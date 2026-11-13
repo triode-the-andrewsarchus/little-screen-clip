@@ -12,7 +12,8 @@ test-support = []
 little-clip-core = { path = "../little-clip-core" }
 little-clip-scene = { path = "../little-clip-scene" }
 tiny-skia.workspace = true
-resvg = { version = "0.37", default-features = false, features = ["text"] }
+resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
+usvg-vector = { package = "usvg", version = "0.49", default-features = false }
 fontdue.workspace = true
 ttf-parser = "0.25"
 image.workspace = true
@@ -27,9 +28,37 @@ pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }
 lini = "=1.1.0"
+pulldown-cmark = { version = "0.13.6", default-features = false }
+mathra = { version = "=1.12.0", default-features = false }
 graphviz-pure = "=1.2.0"
 graphviz-pure-core = "=1.2.0"
 graphviz-pure-parser = "=1.2.0"
+
+d2-rs-wasm = "=0.1.7"
+d2-rs-render = "=0.1.7"
+d2-rs-target = "=0.1.7"
+d2-rs-scenebuild = "=0.1.7"
+d2-rs-raster = "=0.1.7"
+
+bpmnkit-bpmn = "=0.2.1"
+bpmnkit-render = { version = "=0.2.1", default-features = false }
+bpmnkit-layout = "=0.2.1"
+bpmnkit-spec = "=0.2.1"
+
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+
+excalidraw-render = { version = "=0.1.0", default-features = false, features = ["cjk", "svg-text-outlines", "svg-source-groups"] }
+base64 = "0.22"
+data-url = "0.3"
+quick-xml = "0.41"
+dbml-rs = "=1.0.1"
+plantuml-core = "=0.5.4"
+document-svg-drawio = { path = "../../vendor/document-svg-drawio" }
+structurizr-core = { path = "../../vendor/structurizr-rs/crates/structurizr-core" }
+structurizr-dsl = { path = "../../vendor/structurizr-rs/crates/structurizr-dsl" }
+structurizr-render = { path = "../../vendor/structurizr-rs/crates/structurizr-render" }
+
+tikra = { path = "../../vendor/tikra", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27"

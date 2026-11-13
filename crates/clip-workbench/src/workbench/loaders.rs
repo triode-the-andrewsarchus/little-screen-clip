@@ -64,7 +64,7 @@ impl WorkbenchApp {
         self.text_load_job = None;
         match result {
             Ok(Ok(state)) => {
-                self.replace_viewer(Some(ViewerSession::Text(state)));
+                self.replace_viewer(Some(state.into_viewer()));
                 self.clear_status_message();
             }
             Ok(Err(error)) => self.set_status_message(format!("Text preview failed: {error}")),

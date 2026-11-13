@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: SeqDiag
+file_extensions: [seqdiag]
+scope: source.seqdiag
+contexts:
+  main:
+    - include: scope:source.blockdiag

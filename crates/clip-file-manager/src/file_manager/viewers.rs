@@ -549,7 +549,10 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if little_clip_core::diagram::Format::from_path(path).is_some()
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dsl"))
+        || little_clip_core::diagram::Format::from_path(path).is_some()
         || super::text_strip::is_typescript_source(path)
         || little_clip_core::subtitles::is_subtitle_path(path)
     {
@@ -802,6 +805,47 @@ mod tests {
             "drawing.lini",
             "drawing.gv",
             "drawing.graphviz",
+            "drawing.bpmn",
+            "drawing.bpmn2",
+            "drawing.wavejson",
+            "drawing.wavedrom",
+            "drawing.nomnoml",
+            "drawing.noml",
+            "schema.dbml",
+            "diagram.goat",
+            "packet.bytefield",
+            "schema.er",
+            "schema.erd",
+            "sequence.puml",
+            "class.plantuml",
+            "diagram.blockdiag",
+            "diagram.seqdiag",
+            "diagram.actdiag",
+            "diagram.nwdiag",
+            "diagram.packetdiag",
+            "diagram.rackdiag",
+            "diagram.ditaa",
+            "diagram.tikz",
+            "diagram.pgf",
+            "diagram.pgfplots",
+            "diagram.uxf",
+            "diagram.umlet",
+            "diagram.symbolator",
+            "diagram.symbolator.vhdl",
+            "diagram.symbolator.v",
+            "chart.vega",
+            "chart.vegalite",
+            "chart.vg.json",
+            "chart.vl.json",
+            "architecture.structurizr",
+            "architecture.dsl",
+            "drawing.drawio",
+            "drawing.dio",
+            "drawing.drawio.xml",
+            "include.iuml",
+            "activity.pu",
+            "drawing.excalidraw",
+            "drawing.excalidraw.json",
             "DRAWING.PIKCHR",
         ] {
             assert_eq!(kind(Path::new(name)), Kind::Text);

@@ -1,0 +1,9 @@
+@startuml
+skinparam ParticipantBackgroundColor #b8d8ec
+participant Browser
+participant Renderer
+Browser -> Renderer: Preview source
+activate Renderer
+Renderer --> Browser: Native artwork
+ deactivate Renderer
+@enduml

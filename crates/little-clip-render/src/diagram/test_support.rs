@@ -12,6 +12,107 @@ use std::{ffi::OsStr, time::Duration};
 /// resource/protocol bounds, fails a valid fixture or accepts malformed source.
 pub fn assert_worker(executable: impl AsRef<OsStr>) {
     for (format, source, success) in [
+        (
+            "blockdiag",
+            include_str!("../../../../docs/examples/diagrams/pipeline.blockdiag"),
+            true,
+        ),
+        (
+            "seqdiag",
+            include_str!("../../../../docs/examples/diagrams/request.seqdiag"),
+            true,
+        ),
+        (
+            "actdiag",
+            include_str!("../../../../docs/examples/diagrams/review.actdiag"),
+            true,
+        ),
+        (
+            "nwdiag",
+            include_str!("../../../../docs/examples/diagrams/service.nwdiag"),
+            true,
+        ),
+        (
+            "packetdiag",
+            include_str!("../../../../docs/examples/diagrams/header.packetdiag"),
+            true,
+        ),
+        (
+            "rackdiag",
+            include_str!("../../../../docs/examples/diagrams/server.rackdiag"),
+            true,
+        ),
+        (
+            "ditaa",
+            include_str!("../../../../docs/examples/diagrams/pipeline.ditaa"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-tikz.tikz"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-pgf.pgf"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-pgfplots.pgfplots"),
+            true,
+        ),
+        (
+            "umlet",
+            include_str!("../../../../docs/examples/diagrams/umlet/class-relations.uxf"),
+            true,
+        ),
+        (
+            "symbolator",
+            include_str!("../../../../docs/examples/diagrams/entity.symbolator.vhdl"),
+            true,
+        ),
+        ("blockdiag", "blockdiag {", false),
+        ("ditaa", "@startditaa\n+---+", false),
+        (
+            "tikz",
+            r"\input{Cargo.toml}\begin{tikzpicture}\draw (0,0)--(1,1);\end{tikzpicture}",
+            false,
+        ),
+        ("umlet", "<diagram>", false),
+        ("symbolator", "module", false),
+        (
+            "vega",
+            include_str!("../../../../docs/examples/diagrams/native-vega.vega.json"),
+            true,
+        ),
+        (
+            "vegalite",
+            include_str!("../../../../docs/examples/diagrams/native-vega-lite.vl.json"),
+            true,
+        ),
+        ("vega", "{", false),
+        (
+            "vegalite",
+            r#"{"data":{"url":"file:///etc/passwd"},"mark":"point"}"#,
+            false,
+        ),
+        (
+            "structurizr",
+            include_str!("../../../../docs/examples/diagrams/architecture.structurizr"),
+            true,
+        ),
+        ("structurizr", "workspace { model {", false),
+        (
+            "drawio",
+            include_str!("../../../../docs/examples/diagrams/pipeline.drawio"),
+            true,
+        ),
+        (
+            "drawio",
+            "<mxfile><diagram>broken!</diagram></mxfile>",
+            false,
+        ),
         ("pikchr", "box \"Source\"; arrow; circle \"Preview\"", true),
         ("mermaid", "flowchart LR\nA[Source] --> B[Preview]", true),
         (
@@ -21,6 +122,87 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("graphviz", "digraph { a -> b }", true),
+        ("nomnoml", "[Source] -> [Preview]", true),
+        ("nomnoml", "[Unclosed", false),
+        (
+            "dbml",
+            include_str!("../../../../docs/examples/diagrams/schema.dbml"),
+            true,
+        ),
+        ("dbml", "Table broken {", false),
+        (
+            "goat",
+            include_str!("../../../../docs/examples/diagrams/pipeline.goat"),
+            true,
+        ),
+        (
+            "goat",
+            include_str!("../../../../docs/examples/diagrams/unicode.goat"),
+            true,
+        ),
+        ("goat", "a\tb", false),
+        ("bytefield", "(draw-column-headers) (draw-box 0)", true),
+        ("bytefield", "(draw-box", false),
+        (
+            "erd",
+            include_str!("../../../../docs/examples/diagrams/people.er"),
+            true,
+        ),
+        ("erd", "[A]\nA 1--1 Missing", false),
+        (
+            "plantuml",
+            include_str!("../../../../docs/examples/diagrams/sequence.puml"),
+            true,
+        ),
+        (
+            "plantuml",
+            include_str!("../../../../docs/examples/diagrams/architecture.puml"),
+            true,
+        ),
+        (
+            "plantuml",
+            "@startuml\n!include /etc/passwd\nA -> B\n@enduml",
+            false,
+        ),
+        ("plantuml", "@startuml\nA -> B", false),
+        ("bytefield", "(slurp \"/etc/passwd\")", false),
+        ("nomnoml", "#import: /etc/passwd\n[A]", false),
+        (
+            "wireviz",
+            include_str!("../../../../docs/examples/diagrams/harness.wireviz"),
+            true,
+        ),
+        ("wireviz", "connectors: {}\nconnections: []", false),
+        ("d2", "direction: right\na -> b: Preview", true),
+        ("d2", "a: {", false),
+        ("wavedrom", "{signal:[{name:'clk',wave:'p...'}]}", true),
+        (
+            "wavedrom",
+            "{reg:[{bits:4,name:'op'},{bits:12,name:'payload'}]}",
+            true,
+        ),
+        ("wavedrom", "{assign:[['out',['&','a','b']]]}", true),
+        ("wavedrom", "{signal:(()=>{throw 'executed'})()}", false),
+        (
+            "excalidraw",
+            include_str!("../../../../docs/examples/diagrams/drawing.excalidraw"),
+            true,
+        ),
+        (
+            "excalidraw",
+            r#"{"type":"excalidraw","version":3,"elements":[]}"#,
+            false,
+        ),
+        (
+            "bpmn",
+            include_str!("../../../../docs/examples/diagrams/order.bpmn"),
+            true,
+        ),
+        ("bpmn", "<definitions/>", false),
+        ("d2", "...@/etc/passwd", false),
+        ("math", r"\sum_{n=1}^{\infty}\frac{1}{n^2}", true),
+        ("mathinline", r"\frac{x}{y}", true),
+        ("math", r"\input{/etc/passwd}", false),
         ("pikchr", "box at invalid nonsense", false),
         ("mermaid", "flowchart LR\nA[", false),
     ] {
@@ -52,6 +234,11 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         );
         if let Ok(rendered) = response {
             assert!(rendered.svg.contains("<svg"));
+            assert_eq!(rendered.math.is_some(), format.starts_with("math"));
+            assert_eq!(rendered.drawing.is_some(), format == "excalidraw");
+            if let Some(layout) = rendered.math {
+                assert!(layout.valid());
+            }
             assert!(rendered.svg.len() <= MAX_SVG);
             assert!(rendered.png.starts_with(b"\x89PNG\r\n\x1a\n"));
             assert!(rendered.png.len() <= MAX_OUTPUT / 2);

@@ -1,0 +1,9 @@
+# UML overview
+
+```nomnoml
+// A small preview pipeline.
+#direction: right
+#fill: #90ee90
+[Source|+read()] -> [Worker|+render()]
+[Worker] -> [Preview|+inspect()]
+```

@@ -397,6 +397,54 @@ fn subtitle_raw_source_handles_cr_without_normalizing_the_file_bytes() {
 #[test]
 fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
     for (extension, name, source) in [
+        ("vega", "Vega", "{\"marks\":[],\"data\":[]}"),
+        (
+            "vegalite",
+            "Vega-Lite",
+            "{\"mark\":\"bar\",\"encoding\":{}}",
+        ),
+        (
+            "tikz",
+            "TikZ / PGF",
+            "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}",
+        ),
+        (
+            "umlet",
+            "UMLet",
+            "<diagram><element><id>UMLClass</id></element></diagram>",
+        ),
+        (
+            "symbolator",
+            "Symbolator",
+            "module example(input wire clk); endmodule",
+        ),
+        ("ditaa", "Ditaa", "+-----+\n|cBLU |\n+-----+"),
+        (
+            "blockdiag",
+            "BlockDiag",
+            "blockdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "seqdiag",
+            "SeqDiag",
+            "seqdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "actdiag",
+            "ActDiag",
+            "actdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        ("nwdiag", "NwDiag", "nwdiag { a -> b [label=\"Preview\"]; }"),
+        (
+            "packetdiag",
+            "PacketDiag",
+            "packetdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "rackdiag",
+            "RackDiag",
+            "rackdiag { a -> b [label=\"Preview\"]; }",
+        ),
         (
             "mermaid",
             "Mermaid",
@@ -406,6 +454,23 @@ fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
         ("svgbob", "SvgBob", "+----+\n|Text|\n+----+\n"),
         ("lini", "Lini", "|box#a| \"Source\"\na -> b\n"),
         ("gv", "Graphviz", "digraph { a -> b [label=\"Source\"] }"),
+        ("d2", "D2", "direction: right\na -> b: Preview"),
+        ("wavejson", "WaveDrom", "{signal:[{name:'x',wave:'01'}]}"),
+        (
+            "excalidraw",
+            "Excalidraw",
+            r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+        ),
+        (
+            "json5",
+            "JSON5",
+            "{ // comment\n value:'text', count:0x20, }",
+        ),
+        (
+            "bpmn",
+            "BPMN",
+            "<definitions xmlns=\"urn:test\"><process id=\"p\"/></definitions>",
+        ),
     ] {
         let syntax = SYNTAX_SET.find_syntax_by_extension(extension).unwrap();
         assert_eq!(syntax.name, name);

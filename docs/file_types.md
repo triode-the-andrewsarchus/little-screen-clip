@@ -230,32 +230,32 @@
       - [ ] Embedded JSON-LD structured data (`<script type="application/ld+json">`)
     - [x] `.md`, `.markdown` — Markdown syntax highlighting
       - [x] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`) — shared bounded metadata with diagnostics and large/small Markdown presentation
-      - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
-      - [ ] Inline diagram block rendering (Kroki-compatible)
+      - [x] Embedded LaTeX math blocks (`$...$`, `$$...$$`) — native bounded rendering, text baselines, transparent theme colors and diagnostics in both previews
+      - [x] Inline diagram block rendering (Kroki-compatible language families; bounded local rendering and visible compatibility limits)
         - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
-        - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
-        - [ ] D2 (`d2`)
+        - [x] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`) — native Rust renderer, bundled C4/themes, outlined previews and source/live editor; external includes refused
+        - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
-        - [ ] DBML database markup (`dbml`)
-        - [ ] BPMN business process (`bpmn`)
-        - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
-        - [ ] Excalidraw whiteboards (`excalidraw`)
-        - [ ] WaveDrom digital timing diagrams (`wavedrom`)
-        - [ ] Structurizr software architecture (`structurizr`)
-        - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
-        - [ ] Bytefield packet layouts (`bytefield`)
-        - [ ] Ditaa ASCII art diagrams (`ditaa`)
-        - [ ] Erd entity-relationship diagrams (`erd`)
-        - [ ] Nomnoml UML diagrams (`nomnoml`)
+        - [x] DBML database markup (`dbml`) — native schemas, ordered table partials, sample records and explicit optional relationships; highlighted source/live previews and diagnostics (no SQL execution or module imports)
+        - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
+        - [x] Diagrams.net / draw.io (`drawio`, `diagramsnet`) — native pages, highlighted source/live preview/errors; external stencil collections remain unsupported.
+        - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; native vector creation/movement/style/text/resize with exact shared undo; advanced editor parity remains future work
+        - [x] WaveDrom digital timing diagrams (`wavedrom`)
+        - [x] Structurizr software architecture (`structurizr`) — native C4/dynamic/filtered/custom/deployment previews and source/live editor; external image views/themes are not fetched
+        - [x] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`) — canonical grammars/layouts through the bounded local Python/Pillow companion
+        - [x] Bytefield packet layouts (`bytefield`) — pinned upstream Clojure DSL in bounded hostless QuickJS; shared source/live and rendered previews
+        - [x] Ditaa ASCII art diagrams (`ditaa`) — canonical separate Java companion; shared source/live, list/hover and both Markdown previews
+        - [x] Erd entity-relationship diagrams (`erd`) — native canonical bracket/entity parser, styled tables, exact cardinalities and shared source/live previews
+        - [x] Nomnoml UML diagrams (`nomnoml`) — pinned upstream renderer in bounded embedded QuickJS, native SVG/raster previews and diagnostics
         - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
         - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
-        - [ ] GoAT ASCII diagrams (`goat`)
+        - [x] GoAT ASCII diagrams (`goat`) — pinned upstream ASCII/Unicode rendering through a bundled static helper; native SVG composition, bounded large/small previews
         - [x] Lini text diagrams (`lini`) — original Rust compiler, static SVG, large/small previews and visible warnings
-        - [ ] TikZ / PGF diagrams (`tikz`, `pgf`)
-        - [ ] UMLet diagrams (`umlet`)
-        - [ ] Vega and Vega-Lite charts (`vega`, `vegalite`)
-        - [ ] WireViz wiring harnesses (`wireviz`)
-        - [ ] Symbolator circuit symbols (`symbolator`)
+        - [x] TikZ / PGF diagrams (`tikz`, `pgf`, `pgfplots`) — native bounded interpreter; external file/image requests refused
+        - [x] UMLet diagrams (`umlet`) — canonical separate data-only Java companion; executable custom elements refused
+        - [x] Vega and Vega-Lite charts (`vega`, `vegalite`) — canonical static SVG in bounded hostless QuickJS; inline data only, no linked resources
+        - [x] WireViz wiring harnesses (`wireviz`) — native model/renderer and preserving label/color/connect/disconnect editing; template instances remain unsupported; mating edits stay in source
+        - [x] Symbolator circuit symbols (`symbolator`) — canonical local HDL interface extraction and symbol rendering, not HDL compilation/simulation
     - [x] `.json` — JSON syntax highlighting
     - [x] `.toml` — TOML syntax highlighting
     - [x] `.xml`, `.svg` — XML syntax highlighting
@@ -590,39 +590,49 @@
     - [ ] `.vsd`, `.vsdx`, `.vdx` — Microsoft Visio drawing
     - [ ] `.vss` — Microsoft Visio stencil
     - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
-    - [ ] `.drawio`, `.dio` — diagrams.net / draw.io diagram (May need disambiguation with digital I/O data on `.dio`; also commonly saved as compound `.drawio.xml`, `.drawio.svg`, `.drawio.png`)
+    - [x] `.drawio`, `.dio` — native diagrams.net / draw.io previews; `.dio` requires a matching XML root. Compound `.drawio.xml` / `.dio.xml` supported; `.drawio.svg` / `.drawio.png` remain ordinary images, without embedded diagram editing.
       - [ ] XML root metadata (`<mxfile>`: agent, version, etag, modified, compressed/raw boolean, page IDs/names)
-    - [ ] `.excalidraw`, `.excalidraw.json` — Excalidraw whiteboard drawing
-    - [ ] `.uxf` — UMLet eXchange Format
+    - [x] `.excalidraw`, `.excalidraw.json` — native vector canvas, text/label editing, basic creation/movement/style/resize, guarded save and exact undo; advanced rotations/groups/reflow remain source-only
+    - [x] `.uxf`, `.umlet` — canonical UMLet previews and highlighted source/live editor; Java 11+ runtime required
   - [ ] Business process and architecture modeling
-    - [ ] `.bpmn`, `.bpmn2` — Business Process Model and Notation (BPMN 2.0 XML)
-    - [ ] `.structurizr`, `.dsl` — Structurizr architecture DSL (May need disambiguation with generic DSL scripts and Lingvo dictionary files on `.dsl`)
+    - [x] `.bpmn`, `.bpmn2` — BPMN 2.0 XML with highlighted source, live preview, diagnostics and guarded saves
+    - [x] `.structurizr`, recognized `.dsl` — native architecture/deployment views and highlighted source/live editing; unrelated DSL content remains text
   - [ ] Diagram as code (declarative architecture, flow, and schema DSLs)
-    - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
-    - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
-    - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
+    - [x] `.puml`, `.plantuml`, `.pu`, `.iuml` — native PlantUML / bundled C4 previews and highlighted source/live editor; external includes refused
+    - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; native flowchart editing available; other Mermaid families retain source/live editing
+    - [x] `.d2` — native flat-board D2 rendering and highlighted source/live editing with diagnostics (not Diablo II binary data)
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
-    - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
-    - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
-    - [ ] `.nomnoml` — Nomnoml UML diagram
+    - [x] `.dbml` — native schema/partial/sample-record preview and highlighted editor; XML mapping files stay XML; unsupported newer syntax reports errors
+    - [x] `.er`, `.erd` — canonical Erd schema previews and highlighted source/live editor; Eclipse ERMaster XML retains XML presentation
+    - [x] `.nomnoml`, `.noml` — Nomnoml UML diagram; highlighted source/live preview, rendered list strips and enlarged hover
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
-    - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
+    - [x] `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag`, recognized `.diag` — canonical local family previews/source editing; diagnostic logs remain text
   - [ ] Hardware, electrical, and packet layout diagrams
-    - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
-    - [ ] `.wavedrom`, `.wave.json` — WaveDrom digital timing diagram (conventional compound extension for JSON)
-    - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
-    - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
+    - [x] `.bytefield`, recognized `.edn` / `.bf` — canonical Bytefield-SVG packet layouts; ordinary Brainfuck `.bf` sources retain code presentation
+    - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor and basic signal-cell painter; advanced operations stay in source)
+    - [x] `.wireviz`, `.wire.yaml`, `.wire.yml` — native harness source/live/graphical editor with rendered strips and hover
+      - [x] Initial native pin/wire/shield/loop/mating previews, Markdown fences, conservative generic YAML/clipboard inference, source/live-preview editor and rendered list strips
+      - [x] Seven automatic color-code palettes and common visibility/background/bundle presentation
+      - [ ] Template instances and additional font/report presentation compatibility
+      - [x] Graphical harness editing with source-preserving circuit transactions
+        - [x] Backend pin-label and wire-color transactions, reference repair, circuit/alias guards and lossless source tests
+        - [x] Native inspector, typed terminal drag connect, explicit Disconnect and stale/incompatible cancellation
+        - [ ] Mating edits and transactions affecting whole-body mating sets
+    - [x] `.symbolator`, `*.symbolator.v`, `*.symbolator.vhd`, `*.symbolator.vhdl` — explicit HDL interface symbol previews and source/live editing; generic HDL files retain code presentation
+    - [ ] `.sym` — ambiguous symbol/debug/CAD files; no canonical Symbolator source association is assumed
   - [ ] ASCII-art and text-to-vector diagram tools
-    - [ ] `.ditaa` — Ditaa ASCII art diagram
-    - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
+    - [x] `.ditaa` — canonical ASCII diagram previews and source/live editing through the local Java companion
+    - [x] `.svgbob`, recognized `.bob` — native SVG previews and highlighted source/live editing; other BOB raytracer/CAD text remains ordinary text
       - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
-      - [ ] `.bob` content disambiguation and graphical cell editing
-    - [ ] `.goat` — GoAT ASCII diagram
+      - [x] Conservative `.bob` content disambiguation
+      - [ ] Graphical cell editing
+    - [x] `.bytefield` — explicit Bytefield source association; upstream `.edn` uses conservative drawing-content detection; native previews and highlighted source/live editor
+    - [x] `.goat` — GoAT ASCII/Unicode diagram; highlighted source/live preview, list strips and enlarged hover
     - [x] `.lini` — native highlighted source/live-preview editor with diagnostics and guarded saves; graphical manipulation pending
   - [ ] Scientific and statistical charting specifications
-    - [ ] `.vg.json`, `.vega` — Vega visualization specification (conventional compound extension for JSON)
-    - [ ] `.vl.json`, `.vegalite` — Vega-Lite visualization specification (conventional compound extension for JSON)
-    - [ ] `.tikz`, `.pgf` — TikZ / PGF LaTeX graphics (May need disambiguation with Progressive Graphics File raster images on `.pgf`)
+    - [x] `.vega`, `.vg.json`, `.vega.json` — static Vega chart previews and highlighted JSON source/live editing
+    - [x] `.vegalite`, `.vl.json`, `.vegalite.json`, `.vega-lite.json` — static Vega-Lite previews and highlighted source/live editing
+    - [x] `.tikz`, source-qualified `.pgf`, `.pgfplots` — native TikZ/PGF/plots previews and LaTeX source/live editing; binary PGF images are not decoded
 - [ ] Music and sound design
   - [ ] MIDI and notation
     - [x] `.mid`, `.midi` — piano-roll viewer

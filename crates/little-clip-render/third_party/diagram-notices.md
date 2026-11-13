@@ -1,6 +1,6 @@
 # Native diagram renderer notices
 
-These notices cover the Merman, Lini and Graphviz rendering families, not the complete workspace dependency inventory.
+These notices cover the Merman, Lini, Graphviz and Mathra rendering families, not the complete workspace dependency inventory.
 
 Merman 0.10.0 and its MIT/Apache-2.0 components are used under the MIT license
 (reproduced in `merman-MIT.txt`). Upstream: https://github.com/Latias94/merman.
@@ -57,3 +57,42 @@ Tinos, Arimo and Cousine font assets are copied unchanged from
 under `assets/fonts/graphviz/OFL-*.txt` and printed by `--diagram-licenses`.
 These fonts supply the corresponding Times, Helvetica and Courier metric
 families. The existing Noto fonts remain fallbacks for other glyphs.
+
+## Mathra
+
+Mathra 1.12.0 is an unmodified native dependency used under MIT, with its STIX
+Two Math subset under SIL OFL 1.1. The full upstream texts are reproduced in
+`mathra-MIT.txt` and `mathra-stix-OFL.txt` and embedded by `--diagram-licenses`.
+Corresponding source:
+
+- https://crates.io/api/v1/crates/mathra/1.12.0/download
+- https://github.com/matheusmota-dev-br/mathra/tree/48a36964c7ee62171a77063a1572166d5f0fe337
+
+Optional chemistry, emoji and PNG features are disabled. TikZ labels enable the
+Latin Modern Math feature under the GUST Font License, reproduced from Mathra
+in `vendor/tikra/third_party/` and embedded by `--diagram-licenses`. The base
+[LPPL 1.3c](https://www.latex-project.org/lppl/lppl-1-3c.txt) text is retained
+verbatim as `mathra-lppl-1.3c.txt`, together with the upstream font README. The
+application supplies its existing Noto outline fonts as character fallbacks and
+uses its existing SVG rasterizer. No TeX installation or JavaScript engine is
+required, and source commands cannot select a file loader.
+
+## BPMN Kit
+
+The unmodified BPMN Kit 0.2.1 native crates (`bpmnkit-bpmn`, `bpmnkit-render`,
+`bpmnkit-layout`, `bpmnkit-dmn`, `bpmnkit-feel`, `bpmnkit-spec`, `bpmnkit-xml`)
+are used under their MIT option, reproduced in `bpmnkit-MIT.txt`.
+Source: https://github.com/bpmnkit/bpmnkit and the locked crates.io 0.2.1
+release archives. The renderer's optional Inter fonts (OFL-1.1), PNG backend,
+system-font discovery and browser editor are not compiled. SVG text uses the
+application's existing bundled fonts and rasterizer. The preview does not
+execute BPMN processes, scripts, expressions or extension elements.
+
+## WaveDrom
+
+The unmodified WaveDrom 3.8.0 npm package is embedded under MIT in a hostless
+QuickJS runtime. Source is parsed as JSON5 data in Rust, never evaluated.
+`wavedrom-notices.md` records the verified package integrity, original source,
+bundled dependency notices and runtime/parser provenance. Full notices are
+printed by `--diagram-licenses`. The engine uses the existing OFL font metrics
+and SVG rasterizer; no browser, DOM or installed Node runtime is required.

@@ -2,6 +2,11 @@ use super::*;
 
 impl WorkbenchApp {
     pub(crate) fn retain_current_image_session(&mut self) -> bool {
+        if let Some(ViewerSession::TextEditor(state)) = self.viewer.as_mut()
+            && !state.request_close()
+        {
+            return false;
+        }
         if let Some(ViewerSession::Image(state)) = self.viewer.as_mut()
             && (!state.poll_session_snapshots() || state.file_write_pending())
         {

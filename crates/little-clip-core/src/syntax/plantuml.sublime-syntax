@@ -1,0 +1,29 @@
+%YAML 1.2
+---
+name: PlantUML
+file_extensions: [puml, plantuml, pu, iuml]
+scope: source.plantuml
+contexts:
+  main:
+    - match: "'.*$"
+      scope: comment.line.plantuml
+    - match: '^\s*[@!][A-Za-z][A-Za-z0-9_]*'
+      scope: keyword.control.plantuml
+    - match: '\b(class|interface|enum|actor|participant|database|component|package|rectangle|state|note|skinparam|title|start|stop|if|then|else|endif|while|endwhile|legend|endlegend)\b'
+      scope: storage.type.plantuml
+    - match: '[<.ox*#]?[=.-]+[>ox*#]?'
+      scope: keyword.operator.plantuml
+    - match: '"'
+      scope: punctuation.definition.string.begin.plantuml
+      push: quoted
+    - match: '#[A-Za-z0-9_]+'
+      scope: constant.other.color.plantuml
+    - match: '\$[A-Za-z_][A-Za-z0-9_]*'
+      scope: variable.other.plantuml
+  quoted:
+    - meta_scope: string.quoted.double.plantuml
+    - match: '\\.'
+      scope: constant.character.escape.plantuml
+    - match: '"'
+      scope: punctuation.definition.string.end.plantuml
+      pop: true

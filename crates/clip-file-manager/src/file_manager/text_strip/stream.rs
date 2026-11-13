@@ -50,7 +50,9 @@ pub(super) fn scan(reader: &mut impl Read, cancelled: &AtomicBool) -> io::Result
         prefix.extend(
             buffer[..count]
                 .iter()
-                .take((8192_usize).saturating_sub(prefix.len())),
+                // Include the complete bounded metadata region plus a few
+                // bytes proving a delimiter at the limit is a complete line.
+                .take((64 * 1024 + 4_usize).saturating_sub(prefix.len())),
         );
         for &byte in &buffer[..count] {
             if byte == 0 || (byte < 32 && !matches!(byte, b'\n' | b'\r' | b'\t' | 12)) {

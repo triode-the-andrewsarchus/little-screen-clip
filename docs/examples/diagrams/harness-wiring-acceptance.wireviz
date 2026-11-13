@@ -1,0 +1,32 @@
+# Native acceptance: literal pin identity, parallel paths and duplicate links.
+connectors:
+  INPUT:
+    pins: ["01", 2, 3]
+    pinlabels: [EARTH, FEED, DATA]
+    loops: [["01", 3]]
+    future_connector: {keep: "NO", nested: [one, two]}
+  OUTPUT:
+    pincount: 3
+    pinlabels: [RECEIVE, LOAD, RETURN]
+  P:
+    pins: ["P01"]
+    pinlabels: [PROBE]
+cables:
+  LOOM:
+    colors: [BK, RD, GNYE]
+    wirelabels: [BLACK, RED, GREEN]
+    shield: true
+connections:
+  - - INPUT: ["01", 2, 3] # retain the other lanes and this comment
+    - LOOM: [1-3]
+    - OUTPUT: [3-1]
+  - [{INPUT: "01"}, {LOOM: 1}] # retain the duplicate occurrence
+  - [P] # deliberately visible before connecting its terminal
+# Preserve this opaque tail byte for byte, including the alias and block scalar.
+preserved_future: &future
+  spelling: "NO"
+  nested: [one, {two: 2}]
+opaque_alias: *future
+notes: |-
+  Mating annotations remain distinct and source-edit-only.
+  Template instance expansion remains a separate follow-up.

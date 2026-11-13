@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: NwDiag
+file_extensions: [nwdiag]
+scope: source.nwdiag
+contexts:
+  main:
+    - include: scope:source.blockdiag

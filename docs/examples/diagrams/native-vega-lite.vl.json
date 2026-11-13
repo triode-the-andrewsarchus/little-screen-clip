@@ -1,0 +1,21 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "Canonical Vega-Lite: inline observations, aggregate encoding and color legend.",
+  "title": "Latency by renderer",
+  "width": 440,
+  "height": 240,
+  "data": {"values": [
+    {"renderer": "SVG", "latency": 12, "phase": "First"},
+    {"renderer": "SVG", "latency": 10, "phase": "First"},
+    {"renderer": "Raster", "latency": 18, "phase": "First"},
+    {"renderer": "SVG", "latency": 5, "phase": "Cached"},
+    {"renderer": "Raster", "latency": 7, "phase": "Cached"}
+  ]},
+  "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
+  "encoding": {
+    "x": {"field": "renderer", "type": "nominal", "title": "Renderer"},
+    "xOffset": {"field": "phase"},
+    "y": {"aggregate": "mean", "field": "latency", "type": "quantitative", "title": "Mean latency (ms)"},
+    "color": {"field": "phase", "type": "nominal", "scale": {"range": ["#295f98", "#da9b42"]}}
+  }
+}

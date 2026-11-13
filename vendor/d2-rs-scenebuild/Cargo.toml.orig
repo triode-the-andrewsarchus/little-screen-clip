@@ -1,0 +1,55 @@
+[package]
+name = "d2-rs-scenebuild"
+description = "Rust port of D2's d2scenebuild package (target diagram to d2scene document)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[features]
+default = []
+# Oracle tier: tests that read Go-oracle artifacts regenerated into
+# oracle-cache/fixtures by scripts/regen-fixtures.py (docs/FIXTURES.md).
+oracle-fixtures = []
+diagnostic-traces = []
+
+[dependencies]
+d2-rs-core.workspace = true
+d2-rs-fontface.workspace = true
+roxmltree.workspace = true
+d2-rs-math.workspace = true
+d2-rs-text.workspace = true
+d2-rs-language.workspace = true
+base64.workspace = true
+brotli-decompressor.workspace = true
+sha2.workspace = true
+d2-rs-render.workspace = true
+d2-rs-target.workspace = true
+d2-rs-scene.workspace = true
+d2-rs-sketch.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url = "2.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+
+[dev-dependencies]
+d2-rs-raster.workspace = true
+d2-rs-testdata.workspace = true
+
+[lints]
+workspace = true

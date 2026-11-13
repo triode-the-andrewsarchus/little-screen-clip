@@ -1,0 +1,10 @@
+%YAML 1.2
+---
+name: Bytefield
+file_extensions: [bytefield]
+scope: source.bytefield
+contexts:
+  main:
+    - match: '\b(draw-boxes|draw-box|draw-related-boxes|draw-column-headers|draw-gap|draw-bottom|draw-padding|draw-inline-gap|next-row|defattrs|text|hex-text)\b'
+      scope: support.function.bytefield
+    - include: scope:source.clojure

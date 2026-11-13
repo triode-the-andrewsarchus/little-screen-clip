@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: ActDiag
+file_extensions: [actdiag]
+scope: source.actdiag
+contexts:
+  main:
+    - include: scope:source.blockdiag

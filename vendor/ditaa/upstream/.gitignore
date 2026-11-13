@@ -1,0 +1,19 @@
+# Eclipse
+.project
+.classpath
+.settings/
+
+# IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# build
+bin/
+build/jar-temp/
+build/testclasses/
+releases/
+tests/images/
+tests/images-expected/
+target/

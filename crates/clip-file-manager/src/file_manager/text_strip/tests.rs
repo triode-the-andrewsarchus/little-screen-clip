@@ -12,6 +12,60 @@ fn document(name: &str, bytes: &[u8]) -> std::sync::Arc<Document> {
 }
 
 #[test]
+fn page_metadata_summaries_prioritize_hugo_fields_across_all_front_matter_formats() {
+    for source in [
+        "---\ntitle: Notes\ndate: '2026-11-12'\ndraft: false\ntags: [rust, diagrams]\n---\n# Body\n",
+        "+++\ntitle = 'Notes'\ndate = 2026-11-12\ndraft = false\ntags = ['rust', 'diagrams']\n+++\n# Body\n",
+        ";;;\n{\"title\":\"Notes\",\"date\":\"2026-11-12\",\"draft\":false,\"tags\":[\"rust\",\"diagrams\"]}\n;;;\n# Body\n",
+        "{\"title\":\"Notes\",\"date\":\"2026-11-12\",\"draft\":false,\"tags\":[\"rust\",\"diagrams\"]}\n# Body\n",
+    ] {
+        let doc = document("page.md", source.as_bytes());
+        let metadata = doc.metadata.as_ref().unwrap();
+        assert_eq!(metadata.fields[0], ("title".into(), "Notes".into()));
+        assert_eq!(metadata.fields[1], ("date".into(), "2026-11-12".into()));
+        assert_eq!(metadata.fields[2], ("draft".into(), "false".into()));
+        assert!(metadata.fields[3].1.contains("diagrams"));
+        assert_eq!(doc.lines, source.lines().count() as u64);
+    }
+    assert!(
+        document("data.json", b"{\"title\":\"Notes\"}\n")
+            .metadata
+            .is_none()
+    );
+}
+
+#[test]
+fn page_metadata_survives_long_descriptions_and_does_not_grow_the_preview_row() {
+    let source = format!(
+        "---\ndescription: {}\ntitle: Long page\ndraft: true\n---\n# Body\n",
+        "x".repeat(9000)
+    );
+    let doc = document("page.md", source.as_bytes());
+    let metadata = doc.metadata.as_ref().unwrap();
+    assert_eq!(metadata.fields[0].1, "Long page");
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            for width in [320.0, 800.0] {
+                let rect =
+                    egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(width, 64.0));
+                let text = metadata.show(
+                    ui,
+                    rect,
+                    egui::Id::new(width.to_bits()),
+                    &little_clip_core::palette::AppPalette::default(),
+                );
+                assert_eq!(text.top(), rect.top());
+                assert_eq!(text.bottom(), rect.bottom());
+                assert_eq!(text.right(), rect.right());
+                assert!(text.width() >= 160.0);
+                assert_eq!(text == rect, width < 360.0);
+            }
+        });
+    });
+}
+
+#[test]
 fn common_syntax_definitions_produce_colored_whole_file_summaries() {
     let examples = [
         ("rs", "// comment\nfn main() { let s = \"hello\"; }\n"),

@@ -61,7 +61,7 @@ def hover(session, x, y):
         process.wait(timeout=3)
 
 
-def hover_observation(session, name, x, y, expected):
+def hover_observation(session, name, x, y, expected, forbidden=(), rendered=None):
     path = session.output / f"{name}.png"
     with hover(session, x, y):
         text = None
@@ -69,11 +69,14 @@ def hover_observation(session, name, x, y, expected):
             nonlocal text
             text = session.capture_text(name, path, expected)
             visible = "".join(text.lower().split())
-            return all("".join(fragment.lower().split()) in visible for fragment in expected)
+            return (all("".join(fragment.lower().split()) in visible for fragment in expected)
+                    and not any("".join(fragment.lower().split()) in visible for fragment in forbidden)
+                    and (rendered is None or rendered(path)))
         wait_for(ready, name)
     (session.output / f"{name}.txt").write_text(text)
     session.observations.append({"name": name, "screenshot": str(path),
-                                 "expected_visible_text": expected, "hover": [x, y]})
+                                 "expected_visible_text": expected,
+                                 "forbidden_visible_text": list(forbidden), "hover": [x, y]})
 
 
 def exercise(session, root):

@@ -278,7 +278,7 @@ fn dropping_workbench_cancels_queued_text_load() {
     let worker_ran = Arc::clone(&ran);
     let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
         worker_ran.store(true, Ordering::Release);
-        Err::<TextPreviewState, String>("obsolete text load".into())
+        Err::<TextPreviewLoadResult, String>("obsolete text load".into())
     });
     let mut app = test_workbench_app(None, VecDeque::new());
     app.text_load_job = Some(TextPreviewLoadJob { ticket, receiver });
@@ -339,4 +339,75 @@ fn switching_preview_cancels_queued_office_conversion() {
         assert!(app.office_load_job.is_none());
         assert!(!ran.load(Ordering::Acquire));
     }
+}
+
+#[test]
+fn clipboard_diagrams_open_the_shared_source_editor_and_plain_text_keeps_its_viewer() {
+    for source in [
+        "digraph { a -> b }",
+        "flowchart LR\nA[",
+        "direction: right\na -> b",
+        "box \"Read\"; arrow; circle",
+    ] {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.open_slot_text_preview(source.into(), "clipboard diagram");
+        assert!(app.text_load_job.is_some());
+        assert!(app.spreadsheet_load_job.is_none());
+        wait_for_text_load(&mut app);
+        let Some(ViewerSession::TextEditor(session)) = &app.viewer else {
+            panic!("missing native source editor");
+        };
+        assert_eq!(session.preview.content.as_str(), source);
+        assert!(session.file_source().is_none());
+        assert!(!session.dirty());
+        let mut replacement = SlotManager::default();
+        replacement.push_left(ClipItem::from_text("a later clipboard item"));
+        app.state = Arc::new(replacement);
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |context| {
+            assert!(app.render_modal_viewers(context));
+        });
+        let Some(ViewerSession::TextEditor(session)) = &app.viewer else {
+            panic!("clipboard update replaced editor");
+        };
+        assert_eq!(session.preview.content.as_str(), source);
+    }
+    let mut app = test_workbench_app(None, VecDeque::new());
+    app.start_shared_text_preview_load(Arc::new("ordinary text".into()), "clipboard".into());
+    wait_for_text_load(&mut app);
+    assert!(matches!(app.viewer, Some(ViewerSession::Text(_))));
+}
+
+#[test]
+fn replacing_clipboard_source_waits_for_accepted_copy_completion() {
+    let mut source = clip_studios::text_editor::TextSession::from_clipboard(
+        Arc::new("digraph { a -> b }".into()),
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+    let release = clip_studios::text_editor::hold_clipboard_copy_for_test(&mut source);
+    let mut app = test_workbench_app(
+        Some(ViewerSession::TextEditor(Box::new(source))),
+        VecDeque::new(),
+    );
+    app.replace_viewer(None);
+    assert!(matches!(app.viewer, Some(ViewerSession::TextEditor(_))));
+    release.send(()).unwrap();
+    let context = egui::Context::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = context.run(egui::RawInput::default(), |context| {
+            app.render_modal_viewers(context);
+        });
+        let pending =
+            matches!(&app.viewer, Some(ViewerSession::TextEditor(source)) if source.busy());
+        if !pending {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    app.replace_viewer(None);
+    assert!(app.viewer.is_none());
 }

@@ -33,6 +33,7 @@ pub(super) struct EntryPreviews {
     rasters: Previews,
     raster_sizes: BTreeMap<uuid::Uuid, (RasterCacheKey, uuid::Uuid)>,
     image_hover: super::image_strip::Hover,
+    markdown_hover: super::markdown_hover::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
@@ -108,6 +109,7 @@ impl EntryPreviews {
         self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
         self.image_hover.poll(ctx);
+        self.markdown_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
         let now = std::time::Instant::now();
@@ -197,6 +199,7 @@ impl EntryPreviews {
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
         self.materials.retain(&ids);
+        self.markdown_hover.retain(&ids);
         self.system_refresh.retain(|id, _| ids.contains(id));
         self.raster_sizes.retain(|id, _| ids.contains(id));
         self.rasters
@@ -244,6 +247,7 @@ impl EntryPreviews {
         self.cache.clear();
         self.pdf_pages.clear();
         self.image_hover.clear();
+        self.markdown_hover.clear();
         self.scenes.clear();
         self.materials.clear();
         self.identities.clear();
@@ -559,7 +563,8 @@ impl EntryPreviews {
             egui::pos2(row.right() - 6.0, icon.bottom()),
         );
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
-        self.text_strip(ui, strip, entry, palette);
+        let preview_rect = strip;
+        let strip = self.text_strip(ui, strip, entry, palette);
         let clicked_line = ui
             .ctx()
             .pointer_interact_pos()
@@ -567,6 +572,7 @@ impl EntryPreviews {
             .and_then(|point| {
                 self.listing(entry)
                     .and_then(|ready| ready.data.document.as_ref())
+                    .filter(|document| document.diagram.is_none())
                     .map(|document| {
                         let fraction = ((point.x - strip.left()) / strip.width()).clamp(0.0, 1.0);
                         // Source lines progress horizontally, including blank lines.
@@ -579,15 +585,16 @@ impl EntryPreviews {
             && ui
                 .ctx()
                 .pointer_hover_pos()
-                .is_some_and(|point| !strip.contains(point))
-            && let Some(document) = self
-                .listing(entry)
-                .and_then(|ready| ready.data.document.clone())
+                .is_some_and(|point| !preview_rect.contains(point))
+            && self
+                .cache
+                .get(id)
+                .is_some_and(|ready| ready.data.document.is_some())
         {
             egui::show_tooltip_at_pointer(
                 ui.ctx(),
                 egui::Id::new(("text_strip_hover", &entry.path)),
-                |ui| document.excerpt_ui(ui, 0.0, usize::MAX, palette),
+                |ui| self.text_hover(ui, id, 0.0, usize::MAX, palette),
             );
         }
         clicked_line
@@ -598,7 +605,7 @@ impl EntryPreviews {
         rect: egui::Rect,
         entry: &Entry,
         palette: &little_clip_core::palette::AppPalette,
-    ) {
+    ) -> egui::Rect {
         let id = self.identity(entry);
         let Some(document) = self
             .cache
@@ -616,8 +623,16 @@ impl EntryPreviews {
                 egui::FontId::proportional(14.0),
                 ui.visuals().weak_text_color(),
             );
-            return;
+            return rect;
         };
+        if let Some(ready) = self.cache.get(id)
+            && super::diagram_strip::show(ui, rect, id, ready)
+        {
+            return rect;
+        }
+        let rect = document.metadata.as_ref().map_or(rect, |metadata| {
+            metadata.show(ui, rect, egui::Id::new(("frontmatter_strip", id)), palette)
+        });
         let (width, height) = raster_dimensions(ui, rect);
         let colors = super::text_strip::palette_colors(palette);
         let source = Source::TextRaster {
@@ -627,6 +642,16 @@ impl EntryPreviews {
             colors,
         };
         self.paint_raster(ui, rect, id, (width, height, colors.to_vec()), source);
+        if document.diagram.is_some() {
+            crate::icons::Icon::Alert.paint(
+                ui.painter(),
+                egui::Rect::from_min_size(
+                    rect.right_top() + egui::vec2(-18.0, 2.0),
+                    egui::vec2(16.0, 16.0),
+                ),
+                ui.visuals().error_fg_color,
+            );
+        }
         let hovered = super::ui::preview_hovered(ui, rect);
         if hovered {
             let point = ui.ctx().pointer_hover_pos().unwrap_or(rect.min);
@@ -641,9 +666,41 @@ impl EntryPreviews {
             egui::show_tooltip_at_pointer(
                 ui.ctx(),
                 egui::Id::new(("text_strip_hover", id)),
-                |ui| document.excerpt_ui(ui, fraction, width as usize, palette),
+                |ui| self.text_hover(ui, id, fraction, width as usize, palette),
             );
         }
+        rect
+    }
+    fn text_hover(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: uuid::Uuid,
+        fraction: f32,
+        width: usize,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        let Some(ready) = self.cache.get(id) else {
+            return;
+        };
+        if super::diagram_strip::hover(ui, ready) {
+            return;
+        }
+        let Some(document) = ready.data.document.clone() else {
+            return;
+        };
+        if let Some(source) = &document.markdown
+            && self.markdown_hover.show(
+                ui,
+                id,
+                source,
+                document.hover_line(fraction, width),
+                &self.context,
+                palette,
+            )
+        {
+            return;
+        }
+        document.excerpt_ui(ui, fraction, width, palette);
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);

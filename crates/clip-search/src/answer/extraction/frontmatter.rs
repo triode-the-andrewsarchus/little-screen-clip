@@ -66,6 +66,10 @@ pub(super) fn inspect(source: &str) -> Result<Option<Header>, String> {
     if !flatten(&value, &mut Vec::new(), &mut fields) || fields.is_empty() {
         return Ok(None);
     }
+    // Mapping order is not schema: serde_json can preserve insertion order
+    // when another workspace dependency enables that feature. Canonicalize
+    // front matter here; the shared header builder also serves ordered prose.
+    fields.sort_by(|left, right| left.path.cmp(&right.path));
     header(format, fields, raw)
 }
 
@@ -196,6 +200,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first.schema, second.schema);
+        let nested =
+            inspect("---\nmetadata:\n  date: 2021-01-01\n  draft: false\ntitle: First\n---\n")
+                .unwrap()
+                .unwrap();
+        let reordered =
+            inspect("---\ntitle: Second\nmetadata:\n  draft: true\n  date: 2025-02-01\n---\n")
+                .unwrap()
+                .unwrap();
+        assert_eq!(nested.schema, reordered.schema);
+        assert_eq!(reordered.fields[0].path, ["metadata", "date"]);
+        assert_eq!(reordered.fields[0].value, "2025-02-01");
         assert_ne!(first.schema, changed.schema);
         let invalid = inspect("---\ndate: unknown\ndraft: false\n---\n")
             .unwrap()

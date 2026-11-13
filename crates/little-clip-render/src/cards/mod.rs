@@ -19,19 +19,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use tiny_skia::*;
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
-    let mut builder = SyntaxSet::load_defaults_nonewlines().into_builder();
-    for definition in [
-        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
-        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
-    ] {
-        match syntect::parsing::SyntaxDefinition::load_from_str(definition, false, None) {
-            Ok(syntax) => builder.add(syntax),
-            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
-        }
-    }
-    builder.build()
-});
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| crate::syntax::build_syntax_set(false));
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
@@ -45,6 +33,19 @@ pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
                 .or_else(|| SYNTAX_SET.find_syntax_by_extension(fallback))
         })
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
+}
+
+// Clipboard titles are content-derived; only retain a recognized code-language hint.
+// Native diagrams use source inference so a failed render can fall back to text.
+fn clipboard_language_hint<'a>(title: &'a str, text: &str) -> Option<&'a str> {
+    Path::new(title)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|extension| {
+            little_clip_core::syntax::map_extension_to_language(extension).is_some()
+                && little_clip_core::diagram::Format::from_source_extension(extension, text)
+                    .is_none()
+        })
 }
 
 impl ScreenRenderer {
@@ -276,12 +277,10 @@ impl ScreenRenderer {
                         contents,
                         extension,
                     }) => (contents.as_str(), extension.as_deref()),
-                    _ => (
-                        text.as_str(),
-                        Path::new(&item.title)
-                            .extension()
-                            .and_then(|value| value.to_str()),
-                    ),
+                    // Preserve existing code-language title hints, but never
+                    // force native diagram rendering from a content-derived
+                    // clipboard title. Inference must allow a text fallback.
+                    _ => (text.as_str(), clipboard_language_hint(&item.title, text)),
                 };
 
                 *text_preview = self.draw_text_preview(

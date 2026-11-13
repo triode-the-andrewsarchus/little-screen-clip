@@ -106,6 +106,10 @@ define_icons! {
     Flame,
     Resize,
     ArrowRight,
+    Type,
+    Cursor,
+    Hand,
+    ShapeDiamond,
     ShapeCircle,
     ShapeRect,
     ShapeLine,
@@ -221,6 +225,10 @@ impl Icon {
             Self::Flame => "flame",
             Self::Resize => "resize",
             Self::ArrowRight => "arrow_right",
+            Self::Type => "type",
+            Self::Cursor => "cursor",
+            Self::Hand => "hand",
+            Self::ShapeDiamond => "diamond",
             Self::ShapeCircle => "circle",
             Self::ShapeRect => "rect",
             Self::ShapeLine => "line",
@@ -336,6 +344,10 @@ impl Icon {
             Self::Flame => "bytes://icons/flame.svg",
             Self::Resize => "bytes://icons/resize.svg",
             Self::ArrowRight => "bytes://icons/arrow_right.svg",
+            Self::Type => "bytes://icons/type.svg",
+            Self::Cursor => "bytes://icons/cursor.svg",
+            Self::Hand => "bytes://icons/hand.svg",
+            Self::ShapeDiamond => "bytes://icons/diamond.svg",
             Self::ShapeCircle => "bytes://icons/circle.svg",
             Self::ShapeRect => "bytes://icons/rect.svg",
             Self::ShapeLine => "bytes://icons/line.svg",
@@ -472,6 +484,12 @@ impl Icon {
             Self::Resize => include_bytes!("../../little-clip-render/assets/icons/resize.svg"),
             Self::ArrowRight => {
                 include_bytes!("../../little-clip-render/assets/icons/arrow_right.svg")
+            }
+            Self::Type => include_bytes!("../../little-clip-render/assets/icons/type.svg"),
+            Self::Cursor => include_bytes!("../../little-clip-render/assets/icons/cursor.svg"),
+            Self::Hand => include_bytes!("../../little-clip-render/assets/icons/hand.svg"),
+            Self::ShapeDiamond => {
+                include_bytes!("../../little-clip-render/assets/icons/diamond.svg")
             }
             Self::ShapeCircle => include_bytes!("../../little-clip-render/assets/icons/circle.svg"),
             Self::ShapeRect => include_bytes!("../../little-clip-render/assets/icons/rect.svg"),

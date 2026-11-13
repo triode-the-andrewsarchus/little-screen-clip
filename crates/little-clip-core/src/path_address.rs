@@ -94,3 +94,34 @@ pub fn decode_path(text: &str) -> Result<PathBuf, String> {
     }
     Ok(PathBuf::from(OsString::from_vec(decoded)))
 }
+
+/// Decodes one filename using the reversible path-address syntax.
+///
+/// # Errors
+/// Returns an error for invalid escapes, NUL bytes, empty names, path separators,
+/// or the special directory components `.` and `..`.
+pub fn decode_file_name(text: &str) -> Result<OsString, String> {
+    let path = decode_path(text)?;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.is_empty()
+        || bytes.contains(&b'/')
+        || path == Path::new(".")
+        || path == Path::new("..")
+    {
+        return Err("Enter one filename, without /, . or ..".into());
+    }
+    Ok(path.into_os_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn names_round_trip_bytes_and_reject_paths() {
+        for invalid in ["", ".", "..", "../escape", "a/b", "\\x00"] {
+            assert!(decode_file_name(invalid).is_err(), "{invalid}");
+        }
+        let name = decode_file_name("space \\xFF\\\\end").unwrap();
+        assert_eq!(name.as_bytes(), b"space \xff\\end");
+    }
+}

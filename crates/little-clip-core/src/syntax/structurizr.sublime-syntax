@@ -1,0 +1,35 @@
+%YAML 1.2
+---
+name: Structurizr
+file_extensions: [structurizr]
+scope: source.structurizr
+contexts:
+  main:
+    - match: '//.*$|#.*$'
+      scope: comment.line.structurizr
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.structurizr
+      push:
+        - meta_scope: comment.block.structurizr
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.structurizr
+          pop: true
+    - match: '"'
+      scope: punctuation.definition.string.begin.structurizr
+      push:
+        - meta_scope: string.quoted.double.structurizr
+        - match: '\\.'
+          scope: constant.character.escape.structurizr
+        - match: '"'
+          scope: punctuation.definition.string.end.structurizr
+          pop: true
+    - match: '\b(workspace|model|views|person|softwareSystem|container|component|element|customElement|systemLandscape|systemContext|dynamic|deployment|deploymentEnvironment|deploymentNode|infrastructureNode|containerInstance|softwareSystemInstance|filtered|custom|image|include|exclude|autoLayout|styles|relationship|tags|title|description|technology|properties|default|background|color|shape|routing|thickness|group|enterprise)\b'
+      scope: keyword.control.structurizr
+    - match: '![A-Za-z]+'
+      scope: keyword.control.import.structurizr
+    - match: '->|=|\*'
+      scope: keyword.operator.structurizr
+    - match: '\b\d+(\.\d+)*\b'
+      scope: constant.numeric.structurizr
+    - match: '[{}]'
+      scope: punctuation.section.block.structurizr

@@ -1,10 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <linux/input-event-codes.h>
 #include <wayland-client.h>
@@ -51,7 +53,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click|right-click <width> <height> <x> <y> | "
-            "drag|right-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
+            "drag|drag-held|right-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
             "scroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -107,6 +109,18 @@ static uint32_t click_button(const char *action) {
     return 0;
 }
 
+static void hold_drag_until_release(void) {
+    // Keep this private pointer connected while the test captures the app.
+    // EOF, input or a bounded timeout always lets the caller release it.
+    puts("holding private drag");
+    fflush(stdout);
+    struct pollfd input = {.fd = 0, .events = POLLIN};
+    if (poll(&input, 1, 10000) > 0) {
+        char release;
+        (void)read(0, &release, 1);
+    }
+}
+
 int main(int argc, char **argv) {
     uint32_t width = 0, height = 0, x = 0, y = 0, end_x = 0, end_y = 0;
     int probe = argc == 2 && strcmp(argv[1], "probe") == 0;
@@ -114,7 +128,8 @@ int main(int argc, char **argv) {
     int click = button != 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
     int right_drag = argc == 8 && strcmp(argv[1], "right-drag") == 0;
-    int drag = right_drag || (argc == 8 && strcmp(argv[1], "drag") == 0);
+    int drag_held = argc == 8 && strcmp(argv[1], "drag-held") == 0;
+    int drag = right_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
     uint32_t drag_button = right_drag ? BTN_RIGHT : BTN_LEFT;
     int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
     int scroll_amount = 0;
@@ -238,6 +253,9 @@ int main(int argc, char **argv) {
                         return 5;
                     }
                     nanosleep(&pause, NULL);
+                }
+                if (drag_held) {
+                    hold_drag_until_release();
                 }
                 zwlr_virtual_pointer_v1_button(pointer, time_ms + 251, drag_button, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);

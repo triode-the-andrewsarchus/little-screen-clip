@@ -1,3 +1,13 @@
+mod excerpt;
+pub use excerpt::{MarkdownExcerptData, MarkdownExcerptView};
+mod math;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum PreviewKey {
+    Block(usize),
+    Span { block: usize, span: usize },
+}
+pub(super) type Previews = std::collections::HashMap<PreviewKey, crate::diagram_preview::Preview>;
+
 use super::*;
 use little_clip_render::markdown::MarkdownLine;
 
@@ -69,17 +79,27 @@ fn render_blocks(
     ui: &mut egui::Ui,
     blocks: &[MarkdownBlock],
     palette: &AppPalette,
-    mut previews: Option<&mut std::collections::HashMap<usize, crate::diagram_preview::Preview>>,
+    mut previews: Option<&mut Previews>,
 ) {
     ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
     for (index, block) in blocks.iter().enumerate() {
         match block {
-            MarkdownBlock::Line(line) => render_markdown_element(ui, line, palette),
+            MarkdownBlock::Line(line) => {
+                if previews
+                    .as_deref_mut()
+                    .is_none_or(|previews| !math::show_line(ui, line, palette, index, previews))
+                {
+                    render_markdown_element(ui, line, palette);
+                }
+            }
             MarkdownBlock::Code { language, text } => {
                 if let Some(format) = little_clip_core::diagram::Format::from_language(language)
                     && let Some(previews) = previews.as_deref_mut()
                 {
-                    previews.entry(index).or_default().show(ui, format, text);
+                    previews
+                        .entry(PreviewKey::Block(index))
+                        .or_default()
+                        .show(ui, format, text);
                     egui::CollapsingHeader::new("Diagram source")
                         .id_source(index)
                         .show(ui, |ui| {
@@ -91,6 +111,18 @@ fn render_blocks(
             }
         }
     }
+}
+
+fn list_indent(ui: &egui::Ui, depth: usize) -> f32 {
+    (depth as f32 * 16.0).min((ui.available_width() - 32.0).max(0.0))
+}
+
+fn quote_frame(palette: &AppPalette) -> egui::Frame {
+    egui::Frame::none()
+        .fill(hex_to_c32(&palette.colors.surface_recessed))
+        .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
+        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
 }
 
 fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &AppPalette) {
@@ -137,7 +169,7 @@ fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &App
         }
         MarkdownLine::Bullet { indent, spans } => {
             ui.horizontal_wrapped(|ui| {
-                ui.add_space(*indent as f32 * 16.0);
+                ui.add_space(list_indent(ui, *indent));
                 ui.label(egui::RichText::new("•").size(BODY_FONT_SIZE).color(
                     crate::ui_ext::contrast_text_c32_on(
                         ui.visuals().panel_fill,
@@ -184,24 +216,19 @@ fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &App
             });
         }
         MarkdownLine::Quote { spans } => {
-            egui::Frame::none()
-                .fill(hex_to_c32(&palette.colors.surface_recessed))
-                .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
-                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for span in spans {
-                            render_markdown_span(
-                                ui,
-                                span,
-                                BODY_FONT_SIZE,
-                                hex_to_c32(&palette.colors.text_secondary),
-                                palette,
-                            );
-                        }
-                    });
+            quote_frame(palette).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for span in spans {
+                        render_markdown_span(
+                            ui,
+                            span,
+                            BODY_FONT_SIZE,
+                            hex_to_c32(&palette.colors.text_secondary),
+                            palette,
+                        );
+                    }
                 });
+            });
         }
         MarkdownLine::Rule => {
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
@@ -221,6 +248,13 @@ fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &App
                 }
             });
         }
+        MarkdownLine::IncompleteMath { source } => {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                "Unclosed display equation ($$)",
+            );
+            ui.monospace(source.chars().take(2048).collect::<String>());
+        }
         MarkdownLine::Empty => {
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         }
@@ -237,6 +271,9 @@ pub(super) fn render_markdown_span(
     palette: &AppPalette,
 ) {
     match span {
+        little_clip_render::markdown::MarkdownSpan::Math { source, .. } => {
+            ui.monospace(source);
+        }
         little_clip_render::markdown::MarkdownSpan::Text(s) => {
             ui.label(egui::RichText::new(s).size(size).color(color));
         }

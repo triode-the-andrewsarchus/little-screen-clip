@@ -1,0 +1,74 @@
+{
+  "name": "@d2-rs/wasm",
+  "version": "0.1.7",
+  "description": "Browser and Node bindings for d2-rs",
+  "keywords": [
+    "d2",
+    "diagram",
+    "svg",
+    "wasm",
+    "text-to-diagram"
+  ],
+  "homepage": "https://github.com/nelsonjchen/d2-rs/tree/main/crates/d2-rs-wasm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nelsonjchen/d2-rs.git",
+    "directory": "crates/d2-rs-wasm"
+  },
+  "bugs": "https://github.com/nelsonjchen/d2-rs/issues",
+  "type": "module",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "node": {
+        "types": "./src/node.d.cts",
+        "default": "./src/node.cjs"
+      },
+      "browser": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.js"
+      },
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./raw": {
+      "node": {
+        "types": "./pkg/node/d2_rs_wasm.d.cts",
+        "default": "./pkg/node/d2_rs_wasm.cjs"
+      },
+      "types": "./pkg/web/d2_rs_wasm.d.ts",
+      "default": "./pkg/web/d2_rs_wasm.js"
+    }
+  },
+  "files": [
+    "src",
+    "!src/**/*.rs",
+    "pkg",
+    "LICENSE",
+    "README.md",
+    "SOURCE.md",
+    "THIRD_PARTY_NOTICES.md",
+    "DEPENDENCY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build-wasm.mjs",
+    "check": "node --check ./src/index.js && cargo check --release --target wasm32-unknown-unknown -p d2-rs-wasm",
+    "test": "node ./scripts/test-package.mjs && node ./scripts/test-runtime-recovery.mjs && node ./scripts/test-node.mjs",
+    "test:browser": "node ./scripts/test-browser.mjs",
+    "test:types": "tsc --noEmit --strict --module NodeNext --target ES2022 --lib ES2022,DOM,ESNext.Disposable tests/target-text-types.mts tests/node-import-types.cts tests/node-import-types.mts",
+    "test:target": "node ./scripts/test-target-render.mjs",
+    "test:ascii": "node ./scripts/test-target-ascii.mjs",
+    "test:target-sdk": "node ./scripts/test-target-sdk.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MPL-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.0",
+    "typescript": "5.9.3"
+  }
+}

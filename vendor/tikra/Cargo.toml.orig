@@ -1,0 +1,28 @@
+[package]
+name = "tikra"
+description = "TikZ figures to SVG and PNG with no TeX install; math labels by mathra."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["tikz", "pgfplots", "svg", "png", "latex"]
+categories = ["rendering", "graphics", "text-processing"]
+
+include = ["src/**", "Cargo.toml"]
+
+[dependencies]
+mathra.workspace = true
+serde_json = "1"
+resvg = { version = "0.45", default-features = false, features = ["raster-images"] }
+ttf-parser = "0.25"
+png = { version = "0.17", optional = true }
+
+[features]
+# the construction animation as GIF and APNG, outside the browser
+motion = ["dep:png"]
+
+[lints.rust]
+# cargo llvm-cov builds with --cfg coverage
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

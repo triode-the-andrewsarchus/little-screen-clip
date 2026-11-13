@@ -1,0 +1,32 @@
+%YAML 1.2
+---
+name: Erd
+file_extensions: [er, erd]
+scope: source.erd
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.erd
+    - match: '[?1*+]--[?1*+]'
+      scope: keyword.operator.erd
+    - match: '^\s*(title|header|entity|relationship)\b'
+      scope: keyword.control.erd
+    - match: '[A-Za-z-]+(?=\s*:)'
+      scope: entity.other.attribute-name.erd
+    - match: '[*+]'
+      scope: storage.modifier.erd
+    - match: '\['
+      scope: punctuation.definition.entity.begin.erd
+      push: entity
+    - match: '["''`]'
+      scope: punctuation.definition.string.begin.erd
+      push:
+        - meta_scope: string.quoted.erd
+        - match: '["''`]'
+          scope: punctuation.definition.string.end.erd
+          pop: true
+  entity:
+    - meta_scope: entity.name.type.erd
+    - match: '\]'
+      scope: punctuation.definition.entity.end.erd
+      pop: true

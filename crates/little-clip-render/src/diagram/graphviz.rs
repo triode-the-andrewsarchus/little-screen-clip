@@ -1,45 +1,4 @@
 //! Native DOT layout, with file loading disabled before any layout begins.
-use resvg::usvg::TreeWriting;
-use std::{fmt::Write, sync::LazyLock};
-
-fn fonts() -> &'static resvg::usvg::fontdb::Database {
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
-        let mut database = super::default_fonts().clone();
-        for bytes in little_clip_core::font_assets::GRAPHVIZ_FONT_BYTES {
-            database.load_font_data(bytes.to_vec());
-        }
-        // The SVG names the metric families (Helvetica/Times/Courier), while
-        // the bundled faces use their own family names. Keep both names on
-        // each style/weight so explicit requests do not fall back to Tinos.
-        let aliases: &[(&str, &[&str])] = &[
-            ("Tinos", &["Times", "Times-Roman", "Times New Roman"]),
-            ("Arimo", &["Helvetica", "Arial"]),
-            ("Cousine", &["Courier", "Courier New"]),
-        ];
-        let faces: Vec<_> = database.faces().cloned().collect();
-        for mut face in faces {
-            let names = aliases
-                .iter()
-                .find(|(name, _)| face.families.iter().any(|(family, _)| family == name));
-            if let Some((_, names)) = names {
-                for name in *names {
-                    face.families.push((
-                        (*name).into(),
-                        resvg::usvg::fontdb::Language::English_UnitedStates,
-                    ));
-                }
-                database.remove_face(face.id);
-                database.push_face_info(face);
-            }
-        }
-        database.set_serif_family("Tinos");
-        database.set_sans_serif_family("Arimo");
-        database.set_monospace_family("Cousine");
-        database
-    });
-    &FONTS
-}
-
 pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let source = source.trim_start_matches('\u{feff}');
     // This library switch rejects image/shapefile/HTML IMG paths before lookup.
@@ -78,39 +37,19 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
             })
             .collect::<Vec<_>>(),
     );
-    let mut body = String::new();
-    let (mut width, mut height) = (0.0_f32, 0.0_f32);
-    for (index, svg) in diagrams.into_iter().enumerate() {
-        // The inline writer omits both namespace declarations (it expects an
-        // SVG host). Its generated root is otherwise complete. Materialize the
-        // namespaces without enabling DTDs or stylesheet processing.
-        let svg = svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1);
-        let (tree, limitations) = super::parse_svg(&svg, fonts(), "Tinos")?;
-        warnings.extend(limitations);
-        width = width.max(tree.size.width());
-        let normalized = tree.to_string(&resvg::usvg::XmlOptions {
-            // Resolve references before nesting. Each graph gets its own ID
-            // namespace, including gradients, clipping and label paths.
-            id_prefix: Some(format!("graph-{index}-")),
-            ..Default::default()
-        });
-        write!(
-            body,
-            "<g transform=\"translate(0 {height})\">{normalized}</g>"
-        )
-        .map_err(|error| error.to_string())?;
-        height += tree.size.height() + 16.0;
-        if height > 16_384.0 || body.len() > super::MAX_SVG {
-            return Err("Combined DOT graphs exceed the diagram viewport budget".into());
-        }
-    }
-    height -= 16.0;
-    Ok((
-        format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\">{body}</svg>"
-        ),
-        warnings,
-    ))
+    let diagrams = diagrams.into_iter().map(|svg| {
+        // The inline writer expects an SVG host and omits its namespaces.
+        svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1)
+    });
+    let (svg, limitations) = super::compose_svg(
+        diagrams,
+        super::fonts::metric_fonts(),
+        "Tinos",
+        super::ImagePolicy::Block,
+        super::ViewportPolicy::FitContent,
+    )?;
+    warnings.extend(limitations);
+    Ok((svg, warnings))
 }
 
 fn preflight(source: &str) -> Result<Vec<String>, String> {
@@ -142,35 +81,16 @@ fn preflight(source: &str) -> Result<Vec<String>, String> {
     )
 }
 
+/// Escapes authored text for generated DOT HTML labels; identities stay ordinal.
+pub(super) fn label(text: &str) -> String {
+    quick_xml::escape::escape(text)
+        .replace('\r', "")
+        .replace('\n', "<BR ALIGN=\"LEFT\"/>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn graphviz_font_family_names_resolve_to_the_metric_compatible_faces() {
-        use resvg::usvg::fontdb::{Family, Query};
-        let database = fonts();
-        for (requested, expected) in [
-            ("Helvetica", "Arimo"),
-            ("Times-Roman", "Tinos"),
-            ("Courier", "Cousine"),
-        ] {
-            let id = database
-                .query(&Query {
-                    families: &[Family::Name(requested)],
-                    ..Default::default()
-                })
-                .unwrap();
-            assert!(
-                database
-                    .face(id)
-                    .unwrap()
-                    .families
-                    .iter()
-                    .any(|(name, _)| name == expected)
-            );
-        }
-    }
 
     #[test]
     fn native_graphviz_renders_all_layout_engines_with_outlined_labels() {
@@ -190,7 +110,7 @@ mod tests {
             let (svg, _) = svg(&source).unwrap_or_else(|error| panic!("{engine}: {error}"));
             assert!(svg.contains("<path"));
             assert!(!svg.contains("<text"));
-            super::super::rasterize_svg(svg).unwrap();
+            super::super::rasterize_svg(svg, true, super::super::ImagePolicy::Block).unwrap();
         }
         assert!(svg("\u{feff}digraph { a -> b }").is_ok());
     }
@@ -216,7 +136,7 @@ mod tests {
         assert_eq!(ids.len(), distinct.len());
         assert!(ids.iter().any(|id| id.starts_with("graph-0-")));
         assert!(ids.iter().any(|id| id.starts_with("graph-1-")));
-        super::super::rasterize_svg(svg).unwrap();
+        super::super::rasterize_svg(svg, true, super::super::ImagePolicy::Block).unwrap();
         assert!(
             self::svg("digraph { a -> b }\ndigraph { c -> }").is_err(),
             "errors after the first graph must not disappear"

@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["vendor/excalidraw-render", "vendor/spark/rust", "vendor/dbml-rs", "vendor/plantuml-core", "vendor/document-svg-drawio", "vendor/structurizr-rs", "vendor/tikra"]
 resolver = "2"
 members = [
     "crates/little-clip-core",
@@ -58,9 +59,18 @@ opt-level = 3
 
 # egui 0.27 requests physical startup dimensions before Wayland knows output scale.
 [patch.crates-io]
+plantuml-core = { path = "vendor/plantuml-core" }
+dbml-rs = { path = "vendor/dbml-rs" }
+excalidraw-render = { path = "vendor/excalidraw-render" }
 sauron-core = { path = "vendor/sauron-core" }
 symphonia = { path = "vendor/symphonia" }
 symphonia-adapter-libopus = { path = "vendor/symphonia-adapter-libopus" }
 egui-winit = { path = "vendor/egui-winit" }
 symphonia-format-caf = { path = "vendor/symphonia-format-caf" }
 symphonia-codec-pcm = { path = "vendor/symphonia-codec-pcm" }
+
+d2-rs-wasm = { path = "vendor/d2-rs-wasm" }
+d2-rs-scenebuild = { path = "vendor/d2-rs-scenebuild" }
+
+[patch."https://github.com/sparkjsdev/spark"]
+spark-lib = { path = "vendor/spark/rust/spark-lib" }

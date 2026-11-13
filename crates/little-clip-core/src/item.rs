@@ -527,8 +527,12 @@ impl ClipItem {
             return Self::from_url(parsed_url);
         }
 
-        // 6. Check if Markdown text
-        if crate::syntax::detect_markdown_text(trimmed) {
+        // 6. A complete diagram may start with a comment that looks like a
+        // Markdown heading (notably YAML harnesses). Keep it as source text so
+        // preview inference can render it or fall back without changing bytes.
+        if crate::syntax::detect_markdown_text(trimmed)
+            && crate::diagram::Format::from_snippet(trimmed).is_none()
+        {
             return Self::from_markdown_text(text);
         }
 

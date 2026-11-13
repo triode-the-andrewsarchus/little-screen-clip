@@ -1,0 +1,16 @@
+blockdiag {
+  default_fontsize = 16;
+  node_width = 140;
+  node_height = 60;
+  source [label = "Source", color = "#d9e8fb"];
+  parse [label = "Parse", shape = roundedbox];
+  preview [label = "Preview", color = "#d9f0df"];
+  source -> parse -> preview;
+  group validation {
+    label = "Validation";
+    color = "#eeeeee";
+    parse;
+    rejected [label = "Error", shape = diamond, color = "#f7ddd8"];
+  }
+  parse -> rejected [label = "invalid", style = dashed];
+}

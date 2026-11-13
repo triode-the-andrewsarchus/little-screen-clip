@@ -1,0 +1,15 @@
+actdiag {
+  draft -> review -> publish;
+  draft [label = "Draft"];
+  review [label = "Review", color = "#d9e8fb"];
+  publish [label = "Publish", color = "#d9f0df"];
+  lane author {
+    label = "Author";
+    draft;
+    publish;
+  }
+  lane editor {
+    label = "Editor";
+    review;
+  }
+}

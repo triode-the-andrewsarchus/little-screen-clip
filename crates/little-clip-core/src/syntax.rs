@@ -15,7 +15,13 @@ pub use classifier::classify_snippet;
 pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     // 1. If explicit extension hint is provided, normalize and map it
     if let Some(lang) = check_extension_hint(ext_hint) {
-        return lang;
+        return if matches!(lang, "dbml" | "erd")
+            && crate::diagram::Format::from_source_extension(lang, content).is_none()
+        {
+            "xml"
+        } else {
+            lang
+        };
     }
 
     let trimmed = content.trim();
@@ -305,6 +311,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "js" | "mjs" | "cjs" | "jsx" => Some("js"),
         "ts" | "tsx" | "mts" | "cts" => Some("ts"),
         "json" => Some("json"),
+        "json5" => Some("json5"),
         "yaml" | "yml" => Some("yaml"),
         "toml" => Some("toml"),
         "kdl" => Some("kdl"),
@@ -316,10 +323,37 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "mermaid" => Some("mermaid"),
         "lini" => Some("lini"),
         "dot" | "gv" | "graphviz" => Some("graphviz"),
+        "d2" => Some("d2"),
+        "bpmn" | "bpmn2" => Some("bpmn"),
+        "wavejson" | "wavedrom" => Some("wavejson"),
+        "excalidraw" => Some("excalidraw"),
+        "wireviz" => Some("wireviz"),
+        "nomnoml" | "noml" => Some("nomnoml"),
+        "dbml" => Some("dbml"),
+        "goat" => Some("goat"),
+        "bytefield" => Some("bytefield"),
+        "er" | "erd" => Some("erd"),
+        "plantuml" | "puml" | "pu" | "iuml" | "c4plantuml" => Some("plantuml"),
+        "structurizr" => Some("structurizr"),
+        "vega" => Some("vega"),
+        "vegalite" | "vega-lite" => Some("vegalite"),
+        "blockdiag" => Some("blockdiag"),
+        "seqdiag" => Some("seqdiag"),
+        "actdiag" => Some("actdiag"),
+        "nwdiag" => Some("nwdiag"),
+        "packetdiag" => Some("packetdiag"),
+        "rackdiag" => Some("rackdiag"),
+        "ditaa" => Some("ditaa"),
+        "tikz" => Some("tikz"),
+        "umlet" => Some("umlet"),
+        "symbolator" => Some("symbolator"),
+        "pgf" | "pgfplots" => Some("tikz"),
+        "uxf" => Some("umlet"),
+        "dsl" | "diag" | "bob" => Some("txt"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
-        "xml" | "svg" | "xsd" => Some("xml"),
+        "xml" | "svg" | "xsd" | "drawio" | "dio" | "diagramsnet" => Some("xml"),
         "go" => Some("go"),
         "rb" | "ruby" => Some("rb"),
         "php" => Some("php"),
@@ -427,6 +461,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "js" => "JavaScript",
         "ts" => "TypeScript",
         "json" => "JSON",
+        "json5" => "JSON5",
         "yaml" => "YAML",
         "toml" => "TOML",
         "kdl" => "KDL",
@@ -439,6 +474,30 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "mermaid" => "Mermaid",
         "lini" => "Lini",
         "graphviz" => "Graphviz",
+        "d2" => "D2",
+        "bpmn" => "BPMN",
+        "wavejson" | "wavedrom" => "WaveDrom",
+        "excalidraw" => "Excalidraw",
+        "wireviz" => "WireViz",
+        "nomnoml" => "Nomnoml",
+        "dbml" => "DBML",
+        "goat" => "GoAT",
+        "bytefield" => "Bytefield",
+        "erd" => "Erd",
+        "plantuml" => "PlantUML",
+        "structurizr" => "Structurizr",
+        "vega" => "Vega",
+        "vegalite" => "Vega-Lite",
+        "blockdiag" => "BlockDiag",
+        "seqdiag" => "SeqDiag",
+        "actdiag" => "ActDiag",
+        "nwdiag" => "NwDiag",
+        "packetdiag" => "PacketDiag",
+        "rackdiag" => "RackDiag",
+        "ditaa" => "Ditaa",
+        "tikz" => "TikZ / PGF",
+        "umlet" => "UMLet",
+        "symbolator" => "Symbolator",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -552,12 +611,95 @@ pub const LINI_SUBLIME_SYNTAX: &str = include_str!("syntax/lini.sublime-syntax")
 
 /// Bundled DOT source grammar shared with native graph editors.
 pub const GRAPHVIZ_SUBLIME_SYNTAX: &str = include_str!("syntax/graphviz.sublime-syntax");
+/// Native D2 source highlighting, shared by document and standalone editors.
+pub const D2_SUBLIME_SYNTAX: &str = include_str!("syntax/d2.sublime-syntax");
+
+/// BPMN XML highlighting for native source/live-preview sessions.
+pub const BPMN_SUBLIME_SYNTAX: &str = include_str!("syntax/bpmn.sublime-syntax");
+
+/// YAML highlighting for native harness source/live-preview sessions.
+pub const WIREVIZ_SUBLIME_SYNTAX: &str = include_str!("syntax/wireviz.sublime-syntax");
+
+/// JSON5 highlighting shared by data files and WaveJSON source editing.
+pub const JSON5_SUBLIME_SYNTAX: &str = include_str!("syntax/json5.sublime-syntax");
+
+/// WaveJSON source highlighting, including JSON5 comments and single quotes.
+pub const WAVEDROM_SUBLIME_SYNTAX: &str = include_str!("syntax/wavedrom.sublime-syntax");
+
+/// JSON highlighting for native drawing sources.
+pub const EXCALIDRAW_SUBLIME_SYNTAX: &str = include_str!("syntax/excalidraw.sublime-syntax");
+
+/// Nomnoml classifiers, relations, comments and layout directives.
+pub const NOMNOML_SUBLIME_SYNTAX: &str = include_str!("syntax/nomnoml.sublime-syntax");
+
+/// Database schema declarations and inert SQL expressions.
+pub const DBML_SUBLIME_SYNTAX: &str = include_str!("syntax/dbml.sublime-syntax");
+
+/// Fixed-grid ASCII and Unicode diagram highlighting.
+pub const GOAT_SUBLIME_SYNTAX: &str = include_str!("syntax/goat.sublime-syntax");
+
+/// Bytefield's Clojure drawing forms and data literals.
+pub const BYTEFIELD_SUBLIME_SYNTAX: &str = include_str!("syntax/bytefield.sublime-syntax");
+
+/// Erd schema names, keys, options and participation syntax.
+pub const ERD_SUBLIME_SYNTAX: &str = include_str!("syntax/erd.sublime-syntax");
+
+/// PlantUML directives, entities, messages and preprocessing forms.
+pub const PLANTUML_SUBLIME_SYNTAX: &str = include_str!("syntax/plantuml.sublime-syntax");
+
+/// Native architecture DSL highlighting for source/live-preview sessions.
+pub const STRUCTURIZR_SUBLIME_SYNTAX: &str = include_str!("syntax/structurizr.sublime-syntax");
+
+/// XML highlighting for native mxGraph source/live-preview sessions.
+pub const DRAWIO_SUBLIME_SYNTAX: &str = include_str!("syntax/drawio.sublime-syntax");
+
+/// JSON highlighting for canonical visualization specifications.
+pub const VEGA_SUBLIME_SYNTAX: &str = include_str!("syntax/vega.sublime-syntax");
+/// JSON highlighting for high-level visualization specifications.
+pub const VEGA_LITE_SUBLIME_SYNTAX: &str = include_str!("syntax/vegalite.sublime-syntax");
+
+/// Shared native diagram grammars used by both screen and desktop source views.
+pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
+    NOMNOML_SUBLIME_SYNTAX,
+    DBML_SUBLIME_SYNTAX,
+    GOAT_SUBLIME_SYNTAX,
+    BYTEFIELD_SUBLIME_SYNTAX,
+    ERD_SUBLIME_SYNTAX,
+    PLANTUML_SUBLIME_SYNTAX,
+    PIKCHR_SUBLIME_SYNTAX,
+    SVGBOB_SUBLIME_SYNTAX,
+    LINI_SUBLIME_SYNTAX,
+    GRAPHVIZ_SUBLIME_SYNTAX,
+    D2_SUBLIME_SYNTAX,
+    BPMN_SUBLIME_SYNTAX,
+    DRAWIO_SUBLIME_SYNTAX,
+    STRUCTURIZR_SUBLIME_SYNTAX,
+    VEGA_SUBLIME_SYNTAX,
+    VEGA_LITE_SUBLIME_SYNTAX,
+    include_str!("syntax/blockdiag.sublime-syntax"),
+    include_str!("syntax/seqdiag.sublime-syntax"),
+    include_str!("syntax/actdiag.sublime-syntax"),
+    include_str!("syntax/nwdiag.sublime-syntax"),
+    include_str!("syntax/packetdiag.sublime-syntax"),
+    include_str!("syntax/rackdiag.sublime-syntax"),
+    include_str!("syntax/ditaa.sublime-syntax"),
+    include_str!("syntax/tikz.sublime-syntax"),
+    include_str!("syntax/umlet.sublime-syntax"),
+    include_str!("syntax/symbolator.sublime-syntax"),
+    WIREVIZ_SUBLIME_SYNTAX,
+    WAVEDROM_SUBLIME_SYNTAX,
+    EXCALIDRAW_SUBLIME_SYNTAX,
+    MERMAID_SUBLIME_SYNTAX,
+];
 
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {
     match lang {
         "ts" | "tsx" | "mts" | "cts" => "js",
         "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
+        "bpmn" | "bpmn2" => "xml",
+        "wireviz" => "yaml",
+        "json5" | "wavejson" | "wavedrom" | "excalidraw" => "json",
         "objc" | "mm" => "m",
         "swift" => "rs",
         "bazel" | "bzl" => "py",
@@ -725,6 +867,12 @@ pub fn detect_markdown_text(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erd_extension_hints_preserve_er_master_xml_highlighting() {
+        assert_eq!(detect_language("[Person]\nname", Some("er")), "erd");
+        assert_eq!(detect_language("<diagram/>", Some("erd")), "xml");
+    }
 
     #[test]
     fn test_extension_mapping() {

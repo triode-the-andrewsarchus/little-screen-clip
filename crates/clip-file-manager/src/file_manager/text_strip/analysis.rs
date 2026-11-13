@@ -30,10 +30,20 @@ pub(in crate::file_manager) fn load(
     if shape.lossy && !known_text(path) {
         return Err("Unrecognized non-UTF-8 file".into());
     }
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let neutral =
         bytes > 16 * 1024 * 1024 || shape.lines > 250_000 || shape.longest > stream::LINE_LIMIT;
-    let (mut document, syntax) = prepare(path, &shape, neutral);
+    let (mut document, syntax, markdown) = prepare(path, &shape, neutral);
+    document.diagram = super::super::diagram_strip::Document::read(
+        path,
+        &mut file,
+        bytes,
+        cancelled,
+        &source,
+        shape.lossy,
+        &mut document.note,
+    )?;
+    document.markdown = (markdown && document.diagram.is_none()).then(|| source.clone());
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     summarize(&mut document, file, syntax, neutral, cancelled)?;
     source.check()?;
     Ok(Arc::new(document))
@@ -43,7 +53,7 @@ fn prepare(
     path: &Path,
     shape: &stream::Shape,
     neutral: bool,
-) -> (Document, &'static syntect::parsing::SyntaxReference) {
+) -> (Document, &'static syntect::parsing::SyntaxReference, bool) {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -53,7 +63,10 @@ fn prepare(
         .and_then(|extension| extension.to_str())
         .unwrap_or(filename.trim_start_matches('.'))
         .to_ascii_lowercase();
-    let detected = little_clip_core::syntax::detect_language(&shape.prefix, Some(&extension));
+    let prefix = &shape.prefix[..shape
+        .prefix
+        .floor_char_boundary(shape.prefix.len().min(8192))];
+    let detected = little_clip_core::syntax::detect_language(prefix, Some(&extension));
     let syntax = SYNTAX_SET
         .find_syntax_by_extension(filename)
         .or_else(|| SYNTAX_SET.find_syntax_by_extension(&extension))
@@ -69,6 +82,8 @@ fn prepare(
         })
         .unwrap_or_else(|| crate::text_preview::find_syntax(detected));
     let bins = shape.lines.clamp(1, BINS as u64) as usize;
+    let markdown = little_clip_core::syntax::map_extension_to_language(&extension) == Some("md")
+        && little_clip_core::diagram::Format::from_source_extension(&extension, prefix).is_none();
     let document = Document {
         lines: shape.lines,
         language: if syntax.name == "Configuration" {
@@ -95,6 +110,11 @@ fn prepare(
             (false, true) => "Lossy UTF-8 preview".into(),
             _ => String::new(),
         },
+        diagram: None,
+        markdown: None,
+        metadata: markdown
+            .then(|| super::metadata::Summary::parse(&shape.prefix))
+            .flatten(),
         columns: COLUMNS,
         bins: (0..bins)
             .map(|_| Bin {
@@ -105,7 +125,7 @@ fn prepare(
             })
             .collect(),
     };
-    (document, syntax)
+    (document, syntax, markdown)
 }
 
 fn summarize(

@@ -369,3 +369,56 @@ fn prepared_file_text_is_retained_after_the_original_file_disappears() {
         .collect();
     assert!(prepared.contains("captured_source"));
 }
+
+#[test]
+fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+    // The test executable has no worker dispatch, exercising decoder/process
+    // failure as well as incomplete candidates without relying on parser text.
+    for source in [
+        "digraph {",
+        "flowchart LR\nA[",
+        "direction: right\na -> {",
+        "[A] -> [B]\n[Unclosed",
+        "Table broken {",
+        "box \"unterminated",
+    ] {
+        let mut pixmap = Pixmap::new(500, 400).unwrap();
+        let preview = renderer
+            .draw_text_preview(
+                &mut pixmap,
+                source,
+                None,
+                0.0,
+                0.0,
+                500.0,
+                400.0,
+                true,
+                Color::WHITE,
+                true,
+            )
+            .expect("failed inference must fall back to text");
+        let lines: Vec<String> = preview
+            .lines
+            .iter()
+            .map(|line| line.iter().map(|span| span.text.as_str()).collect())
+            .collect();
+        assert_eq!(lines.join("\n"), source, "{source}");
+        assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
+    }
+    for (language, expected) in [
+        ("mermaid", "Mermaid"),
+        ("d2", "D2"),
+        ("graphviz", "Graphviz"),
+        ("bpmn", "BPMN"),
+        ("wireviz", "WireViz"),
+        ("nomnoml", "Nomnoml"),
+        ("dbml", "DBML"),
+        ("goat", "GoAT"),
+        ("bytefield", "Bytefield"),
+        ("erd", "Erd"),
+        ("plantuml", "PlantUML"),
+    ] {
+        assert_eq!(find_syntax(language).name, expected);
+    }
+}

@@ -1,0 +1,11 @@
+%YAML 1.2
+---
+name: Ditaa
+file_extensions: [ditaa]
+scope: source.ditaa
+contexts:
+  main:
+    - match: '\{[a-z]+\}|c[0-9A-Fa-f]{3}|c[A-Z]{3}'
+      scope: constant.other.ditaa
+    - match: '[-+|/\\<>^v]'
+      scope: keyword.operator.ditaa

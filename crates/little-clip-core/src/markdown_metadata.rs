@@ -163,7 +163,7 @@ fn decode(source: &str, format: Format) -> Result<Value, String> {
         }
         Format::Toml => {
             let value: toml::Value = toml::from_str(source).map_err(|error| error.to_string())?;
-            serde_json::to_value(value).map_err(|error| error.to_string())?
+            toml_metadata(value)?
         }
         Format::Json => serde_json::from_str(source).map_err(|error| error.to_string())?,
     };
@@ -176,9 +176,39 @@ fn decode(source: &str, format: Format) -> Result<Value, String> {
     Ok(value)
 }
 
+// TOML's Serde datetime encoding is an implementation-specific struct, not a
+// metadata object. Represent its ISO value as text in the common JSON model.
+fn toml_metadata(value: toml::Value) -> Result<Value, String> {
+    match value {
+        toml::Value::Datetime(value) => Ok(Value::String(value.to_string())),
+        toml::Value::Array(values) => values
+            .into_iter()
+            .map(toml_metadata)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array),
+        toml::Value::Table(values) => values
+            .into_iter()
+            .map(|(key, value)| toml_metadata(value).map(|value| (key, value)))
+            .collect::<Result<_, _>>()
+            .map(Value::Object),
+        value => serde_json::to_value(value).map_err(|error| error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toml_dates_remain_readable_typed_metadata_in_nested_tables_and_arrays() {
+        let source = "+++\ndate = 2026-11-12\nlastmod = 2026-11-12T12:30:00-06:00\n[params]\nrevisions = [2026-11-11, 2026-11-12]\ndraft = false\n+++\n# Body";
+        let value = parse(source).unwrap().value.unwrap();
+        assert_eq!(value["date"], "2026-11-12");
+        assert_eq!(value["lastmod"], "2026-11-12T12:30:00-06:00");
+        assert_eq!(value["params"]["revisions"][1], "2026-11-12");
+        assert_eq!(value["params"]["draft"], false);
+        assert!(!value.to_string().contains("toml_private"));
+    }
 
     #[test]
     fn delimiters_preserve_original_body_and_unicode_offsets() {

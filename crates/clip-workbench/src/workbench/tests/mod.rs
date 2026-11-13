@@ -20,6 +20,7 @@ pub(super) fn test_workbench_app(
     let (state_tx, state_rx) = std::sync::mpsc::channel();
     drop(state_tx);
     WorkbenchApp {
+        vector_runtime: None,
         state: Arc::new(SlotManager::default()),
         state_rx,
         state_loaded: true,

@@ -1,0 +1,15 @@
+\definecolor{stageblue}{HTML}{295F98}
+\definecolor{stagegold}{HTML}{DA9B42}
+\begin{pgfpicture}
+  \pgfsetlinewidth{1.2pt}
+  \pgfsetstrokecolor{stageblue}
+  \pgfsetfillcolor{stageblue!10}
+  \pgfpathrectangle{\pgfpoint{0cm}{0cm}}{\pgfpoint{6cm}{2cm}}
+  \pgfusepath{fill,stroke}
+  \pgfsetstrokecolor{stagegold}
+  \pgfpathmoveto{\pgfpoint{0.5cm}{0.5cm}}
+  \pgfpathcurveto{\pgfpoint{2cm}{2cm}}{\pgfpoint{4cm}{0cm}}{\pgfpoint{5.5cm}{1.5cm}}
+  \pgfusepath{stroke}
+  \pgfsetfillcolor{black}
+  \pgftext[at={\pgfpoint{3cm}{1cm}}]{PGF paths and $\int_0^1 x\,dx$}
+\end{pgfpicture}

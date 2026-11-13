@@ -1,0 +1,93 @@
+# Third-party notices
+
+## Current dependency audit and notice bundle
+
+The current audit is in [docs/LICENSE_AUDIT.md](docs/LICENSE_AUDIT.md), with the
+complete machine-readable inventory in [docs/DEPENDENCY_LICENSES.json](docs/DEPENDENCY_LICENSES.json).
+[THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) retains the original dependency
+license/copyright texts and is included with the Rust, Node.js and Python distributions.
+
+This software is based in part on the work of the Independent JPEG Group.
+
+## Standard PDF font metrics
+
+`src/pdf_base14.rs` rearranges numeric glyph advances from eight Adobe Core 14 AFM
+files into Rust tables. Source revision, hashes and checked glyph counts are in the
+dependency inventory. Original copyright/trademark notices and permission are in
+[licenses/Adobe-Core14-AFM.txt](licenses/Adobe-Core14-AFM.txt) and the notice bundle.
+The source is [tc-font-core14-afms](https://github.com/tecnickcom/tc-font-core14-afms/tree/0675784d24b28a55c607cad6b74596ce19ce333c).
+
+## E57 reference test data
+
+`tests/fixtures/sample_e57_bunny.e57` is the `BunnyDouble.e57` XYZ reference file
+from the [E57 Example/Test Data collection](https://e57-3d-imgfmt.sourceforge.net/data.html).
+The collection publishes a Test Data License permitting use, reproduction,
+display, distribution, publication, transmission and reformatting. It requires
+copyright notices except for copies distributed solely as binary files; this
+repository stores the sample in binary form and records its source, license and
+SHA-256 in `tests/fixtures/e57_bunny.provenance.json`.
+
+## Optional cloud architecture assets
+
+`authoring/cloud_icons.py` は、Azure・AWS・Google Cloudの公式アイコンを利用者のローカル
+キャッシュへ取得する任意ツールです。素材とキャッシュ、デモ出力は配布に含めません。原本ZIPには配布元の同梱情報も保持します。
+
+- Microsoft Azure: https://learn.microsoft.com/en-us/azure/architecture/icons/ 。構成図・研修資料・文書への利用が認められています。原形を維持し、製品名を添え、回転・反転・切り抜き・変形を行いません。
+- AWS: https://aws.amazon.com/architecture/icons/ 。公式の構成図用素材を取得します。製品・リソース・カテゴリ・グループを区別します。
+- Google Cloud: https://cloud.google.com/icons 。現行のcore product/category素材を取得します。個別製品と共通カテゴリの使い分けは公式Product icons overviewに従います。
+
+取得元URL・確認日・リリース表記・ZIPのSHA-256は `authoring/icon-sources.json`、各SVGの
+出典・原本内パス・SHA-256は生成する `catalog.json` に記録します。
+
+## Runtime dependencies
+
+このプロジェクトは、コア実行時依存をMIT、Apache-2.0、BSD-3-Clause、CC0-1.0、Zlib、IJGなどの許容的ライセンスへ限定します。GPL、AGPL、SSPL、非商用限定、ソース公開を要求する依存は採用していません。
+
+直接依存:
+
+| crate | resolved version | license |
+|---|---:|---|
+| anyhow | 1.0.104 | MIT OR Apache-2.0 |
+| base64 | 0.23.1 | MIT OR Apache-2.0 |
+| dicom-object | 0.10.0 | MIT OR Apache-2.0 |
+| dicom-parser | 0.10.0 | MIT OR Apache-2.0 |
+| dicom-pixeldata | 0.10.0 | MIT OR Apache-2.0 |
+| dicom-transfer-syntax-registry | 0.10.0 | MIT OR Apache-2.0 |
+| clap | 4.6.6 | MIT OR Apache-2.0 |
+| emf-core | 0.1.0 | MIT |
+| e57 | 0.11.13 | MIT |
+| hayro-ccitt | 0.3.0 | Apache-2.0 OR MIT |
+| jpeg-decoder | 0.3.2 | MIT OR Apache-2.0 |
+| lopdf | 0.44.0 | MIT |
+| png | 0.18.1 | MIT OR Apache-2.0 |
+| quick-xml | 0.41.0 | MIT |
+| rayon | 1.12.0 | MIT OR Apache-2.0 |
+| resvg | 0.48.1 | Apache-2.0 OR MIT |
+| serde | 1.0.229 | MIT OR Apache-2.0 |
+| serde_json | 1.0.151 | MIT OR Apache-2.0 |
+| stet-fonts | 0.4.1 | Apache-2.0 OR MIT |
+| skrifa | 0.44.0 | MIT OR Apache-2.0 |
+| zip | 8.6.0 | MIT |
+
+言語バインディング専用の直接依存:
+
+| crate | resolved version | license |
+|---|---:|---|
+| napi | 3.12.2 | MIT |
+| napi-derive | 3.6.3 | MIT |
+| napi-build | 2.4.1 | MIT |
+| pyo3 | 0.29.2 | MIT OR Apache-2.0 |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 |
+
+実行時依存`jpeg-encoder 0.6.1`は、PDF内のCMYK/YCCK JPEGをブラウザ互換RGB JPEGへ正規化するために使用し、ライセンスは(MIT OR Apache-2.0) AND IJGです。DICOM-rs 0.10.0のcrate archiveはroot license textを含まないため、pinned release tagのMIT/Apache licenseをbundleします。`encoding-index-*`のCC0-1.0 legal codeは`licenses/CC0-1.0.txt`とbundleに含めます。`zune-inflate`は宣言済みlicense alternativesからZlibを選び、pinned source commitのnoticeをbundleします。`tempfile`はコアのテストに加えてNode.js preview APIの一時出力管理にも使用します。
+
+2026-09-14に次の監査で全推移依存のSPDX表現を確認し、必須のコピーレフト依存がないことを確認しました。複数ライセンスを`OR`で提示するcrateは、許容的な選択肢を選びます。target固有推移依存`r-efi`の`MIT OR Apache-2.0 OR LGPL-2.1-or-later`からはMITを選択します。
+
+```bash
+bindings/python/.venv/bin/python scripts/audit-licenses.py \
+  --cargo-deny /path/to/cargo-deny --check
+```
+
+リリース前には`Cargo.lock`を基準に同じ監査を再実行し、各crateの配布物に含まれるLICENSE／NOTICEも保持してください。QAだけに使う`pdftoppm`、`rsvg-convert`、LibreOfficeは外部CLIであり、このcrateへリンク・同梱しません。
+
+参照した既存の実装（非公開、proprietary license）について、そのコードをcopy/vendorせず、公開仕様と観察した入出力契約をもとに独立実装しています。参照QA文書、SVG、PPTX、画像はこの配布物へ含めません。

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "description": "Canonical Vega: inline data, formula, band/linear scales and native SVG marks.",
+  "background": "white",
+  "width": 440,
+  "height": 240,
+  "padding": 12,
+  "title": "Local preview throughput",
+  "data": [{"name": "table", "values": [
+    {"stage": "Parse", "ms": 8}, {"stage": "Layout", "ms": 23}, {"stage": "Raster", "ms": 15}
+  ], "transform": [{"type": "formula", "expr": "datum.ms * 2", "as": "budget"}]}],
+  "scales": [
+    {"name": "x", "type": "band", "domain": {"data": "table", "field": "stage"}, "range": "width", "padding": 0.25},
+    {"name": "y", "type": "linear", "domain": {"data": "table", "field": "budget"}, "range": "height", "nice": true, "zero": true}
+  ],
+  "axes": [{"orient": "bottom", "scale": "x"}, {"orient": "left", "scale": "y", "title": "Budget (ms)"}],
+  "marks": [{"type": "rect", "from": {"data": "table"}, "encode": {"enter": {
+    "x": {"scale": "x", "field": "stage"}, "width": {"scale": "x", "band": 1},
+    "y": {"scale": "y", "field": "budget"}, "y2": {"scale": "y", "value": 0}, "fill": {"value": "#295f98"}
+  }}}]
+}

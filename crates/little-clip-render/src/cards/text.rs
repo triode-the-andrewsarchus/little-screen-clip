@@ -1,107 +1,189 @@
+use std::{borrow::Cow, sync::Arc};
+
+struct MarkdownRun<'a> {
+    text: Cow<'a, str>,
+    style: FontStyle,
+    color: Color,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+    image: Option<Arc<crate::diagram::Thumbnail>>,
+}
+impl<'a> MarkdownRun<'a> {
+    fn text(
+        renderer: &ScreenRenderer,
+        text: Cow<'a, str>,
+        size: f32,
+        style: FontStyle,
+        color: Color,
+    ) -> Self {
+        Self {
+            width: renderer.measure_text_width_styled(&text, size, style),
+            text,
+            style,
+            color,
+            ascent: size,
+            descent: size * 0.2,
+            image: None,
+        }
+    }
+}
+
 use super::*;
 
 impl ScreenRenderer {
-    /// TrueType text width measurement with styling.
+    /// Draws one inline row with a shared baseline, including native equations.
     #[expect(
         clippy::too_many_arguments,
-        reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
+        reason = "Explicit raster bounds, text metrics and palette at the drawing boundary"
     )]
-    pub(super) fn draw_markdown_spans(
+    pub(crate) fn draw_markdown_spans(
         &self,
         pixmap: &mut Pixmap,
         spans: &[crate::markdown::MarkdownSpan],
-        mut cx: f32,
+        x: f32,
         y: f32,
         size: f32,
         default_color: Color,
         clip_right: f32,
+        max_height: f32,
+        prefix: Option<(&str, Color)>,
     ) -> f32 {
         use crate::markdown::MarkdownSpan;
-        let url_color = self.color_from_hex(&self.palette.url_color);
-        let title_color = self.color_from_hex(&self.palette.colors.text_primary);
-        let italic_color = self.color_from_hex_alpha(&self.palette.colors.text_muted, 240);
-        let code_color = self.color_from_hex(&self.palette.undo_border);
-
+        let mut runs = Vec::new();
+        let mut occupied = 0.0;
+        if let Some((text, color)) = prefix {
+            let run = MarkdownRun::text(self, text.into(), size, FontStyle::Bold, color);
+            occupied += run.width;
+            runs.push(run);
+        }
         for span in spans {
-            if cx >= clip_right {
+            if x + occupied >= clip_right {
                 break;
             }
-            match span {
-                MarkdownSpan::Text(s) => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        s,
-                        cx,
-                        y,
-                        size,
-                        default_color,
-                        FontStyle::Regular,
-                        clip_right,
-                    );
+            let (text, style, color) = match span {
+                MarkdownSpan::Text(text) => (text, FontStyle::Regular, default_color),
+                MarkdownSpan::Bold(text) => (
+                    text,
+                    FontStyle::Bold,
+                    self.color_from_hex(&self.palette.colors.text_primary),
+                ),
+                MarkdownSpan::Italic(text) => (
+                    text,
+                    FontStyle::Italic,
+                    self.color_from_hex_alpha(&self.palette.colors.text_muted, 240),
+                ),
+                MarkdownSpan::BoldItalic(text) => (
+                    text,
+                    FontStyle::BoldItalic,
+                    self.color_from_hex(&self.palette.colors.text_primary),
+                ),
+                MarkdownSpan::Code(text) => (
+                    text,
+                    FontStyle::Mono,
+                    self.color_from_hex(&self.palette.undo_border),
+                ),
+                MarkdownSpan::Link { label, .. } => (
+                    label,
+                    FontStyle::Regular,
+                    self.color_from_hex(&self.palette.url_color),
+                ),
+                MarkdownSpan::Math {
+                    source, display, ..
+                } => {
+                    let foreground = [
+                        default_color.red(),
+                        default_color.green(),
+                        default_color.blue(),
+                    ]
+                    .map(|value| (value * 255.0).round() as u8);
+                    let format = if *display {
+                        little_clip_core::diagram::Format::Math
+                    } else {
+                        little_clip_core::diagram::Format::MathInline
+                    };
+                    let result = self
+                        .diagram_previews
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .thumbnail_colored(format, source, Some(foreground))
+                        .and_then(|preview| {
+                            preview
+                                .math
+                                .map(|layout| (preview, layout))
+                                .ok_or_else(|| "Missing equation layout".into())
+                        });
+                    let run = match result {
+                        Ok((preview, layout)) => {
+                            let scale = ((clip_right - x - occupied)
+                                / (layout.width_em * size).max(1.0))
+                            .min(max_height / (layout.height_em * size).max(1.0))
+                            .min(1.0);
+                            MarkdownRun {
+                                text: "".into(),
+                                style: FontStyle::Regular,
+                                color: default_color,
+                                width: layout.width_em * size * scale,
+                                ascent: layout.baseline_em * size * scale,
+                                descent: (layout.height_em - layout.baseline_em) * size * scale,
+                                image: Some(preview),
+                            }
+                        }
+                        Err(error) => MarkdownRun::text(
+                            self,
+                            format!("Math: {error}").into(),
+                            size,
+                            FontStyle::Mono,
+                            default_color,
+                        ),
+                    };
+                    occupied += run.width;
+                    runs.push(run);
+                    continue;
                 }
-                MarkdownSpan::Bold(s) => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        s,
-                        cx,
-                        y,
-                        size,
-                        title_color,
-                        FontStyle::Bold,
-                        clip_right,
-                    );
-                }
-                MarkdownSpan::Italic(s) => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        s,
-                        cx,
-                        y,
-                        size,
-                        italic_color,
-                        FontStyle::Italic,
-                        clip_right,
-                    );
-                }
-                MarkdownSpan::BoldItalic(s) => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        s,
-                        cx,
-                        y,
-                        size,
-                        title_color,
-                        FontStyle::BoldItalic,
-                        clip_right,
-                    );
-                }
-                MarkdownSpan::Code(s) => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        s,
-                        cx,
-                        y,
-                        size,
-                        code_color,
-                        FontStyle::Mono,
-                        clip_right,
-                    );
-                }
-                MarkdownSpan::Link { label, .. } => {
-                    cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        label,
-                        cx,
-                        y,
-                        size,
-                        url_color,
-                        FontStyle::Regular,
-                        clip_right,
-                    );
-                }
-            }
+            };
+            let run = MarkdownRun::text(self, text.as_str().into(), size, style, color);
+            occupied += run.width;
+            runs.push(run);
         }
-        cx
+        let ascent = runs.iter().map(|run| run.ascent).fold(size, f32::max);
+        let descent = runs
+            .iter()
+            .map(|run| run.descent)
+            .fold(size * 0.2, f32::max);
+        let mut cx = x;
+        // A display equation on its own line is centered at its natural em size.
+        if matches!(spans, [MarkdownSpan::Math { display: true, .. }]) {
+            cx += ((clip_right - x - occupied) / 2.0).max(0.0);
+        }
+        for run in runs {
+            if let Some(preview) = run.image {
+                let image = &preview.image;
+                if let Some(pixels) =
+                    PixmapRef::from_bytes(&image.premultiplied_rgba, image.width, image.height)
+                {
+                    let transform = Transform::from_scale(
+                        run.width / image.width as f32,
+                        (run.ascent + run.descent) / image.height as f32,
+                    )
+                    .post_translate(cx, y + ascent - run.ascent);
+                    pixmap.draw_pixmap(0, 0, pixels, &PixmapPaint::default(), transform, None);
+                }
+            } else {
+                self.draw_text_styled_clipped(
+                    pixmap,
+                    &run.text,
+                    cx,
+                    y + ascent - size,
+                    size,
+                    run.color,
+                    run.style,
+                    clip_right,
+                );
+            }
+            cx += run.width;
+        }
+        ascent + descent + 4.0
     }
 
     #[expect(
@@ -177,6 +259,7 @@ impl ScreenRenderer {
                     max_content_w,
                     (max_y - y - 4.0).max(1.0),
                     body_color,
+                    false,
                 );
                 skipped_until = last + 1;
                 continue;
@@ -248,80 +331,78 @@ impl ScreenRenderer {
                         Some(head_color_pref),
                     );
 
-                    let cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        lead_symbol,
-                        content_x,
-                        y,
-                        head_size,
-                        elision_color,
-                        FontStyle::Bold,
-                        clip_right,
-                    );
-                    self.draw_markdown_spans(
-                        pixmap, spans, cx, y, head_size, head_color, clip_right,
-                    );
-                    y += if is_hero { 26.0 } else { 22.0 };
+                    y += self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x,
+                            y,
+                            head_size,
+                            head_color,
+                            clip_right,
+                            max_y - y,
+                            Some((lead_symbol, elision_color)),
+                        )
+                        .max(if is_hero { 26.0 } else { 22.0 });
                 }
                 MarkdownLine::Bullet { indent, spans } => {
                     let indent_px = (*indent as f32 * 4.0).min(16.0);
-                    let bullet_x = content_x + indent_px;
-                    let cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        "• ",
-                        bullet_x,
-                        y,
-                        if is_hero { 18.0 } else { 15.0 },
-                        border_color,
-                        FontStyle::Bold,
-                        clip_right,
-                    );
-                    let font_size = if is_hero { 18.0 } else { 15.0 };
-                    self.draw_markdown_spans(
-                        pixmap, spans, cx, y, font_size, body_color, clip_right,
-                    );
-                    y += if is_hero { 24.0 } else { 20.0 };
+                    let size = if is_hero { 18.0 } else { 15.0 };
+                    y += self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x + indent_px,
+                            y,
+                            size,
+                            body_color,
+                            clip_right,
+                            max_y - y,
+                            Some(("• ", border_color)),
+                        )
+                        .max(if is_hero { 24.0 } else { 20.0 });
                 }
                 MarkdownLine::Numbered { number, spans } => {
-                    let font_size = if is_hero { 18.0 } else { 15.0 };
-                    let cx = self.draw_text_styled_clipped(
-                        pixmap,
-                        &format!("{} ", number),
-                        content_x,
-                        y,
-                        font_size,
-                        border_color,
-                        FontStyle::Bold,
-                        clip_right,
-                    );
-                    self.draw_markdown_spans(
-                        pixmap, spans, cx, y, font_size, body_color, clip_right,
-                    );
-                    y += if is_hero { 24.0 } else { 20.0 };
+                    let size = if is_hero { 18.0 } else { 15.0 };
+                    y += self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x,
+                            y,
+                            size,
+                            body_color,
+                            clip_right,
+                            max_y - y,
+                            Some((&format!("{number} "), border_color)),
+                        )
+                        .max(if is_hero { 24.0 } else { 20.0 });
                 }
                 MarkdownLine::Quote { spans } => {
-                    if let Some(qr) =
-                        Rect::from_xywh(content_x, y, 2.5, if is_hero { 18.0 } else { 15.0 })
-                    {
-                        let mut qp = Paint::default();
-                        qp.set_color(self.color_from_hex(&self.palette.harmonies.base));
-                        pixmap.fill_rect(qr, &qp, Transform::identity(), None);
-                    }
-                    let font_size = if is_hero { 17.5 } else { 14.5 };
+                    let size = if is_hero { 18.0 } else { 15.0 };
                     let quote_fg = self.contrast_color(
                         self.color_from_hex(&self.palette.colors.canvas),
                         Some(self.color_from_hex(&self.palette.colors.text_secondary)),
                     );
-                    self.draw_markdown_spans(
-                        pixmap,
-                        spans,
-                        content_x + 10.0,
-                        y,
-                        font_size,
-                        quote_fg,
-                        clip_right,
-                    );
-                    y += if is_hero { 24.0 } else { 20.0 };
+                    let height = self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x + 10.0,
+                            y,
+                            size,
+                            quote_fg,
+                            clip_right,
+                            max_y - y,
+                            None,
+                        )
+                        .max(if is_hero { 24.0 } else { 20.0 });
+                    if let Some(rect) = Rect::from_xywh(content_x, y, 2.0, height) {
+                        let mut paint = Paint::default();
+                        paint.set_color(border_color);
+                        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+                    }
+                    y += height;
                 }
                 MarkdownLine::Rule => {
                     if let Some(rr) = Rect::from_xywh(content_x, y + 6.0, max_content_w, 1.0) {
@@ -381,10 +462,32 @@ impl ScreenRenderer {
                 }
                 MarkdownLine::Paragraph { spans } => {
                     let font_size = if is_hero { 18.0 } else { 15.0 };
-                    self.draw_markdown_spans(
-                        pixmap, spans, content_x, y, font_size, body_color, clip_right,
+                    y += self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x,
+                            y,
+                            font_size,
+                            body_color,
+                            clip_right,
+                            max_y - y,
+                            None,
+                        )
+                        .max(if is_hero { 24.0 } else { 20.0 });
+                }
+                MarkdownLine::IncompleteMath { .. } => {
+                    self.draw_text_styled_clipped(
+                        pixmap,
+                        "Unclosed display equation ($$)",
+                        content_x,
+                        y,
+                        13.0,
+                        body_color,
+                        FontStyle::Mono,
+                        clip_right,
                     );
-                    y += if is_hero { 24.0 } else { 20.0 };
+                    y += 20.0;
                 }
                 MarkdownLine::Empty => {
                     y += if is_hero { 10.0 } else { 8.0 };
@@ -410,10 +513,17 @@ impl ScreenRenderer {
         elision_color: Color,
         collect_previews: bool,
     ) -> Option<crate::PreparedTextPreview> {
-        if let Some(format) = ext_hint.and_then(|extension| {
-            little_clip_core::diagram::Format::from_source_extension(extension, text)
-        }) {
-            self.draw_diagram_preview(
+        let inferred = ext_hint
+            .is_none()
+            .then(|| little_clip_core::diagram::Format::from_snippet(text))
+            .flatten();
+        if let Some(format) = ext_hint
+            .and_then(|extension| {
+                little_clip_core::diagram::Format::from_source_extension(extension, text)
+            })
+            .or(inferred)
+        {
+            let height = self.draw_diagram_preview(
                 pixmap,
                 format,
                 text,
@@ -422,10 +532,18 @@ impl ScreenRenderer {
                 (rw - 28.0).max(1.0),
                 (rh - 150.0).max(1.0),
                 self.color_from_hex(&self.palette.colors.text_primary),
+                inferred.is_some(),
             );
-            return None;
+            if height > 0.0 {
+                return None;
+            }
         }
-        if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md") {
+        // A guessed diagram which does not render remains readable source. Its
+        // syntax hint also keeps table heuristics from consuming partial code.
+        let ext_hint = ext_hint.or_else(|| inferred.and_then(|format| format.source_extension()));
+        if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md")
+            || (ext_hint.is_none() && little_clip_core::syntax::detect_markdown_text(text))
+        {
             self.draw_markdown_preview(
                 pixmap,
                 text,
@@ -493,6 +611,27 @@ impl ScreenRenderer {
             return None;
         }
 
+        self.draw_source_preview(
+            pixmap,
+            trimmed,
+            little_clip_core::syntax::detect_language(trimmed, ext_hint),
+            [rx, ry, rw, rh],
+            is_hero,
+            collect_previews,
+        )
+    }
+
+    // Keep source painting separate from presentation classification. Both an
+    // ordinary snippet and a rejected diagram use this exact fallback path.
+    fn draw_source_preview(
+        &self,
+        pixmap: &mut Pixmap,
+        trimmed: &str,
+        lang_id: &str,
+        [rx, ry, rw, rh]: [f32; 4],
+        is_hero: bool,
+        collect_previews: bool,
+    ) -> Option<crate::PreparedTextPreview> {
         let content_x = rx + 14.0;
         let clip_right = rx + rw - 10.0;
         let text_font_size = if is_hero { 18.0 } else { 15.0 };
@@ -506,7 +645,6 @@ impl ScreenRenderer {
         let max_y = ry + rh - 22.0;
         let mut line_y = ry + 124.0;
 
-        let lang_id = little_clip_core::syntax::detect_language(trimmed, ext_hint);
         let syntax = find_syntax(lang_id);
 
         let theme = THEME_SET
@@ -619,6 +757,7 @@ impl ScreenRenderer {
         width: f32,
         height: f32,
         foreground: Color,
+        text_fallback: bool,
     ) -> f32 {
         let result = self
             .diagram_previews
@@ -666,6 +805,7 @@ impl ScreenRenderer {
                 }
                 drawn_height + warning_height + 10.0
             }
+            Err(_) if text_fallback => 0.0,
             Err(error) => {
                 self.draw_text_styled_clipped(
                     pixmap,

@@ -1,0 +1,1 @@
+Pinned pristine Symbolator 1.2.2 fork, including its canonical pyHDLParser and NuCanvas runtime sources. See PROVENANCE.json for the immutable commit, archive digest and file inventory. Upstream files are unmodified and MIT licensed. Sphinx, tests and documentation assets are omitted. The selected fork directly supports VHDL entities/components plus Verilog modules.

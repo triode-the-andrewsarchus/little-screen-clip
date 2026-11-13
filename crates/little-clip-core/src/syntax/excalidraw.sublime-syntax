@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: Excalidraw
+file_extensions: [excalidraw]
+scope: source.json.excalidraw
+contexts:
+  main:
+    - include: scope:source.json

@@ -261,6 +261,7 @@ enum ViewerSession {
     Model3d(Model3dViewerState),
     Splat(Box<splat_view::SplatViewerState>),
     Text(TextPreviewState),
+    TextEditor(Box<clip_studios::text_editor::TextSession>),
     ComponentGallery(component_gallery::ComponentGalleryState),
 }
 
@@ -512,9 +513,37 @@ struct ImageLoadJob {
     receiver: little_clip_core::jobs::JobReceiver<Result<ImageLoadResult, String>>,
 }
 
+enum TextPreviewLoadResult {
+    Preview(Box<TextPreviewState>),
+    Editor(Box<clip_studios::text_editor::TextSession>),
+}
+impl TextPreviewLoadResult {
+    fn clipboard(content: Arc<String>, title: Option<String>, config: &AppConfig) -> Self {
+        if let Some(editor) = clip_studios::text_editor::TextSession::from_clipboard(
+            content.clone(),
+            title.clone(),
+            config,
+        ) {
+            Self::Editor(Box::new(editor))
+        } else {
+            Self::Preview(Box::new(TextPreviewState::from_data(
+                TextPreviewData::from_text(content),
+                title,
+                config,
+            )))
+        }
+    }
+    fn into_viewer(self) -> ViewerSession {
+        match self {
+            Self::Preview(state) => ViewerSession::Text(*state),
+            Self::Editor(state) => ViewerSession::TextEditor(state),
+        }
+    }
+}
+
 struct TextPreviewLoadJob {
     ticket: JobTicket,
-    receiver: little_clip_core::jobs::JobReceiver<Result<TextPreviewState, String>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<TextPreviewLoadResult, String>>,
 }
 
 struct RollingEditorLoadJob {
@@ -562,15 +591,20 @@ impl TextPreviewLoadJob {
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
                 let failure_path = path.display().to_string();
                 TextPreviewState::from_file(&path, &config)
+                    .map(|state| TextPreviewLoadResult::Preview(Box::new(state)))
                     .ok_or_else(|| format!("Could not read or prepare text file {failure_path}"))
             });
         Self { ticket, receiver }
     }
 
     fn from_text(content: String, title: Option<String>, config: AppConfig) -> Self {
-        let (ticket, receiver) = BackgroundJobs::global()
-            .submit(Duration::from_secs(30), move || {
-                Ok(TextPreviewState::from_text(content, title, &config))
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                Ok(TextPreviewLoadResult::clipboard(
+                    Arc::new(content),
+                    title,
+                    &config,
+                ))
             });
         Self { ticket, receiver }
     }
@@ -578,8 +612,11 @@ impl TextPreviewLoadJob {
     fn from_shared_text(content: Arc<String>, title: String, config: AppConfig) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-                let data = TextPreviewData::from_text(content);
-                Ok(TextPreviewState::from_data(data, Some(title), &config))
+                Ok(TextPreviewLoadResult::clipboard(
+                    content,
+                    Some(title),
+                    &config,
+                ))
             });
         Self { ticket, receiver }
     }
@@ -592,6 +629,7 @@ impl Drop for TextPreviewLoadJob {
 }
 
 struct WorkbenchApp {
+    vector_runtime: Option<clip_ui::vectors::Runtime>,
     state: Arc<SlotManager>,
     state_rx: Receiver<Result<Arc<SlotManager>, String>>,
     state_loaded: bool,
@@ -1189,7 +1227,19 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
         Box::new(move |cc| {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Box::new(WorkbenchApp::new(
+            let vector_runtime =
+                cc.gl
+                    .as_ref()
+                    .zip(cc.get_proc_address)
+                    .and_then(|(gl, loader)| {
+                        // SAFETY: eframe invokes its creator with this window's context
+                        // current. Its matching loader is used only here, and on_exit
+                        // releases the UI-thread runtime before eframe destroys the context.
+                        unsafe { clip_ui::vectors::Runtime::install(&cc.egui_ctx, gl, loader) }
+                    .map_err(|error| tracing::warn!(%error, "Native vector initialization failed"))
+                    .ok()
+                    });
+            let mut app = WorkbenchApp::new(
                 cc.egui_ctx.clone(),
                 is_diff,
                 is_binary_diff,
@@ -1203,7 +1253,9 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
                 open_component_gallery,
                 start_node_machine,
                 start_auto_actions,
-            ))
+            );
+            app.vector_runtime = vector_runtime;
+            Box::new(app)
         }),
     )
 }

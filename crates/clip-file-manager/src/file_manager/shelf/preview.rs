@@ -41,6 +41,10 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf, bool),
     Text(PathBuf),
+    Markdown {
+        source: crate::file_source::FileSource,
+        line: usize,
+    },
     System(PathBuf),
     Binary(PathBuf),
     Font(PathBuf),
@@ -123,6 +127,7 @@ impl Source {
             | Self::StudioPhoto { .. }
             | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
+            | Self::Markdown { .. }
             | Self::Font(_)
             | Self::Subtitle(_)
             | Self::Notebook(_)
@@ -258,6 +263,9 @@ impl Source {
                 data
             }
             Source::Text(path) => document_preview(&path, token),
+            Source::Markdown { source, line } => {
+                super::super::markdown_hover::load(source, line, token)
+            }
             Source::TextRaster {
                 document,
                 width,
@@ -297,11 +305,13 @@ impl HoverRaster {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
     }
-    pub fn retain(&mut self, keep: impl Fn(uuid::Uuid) -> bool) {
-        if !self.seen || self.key.is_some_and(|(source, _, _, _)| !keep(source)) {
+    pub fn retain(&mut self, keep: impl Fn(uuid::Uuid) -> bool) -> bool {
+        let retired = !self.seen || self.key.is_some_and(|(source, _, _, _)| !keep(source));
+        if retired {
             self.clear();
         }
         self.seen = false;
+        retired
     }
     pub fn request(
         &mut self,
@@ -463,11 +473,12 @@ impl Previews {
         {
             Arc::make_mut(current).inherit_retained_provenance(previous);
         }
-        let options = if data.document.is_some() || data.midi_document.is_some() {
-            egui::TextureOptions::NEAREST
-        } else {
-            egui::TextureOptions::LINEAR
-        };
+        let options =
+            if data.document.is_some() && !data.rendered_diagram || data.midi_document.is_some() {
+                egui::TextureOptions::NEAREST
+            } else {
+                egui::TextureOptions::LINEAR
+            };
         let texture = data
             .image
             .as_ref()
@@ -1118,6 +1129,9 @@ fn document_preview(path: &Path, token: &AtomicBool) -> Data {
     let mut data = Data::new(display_path(path), "Text".into(), Icon::Text);
     match super::super::text_strip::load(path, token) {
         Ok(document) => {
+            if let Some(diagram) = &document.diagram {
+                diagram.render(&mut data, token);
+            }
             data.document = Some(document);
         }
         Err(error) if error == "Binary file" || error == "Unrecognized non-UTF-8 file" => {
