@@ -42,7 +42,7 @@ def painted_bounds(path, color):
 
 def artwork(session, shot, expected=()):
     def ready():
-        session.observe(shot, ["Pencil", *expected], timeout_seconds=45)
+        session.observe(shot, ["Stroke", *expected], timeout_seconds=45)
         try:
             blue = painted_bounds(session.output / f"{shot}.png", BLUE)
             green = painted_bounds(session.output / f"{shot}.png", GREEN)
@@ -123,18 +123,25 @@ def undo_exact(session, path, screen, expected, shot):
 
 
 def replace_text(session, shot, value):
-    session.observe(shot, ["Drawing text", "Apply text"])
-    apply = (session.word(shot, "Apply", minimum_y=160, required=False, last=True) or
-             isolated_control(session, shot, "Apply", (800, 140, 1180, 430)))
-    # The three-row native TextEdit lies immediately above its Apply button.
+    session.observe(shot, ["Apply text", "Cancel"])
+    try:
+        apply = isolated_control(session, shot, "Apply", (0, 180, 360, 650))
+    except RuntimeError:
+        apply = session.word(shot, "Apply", tree=True)
+    assert apply[0] < 330, "text editing stays docked in the fixed sidebar"
+    # The four-row docked TextEdit lies immediately above its Apply button.
     session.click(apply[0] + 120, apply[1] - 40)
     session.key("a", "ctrl")
     private.run_checked(["wtype", value], env=session.env)
+    session.key("a", "ctrl")
+    session.key("c", "ctrl")
+    assert private.run_checked(["wl-paste", "--no-newline"], env=session.env) == value, \
+        "the docked field must contain the exact submitted draft"
     # Defocus the field before OCR: its caret can turn a final 'e' into 'd'
     # in light appearance. The form heading leaves the exact draft intact.
-    session.click(apply[0] + 120, apply[1] - 116)
-    session.observe(shot + "-entered", [value, "Apply text"])
-    # The form remains at its user-owned position while this field is edited.
+    session.click(apply[0] + 120, apply[1] - 140)
+    session.observe(shot + "-entered", [*value.split(), "Apply text"])
+    # The form remains in the fixed sidebar while this field is edited.
     session.click(apply[0] + 8, apply[1])
     return apply
 
@@ -159,8 +166,9 @@ def text_artwork(session, shot, bounds, previous=None):
 
 def text_edits(session, path, blue):
     _, screen = mapping(blue)
-    session.observe("03-text-tool", ["Pencil", "Text"])
-    control(session, "03-text-tool", "Text")
+    session.observe("03-text-tool", ["Stroke", "Background"])
+    canvas_focus(session, screen)
+    session.key("t")
     session.click(*screen(325, 350))
     replace_text(session, "04-new-text", "Native note")
     initial_ids = {entry["id"] for entry in ORIGINAL["elements"]}
@@ -189,8 +197,8 @@ def text_edits(session, path, blue):
 def label_binding(session, path, blue):
     _, screen = mapping(blue)
     session.click(*screen(230, 175))
-    session.observe("10-label-target", ["Add label", "Pencil"])
-    control(session, "10-label-target", "label")
+    session.scroll_to_visible("10-label-target", ["Add label"], position=(200, 590))
+    control(session, "10-label-target", "label", bounds=(95, 280, 330, 650))
     replace_text(session, "11-add-label", "Bound label")
     labelled_bytes, labelled = save_document(session, path,
         lambda doc: len(element(doc, "capture")["boundElements"]) == 2,
@@ -205,7 +213,7 @@ def label_binding(session, path, blue):
     session.click(*screen(label["x"] + 10, label["y"] + label["height"] / 2))
     rejected = "Oversized replacement label text"
     apply = replace_text(session, "12a-label-too-wide", rejected)
-    session.observe("12b-label-rejected", [rejected, "does not fit its container", "Apply text"])
+    session.observe("12b-label-rejected", [*rejected.split(), "does not fit its container", "Apply text"])
     assert path.read_bytes() == labelled_bytes, "a rejected label cannot change the source"
     session.click(apply[0] + 120, apply[1] - 40)
     session.key("a", "ctrl")
@@ -228,7 +236,7 @@ def held_drag(session, start, end, shot, path, before_bytes):
         stderr=subprocess.PIPE, text=True)
     try:
         assert drag.stdout.readline().strip() == "holding private drag"
-        session.observe(shot, ["Pencil"], preserve_pointer=True)
+        session.observe(shot, ["Stroke"], preserve_pointer=True)
         assert drag.poll() is None, "artwork is inspected before pointer release"
         assert path.read_bytes() == before_bytes, "held resize cannot write the source"
         yield shot

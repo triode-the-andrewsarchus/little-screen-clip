@@ -30,7 +30,7 @@ def exercise(session, root):
     # Allow the worker's first valid source to arrive, using actual artwork
     # rather than a fixed delay or a toolbar that can appear before loading.
     def filled():
-        session.capture_text("03-loaded", session.output / "03-loaded.png", ["Pencil"])
+        session.capture_text("03-loaded", session.output / "03-loaded.png", ["Stroke"])
         try:
             color_bounds(session.output / "03-loaded.png")
             return True
@@ -46,7 +46,7 @@ def exercise(session, root):
     )
     try:
         assert drag.stdout.readline().strip() == "holding private drag"
-        session.observe("04-held-artwork", ["Pencil"], preserve_pointer=True)
+        session.observe("04-held-artwork", ["Stroke"], preserve_pointer=True)
         assert drag.poll() is None, "capture must finish while the pointer is still held"
         during, _ = color_bounds(session.output / "04-held-artwork.png")
         green_during, _ = color_bounds(session.output / "04-held-artwork.png", (211, 249, 216))
@@ -75,10 +75,10 @@ def exercise(session, root):
     session.key("z", "ctrl")
     session.key("s", "ctrl")
     wait_for(lambda: path.read_text() == SOURCE, "shared undo restores the exact drawing source")
-    session.observe("05-undone", ["Pencil", "Redo"])
+    session.observe("05-undone", ["Stroke", "Redo"])
     bounds, _ = color_bounds(session.output / "05-undone.png")
     private.run_checked([str(session.pointer), "scroll", "1280", "800", str((bounds[0] + bounds[2]) // 2), str((bounds[1] + bounds[3]) // 2), "-1000"], env=session.env)
-    session.observe("06-vector-zoom", ["1600%", "Pencil"])
+    session.observe("06-vector-zoom", ["1600%", "Stroke"])
 
 
 if __name__ == "__main__":

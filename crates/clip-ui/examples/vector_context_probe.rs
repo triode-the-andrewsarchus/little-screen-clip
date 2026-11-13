@@ -24,6 +24,7 @@ struct Probe {
     zoom: f32,
     pan: egui::Vec2,
     clicks: u32,
+    svg: Option<Arc<vectors::svg::Scene>>,
 }
 
 impl Probe {
@@ -56,6 +57,12 @@ impl Probe {
             Ok(runtime) => (Some(runtime), None),
             Err(error) => (None, Some(error)),
         };
+        let svg = std::env::var_os("LITTLE_CLIP_VECTOR_PROBE_SVG").map(|path| {
+            let source = std::fs::read_to_string(path).expect("probe SVG fixture");
+            let tree = usvg::Tree::from_str(&source, &usvg::Options::default())
+                .expect("normalized probe SVG");
+            vectors::svg::Scene::new(tree, Default::default()).expect("native probe SVG effects")
+        });
         Self {
             metrics,
             error,
@@ -63,6 +70,7 @@ impl Probe {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             clicks: 0,
+            svg,
         }
     }
 
@@ -74,6 +82,19 @@ impl Probe {
         if response.hovered() {
             let scroll = ui.input(|input| input.raw_scroll_delta.y);
             self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(0.25, 32.0);
+        }
+        if let Some(svg) = &self.svg {
+            ui.painter_at(rect)
+                .rect_filled(rect, 0.0, egui::Color32::WHITE);
+            let image =
+                egui::Rect::from_center_size(rect.center() + self.pan, svg.size() * self.zoom);
+            match svg.paint(ui, rect, image, Default::default()) {
+                Ok(()) => {
+                    self.metrics.frames.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => self.error = Some(error),
+            }
+            return;
         }
         let metrics = self.metrics.clone();
         let zoom = self.zoom;

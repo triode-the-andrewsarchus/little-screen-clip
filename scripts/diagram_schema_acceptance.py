@@ -9,6 +9,8 @@ from text_strip_acceptance import hover_observation
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "docs/examples/diagrams"
 FAMILIES = {
+    'pikchr': ('Pikchr', 'pipeline.pikchr', (0, 0, 0), 'box at invalid nonsense'),
+    'svgbob': ('svgbob', 'pipeline.svgbob', (0, 0, 0), '+' * 257),
     'seqdiag': ('SeqDiag', 'request.seqdiag', (217, 232, 251), 'seqdiag {'),
     'blockdiag': ('BlockDiag', 'pipeline.blockdiag', (217, 232, 251), 'blockdiag {'),
     'actdiag': ('ActDiag', 'review.actdiag', (217, 232, 251), 'actdiag {'),
@@ -33,11 +35,11 @@ FAMILIES = {
 }
 
 
-def artwork(path, color, minimum=200):
+def artwork(path, color, minimum=200, bounds=None):
     with Image.open(path).convert("RGB") as image:
         # The fixture's node fill must occupy real painted area; source words
         # appearing in the syntax editor cannot prove that rendering worked.
-        pixels = iter(image.tobytes())
+        pixels = iter((image.crop(bounds) if bounds else image).tobytes())
         return sum(all(abs(a - b) < 3 for a, b in zip((r, g, b), color))
                    for r, g, b in zip(pixels, pixels, pixels)) > minimum
 
@@ -62,7 +64,11 @@ def exercise(session, root):
         valid, invalid = f"a-pipeline.{syntax}", f"b-invalid.{syntax}"
         rendered(session, prefix + "01-strips", [valid, invalid, "c-overview.md"], color, minimum=80 if syntax in {"symbolator", "seqdiag", "actdiag", "nwdiag", "packetdiag", "rackdiag"} else 500)
         _, y = session.word(prefix + "01-strips", valid)
-        hover_observation(session, prefix + "02-popout", 700, y + 42, [title])
+        # These format names also appear in the row's type badge. Require
+        # enlarged paper outside the row before capturing the hover evidence.
+        enlarged = (lambda path: artwork(path, (255, 255, 255), 1000,
+                                         bounds=(230, 320, 325, 650))) if syntax in {"pikchr", "svgbob"} else None
+        hover_observation(session, prefix + "02-popout", 700, y + 42, [title], rendered=enlarged)
         assert artwork(session.output / f"{prefix}02-popout.png", color), f"{syntax}: authored artwork missing from hover"
         _, y = session.word(prefix + "01-strips", invalid)
         hover_observation(session, prefix + "03-invalid", 700, y + 42, ["Rendered preview unavailable"])

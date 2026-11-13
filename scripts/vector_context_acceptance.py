@@ -46,11 +46,14 @@ def exercise(session, _root):
 
 
 def main():
-    args = application_arguments(__doc__, Path("target/debug/examples/vector_context_probe"))
+    args = application_arguments(__doc__, Path("target/debug/examples/vector_context_probe"),
+                                 configure=lambda parser: parser.add_argument("--svg", type=Path))
     output, root = media_fixture_directory(args)
     def environment(env, _children):
         private.APP_ID = "little-clip-vector-probe"
         env["LITTLE_CLIP_VECTOR_PROBE_APPEARANCE"] = args.appearance
+        if args.svg:
+            env["LITTLE_CLIP_VECTOR_PROBE_SVG"] = str(args.svg.resolve())
         # Resize crossfades mix old/new native surfaces in screenshots. Disable
         # only this disposable compositor's animations so visual evidence shows
         # the actual frame produced by the two renderers.
