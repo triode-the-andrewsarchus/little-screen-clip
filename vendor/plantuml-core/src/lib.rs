@@ -130,6 +130,22 @@ pub fn render_with_metrics(
     resolver: std::rc::Rc<dyn crate::tim::resolver::Resolver>,
     deterministic: bool,
 ) -> Result<String, Error> {
+    render_report(source, resolver, deterministic).map(|report| report.svg)
+}
+
+/// Native render output and diagnostics retained by embedding applications.
+#[derive(Debug)]
+pub struct RenderReport {
+    pub svg: String,
+    pub warnings: Vec<String>,
+}
+
+/// Renders with the same pipeline while retaining its visible warning messages.
+pub fn render_report(
+    source: &str,
+    resolver: std::rc::Rc<dyn crate::tim::resolver::Resolver>,
+    deterministic: bool,
+) -> Result<RenderReport, Error> {
     let outer = DETERMINISTIC.with(|d| d.replace(deterministic));
     let result = render_mode(source, resolver, deterministic);
     DETERMINISTIC.with(|d| d.set(outer));
@@ -140,7 +156,7 @@ fn render_mode(
     source: &str,
     resolver: std::rc::Rc<dyn crate::tim::resolver::Resolver>,
     deterministic: bool,
-) -> Result<String, Error> {
+) -> Result<RenderReport, Error> {
     use crate::command::UmlSource;
     use crate::export::{export_svg, ExportOptions};
     use crate::klimt::font::TableFontBounder;
@@ -207,7 +223,10 @@ fn render_mode(
     opts.svg_title = pre.artifact.options.get(&OptionKey::SvgTitle).cloned();
     opts.svg_desc = pre.artifact.options.get(&OptionKey::SvgDesc).cloned();
     let block = crate::chrome::create(block, base, &skin, &diagram.title());
-    Ok(export_svg(block.as_ref(), sb, &opts))
+    Ok(RenderReport {
+        svg: export_svg(block.as_ref(), sb, &opts),
+        warnings: base.warnings.iter().map(|lines| lines.join("\n")).collect(),
+    })
 }
 
 #[cfg(test)]
