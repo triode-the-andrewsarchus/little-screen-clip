@@ -144,7 +144,12 @@ impl Reader<'_> {
         Some(c)
     }
     fn error(&self, message: &str) -> String {
-        let before = &self.source[..self.offset];
+        // Erd accepts LF, CRLF and classic CR line endings. Normalize only
+        // this bounded diagnostic copy; authored bytes and token spans stay exact.
+        let normalized = self.source[..self.offset]
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
+        let before = normalized.as_str();
         let line = before.bytes().filter(|c| *c == b'\n').count() + 1;
         let column = before
             .rsplit_once('\n')
@@ -410,6 +415,14 @@ mod tests {
             assert_eq!(doc.entities[0].attributes.len(), 2);
             assert_eq!(doc.relations[0].left_cardinality, card);
             assert_eq!(doc.relations[1].right_cardinality, card);
+        }
+    }
+
+    #[test]
+    fn parse_diagnostics_count_all_supported_line_endings() {
+        for ending in ["\n", "\r\n", "\r"] {
+            let error = parse(&format!("[A]{ending}unquoted field")).unwrap_err();
+            assert!(error.contains("line 2, column 10"), "{error}");
         }
     }
 

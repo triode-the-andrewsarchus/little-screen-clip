@@ -2163,3 +2163,9 @@ artwork because a legitimate tall diagram can place that control below the
 viewport. Earlier attempts exposed a singular/plural harness check and an
 executable replacement during overlapping development builds; the final runs
 use the completed build without overlapping compilation.
+
+## Erd parser diagnostics
+
+- [x] Count classic CR-only line endings as well as LF and CRLF in parse errors.
+  A targeted test verifies line 2, column 10 for the same malformed statement
+  under all three encodings. Authored bytes and token offsets remain unchanged.
