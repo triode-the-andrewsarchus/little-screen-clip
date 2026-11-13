@@ -21,6 +21,7 @@ use std::{
 };
 
 mod canvas;
+mod wiring;
 
 struct Model {
     editable: Editable,
@@ -49,6 +50,12 @@ struct Update {
     model: Arc<Model>,
     publish: bool,
 }
+struct TerminalDrag {
+    from: Endpoint,
+    source: Arc<str>,
+    model: Arc<Model>,
+}
+
 struct Request {
     edit: Edit,
     started: Instant,
@@ -66,6 +73,7 @@ pub(crate) struct WireEditor {
     canvas_notice: Option<String>,
     camera: Camera,
     selected: Option<Endpoint>,
+    drag: Option<TerminalDrag>,
     connected: HashSet<Endpoint>,
     label: String,
     color: String,
@@ -79,6 +87,7 @@ impl WireEditor {
         self.edit_error.is_some()
     }
     pub(crate) fn suspend(&mut self) {
+        self.drag = None;
         if !self.busy() {
             self.pending = None;
         }
@@ -92,6 +101,7 @@ impl WireEditor {
             self.model = None;
             self.source = None;
             self.selected = None;
+            self.drag = None;
             self.connected.clear();
             self.parse_error = None;
             self.edit_error = accepted
@@ -199,6 +209,7 @@ impl WireEditor {
         if self.busy() || self.pending.is_some() || self.model.is_none() {
             return;
         }
+        self.drag = None;
         self.edit_error = None;
         self.retry = None;
         self.request = Some(Request {
@@ -221,7 +232,7 @@ impl WireEditor {
                 self.camera.fitted = false;
             }
             ui.small(format!("{:.0}%", self.camera.zoom_percent()));
-            ui.small("Click a terminal to trace its path · scroll to zoom · middle-drag to pan");
+            ui.small("Select to trace · drag a pin to a conductor to connect · middle-drag to pan");
         });
         self.show_source
     }
@@ -324,12 +335,14 @@ impl WireEditor {
 }
 
 fn edit_source(model: Arc<Model>, source: Arc<str>, edit: Edit) -> Result<Update, String> {
-    let source = Arc::from(model.editable.apply(&source, edit)?);
+    let output = model.editable.apply(&source, edit)?;
+    let publish = output != source.as_ref();
+    let source = Arc::from(output);
     let model = Arc::new(Model::parse(&source)?);
     Ok(Update {
         source,
         model,
-        publish: true,
+        publish,
     })
 }
 

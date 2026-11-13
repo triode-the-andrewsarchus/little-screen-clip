@@ -444,3 +444,49 @@ mod presentation_tests {
         assert!(svg.contains("wireviz-connector-0"));
     }
 }
+
+#[cfg(test)]
+mod wiring_tests {
+    use super::*;
+    use wireviz::edits::{Edit, Editable};
+
+    #[test]
+    fn source_wiring_transactions_keep_native_terminal_hit_identities() {
+        let source = include_str!("../../../../docs/examples/diagrams/harness-wiring.wireviz");
+        let disconnected = Editable::parse(source)
+            .unwrap()
+            .apply(source, Edit::Disconnect { link: 4 })
+            .unwrap();
+        let connected = Editable::parse(&disconnected)
+            .unwrap()
+            .apply(
+                &disconnected,
+                Edit::Connect {
+                    from: Endpoint::Pin {
+                        connector: 2,
+                        pin: 0,
+                    },
+                    to: Endpoint::Cable {
+                        cable: 0,
+                        conductor: Conductor::Shield,
+                    },
+                },
+            )
+            .unwrap();
+        let (svg, warnings) = svg(&connected).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let prepared = super::super::retained::prepare(&svg).unwrap();
+        for id in [
+            "graph-0-a_wireviz-pin-0-0",
+            "graph-0-a_wireviz-pin-1-1",
+            "graph-0-a_wireviz-pin-2-0",
+            "graph-0-a_wireviz-wire-0-1",
+            "graph-0-a_wireviz-shield-0",
+        ] {
+            let node = prepared.tree.node_by_id(id).expect(id);
+            assert!(node.abs_bounding_box().width() > 0.0, "{id}");
+        }
+        assert_eq!(wireviz::parse(&connected).unwrap().links.len(), 6);
+        assert!(connected.contains("# three distinct parallel lanes"));
+    }
+}

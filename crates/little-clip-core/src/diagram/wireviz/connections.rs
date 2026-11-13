@@ -1,6 +1,6 @@
 use super::*;
 
-enum Step {
+pub(super) enum Step {
     Endpoints(Vec<Endpoint>),
     Arrows(Vec<Direction>),
     Mating(Direction),
@@ -28,11 +28,8 @@ pub(super) fn read(root: &Mapping, harness: &mut Harness) -> Result<(), String> 
             cable.used = true;
             continue;
         }
-        let steps = items
-            .iter()
-            .map(|item| resolve(item, harness))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Connection set {}: {e}", set + 1))?;
+        let steps = resolved(items, harness)
+            .map_err(|error| format!("Connection set {}: {error}", set + 1))?;
         mark_used(&steps, harness);
         link_steps(&steps, set, harness)?;
     }
@@ -45,6 +42,10 @@ pub(super) fn read(root: &Mapping, harness: &mut Harness) -> Result<(), String> 
         ));
     }
     Ok(())
+}
+
+pub(super) fn resolved(items: &[Value], harness: &Harness) -> Result<Vec<Step>, String> {
+    items.iter().map(|item| resolve(item, harness)).collect()
 }
 
 fn resolve(item: &Value, harness: &Harness) -> Result<Step, String> {

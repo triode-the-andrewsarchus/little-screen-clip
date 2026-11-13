@@ -2,11 +2,29 @@
 use super::*;
 
 #[derive(Default)]
-pub(super) struct Backgrounds {
-    pub graph: Option<[u8; 3]>,
-    pub connector: Option<[u8; 3]>,
-    pub cable: Option<[u8; 3]>,
-    pub bundle: Option<[u8; 3]>,
+struct Backgrounds {
+    graph: Option<[u8; 3]>,
+    connector: Option<[u8; 3]>,
+    cable: Option<[u8; 3]>,
+    bundle: Option<[u8; 3]>,
+}
+
+/// Applies presentation defaults after physical component normalization.
+pub(super) fn apply(root: &Mapping, harness: &mut Harness) -> Result<(), String> {
+    let backgrounds = read(root, &mut harness.warnings)?;
+    harness.background = backgrounds.graph;
+    for connector in &mut harness.connectors {
+        connector.background = connector.background.or(backgrounds.connector);
+    }
+    for cable in &mut harness.cables {
+        cable.background = cable.background.or(if cable.bundle {
+            backgrounds.bundle
+        } else {
+            backgrounds.cable
+        });
+    }
+    omissions(root, &mut harness.warnings);
+    Ok(())
 }
 
 pub(super) fn flag(attrs: &Mapping, name: &str, default: bool) -> Result<bool, String> {
@@ -34,7 +52,7 @@ pub(super) fn color(attrs: &Mapping, name: &str) -> Result<Option<[u8; 3]>, Stri
     }
 }
 
-pub(super) fn read(root: &Mapping, warnings: &mut Vec<String>) -> Result<Backgrounds, String> {
+fn read(root: &Mapping, warnings: &mut Vec<String>) -> Result<Backgrounds, String> {
     let Some(options) = root.get_str("options") else {
         return Ok(Backgrounds::default());
     };
@@ -86,7 +104,7 @@ pub(super) fn read(root: &Mapping, warnings: &mut Vec<String>) -> Result<Backgro
     })
 }
 
-pub(super) fn omissions(root: &Mapping, warnings: &mut Vec<String>) {
+fn omissions(root: &Mapping, warnings: &mut Vec<String>) {
     let omitted = [
         "subtype",
         "color",
@@ -131,5 +149,15 @@ pub(super) fn omissions(root: &Mapping, warnings: &mut Vec<String>) {
         })
     }) {
         warnings.push("Unrecognized component visibility options are not applied".into());
+    }
+    if root.get_str("tweak").is_some() {
+        warnings.push("Graphviz tweaks are not executed by the native harness preview".into());
+    }
+    if components
+        .iter()
+        .any(|attrs| attrs.get_str("image").is_some())
+    {
+        warnings
+            .push("Linked component images are omitted; no external resources were read".into());
     }
 }

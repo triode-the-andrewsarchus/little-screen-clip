@@ -33,40 +33,15 @@ pub(super) fn read(root: &Mapping) -> Result<Harness, String> {
     if connectors.is_empty() && cables.is_empty() {
         return Err("WireViz needs connector or cable definitions".into());
     }
-    let mut warnings = Vec::new();
-    let backgrounds = presentation::read(root, &mut warnings)?;
-    for connector in &mut connectors {
-        connector.background = connector.background.or(backgrounds.connector);
-    }
-    for cable in &mut cables {
-        cable.background = cable.background.or(if cable.bundle {
-            backgrounds.bundle
-        } else {
-            backgrounds.cable
-        });
-    }
-    presentation::omissions(root, &mut warnings);
-    if root.get_str("tweak").is_some() {
-        warnings.push("Graphviz tweaks are not executed by the native harness preview".into());
-    }
-    if ["connectors", "cables"]
-        .iter()
-        .filter_map(|key| root.get_str(key))
-        .filter_map(Value::as_mapping)
-        .flat_map(Mapping::values)
-        .filter_map(Value::as_mapping)
-        .any(|attrs| attrs.get_str("image").is_some())
-    {
-        warnings
-            .push("Linked component images are omitted; no external resources were read".into());
-    }
-    Ok(Harness {
+    let mut harness = Harness {
         connectors,
         cables,
         links: Vec::new(),
-        background: backgrounds.graph,
-        warnings,
-    })
+        background: None,
+        warnings: Vec::new(),
+    };
+    presentation::apply(root, &mut harness)?;
+    Ok(harness)
 }
 
 fn components<'a>(root: &'a Mapping, key: &str) -> Result<Vec<(&'a str, &'a Mapping)>, String> {
@@ -155,6 +130,28 @@ fn numbered_pins(
 }
 
 fn cable(name: &str, attrs: &Mapping) -> Result<Cable, String> {
+    let bundle = match text(attrs, "category")?.as_deref() {
+        None => false,
+        Some("bundle") => true,
+        Some(category) => return Err(format!("Unsupported cable category {category:?}")),
+    };
+    Ok(Cable {
+        name: name.to_owned(),
+        description: text(attrs, "type")?,
+        notes: text(attrs, "notes")?,
+        wires: cable_wires(name, attrs)?,
+        shield: shield(attrs)?,
+        bundle,
+        show_name: presentation::flag(attrs, "show_name", !name.starts_with("__"))?,
+        show_wirecount: presentation::flag(attrs, "show_wirecount", true)?,
+        show_wirenumbers: presentation::flag(attrs, "show_wirenumbers", !bundle)?,
+        background: presentation::color(attrs, "bgcolor")?,
+        title_background: presentation::color(attrs, "bgcolor_title")?,
+        used: false,
+    })
+}
+
+fn cable_wires(name: &str, attrs: &Mapping) -> Result<Vec<Wire>, String> {
     let explicit = list(attrs, "colors")?;
     let count = count(attrs, "wirecount", explicit.len())?;
     let generated;
@@ -186,25 +183,7 @@ fn cable(name: &str, attrs: &Mapping) -> Result<Cable, String> {
             color: optional_color(color, "wire color")?,
         });
     }
-    let bundle = match text(attrs, "category")?.as_deref() {
-        None => false,
-        Some("bundle") => true,
-        Some(category) => return Err(format!("Unsupported cable category {category:?}")),
-    };
-    Ok(Cable {
-        name: name.to_owned(),
-        description: text(attrs, "type")?,
-        notes: text(attrs, "notes")?,
-        wires,
-        shield: shield(attrs)?,
-        bundle,
-        show_name: presentation::flag(attrs, "show_name", !name.starts_with("__"))?,
-        show_wirecount: presentation::flag(attrs, "show_wirecount", true)?,
-        show_wirenumbers: presentation::flag(attrs, "show_wirenumbers", !bundle)?,
-        background: presentation::color(attrs, "bgcolor")?,
-        title_background: presentation::color(attrs, "bgcolor_title")?,
-        used: false,
-    })
+    Ok(wires)
 }
 
 fn shield(attrs: &Mapping) -> Result<Option<String>, String> {

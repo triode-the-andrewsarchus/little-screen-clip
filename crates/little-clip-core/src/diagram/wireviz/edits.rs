@@ -2,12 +2,20 @@
 use super::*;
 use oneyaml::{Patch, PatchOp};
 
+mod wiring;
+
 const MAX_OPERATIONS: usize = 4096;
 const MAX_PATCH_BYTES: usize = 512 * 1024;
 
 /// One supported graphical change, addressing an immutable harness snapshot.
 #[derive(Clone, Debug)]
 pub enum Edit {
+    /// Adds a direct connection between an already-visible pin and conductor.
+    Connect { from: Endpoint, to: Endpoint },
+    /// Removes one cable termination or loop by its immutable snapshot index.
+    ///
+    /// Mating annotations require source editing.
+    Disconnect { link: usize },
     PinLabel {
         connector: usize,
         pin: usize,
@@ -51,6 +59,8 @@ impl Editable {
     /// Label/color references are rewritten to stable pin IDs or wire numbers.
     /// Both the complete YAML value and the normalized circuit are checked after
     /// editing, so a shared anchor cannot silently modify unrelated components.
+    /// Wiring changes additionally prove the remaining link multiset and retain
+    /// explicitly visible singleton components when a path is disconnected.
     /// A host publishing a background result must check the source revision
     /// again; this method can compare only the captured `current` argument.
     ///
@@ -73,6 +83,9 @@ impl Editable {
     pub fn apply(&self, current: &str, edit: Edit) -> Result<String, String> {
         if current != self.source {
             return Err("Harness source changed; wait for the editor to refresh".into());
+        }
+        if matches!(edit, Edit::Connect { .. } | Edit::Disconnect { .. }) {
+            return wiring::apply(self, current, edit);
         }
         let (mut yaml, value) = document(current)?;
         if yaml.to_string() != current {
@@ -114,6 +127,9 @@ impl Editable {
         plan: &mut Plan,
     ) -> Result<Target<'a>, String> {
         match edit {
+            Edit::Connect { .. } | Edit::Disconnect { .. } => {
+                unreachable!("wiring edits have a separate source plan")
+            }
             Edit::PinLabel {
                 connector,
                 pin,
@@ -288,15 +304,21 @@ impl Plan {
 
 impl Changes {
     fn push(&mut self, path: String, value: Value, add: bool) -> Result<(), String> {
-        self.bytes = self.bytes.saturating_add(path.len() + value_size(&value));
-        if self.ops.len() >= MAX_OPERATIONS || self.bytes > MAX_PATCH_BYTES {
-            return Err("Harness edit exceeds the transaction budget".into());
-        }
-        self.ops.push(if add {
+        let bytes = path.len() + value_size(&value);
+        let operation = if add {
             PatchOp::add(path, value)
         } else {
             PatchOp::replace(path, value)
-        });
+        };
+        self.record(operation, bytes)
+    }
+
+    fn record(&mut self, operation: PatchOp, bytes: usize) -> Result<(), String> {
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.ops.len() >= MAX_OPERATIONS || self.bytes > MAX_PATCH_BYTES {
+            return Err("Harness edit exceeds the transaction budget".into());
+        }
+        self.ops.push(operation);
         Ok(())
     }
 }
@@ -364,6 +386,12 @@ fn value_size(value: &Value) -> usize {
         size = size.saturating_add(16 + value.as_str().map_or(0, str::len));
         if let Some(items) = value.as_sequence() {
             pending.extend(items.iter());
+        }
+        if let Some(items) = value.as_mapping() {
+            for (key, value) in items.iter() {
+                pending.push(key);
+                pending.push(value);
+            }
         }
     }
     size

@@ -170,3 +170,49 @@ Strict library/test Clippy passed for core and render. A review fixture is
 [harness-presentation.wireviz](../examples/diagrams/harness-presentation.wireviz).
 No application binaries were rebuilt in this checkpoint; the earlier GUI
 acceptance screenshots exercised frozen binaries from before these changes.
+
+
+## Source-preserving wiring transactions
+
+The native model and studio now implement bounded wiring transactions. The frozen
+GUI binaries used in the current acceptance run do not include this patch.
+Connect creates a new connection set
+using typed pin IDs, wire numbers or the shield selector, leaving existing sets
+untouched. A reversed duplicate direct connection is a no-op. Disconnect targets
+one immutable link index and its exact set/step/lane or loop-pair origin, retaining
+other duplicate occurrences.
+
+For a parallel connection set, only the selected lane is removed from existing
+selector items. A numeric range is trimmed/split at its own scalar item. New
+prefix/suffix paths preserve every surviving electrical relationship and include
+singletons so components remain visible. For a single-lane set, the suffix moves
+as actual oneyaml source nodes with its authored spelling and comments. Existing
+connection paths and document subtrees are never reserialized.
+
+Before returning source, the transaction proves the complete expected YAML value,
+comment multiset, every non-link harness field and the multiset of electrical
+links/annotations. Link origins may change after lane decomposition; endpoint
+identities and link multiplicities may not. Shared-anchor side effects, inherited
+or aliased writable collections, lost comments, unsupported source moves and
+budget failures refuse the edit without publishing source.
+
+Native controls use primary-button terminal-to-terminal drag and explicit
+Disconnect buttons beside direct incident links in the inspector. Selection
+continues to address stable terminal IDs. Outside/incompatible release, Escape,
+middle-button pan, suspension and changed source/model/frame cancel the drag.
+The existing worker, host undo, guarded save and close lifecycle own publication;
+a duplicate connect does not create an undo update. Edge bounding rectangles do
+not select connections.
+
+Mating annotations remain visibly distinct and source-edit-only. Removing an
+electrical link from a set containing whole-connector mating is also refused
+until a transaction can prove preservation of its component-level meaning.
+Template instance expansion remains a separate follow-up.
+
+The review fixture is [harness-wiring.wireviz](../examples/diagrams/harness-wiring.wireviz).
+Validation: 44 core WireViz tests, nine studio WireViz tests and five renderer
+WireViz tests passed. Strict library Clippy passed for core, render and studios.
+The new renderer test applies a parallel disconnect plus a shield connection and
+verifies native SVG terminal hit groups. Studio tests exercise primary-button
+press/release, outside/incompatible cancellation and changed model/source. No
+application binary rebuild or native GUI acceptance was performed for this patch.

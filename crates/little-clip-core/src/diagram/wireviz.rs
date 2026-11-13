@@ -174,7 +174,7 @@ pub enum Endpoint {
 }
 
 /// Arrowheads used by pin-to-pin or whole-connector mating annotations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
     None,
     Forward,
@@ -183,7 +183,7 @@ pub enum Direction {
 }
 
 /// Electrical links and mating annotations retain their distinct meanings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LinkKind {
     Cable,
     PinMating(Direction),

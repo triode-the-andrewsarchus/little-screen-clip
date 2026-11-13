@@ -12,6 +12,9 @@ impl WireEditor {
         ready: bool,
         palette: &AppPalette,
     ) {
+        if !ready {
+            self.drag = None;
+        }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         let Some(frame) = frame else {
@@ -68,6 +71,7 @@ impl WireEditor {
                 })
                 .map(|(target, _)| *target)
         });
+        let pointer = self.terminal_input(ui, response, hover);
         if response.clicked() {
             response.request_focus();
             self.select(hover);
@@ -80,6 +84,7 @@ impl WireEditor {
                 .on_hover_text(endpoint_name(model.editable.harness(), target));
         }
         let accent = crate::hex_to_c32(&palette.harmonies.base);
+        self.paint_drag(&painter, rect, &hits, pointer, accent);
         for (target, bounds) in hits {
             if self.connected.contains(&target) || hover == Some(target) {
                 let bounds = self.camera.screen_rect(bounds, rect);
@@ -117,7 +122,7 @@ impl WireEditor {
         ui.strong(endpoint_name(harness, target));
         ui.small(format!("{} linked terminals", self.connected.len()));
         ui.separator();
-        let edit = match target {
+        let mut edit = match target {
             Endpoint::Pin { connector, pin } => {
                 ui.label("Pin label");
                 let input = ui.add(
@@ -150,6 +155,9 @@ impl WireEditor {
             Endpoint::Connector(_) => None,
         };
         ui.separator();
+        if let Some(disconnect) = Self::direct_connections(ui, palette, harness, target) {
+            edit = Some(disconnect);
+        }
         ui.strong("Electrical path");
         let mut connected: Vec<_> = self.connected.iter().copied().collect();
         connected.sort_by_key(|endpoint| match *endpoint {
@@ -265,7 +273,7 @@ fn terminal_rect(geometry: &Geometry, endpoint: Endpoint, content: Rect) -> Rect
     )
 }
 
-fn endpoint_name(harness: &Harness, endpoint: Endpoint) -> String {
+pub(super) fn endpoint_name(harness: &Harness, endpoint: Endpoint) -> String {
     match endpoint {
         Endpoint::Pin { connector, pin } => harness
             .connectors
