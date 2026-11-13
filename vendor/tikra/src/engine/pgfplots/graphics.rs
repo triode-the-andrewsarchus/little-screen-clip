@@ -75,19 +75,9 @@ fn natural_size(w: u32, h: u32, xres: f64, yres: f64) -> (f64, f64) {
 
 /// The file `\includegraphics` would load: the name as given, or with the first of pdfTeX's
 /// extensions that exists (`\Gin@extensions`).
-fn find_image(name: &str) -> Result<String, String> {
-    let n = name.trim();
-    let base = n.rsplit('/').next().unwrap_or(n);
-    if base.contains('.') {
-        return Ok(n.to_string());
-    }
-    for ext in [".pdf", ".PDF", ".ai", ".AI", ".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG", ".jbig2", ".JBIG2", ".jb2", ".JB2"] {
-        let full = format!("{n}{ext}");
-        if table::find_file(&full, &[]).is_ok() {
-            return Ok(full);
-        }
-    }
-    Err(format!("file '{n}' not found"))
+fn find_image(_name: &str) -> Result<String, String> {
+    // Deny before extension probing can query metadata or hide the refusal.
+    Err(crate::RESOURCE_ACCESS_DENIED.into())
 }
 
 /// A PNG file's bytes and its natural size (cm).

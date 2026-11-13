@@ -27,6 +27,7 @@ pub mod label;
 #[cfg(feature = "motion")]
 pub mod motion;
 #[doc(hidden)]
+#[cfg(feature = "raster")]
 pub mod pen;
 pub mod scene;
 mod slides;
@@ -40,6 +41,9 @@ use std::fmt;
 pub const PT: f64 = 2.54 / 72.27;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The preview build has no external resource resolver.
+pub const RESOURCE_ACCESS_DENIED: &str = "External resources are disabled in TikZ previews";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -358,6 +362,7 @@ fn tikz_command(text: &str) -> Option<usize> {
 pub const MAX_PIXELS: u64 = 100_000_000;
 
 /// Rasterizes the SVG to PNG. `dpi` 300 is the print default; `background` paints it white.
+#[cfg(feature = "raster")]
 pub fn png(svg: &str, dpi: f32, background: bool) -> Result<Vec<u8>, Error> {
     use resvg::{tiny_skia, usvg};
     if !(dpi > 0.0 && dpi.is_finite()) {
@@ -405,6 +410,7 @@ pub(crate) fn raster(svg: &str, width: u32, height: u32) -> Result<Vec<u8>, Erro
 }
 
 /// Errors from the rasterization libraries (invalid SVG, PNG encoding failure).
+#[cfg(feature = "raster")]
 fn png_error(e: impl fmt::Display) -> Error {
     Error::Png(e.to_string())
 }

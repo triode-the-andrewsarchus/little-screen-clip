@@ -2858,7 +2858,7 @@ impl Tex {
             }
             Message | Typeout | Errmessage | Showtokens | Write => {
                 if p == Write {
-                    let _ = self.scan_int();
+                    return Err(Error::Figure(crate::RESOURCE_ACCESS_DENIED.into()));
                 }
                 let _ = self.read_undelimited()?;
             }

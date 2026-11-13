@@ -1,9 +1,8 @@
 //! Tables, as `\addplot table` reads them (`pgfplotstable`'s parser): rows separated by newlines
 //! (or `\\`), cells by spaces (or `col sep`), a first row of column names when it is not numeric.
 //!
-//! Files are read from the folders of `TIKRA_INPUT_DIR` (`:`-separated; the current directory if
-//! unset), with `table/search path`; only relative names without `..` are accepted, and at most
-//! [`MAX_FILE`] bytes.
+//! The application preview build disables external table/image files at this
+//! boundary, before even looking up metadata. Inline tables still use `Table`.
 
 use std::path::PathBuf;
 
@@ -152,42 +151,13 @@ pub fn read_file(name: &str, search: &[String]) -> Result<String, String> {
 
 /// Reads a file of at most `max` bytes from the input folders (with the folders of `search` in
 /// each), as [`read_file`] finds it.
-pub fn read_bytes(name: &str, search: &[String], max: u64) -> Result<Vec<u8>, String> {
-    let n = name.trim();
-    let full = find_file(n, search)?;
-    let meta = std::fs::metadata(&full).map_err(|e| format!("file '{n}': {e}"))?;
-    if meta.len() > max {
-        return Err(format!("file '{n}' is larger than {max} bytes"));
-    }
-    std::fs::read(&full).map_err(|e| format!("file '{n}': {e}"))
+pub fn read_bytes(_name: &str, _search: &[String], _max: u64) -> Result<Vec<u8>, String> {
+    Err(crate::RESOURCE_ACCESS_DENIED.into())
 }
 
 /// Where a file is: the first input folder (and folder of `search` in it) that has it.
-pub fn find_file(name: &str, search: &[String]) -> Result<PathBuf, String> {
-    let n = name.trim();
-    if n.is_empty() {
-        return Err("no file name".into());
-    }
-    let p = std::path::Path::new(n);
-    if p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(format!("file '{n}' refused: only relative names inside the input folders are read"));
-    }
-    let roots: Vec<PathBuf> = match std::env::var("TIKRA_INPUT_DIR") {
-        Ok(v) if !v.is_empty() => v.split(':').map(PathBuf::from).collect(),
-        _ => vec![PathBuf::from(".")],
-    };
-    for root in &roots {
-        for dir in search.iter().map(|s| s.trim()).chain(std::iter::once(".")) {
-            if std::path::Path::new(dir).components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-                continue;
-            }
-            let full = root.join(dir).join(n);
-            if std::fs::metadata(&full).is_ok_and(|m| m.is_file()) {
-                return Ok(full);
-            }
-        }
-    }
-    Err(format!("file '{n}' not found"))
+pub fn find_file(_name: &str, _search: &[String]) -> Result<PathBuf, String> {
+    Err(crate::RESOURCE_ACCESS_DENIED.into())
 }
 
 #[cfg(test)]

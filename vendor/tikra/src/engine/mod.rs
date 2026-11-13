@@ -1203,6 +1203,11 @@ impl Engine {
 
     /// An undefined command: in a picture, the statement it starts is skipped to its `;`.
     fn unknown_command(&mut self, name: &str) -> Result<(), Error> {
+        // These are not implemented by the native engine. Diagnose resource
+        // requests even outside a picture, instead of silently dropping them.
+        if matches!(name, "input" | "include" | "openin" | "openout" | "read" | "readline" | "directlua" | "special" | "immediate" | "includegraphics" | "pgfimage") {
+            return Err(Error::Figure(crate::RESOURCE_ACCESS_DENIED.into()));
+        }
         if self.picture_depth == 0 && name == "\\" {
             // `\\[2pt]`: the space it asks for is not kept
             if let Some(t) = self.tex.next_nonspace() {
@@ -1236,6 +1241,8 @@ impl Engine {
         if self.picture_depth > 0 {
             let rest = self.skip_statement()?;
             self.warn(format!("\\{name} not supported: '{}' ignored", rest.chars().take(40).collect::<String>().trim()));
+        } else {
+            self.warn(format!("\\{name} not supported outside a picture"));
         }
         Ok(())
     }

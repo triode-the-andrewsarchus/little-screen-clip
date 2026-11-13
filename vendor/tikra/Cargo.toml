@@ -42,14 +42,17 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/matheusmota-dev-br/tikra"
 
 [features]
-motion = ["dep:png"]
+default = ["raster"]
+raster = ["dep:resvg"]
+motion = ["dep:png", "raster"]
 
 [lib]
 name = "tikra"
 path = "src/lib.rs"
 
 [dependencies.mathra]
-version = "1.12.0"
+version = "=1.12.0"
+default-features = false
 features = ["latin-modern"]
 
 [dependencies.png]
@@ -58,6 +61,7 @@ optional = true
 
 [dependencies.resvg]
 version = "0.45"
+optional = true
 features = ["raster-images"]
 default-features = false
 
