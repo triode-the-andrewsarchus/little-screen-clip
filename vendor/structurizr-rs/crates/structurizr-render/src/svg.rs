@@ -9,7 +9,9 @@ fn color_to_marker_id(color: &str) -> String {
     format!("arrow-{}", clean_color)
 }
 
-use structurizr_core::model::{ElementId, DeploymentNode};
+use structurizr_core::model::ElementId;
+
+mod deployment;
 use structurizr_core::style::{IconPosition, Routing};
 use structurizr_core::view::{
     ComponentView, ContainerView, CustomView, DeploymentView, DynamicView,
@@ -671,98 +673,9 @@ impl SvgRenderer {
         workspace: &Workspace,
         view: &DeploymentView,
     ) -> Result<String> {
-        let model = workspace.model();
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Recursively collect deployment nodes
-        fn collect_deployment_nodes(
-            nodes: &[DeploymentNode],
-            environment: &str,
-            element_ids: &mut Vec<String>,
-            elements_info: &mut Vec<ElementInfo>,
-        ) {
-            for node in nodes {
-                // Check if this node matches the environment
-                let matches_env = node.environment.as_ref()
-                    .map(|e| e == environment)
-                    .unwrap_or(true);
-
-                if matches_env {
-                    element_ids.push(node.id().to_string());
-                    elements_info.push(ElementInfo {
-                        id: node.id(),
-                        name: node.name().to_string(),
-                        description: node.properties.description.clone(),
-                        element_type: ElementType::DeploymentNode,
-                        technology: node.technology.clone(),
-                        tags: node.properties.tags.clone(),
-                    });
-
-                    // Add infrastructure nodes
-                    for infra in &node.infrastructure_nodes {
-                        element_ids.push(infra.id().to_string());
-                        elements_info.push(ElementInfo {
-                            id: infra.id(),
-                            name: infra.properties.name.clone(),
-                            description: infra.properties.description.clone(),
-                            element_type: ElementType::InfrastructureNode,
-                            technology: infra.technology.clone(),
-                            tags: infra.properties.tags.clone(),
-                        });
-                    }
-
-                    // Recurse into children
-                    collect_deployment_nodes(&node.children, environment, element_ids, elements_info);
-                }
-            }
-        }
-
-        collect_deployment_nodes(&model.deployment_nodes, &view.environment, &mut element_ids, &mut elements_info);
-
-        let edges: Vec<LayoutEdge> = model
-            .relationships
-            .iter()
-            .filter(|r| {
-                element_ids.contains(&r.source_id.to_string()) ||
-                element_ids.contains(&r.destination_id.to_string())
-            })
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (Deployment = TopBottom)
-        let layout = GridLayout::for_view_type(
-            ViewType::Deployment,
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &model.relationships, workspace, layout.direction, None)
+        let diagram = deployment::prepare(workspace, view)?;
+        self.render_svg(&diagram.nodes, &diagram.elements, &diagram.relationships,
+            workspace, diagram.direction, None)
     }
 
     /// Render a dynamic view to SVG.
@@ -1202,8 +1115,8 @@ impl SvgRenderer {
             ContentBounds {
                 min_x: 0.0,
                 min_y: 0.0,
-                max_x: self.width as f64,
-                max_y: self.height as f64,
+                max_x: self.width.max(100) as f64,
+                max_y: self.height.max(100) as f64,
             }
         };
 
@@ -1266,6 +1179,18 @@ impl SvgRenderer {
         // Render groups first (so they appear behind everything)
         self.render_groups(&mut svg, &node_map, groups);
 
+        // Deployment hosts are real containers, painted outermost first. Their
+        // opaque backgrounds must never cover links or their deployed children.
+        let mut boundaries: Vec<_> = elements.iter()
+            .filter(|element| element.element_type == ElementType::DeploymentNode)
+            .filter_map(|element| node_map.get(&element.id.to_string()).map(|node| (element, *node)))
+            .collect();
+        boundaries.sort_by(|(_, a), (_, b)| (b.size.width * b.size.height).total_cmp(&(a.size.width * a.size.height)));
+        let boundary_ids: HashSet<_> = boundaries.iter().map(|(_, node)| node.id.as_str()).collect();
+        for (element, node) in &boundaries {
+            self.render_element(&mut svg, node, element, &style_resolver);
+        }
+
         // Collect relationship line data and labels for collision-aware rendering
         struct RelLineData {
             x1: f64,
@@ -1292,7 +1217,8 @@ impl SvgRenderer {
         // Create orthogonal router with A* pathfinding enabled
         // Pass nodes so the router can build an obstacle grid for pathfinding
         let orthogonal_config = OrthogonalConfig::for_direction(direction);
-        let orthogonal_router = OrthogonalRouter::with_nodes(orthogonal_config, nodes);
+        let obstacles: Vec<_> = nodes.iter().filter(|node| !boundary_ids.contains(node.id.as_str())).cloned().collect();
+        let orthogonal_router = OrthogonalRouter::with_nodes(orthogonal_config, &obstacles);
 
         // Pre-compute edge indices for port distribution
         // This allows multiple connectors to the same node to attach at different points
@@ -1347,7 +1273,7 @@ impl SvgRenderer {
                 };
 
                 // Check which routing style is requested
-                let use_orthogonal = matches!(rel_style.routing, Routing::Orthogonal);
+                let use_orthogonal = matches!(rel_style.routing, Routing::Orthogonal) || source_id == target_id;
                 let use_curved = matches!(rel_style.routing, Routing::Curved);
 
                 // Get edge indices for proper port distribution
@@ -1364,11 +1290,13 @@ impl SvgRenderer {
 
                 let (x1, y1, x2, y2) = if use_orthogonal {
                     // Orthogonal routing - use the router with proper port distribution
-                    let path = orthogonal_router.route_edge(
+                    let path = if source_id == target_id {
+                        deployment::self_loop(source_node)
+                    } else { orthogonal_router.route_edge(
                         source_node, target_node,
                         edge_idx_at_source, total_source_edges,
                         edge_idx_at_target, total_target_edges,
-                    );
+                    ) };
 
                     // Get waypoints from the path
                     if let EdgePath::Orthogonal { waypoints } = &path {
@@ -1636,7 +1564,7 @@ impl SvgRenderer {
         }
 
         // Render elements
-        for element in elements {
+        for element in elements.iter().filter(|element| element.element_type != ElementType::DeploymentNode) {
             if let Some(node) = node_map.get(&element.id.to_string()) {
                 self.render_element(&mut svg, node, element, &style_resolver);
             }
@@ -1675,6 +1603,8 @@ impl SvgRenderer {
                     ElementType::Person => "Person",
                     ElementType::SoftwareSystem => "Software System",
                     ElementType::Container => "Container",
+                    ElementType::ContainerInstance(_) => "Container Instance",
+                    ElementType::SoftwareSystemInstance(_) => "Software System Instance",
                     ElementType::Component => "Component",
                     ElementType::ExternalSystem => "External System",
                     ElementType::DeploymentNode => "Deployment Node",
@@ -2001,7 +1931,9 @@ impl SvgRenderer {
         };
 
         // Calculate text position based on shape (with icon offset)
-        let text_y = match resolved_style.shape {
+        let text_y = if element.element_type == ElementType::DeploymentNode {
+            y + 40.0 + icon_text_offset
+        } else { match resolved_style.shape {
             structurizr_core::style::Shape::Person => y + height - 80.0,
             structurizr_core::style::Shape::Robot => y + height - 60.0,
             structurizr_core::style::Shape::Cylinder => y + height * 0.35,
@@ -2010,7 +1942,7 @@ impl SvgRenderer {
             structurizr_core::style::Shape::MobileDeviceLandscape => y + height * 0.35,
             structurizr_core::style::Shape::Folder => y + height * 0.35,
             _ => y + 40.0 + icon_text_offset,
-        };
+        }};
 
         let text_color = &resolved_style.color;
         let font_size = resolved_style.font_size;
@@ -2025,14 +1957,16 @@ impl SvgRenderer {
         // Type label (only if metadata is enabled)
         if resolved_style.show_metadata {
             let type_label = match element.element_type {
-                ElementType::Person => "[Person]",
-                ElementType::SoftwareSystem => "[Software System]",
-                ElementType::Container => "[Container]",
-                ElementType::Component => "[Component]",
-                ElementType::ExternalSystem => "[External System]",
-                ElementType::DeploymentNode => "[Deployment Node]",
-                ElementType::InfrastructureNode => "[Infrastructure Node]",
-                ElementType::Custom => "[Element]",
+                ElementType::Person => "[Person]".to_owned(),
+                ElementType::SoftwareSystem => "[Software System]".to_owned(),
+                ElementType::Container => "[Container]".to_owned(),
+                ElementType::Component => "[Component]".to_owned(),
+                ElementType::ExternalSystem => "[External System]".to_owned(),
+                ElementType::DeploymentNode => "[Deployment Node]".to_owned(),
+                ElementType::InfrastructureNode => "[Infrastructure Node]".to_owned(),
+                ElementType::Custom => "[Element]".to_owned(),
+                ElementType::ContainerInstance(number) => format!("[Container Instance: {number}]"),
+                ElementType::SoftwareSystemInstance(number) => format!("[Software System Instance: {number}]"),
             };
             svg.push_str(&format!(
                 r#"    <text x="{:.0}" y="{:.0}" text-anchor="middle" font-family="Arial, sans-serif" font-size="{}" fill="{}">{}</text>"#,
@@ -2089,6 +2023,8 @@ enum ElementType {
     ExternalSystem,
     DeploymentNode,
     InfrastructureNode,
+    ContainerInstance(u32),
+    SoftwareSystemInstance(u32),
     Custom,
 }
 
@@ -2097,8 +2033,8 @@ impl ElementType {
     fn to_element_kind(&self) -> ElementKind {
         match self {
             ElementType::Person => ElementKind::Person,
-            ElementType::SoftwareSystem => ElementKind::SoftwareSystem,
-            ElementType::Container => ElementKind::Container,
+            ElementType::SoftwareSystem | ElementType::SoftwareSystemInstance(_) => ElementKind::SoftwareSystem,
+            ElementType::Container | ElementType::ContainerInstance(_) => ElementKind::Container,
             ElementType::Component => ElementKind::Component,
             ElementType::ExternalSystem => ElementKind::External,
             ElementType::DeploymentNode => ElementKind::DeploymentNode,
