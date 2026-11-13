@@ -1,0 +1,27 @@
+[package]
+name = "dbml-rs"
+version = "1.0.1"
+edition = "2024"
+description = "A DBML parser for Rust."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/apskhem/dbml-rs"
+readme = "README.md"
+authors = ["Apisit Ritreungroj <cyber1.record@gmail.com>"]
+keywords = ["parser", "parse", "dbml"]
+exclude = [
+  ".github/*",
+  "tests/*",
+  ".gitignore",
+  "rustfmt.toml"
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pest = { version = "2.8", default-features = false, features = ["memchr"]}
+pest_derive = { version = "2.8", default-features = false }
+derive_more = { version = "2.1", default-features = false, features = ["display"]}
+
+[features]
+default = []
+utils = []
