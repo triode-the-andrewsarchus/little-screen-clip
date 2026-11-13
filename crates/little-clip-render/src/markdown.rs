@@ -73,21 +73,52 @@ pub enum MarkdownLine {
     Empty,
 }
 
+/// A native Markdown element and the UTF-8 byte range that produced it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocatedLine {
+    pub source: std::ops::Range<usize>,
+    pub line: MarkdownLine,
+}
+
 /// Parses raw Markdown text into a sequence of [`MarkdownLine`] blocks.
 pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
-    let metadata = little_clip_core::markdown_metadata::parse(input);
-    let body = &input[metadata.as_ref().map_or(0, |value| value.body_start)..];
     let mut lines = Vec::new();
-    if let Some(metadata) = metadata {
-        lines.push(MarkdownLine::FrontMatter(Box::new(metadata)));
-    }
-    lines.extend(parse_body(body));
+    parse_document(input, |line, _| lines.push(line));
     lines
+}
+
+/// Parses the same native elements while retaining their original source ranges.
+///
+/// Multiline equations cover all consumed lines. A trailing paragraph after an
+/// equation shares that source range; front matter retains its full framing.
+/// Run preparation on a bounded worker for an interactive source.
+pub fn parse_located(input: &str) -> Vec<LocatedLine> {
+    let mut lines = Vec::new();
+    parse_document(input, |line, source| {
+        lines.push(LocatedLine { source, line })
+    });
+    lines
+}
+
+fn parse_document(input: &str, mut emit: impl FnMut(MarkdownLine, std::ops::Range<usize>)) {
+    let metadata = little_clip_core::markdown_metadata::parse(input);
+    let offset = metadata.as_ref().map_or(0, |value| value.body_start);
+    if let Some(metadata) = metadata {
+        let range = if metadata.body_start == 0 {
+            metadata.source.clone()
+        } else {
+            0..metadata.body_start
+        };
+        emit(MarkdownLine::FrontMatter(Box::new(metadata)), range);
+    }
+    parse_body_into(&input[offset..], |line, range| {
+        emit(line, range.start + offset..range.end + offset)
+    });
 }
 
 // Coalesce physical lines only across complete native math ranges. Keeping this
 // lexical step separate preserves the existing code-fence and paragraph parser.
-fn logical_lines(input: &str) -> impl Iterator<Item = &str> {
+fn logical_lines(input: &str) -> impl Iterator<Item = std::ops::Range<usize>> {
     let mut math = math_ranges(input).into_iter().peekable();
     let mut physical = input.split_inclusive('\n');
     let mut offset = 0;
@@ -108,23 +139,27 @@ fn logical_lines(input: &str) -> impl Iterator<Item = &str> {
                 math.next();
             }
         }
-        Some(input[start..offset].trim_end_matches(['\r', '\n']))
+        Some(start..offset)
     })
 }
 
 enum DisplayLine {
     Ordinary,
     Pending,
-    Complete { source: String, tail: String },
+    Complete {
+        source: String,
+        tail: String,
+        start: usize,
+    },
 }
 
 // Display blocks have their own framing: Markdown list/rule/fence markers
 // inside an equation must not interrupt it. Scan each incoming line once.
-fn display_math_line(line: &str, open: &mut Option<String>) -> DisplayLine {
-    let (rest, mut source) = if let Some(source) = open.take() {
-        (line, source)
+fn display_math_line(line: &str, offset: usize, open: &mut Option<(usize, String)>) -> DisplayLine {
+    let (rest, start, mut source) = if let Some((start, source)) = open.take() {
+        (line, start, source)
     } else if let Some(rest) = line.trim_start().strip_prefix("$$") {
-        (rest, String::new())
+        (rest, offset, String::new())
     } else {
         return DisplayLine::Ordinary;
     };
@@ -135,39 +170,53 @@ fn display_math_line(line: &str, open: &mut Option<String>) -> DisplayLine {
             return DisplayLine::Complete {
                 source,
                 tail: rest[index + 2..].to_owned(),
+                start,
             };
         }
         escaped = !escaped && value == '\\';
     }
     source.push_str(rest);
     source.push('\n');
-    *open = Some(source);
+    *open = Some((start, source));
     DisplayLine::Pending
 }
 
 fn parse_body(input: &str) -> Vec<MarkdownLine> {
-    let input = input.trim_start_matches('\u{feff}');
     let mut lines = Vec::new();
+    parse_body_into(input, |line, _| lines.push(line));
+    lines
+}
+
+fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Range<usize>)) {
+    let original = input;
+    let input = input.trim_start_matches('\u{feff}');
+    let bom = original.len() - input.len();
     let mut fence: Option<(char, usize)> = None;
     let mut display = None;
-
-    for raw_line in logical_lines(input) {
+    for range in logical_lines(input) {
+        let mut source_range = range.clone();
+        let raw_line = input[range.clone()].trim_end_matches(['\r', '\n']);
         let tail;
         let raw_line = if fence.is_none() {
-            match display_math_line(raw_line, &mut display) {
+            match display_math_line(raw_line, range.start, &mut display) {
                 DisplayLine::Ordinary => raw_line,
                 DisplayLine::Pending => continue,
                 DisplayLine::Complete {
                     source,
                     tail: after,
+                    start,
                 } => {
-                    lines.push(MarkdownLine::Paragraph {
-                        spans: vec![MarkdownSpan::Math {
-                            source: source.trim().to_owned(),
-                            display: true,
-                            url: None,
-                        }],
-                    });
+                    source_range.start = start;
+                    sink(
+                        MarkdownLine::Paragraph {
+                            spans: vec![MarkdownSpan::Math {
+                                source: source.trim().to_owned(),
+                                display: true,
+                                url: None,
+                            }],
+                        },
+                        source_range.start + bom..source_range.end + bom,
+                    );
                     tail = after;
                     if tail.trim().is_empty() {
                         continue;
@@ -178,6 +227,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
         } else {
             raw_line
         };
+        let mut emit = |line| sink(line, source_range.start + bom..source_range.end + bom);
         let trimmed_start = raw_line.trim_start();
         let trimmed = raw_line.trim();
 
@@ -185,11 +235,11 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
             let run = trimmed.chars().take_while(|value| *value == marker).count();
             if run >= minimum && trimmed.chars().skip(run).all(char::is_whitespace) {
                 fence = None;
-                lines.push(MarkdownLine::CodeFence {
+                emit(MarkdownLine::CodeFence {
                     language: String::new(),
                 });
             } else {
-                lines.push(MarkdownLine::CodeLine {
+                emit(MarkdownLine::CodeLine {
                     line: raw_line.to_string(),
                 });
             }
@@ -200,7 +250,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
             let language = &trimmed[run..];
             if run >= 3 && (marker != '`' || !language.contains('`')) {
                 fence = Some((marker, run));
-                lines.push(MarkdownLine::CodeFence {
+                emit(MarkdownLine::CodeFence {
                     language: language.trim().to_string(),
                 });
                 continue;
@@ -208,7 +258,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
         }
 
         if trimmed.is_empty() {
-            lines.push(MarkdownLine::Empty);
+            emit(MarkdownLine::Empty);
             continue;
         }
 
@@ -218,13 +268,13 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
             && trimmed.len() >= 3
             && trimmed.bytes().all(|value| value == *marker)
         {
-            lines.push(MarkdownLine::Rule);
+            emit(MarkdownLine::Rule);
             continue;
         }
         if let Some((marker, rest)) = trimmed_start.split_once(' ')
             && matches!(marker, "#" | "##" | "###" | "####")
         {
-            lines.push(MarkdownLine::Heading {
+            emit(MarkdownLine::Heading {
                 level: marker.len().min(3),
                 text: rest.trim().to_owned(),
                 spans: parse_markdown_spans(rest.trim()),
@@ -235,7 +285,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
         // Blockquotes
         if let Some(rest) = trimmed_start.strip_prefix("> ") {
             let spans = parse_markdown_spans(rest.trim());
-            lines.push(MarkdownLine::Quote { spans });
+            emit(MarkdownLine::Quote { spans });
             continue;
         }
 
@@ -247,7 +297,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
             .or_else(|| trimmed_start.strip_prefix("+ "))
         {
             let spans = parse_markdown_spans(rest.trim());
-            lines.push(MarkdownLine::Bullet { indent, spans });
+            emit(MarkdownLine::Bullet { indent, spans });
             continue;
         }
 
@@ -257,7 +307,7 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
             if !num_part.is_empty() && num_part.chars().all(|c| c.is_ascii_digit()) {
                 let rest = &trimmed_start[dot_pos + 2..];
                 let spans = parse_markdown_spans(rest.trim());
-                lines.push(MarkdownLine::Numbered {
+                emit(MarkdownLine::Numbered {
                     number: format!("{}.", num_part),
                     spans,
                 });
@@ -267,13 +317,15 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
 
         // Normal paragraph
         let spans = parse_markdown_spans(trimmed);
-        lines.push(MarkdownLine::Paragraph { spans });
+        emit(MarkdownLine::Paragraph { spans });
     }
 
-    if let Some(source) = display {
-        lines.push(MarkdownLine::IncompleteMath { source });
+    if let Some((start, source)) = display {
+        sink(
+            MarkdownLine::IncompleteMath { source },
+            start + bom..original.len(),
+        );
     }
-    lines
 }
 
 /// Prepares only the bounded prefix visible in a screen card. Full line counting
@@ -439,6 +491,46 @@ fn push_span(spans: &mut Vec<MarkdownSpan>, span: MarkdownSpan) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn located_elements_preserve_original_utf8_frontmatter_fences_and_multiline_math() {
+        let source = "\u{feff}---\r\ntitle: Café\r\n---\r\n# Résumé\r\n\r\n```mermaid\r\nflowchart LR\r\n A --> B\r\n```\r\n\r\n$$\r\nx^2 + y^2\r\n$$ tail\r\n";
+        let located = parse_located(source);
+        assert_eq!(
+            located
+                .iter()
+                .map(|item| item.line.clone())
+                .collect::<Vec<_>>(),
+            parse_markdown(source)
+        );
+        assert_eq!(
+            &source[located[0].source.clone()],
+            "\u{feff}---\r\ntitle: Café\r\n---\r\n"
+        );
+        assert!(located.iter().any(
+            |item| matches!(&item.line, MarkdownLine::Heading { text, .. } if text == "Résumé")
+                && &source[item.source.clone()] == "# Résumé\r\n"
+        ));
+        assert!(located.iter().any(
+            |item| matches!(&item.line, MarkdownLine::CodeLine { line } if line == " A --> B")
+                && &source[item.source.clone()] == " A --> B\r\n"
+        ));
+        assert!(located.iter().any(|item| matches!(&item.line, MarkdownLine::Paragraph { spans } if matches!(spans.first(), Some(MarkdownSpan::Math {display: true, ..})))
+            && &source[item.source.clone()] == "$$\r\nx^2 + y^2\r\n$$ tail\r\n"));
+        for item in located {
+            assert!(source.is_char_boundary(item.source.start));
+            assert!(source.is_char_boundary(item.source.end));
+        }
+    }
+
+    #[test]
+    fn located_incomplete_equation_retains_the_entire_unfinished_source_range() {
+        let source = "Intro\n\n$$\nx + y\n";
+        let located = parse_located(source);
+        let last = located.last().unwrap();
+        assert!(matches!(last.line, MarkdownLine::IncompleteMath { .. }));
+        assert_eq!(&source[last.source.clone()], "$$\nx + y\n");
+    }
 
     #[test]
     fn display_blocks_ignore_inner_markdown_markers_but_not_code_fences() {

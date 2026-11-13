@@ -1586,3 +1586,27 @@ cycles are not new cycles.
 Review the existing files in `/home/vega/Documents/type_testing/md_extensions/`.
 Rendered Markdown hover at the selected source position remains pending and is
 still required before the active goal can be completed.
+
+### Markdown hover foundation: native source correspondence
+
+- [x] Retain UTF-8 source ranges from the existing native Markdown parser.
+  The plain and located APIs share the same emitter; this does not add a second
+  Markdown grammar or change the rendered elements. Front matter includes its
+  framing, code lines/fences retain their actual byte ranges, and multiline
+  equations cover all consumed physical lines. An equation's trailing paragraph
+  may share that range. BOM and CRLF positions remain relative to the original
+  source, including explicit incomplete-equation ranges.
+- [ ] Use those ranges to prepare bounded hover excerpts around the selected
+  source position, preserving complete diagram/math blocks and retiring hidden
+  preview jobs. The parser foundation alone does not complete rendered hover.
+
+Validation: the 15 render Markdown tests and nine shared studio Markdown tests
+pass. New cases verify exact Unicode/front-matter/fence/CRLF/multiline-math
+ranges and preservation of the existing element sequence. Strict all-target
+Clippy for render, studios and UI passes. Ordinary parsing collects directly
+through the shared emitter, without allocating the additional located model.
+
+The framing state owns an unfinished display equation's source start alongside
+its accumulated text. This removes a parallel per-line start/reset condition
+from the body parser; adding correspondence does not add another grammar branch.
+The architecture check's reordered Python-cycle members are unchanged cycles.
