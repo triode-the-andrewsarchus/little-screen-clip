@@ -13,6 +13,22 @@ use std::{ffi::OsStr, time::Duration};
 pub fn assert_worker(executable: impl AsRef<OsStr>) {
     for (format, source, success) in [
         (
+            "vega",
+            include_str!("../../../../docs/examples/diagrams/native-vega.vega.json"),
+            true,
+        ),
+        (
+            "vegalite",
+            include_str!("../../../../docs/examples/diagrams/native-vega-lite.vl.json"),
+            true,
+        ),
+        ("vega", "{", false),
+        (
+            "vegalite",
+            r#"{"data":{"url":"file:///etc/passwd"},"mark":"point"}"#,
+            false,
+        ),
+        (
             "structurizr",
             include_str!("../../../../docs/examples/diagrams/architecture.structurizr"),
             true,

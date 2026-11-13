@@ -33,6 +33,7 @@ mod nomnoml;
 mod plantuml;
 mod script;
 mod structurizr;
+mod vega;
 mod wavedrom;
 mod wireviz;
 
@@ -239,6 +240,7 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/plantuml-notices.md"),
             include_str!("../third_party/drawio-notices.md"),
             include_str!("../third_party/structurizr-notices.md"),
+            include_str!("../third_party/vega-notices.md"),
             include_str!("../../../vendor/structurizr-rs/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-APACHE"),
@@ -364,6 +366,8 @@ fn render_inline(
         Format::Plantuml => plantuml::svg(source)?,
         Format::Drawio => drawio::svg(source)?,
         Format::Structurizr => structurizr::svg(source)?,
+        Format::Vega => vega::svg(source, false)?,
+        Format::VegaLite => vega::svg(source, true)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -678,6 +682,8 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const VEGA: &str = include_str!("../../../docs/examples/diagrams/native-vega.vega.json");
+        const LITE: &str = include_str!("../../../docs/examples/diagrams/native-vega-lite.vl.json");
         const STRUCTURIZR: &str =
             include_str!("../../../docs/examples/diagrams/architecture.structurizr");
         const DRAWIO: &str = include_str!("../../../docs/examples/diagrams/pipeline.drawio");
@@ -714,6 +720,12 @@ mod tests {
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
             ),
+            ("", VEGA, Format::Vega, VEGA),
+            ("vega", VEGA, Format::Vega, VEGA),
+            ("vg.json", VEGA, Format::Vega, VEGA),
+            ("", LITE, Format::VegaLite, LITE),
+            ("vegalite", LITE, Format::VegaLite, LITE),
+            ("vl.json", LITE, Format::VegaLite, LITE),
             ("", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),
             ("structurizr", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),
             ("dsl", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),

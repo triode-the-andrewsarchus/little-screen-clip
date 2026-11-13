@@ -335,6 +335,8 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "er" | "erd" => Some("erd"),
         "plantuml" | "puml" | "pu" | "iuml" | "c4plantuml" => Some("plantuml"),
         "structurizr" => Some("structurizr"),
+        "vega" => Some("vega"),
+        "vegalite" | "vega-lite" => Some("vegalite"),
         "dsl" => Some("txt"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
@@ -472,6 +474,8 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "erd" => "Erd",
         "plantuml" => "PlantUML",
         "structurizr" => "Structurizr",
+        "vega" => "Vega",
+        "vegalite" => "Vega-Lite",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -627,6 +631,11 @@ pub const STRUCTURIZR_SUBLIME_SYNTAX: &str = include_str!("syntax/structurizr.su
 /// XML highlighting for native mxGraph source/live-preview sessions.
 pub const DRAWIO_SUBLIME_SYNTAX: &str = include_str!("syntax/drawio.sublime-syntax");
 
+/// JSON highlighting for canonical visualization specifications.
+pub const VEGA_SUBLIME_SYNTAX: &str = include_str!("syntax/vega.sublime-syntax");
+/// JSON highlighting for high-level visualization specifications.
+pub const VEGA_LITE_SUBLIME_SYNTAX: &str = include_str!("syntax/vegalite.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
@@ -643,6 +652,8 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     BPMN_SUBLIME_SYNTAX,
     DRAWIO_SUBLIME_SYNTAX,
     STRUCTURIZR_SUBLIME_SYNTAX,
+    VEGA_SUBLIME_SYNTAX,
+    VEGA_LITE_SUBLIME_SYNTAX,
     WIREVIZ_SUBLIME_SYNTAX,
     WAVEDROM_SUBLIME_SYNTAX,
     EXCALIDRAW_SUBLIME_SYNTAX,

@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: Vega-Lite
+file_extensions: [vegalite]
+scope: source.json.vegalite
+contexts:
+  main:
+    - include: scope:source.json

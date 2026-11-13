@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: Vega
+file_extensions: [vega]
+scope: source.json.vega
+contexts:
+  main:
+    - include: scope:source.json

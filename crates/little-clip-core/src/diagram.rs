@@ -38,6 +38,8 @@ pub enum Format {
     Plantuml,
     Drawio,
     Structurizr,
+    Vega,
+    VegaLite,
     Math,
     MathInline,
 }
@@ -68,6 +70,8 @@ impl Format {
             "plantuml" | "puml" | "c4plantuml" => Some(Self::Plantuml),
             "drawio" | "diagramsnet" => Some(Self::Drawio),
             "structurizr" => Some(Self::Structurizr),
+            "vega" => Some(Self::Vega),
+            "vegalite" | "vega-lite" => Some(Self::VegaLite),
             _ => None,
         }
     }
@@ -81,6 +85,11 @@ impl Format {
         let name = path.file_name()?.as_encoded_bytes();
         for (suffix, format) in [
             (b".excalidraw.json".as_slice(), Self::Excalidraw),
+            (b".vega.json".as_slice(), Self::Vega),
+            (b".vg.json".as_slice(), Self::Vega),
+            (b".vega-lite.json".as_slice(), Self::VegaLite),
+            (b".vegalite.json".as_slice(), Self::VegaLite),
+            (b".vl.json".as_slice(), Self::VegaLite),
             (b".drawio.xml".as_slice(), Self::Drawio),
             (b".dio.xml".as_slice(), Self::Drawio),
             (b".wire.yaml".as_slice(), Self::Wireviz),
@@ -102,6 +111,8 @@ impl Format {
         match Self::from_path(path) {
             Some(Self::Excalidraw) => Some("excalidraw"),
             Some(Self::Wireviz) => Some("wireviz"),
+            Some(Self::Vega) => Some("vega"),
+            Some(Self::VegaLite) => Some("vegalite"),
             Some(Self::Drawio) => Some(if path.extension()?.eq_ignore_ascii_case("dio") {
                 "dio"
             } else {
@@ -132,6 +143,8 @@ impl Format {
             "plantuml" | "puml" | "pu" | "iuml" => Some(Self::Plantuml),
             "drawio" | "dio" => Some(Self::Drawio),
             "structurizr" => Some(Self::Structurizr),
+            "vega" => Some(Self::Vega),
+            "vegalite" => Some(Self::VegaLite),
             _ => None,
         }
     }
@@ -176,7 +189,9 @@ impl Format {
                     }
                 }
                 "json" if excalidraw_signature(source) => Some(Self::Excalidraw),
-                "json" | "json5" => wavejson::signature(source).then_some(Self::Wavedrom),
+                "json" => vega_format(source)
+                    .or_else(|| wavejson::signature(source).then_some(Self::Wavedrom)),
+                "json5" => wavejson::signature(source).then_some(Self::Wavedrom),
                 "yaml" | "yml" => wireviz::signature(source).then_some(Self::Wireviz),
                 _ => None,
             })
@@ -215,6 +230,7 @@ impl Format {
         signatures
             .iter()
             .find_map(|(format, signature)| signature(source).then_some(*format))
+            .or_else(|| vega_format(source))
     }
 
     /// Returns the preferred source extension, excluding inline math.
@@ -240,6 +256,8 @@ impl Format {
             Self::Plantuml => Some("puml"),
             Self::Drawio => Some("drawio"),
             Self::Structurizr => Some("structurizr"),
+            Self::Vega => Some("vega"),
+            Self::VegaLite => Some("vegalite"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -265,9 +283,99 @@ impl Format {
             Self::Plantuml => "PlantUML",
             Self::Drawio => "draw.io",
             Self::Structurizr => "Structurizr",
+            Self::Vega => "Vega",
+            Self::VegaLite => "Vega-Lite",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
+}
+
+fn vega_format(source: &str) -> Option<Format> {
+    if source.len() > 256 * 1024 {
+        return None;
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(source.trim_start_matches('\u{feff}')).ok()?;
+    let object = value.as_object()?;
+    if let Some(schema) = object.get("$schema").and_then(serde_json::Value::as_str) {
+        let schema = schema
+            .strip_prefix("https://")
+            .or_else(|| schema.strip_prefix("http://"))?;
+        return if schema.starts_with("vega.github.io/schema/vega-lite/") {
+            Some(Format::VegaLite)
+        } else if schema.starts_with("vega.github.io/schema/vega/") {
+            Some(Format::Vega)
+        } else {
+            None
+        };
+    }
+    if lite_shape(&value) {
+        return Some(Format::VegaLite);
+    }
+    const MARKS: &[&str] = &[
+        "arc", "area", "group", "image", "line", "path", "rect", "rule", "shape", "symbol", "text",
+        "trail",
+    ];
+    object
+        .get("marks")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|marks| {
+            marks.iter().any(|mark| {
+                mark.get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| MARKS.contains(&kind))
+                    && mark.get("encode").is_some_and(serde_json::Value::is_object)
+            })
+        })
+        .then_some(Format::Vega)
+}
+
+fn lite_shape(value: &serde_json::Value) -> bool {
+    let encoding = value
+        .get("encoding")
+        .is_some_and(serde_json::Value::is_object);
+    if encoding && value.get("mark").is_some_and(lite_mark) {
+        return true;
+    }
+    // Classification is a bounded hint, not recursive schema validation.
+    value
+        .get("layer")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|layers| {
+            layers.iter().any(|layer| {
+                layer.get("mark").is_some_and(lite_mark)
+                    && (encoding
+                        || layer
+                            .get("encoding")
+                            .is_some_and(serde_json::Value::is_object))
+            })
+        })
+}
+
+fn lite_mark(value: &serde_json::Value) -> bool {
+    const MARKS: &[&str] = &[
+        "arc",
+        "area",
+        "bar",
+        "boxplot",
+        "circle",
+        "errorband",
+        "errorbar",
+        "geoshape",
+        "image",
+        "line",
+        "point",
+        "rect",
+        "rule",
+        "square",
+        "text",
+        "tick",
+        "trail",
+    ];
+    value
+        .as_str()
+        .or_else(|| value.get("type")?.as_str())
+        .is_some_and(|kind| MARKS.contains(&kind))
 }
 
 fn structurizr_signature(source: &str) -> bool {
@@ -732,6 +840,55 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chart_schemas_compound_names_and_distinctive_clipboard_specs_share_routes() {
+        let vega = include_str!("../../../docs/examples/diagrams/native-vega.vega.json");
+        let lite = include_str!("../../../docs/examples/diagrams/native-vega-lite.vl.json");
+        for (source, format, names) in [
+            (
+                vega,
+                Format::Vega,
+                vec!["chart.vega", "chart.vg.json", "chart.vega.json"],
+            ),
+            (
+                lite,
+                Format::VegaLite,
+                vec!["chart.vegalite", "chart.vl.json", "chart.vega-lite.json"],
+            ),
+        ] {
+            assert_eq!(Format::from_source_extension("json", source), Some(format));
+            assert_eq!(Format::from_snippet(source), Some(format));
+            for name in names {
+                let path = Path::new(name);
+                assert_eq!(Format::from_path(path), Some(format));
+                assert_eq!(Format::from_source_path(path, source), Some(format));
+                assert_eq!(
+                    Format::from_source_extension(
+                        Format::source_extension_hint(path).unwrap(),
+                        "{"
+                    ),
+                    Some(format),
+                    "malformed explicit charts retain editor identity"
+                );
+            }
+        }
+        assert_eq!(Format::from_language("vega-lite"), Some(Format::VegaLite));
+        let implicit = r#"{"mark":"bar","encoding":{"x":{"field":"name","type":"nominal"}}}"#;
+        assert_eq!(Format::from_snippet(implicit), Some(Format::VegaLite));
+        for ordinary in [
+            r#"{"mark":"John","encoding":"utf8"}"#,
+            r#"{"layer":[{"mark":"reviewed","encoding":{}}]}"#,
+            r#"{"$schema":"https://json-schema.org/schema","mark":"bar","encoding":{}}"#,
+            "{",
+        ] {
+            assert_eq!(
+                Format::from_source_extension("json", ordinary),
+                None,
+                "{ordinary}"
+            );
+        }
+    }
+
     #[test]
     fn architecture_dsl_uses_content_hints_without_claiming_unrelated_dsl_or_json() {
         let source = include_str!("../../../docs/examples/diagrams/architecture.structurizr");

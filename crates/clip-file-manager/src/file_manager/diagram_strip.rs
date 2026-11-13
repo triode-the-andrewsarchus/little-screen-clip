@@ -163,7 +163,9 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
             | Format::Erd
             | Format::Plantuml
             | Format::Drawio
-            | Format::Structurizr,
+            | Format::Structurizr
+            | Format::Vega
+            | Format::VegaLite,
         ) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };
