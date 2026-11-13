@@ -50,7 +50,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
 | Bytefield | Canonical Bytefield-SVG 1.11/1.12; ProtoViz; Framegram; unrelated native bitfield crates | Pin canonical 1.11 after differential helper-function regression; bounded hostless rendering, shared Markdown/clipboard/source/list paths implemented |
 | Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
-| Erd | [rusterd](https://crates.io/crates/rusterd) 0.3.1; [erd_rs](https://crates.io/crates/erd_rs) 0.1.0; [fastbreak](https://crates.io/crates/fastbreak) 0.5.0 | Pending comparison / editor research |
+| Erd | rusterd 0.3.1; erd_rs 0.1; erd-rs; erd-go; original Haskell grammar | Native canonical bracket/entity parser, styled Graphviz rendering and shared Markdown/source/list routes implemented; graphical editing pending |
 | Nomnoml | Canonical Nomnoml 1.7.0 with Graphre 0.1.3; crates.io hits silica/squaredb inspected and unrelated | Hostless canonical rendering, standalone/Markdown/clipboard routes and source/live editor implemented; graphical editing pending |
 | Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
 | Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
@@ -2169,3 +2169,81 @@ use the completed build without overlapping compilation.
 - [x] Count classic CR-only line endings as well as LF and CRLF in parse errors.
   A targeted test verifies line 2, column 10 for the same malformed statement
   under all three encodings. Authored bytes and token offsets remain unchanged.
+
+## Erd research and native implementation
+
+The requested Erd syntax is the original [bracket/entity language](https://github.com/BurntSushi/erd),
+not the newer Rust `rusterd` DSL. Compared rusterd 0.3.1 (different `entity/rel`
+language), erd_rs 0.1.0 (Rust-source-to-Mermaid tool), `fastbreak` (formal methods
+specification language), [erd-rs](https://github.com/davechallis/erd-rs),
+[erd-go](https://github.com/kaishuu0123/erd-go) and original Erd. The native erd-rs
+parser prototype parsed basic entities but rejected hyphenated settings,
+fractional field font sizes and Unicode identifiers; it also applied global
+entity background over a local override. Its renderer leaves much formatting
+unfinished. The prototype used its unmodified parser with the already-built,
+API-compatible nom 7 dependency; the source itself requests nom 6. The failures
+follow its grammar/model, not a different interpretation of the requested format.
+No candidate code was assumed compatible just because it draws ER diagrams.
+
+Choose a small native implementation of the original grammar and semantic model,
+retaining exact authored identifier/option token spans. It adds no dependency or
+installed tool and reuses the existing Graphviz layout, HTML escaping, bundled
+fonts, SVG composition and guarded preview/source lifecycle. Original grammar,
+semantics, presentation reference, license and fixtures at
+`d18075d205583458b477cdcb7fe8bb41ec092cf9` were imported unmodified in a separate
+commit under `vendor/erd-reference`. The reference is Unlicense; no Haskell
+runtime or external configuration-file lookup is used.
+
+- [x] Parse quoted/bare/Unicode identifiers, ordered entities/attributes,
+  independent primary/foreign keys, relationships before declarations and all
+  four participation cardinalities. Retain minimums in explicit UML labels.
+- [x] Parse all twelve original settings, multiline maps, comments/trailing
+  commas, global title/header/entity/relationship scopes and local precedence.
+  Unknown settings or invalid/excessive numeric values return locations.
+- [x] Bound source at 256 KiB, entities at 128, attributes at 4096, relationships
+  at 2048, names at 4096 bytes and setting values at 8192 bytes. No recursive
+  parser. Validate every relationship and refuse ambiguous duplicate entities.
+- [x] Preserve underlined primary keys, italic foreign keys, labels, table/cell
+  formatting, fonts and explicit global/local precedence in native DOT output.
+- [x] Standalone `.er/.erd`, `erd` Markdown fences and conservative clipboard
+  hints share format identity. Bracket headings alone are too ambiguous for a
+  clipboard claim; a complete cardinality relationship supplies the hint.
+- [x] Keep Eclipse ERMaster XML and incomplete XML drafts out of the Erd renderer;
+  use ordinary XML highlighting and previews instead.
+- [x] Complete real-host, warning-free and native visual validation.
+
+Editor comparison: original Erd and erd-go are source/DOT tools, and the
+[VS Code Erd extension](https://github.com/kaishuu0123/vscode-erd) is likewise a
+source-linked preview rather than a graphical editor. The [t2erd](https://github.com/dosaki/t2erd)
+JavaScript renderer has a different styling/layout dialect and GPL-3.0 license;
+its code is not imported. The existing DBML table preview offers shared native
+presentation patterns, while source-preserving schema editing can use this
+parser's token spans. For this non-priority editor, source/highlighting/live
+preview/errors is the initial baseline. Direct table/field/relationship editing
+remains future work after the priority editors; no destructive round-trip
+serializer is substituted for the authored source.
+
+Review fixtures: `people.er`, the same source in `people.erd`, and `erd.md` under
+`type_testing/md_extensions/`. Repository examples retain the authored `.er`
+source and embedded Markdown. The original `simple.er` and `nfldb.er` fixtures
+are used by parser and renderer tests; the latter contains seven entities and
+thirteen relationships.
+
+Erd validation: 54 shared core diagram tests plus the targeted CR/LF diagnostic
+test pass; 15 syntax tests, 66 render diagram tests, ten card-preview tests,
+three file-strip tests, the native-extension viewer test and both desktop host
+worker suites pass. Strict all-targets Clippy across core/render/studios/both
+hosts and the final file-manager fit adjustment passes with `-D warnings`;
+both desktop binaries build successfully. Native light/dark runs each pass
+nine observations with actual table-color pixels and source hashes preserved.
+The first visual run exposed title-only cropping; Erd now shares the existing
+fit-height treatment for DBML/Nomnoml/WireViz component overviews.
+
+Architecture comparison against `before-erd` leaves maximum CCN 274 unchanged
+and reduces duplication by 0.02 percentage points. The required catalog case
+adds one branch to the renderer dispatch. The two added clone groups are in
+retained upstream reference fixtures; existing lookup tables and untouched
+viewer/test clones are also flagged because their files changed. No new Rust
+parser/renderer hotspot, dependency cycle, cache, runtime dependency, generic
+factory or file owner is introduced. The native parser/renderer growth is the
+actual requested language/model/presentation, not a second diagram pipeline.

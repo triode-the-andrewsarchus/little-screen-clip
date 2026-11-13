@@ -39,6 +39,8 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("2015 Taco de Wolff"));
     assert!(notices.contains("The Go Authors"));
     assert!(notices.contains("Bytefield-SVG 1.11.0"));
+    assert!(notices.contains("Erd compatibility grammar"));
+    assert!(notices.contains("d18075d205583458b477cdcb7fe8bb41ec092cf9"));
     assert!(notices.contains("Eclipse Public License - v 1.0"));
     assert!(notices.contains("811552e58e93d1106cb634ddeec1f68db4e6371f9edc56cf1787b82202478e80"));
     assert!(notices.contains("2012-2014 Chris Pettitt"));

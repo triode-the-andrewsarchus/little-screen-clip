@@ -42,6 +42,12 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("goat", "a\tb", false),
         ("bytefield", "(draw-column-headers) (draw-box 0)", true),
         ("bytefield", "(draw-box", false),
+        (
+            "erd",
+            include_str!("../../../../docs/examples/diagrams/people.er"),
+            true,
+        ),
+        ("erd", "[A]\nA 1--1 Missing", false),
         ("bytefield", "(slurp \"/etc/passwd\")", false),
         ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (

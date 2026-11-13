@@ -226,7 +226,7 @@
         - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
         - [x] Bytefield packet layouts (`bytefield`) — pinned upstream Clojure DSL in bounded hostless QuickJS; shared source/live and rendered previews
         - [ ] Ditaa ASCII art diagrams (`ditaa`)
-        - [ ] Erd entity-relationship diagrams (`erd`)
+        - [x] Erd entity-relationship diagrams (`erd`) — native canonical bracket/entity parser, styled tables, exact cardinalities and shared source/live previews
         - [x] Nomnoml UML diagrams (`nomnoml`) — pinned upstream renderer in bounded embedded QuickJS, native SVG/raster previews and diagnostics
         - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
         - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
@@ -553,7 +553,7 @@
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
     - [x] `.dbml` — native core schema preview and highlighted editor; XML mapping files stay XML, newer DBML syntax remains pending
-    - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
+    - [x] `.er`, `.erd` — canonical Erd schema previews and highlighted source/live editor; Eclipse ERMaster XML retains XML presentation
     - [x] `.nomnoml`, `.noml` — Nomnoml UML diagram; highlighted source/live preview, rendered list strips and enlarged hover
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)

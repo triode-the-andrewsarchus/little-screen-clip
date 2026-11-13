@@ -142,3 +142,10 @@ suffix; ordinary EDN maps are not classified as diagrams. Helpers, maps, loops
 allowed by upstream's termination-safe preset and custom attributes remain part
 of the original DSL. The source editor exposes errors and previews without
 flattening helper-generated output into fabricated source calls.
+
+### Erd
+
+`people.er` and `erd.md` show primary/foreign keys, field labels, local table
+colors, a graph title and explicit minimum/maximum relationship labels. `.erd`
+also opens this language; Eclipse ERMaster XML with that suffix remains XML.
+These previews use the original bracket/entity syntax, not Rusterd's separate DSL.

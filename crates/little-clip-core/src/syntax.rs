@@ -15,8 +15,8 @@ pub use classifier::classify_snippet;
 pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     // 1. If explicit extension hint is provided, normalize and map it
     if let Some(lang) = check_extension_hint(ext_hint) {
-        return if lang == "dbml"
-            && crate::diagram::Format::from_source_extension("dbml", content).is_none()
+        return if matches!(lang, "dbml" | "erd")
+            && crate::diagram::Format::from_source_extension(lang, content).is_none()
         {
             "xml"
         } else {
@@ -332,6 +332,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "dbml" => Some("dbml"),
         "goat" => Some("goat"),
         "bytefield" => Some("bytefield"),
+        "er" | "erd" => Some("erd"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -465,6 +466,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "dbml" => "DBML",
         "goat" => "GoAT",
         "bytefield" => "Bytefield",
+        "erd" => "Erd",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -608,12 +610,16 @@ pub const GOAT_SUBLIME_SYNTAX: &str = include_str!("syntax/goat.sublime-syntax")
 /// Bytefield's Clojure drawing forms and data literals.
 pub const BYTEFIELD_SUBLIME_SYNTAX: &str = include_str!("syntax/bytefield.sublime-syntax");
 
+/// Erd schema names, keys, options and participation syntax.
+pub const ERD_SUBLIME_SYNTAX: &str = include_str!("syntax/erd.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
     DBML_SUBLIME_SYNTAX,
     GOAT_SUBLIME_SYNTAX,
     BYTEFIELD_SUBLIME_SYNTAX,
+    ERD_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,
@@ -801,6 +807,12 @@ pub fn detect_markdown_text(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erd_extension_hints_preserve_er_master_xml_highlighting() {
+        assert_eq!(detect_language("[Person]\nname", Some("er")), "erd");
+        assert_eq!(detect_language("<diagram/>", Some("erd")), "xml");
+    }
 
     #[test]
     fn test_extension_mapping() {

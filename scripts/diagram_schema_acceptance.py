@@ -13,6 +13,7 @@ FAMILIES = {
     "dbml": ("DBML", "schema.dbml", (34, 56, 77), "Table broken {"),
     "goat": ("GoAT", "pipeline.goat", (17, 17, 17), "a\tb"),
     "bytefield": ("Bytefield", "packet.bytefield", (184, 216, 236), "(draw-box"),
+    "erd": ("Erd", "people.er", (208, 224, 208), "[Person"),
 }
 
 

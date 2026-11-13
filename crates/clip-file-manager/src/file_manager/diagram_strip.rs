@@ -156,7 +156,7 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         Some(Format::Wavedrom) => 0.25,
         // Component overviews need their relations and compartments visible.
         // Cropping the top can show only titles or the outer paper margin.
-        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml) => {
+        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml | Format::Erd) => {
             rect.height() / texture.size_vec2().y
         }
         _ => 0.5,
@@ -252,6 +252,8 @@ mod tests {
             ("shape.goat", ".----.\n| hi |\n'----'", Format::Goat),
             ("packet.bytefield", "(draw-box 0)", Format::Bytefield),
             ("packet.edn", "(draw-box 0)", Format::Bytefield),
+            ("schema.er", "[Person]\n*name", Format::Erd),
+            ("schema.erd", "[Person]\n*name", Format::Erd),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",
@@ -271,6 +273,7 @@ mod tests {
             ("data.json", "{\"title\":\"ordinary data\"}"),
             ("page.mmd", "# Ordinary Markdown\n\nWords here."),
             ("data.xml", "<ordinary/>"),
+            ("eclipse.erd", "<?xml version=\"1.0\"?><diagram/>"),
             (
                 "legacy.dbml",
                 r#"<Database xmlns="http://schemas.microsoft.com/linqtosql/dbml/2007"/>"#,

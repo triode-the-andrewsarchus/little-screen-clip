@@ -416,6 +416,7 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         ("dbml", "DBML"),
         ("goat", "GoAT"),
         ("bytefield", "Bytefield"),
+        ("erd", "Erd"),
     ] {
         assert_eq!(find_syntax(language).name, expected);
     }

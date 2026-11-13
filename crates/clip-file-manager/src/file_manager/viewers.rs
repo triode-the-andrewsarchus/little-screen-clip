@@ -811,6 +811,8 @@ mod tests {
             "schema.dbml",
             "diagram.goat",
             "packet.bytefield",
+            "schema.er",
+            "schema.erd",
             "drawing.excalidraw",
             "drawing.excalidraw.json",
             "DRAWING.PIKCHR",

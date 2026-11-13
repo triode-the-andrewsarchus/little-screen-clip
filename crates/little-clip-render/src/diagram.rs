@@ -17,6 +17,7 @@ mod bpmn;
 mod bytefield;
 mod d2;
 mod dbml;
+mod erd;
 mod excalidraw;
 mod fonts;
 mod goat;
@@ -231,6 +232,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../../../vendor/nomnoml/LICENSE"),
             include_str!("../../../vendor/goat/LICENSE"),
             include_str!("../third_party/bytefield-notices.md"),
+            include_str!("../third_party/erd-notices.md"),
+            include_str!("../../../vendor/erd-reference/UNLICENSE"),
             include_str!("../../../vendor/bytefield-svg/LICENSE"),
             include_str!("../../../vendor/bytefield-svg/licenses/sci-LICENSE"),
             include_str!("../../../vendor/bytefield-svg/licenses/clojurescript-LICENSE"),
@@ -346,6 +349,7 @@ fn render_inline(
         Format::Dbml => dbml::svg(source)?,
         Format::Goat => goat::svg(source)?,
         Format::Bytefield => bytefield::svg(source)?,
+        Format::Erd => erd::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -655,6 +659,7 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const ERD: &str = include_str!("../../../docs/examples/diagrams/people.er");
         const BYTEFIELD: &str = include_str!("../../../docs/examples/diagrams/packet.bytefield");
         const GOAT: &str = include_str!("../../../docs/examples/diagrams/pipeline.goat");
         const SCHEMA: &str = include_str!("../../../docs/examples/diagrams/schema.dbml");
@@ -684,6 +689,15 @@ mod tests {
                 "```nomnoml\n[Source] -> [Preview]\n```",
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
+            ),
+            ("", ERD, Format::Erd, ERD),
+            ("er", ERD, Format::Erd, ERD),
+            ("erd", ERD, Format::Erd, ERD),
+            (
+                "md",
+                include_str!("../../../docs/examples/diagrams/erd.md"),
+                Format::Erd,
+                ERD,
             ),
             ("", BYTEFIELD, Format::Bytefield, BYTEFIELD),
             ("bytefield", BYTEFIELD, Format::Bytefield, BYTEFIELD),

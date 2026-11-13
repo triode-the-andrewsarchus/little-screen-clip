@@ -34,6 +34,7 @@ pub enum Format {
     Dbml,
     Goat,
     Bytefield,
+    Erd,
     Math,
     MathInline,
 }
@@ -60,13 +61,14 @@ impl Format {
             "dbml" => Some(Self::Dbml),
             "goat" => Some(Self::Goat),
             "bytefield" => Some(Self::Bytefield),
+            "erd" | "er" => Some(Self::Erd),
             _ => None,
         }
     }
 
     /// Recognizes standalone extension candidates.
     ///
-    /// DBML candidates still need XML disambiguation once source is available.
+    /// DBML and Erd candidates still need XML disambiguation once source is available.
     ///
     /// Ambiguous `.bob` files need content classification and are not claimed here.
     pub fn from_path(path: &Path) -> Option<Self> {
@@ -113,17 +115,20 @@ impl Format {
             "dbml" => Some(Self::Dbml),
             "goat" => Some(Self::Goat),
             "bytefield" => Some(Self::Bytefield),
+            "erd" | "er" => Some(Self::Erd),
             _ => None,
         }
     }
 
     /// Uses content signatures for extensions shared with ordinary Markdown.
     pub fn from_source_path(path: &Path, source: &str) -> Option<Self> {
-        if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("dbml"))
+        if let Some(extension) = path.extension().and_then(|ext| ext.to_str())
+            && matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "dbml" | "erd" | "er"
+            )
         {
-            return Self::from_source_extension("dbml", source);
+            return Self::from_source_extension(extension, source);
         }
         Self::from_path(path)
             .or_else(|| Self::from_source_extension(path.extension()?.to_str()?, source))
@@ -133,9 +138,9 @@ impl Format {
     pub fn from_source_extension(extension: &str, source: &str) -> Option<Self> {
         Self::from_extension(extension)
             .filter(|format| {
-                // Microsoft LINQ-to-SQL files share .dbml but contain XML.
+                // Microsoft LINQ-to-SQL and ERMaster share DBML/Erd suffixes.
                 // Incomplete XML drafts also remain in the ordinary XML viewer.
-                *format != Self::Dbml
+                !matches!(format, Self::Dbml | Self::Erd)
                     || !source
                         .trim_start_matches('\u{feff}')
                         .trim_start()
@@ -178,6 +183,7 @@ impl Format {
             (Self::Svgbob, svgbob_signature),
             (Self::Goat, goat_signature),
             (Self::Bytefield, bytefield_signature),
+            (Self::Erd, erd_signature),
         ];
         signatures
             .iter()
@@ -203,6 +209,7 @@ impl Format {
             Self::Dbml => Some("dbml"),
             Self::Goat => Some("goat"),
             Self::Bytefield => Some("bytefield"),
+            Self::Erd => Some("er"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -224,6 +231,7 @@ impl Format {
             Self::Dbml => "DBML",
             Self::Goat => "GoAT",
             Self::Bytefield => "Bytefield",
+            Self::Erd => "Erd",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -331,6 +339,14 @@ fn d2_signature(source: &str) -> bool {
             .lines()
             .skip(1)
             .any(|line| line.contains("->") || line.contains("shape:"))
+}
+
+fn erd_signature(source: &str) -> bool {
+    // Bracket headings alone overlap INI and prose. A complete canonical
+    // cardinality relationship provides a distinctive extensionless hint.
+    source.len() <= 32 * 1024
+        && source.contains("--")
+        && erd::parse(source).is_ok_and(|document| !document.relations.is_empty())
 }
 
 fn bytefield_signature(source: &str) -> bool {
@@ -610,6 +626,35 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn erd_routes_canonical_schemas_and_keeps_er_master_xml_and_markdown_separate() {
+        let schema = "[Person]\n*name\n[Place]\n*id\nPerson *--1 Place\n";
+        assert_eq!(Format::from_snippet(schema), Some(Format::Erd));
+        assert_eq!(Format::from_language("erd"), Some(Format::Erd));
+        for extension in ["er", "erd"] {
+            assert_eq!(
+                Format::from_source_extension(extension, schema),
+                Some(Format::Erd)
+            );
+            assert_eq!(
+                Format::from_source_extension(extension, "<?xml version=\"1.0\"?><diagram/>"),
+                None
+            );
+            assert_eq!(
+                Format::from_source_path(Path::new(&format!("eclipse.{extension}")), "<diagram>"),
+                None
+            );
+        }
+        for source in [
+            "[Person]\nname",
+            "[Section]\nkey=value",
+            "# Title\n```erd\n[Person]\n```",
+            "[A]\nA 1--1 Missing",
+        ] {
+            assert_eq!(Format::from_snippet(source), None, "{source}");
+        }
+    }
+
     #[test]
     fn bytefield_signatures_disambiguate_clojure_data_without_claiming_quoted_examples() {
         assert_eq!(Format::from_extension("bytefield"), Some(Format::Bytefield));
