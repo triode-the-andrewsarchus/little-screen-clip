@@ -36,7 +36,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
-| Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer integrated; preserving model selected; graphical canvas pending |
+| Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer and preserving graphical transactions integrated; initial drawing/selection/movement canvas works; text editing and resize handles pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
@@ -1057,3 +1057,43 @@ measurement. Its typed scene and binding schema also require review before
 adapting algorithms to the preserving 0.18.1 document profile. No GPUI source or
 assets have been copied into this implementation. Any future extraction must
 retain the original MIT license and be committed pristine before adaptation.
+
+The follow-up source review informs these implementation requirements:
+
+- Text editing should commit one source transaction, preserve container bindings
+  and unknown properties, and share the existing save/close/undo delivery rules.
+  GPUI's `begin_text_edit` / `commit_text_edit` interaction is a useful reference;
+  its character-width approximation is unsuitable for mixed-font labels. Our
+  native renderer already computes shaped line advances in
+  `vendor/excalidraw-render/src/render/text.rs`; extend that bounded worker result
+  if authoring requires measurements rather than adding a second font layout.
+- Resize should anchor the opposite handle and support an aspect-ratio modifier.
+  Calculate the completed transaction from the captured starting geometry, so
+  intermediate frames do not accumulate rounding or generate undo revisions.
+  Crossing the anchor, rotated shapes, relative paths, bound labels and attached
+  arrows need explicit tests. The GPUI transform helper takes absolute path
+  points and applies absolute dimensions before checking their sign; it cannot
+  be used directly for our relative-point geometry or negative-scale handling.
+- New arrow binding should select the visible topmost eligible shape and use a
+  screen-distance threshold converted through the camera scale. GPUI's
+  `find_bindable` uses scene iteration order and a fixed world-space threshold;
+  copying that behavior would make overlap selection and zoom inconsistent.
+  Its normalized `fixedPoint` / `mode` bindings also differ from the selected
+  document profile's `focus` / `gap` representation.
+
+These are adaptation decisions, not completed features. Primary source:
+[GPUI editor at the inspected revision](https://github.com/LittleGuest/gpui-excalidraw/tree/2641e1b9c00b51e5e8329094a7d88cd1223ed630/src).
+A fresh crates.io search still found that editor alongside the native document
+and rendering crates, rather than an existing egui editor to integrate.
+
+### Post-canvas desktop regression checkpoint
+
+The current debug file-manager binary passes the private light- and dark-theme whiteboard
+draw/save/undo/save test, including exact original-byte restoration and retained
+embedded assets (`/tmp/diagram-whiteboard-ui-{light,dark}-final-1/report.json`). The
+existing WaveDrom timing-painter acceptance also passes in both appearances after
+the shared editor changes
+(`/tmp/diagram-timing-ui-{light,dark}-post-canvas-1/report.json`). These exercise actual
+pointer and keyboard input on an isolated desktop; they do not prove the pending
+text/resize functionality or full format coverage. No Cargo job or source change
+was needed for this checkpoint while the user's scratch-worktree build ran.
