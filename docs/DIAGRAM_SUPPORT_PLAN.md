@@ -1264,3 +1264,27 @@ keeping maximum complexity, clone-group count and dependency-cycle count
 unchanged; duplication falls slightly. The reported new/resolved Python cycle
 is the same untouched cycle with its members reordered, and the touched preview
 clone windows retain existing raster/cache handling. No new hotspot is reported.
+
+## Vector object correspondence checkpoint
+
+The native renderer's opt-in `svg-source-groups` feature now retains each
+object's identity around its existing vector content. It reuses the renderer's
+source correspondence rather than inferring objects from paths. Hex-encoded
+UTF-8 identities survive the shared SVG namespace isolation, including markup
+characters, spaces and emoji. The real example retains eight independently
+identified shape, arrow, text, freehand and image objects. Frame names stay with
+their frame, and existing clipping, viewport and asset accounting remain intact.
+
+All four native drawing-renderer integration tests pass, and strict all-target
+Clippy for render and file manager passes. The first new fixture omitted its
+timestamp and correctly produced a repair diagnostic; it now supplies that
+timestamp rather than suppressing the diagnostic. The small writer patch adds
+one necessary fallible output operation to the existing serializer; maximum
+complexity and clone-group counts remain unchanged. No new application hotspot
+is introduced. The renderer's upstream output is unchanged when the feature is off.
+
+This provides correspondence for retained vector drawing; the current canvas
+still paints a PNG until the GPU backend is integrated. FemtoVG's context-sharing
+prototype is the next gate. The user also identified future VCV Rack previews as
+a reuse opportunity for that renderer. Keep its host/context lifetime reusable,
+and validate coexistence with egui before enabling it in the studios.

@@ -49,6 +49,8 @@ targets = ["x86_64-unknown-linux-gnu"]
 [features]
 # Local integration: preserve native shaping when an SVG consumer re-outlines text.
 svg-text-outlines = []
+# Local integration: keep a reversible source identity around each vector object.
+svg-source-groups = []
 cjk = ["excalidraw-fonts/cjk"]
 default = [
     "cjk",

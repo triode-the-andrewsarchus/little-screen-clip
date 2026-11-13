@@ -420,6 +420,8 @@ impl SvgPlan {
                 height,
                 kind,
             } = element;
+            #[cfg(feature = "svg-source-groups")]
+            push_source_group(&mut svg, self.source(element_index).and_then(|(id, _)| id))?;
             let frame_clip_count = frame_clips.len();
             // The name precedes the frame as its own element, outside the
             // frame's clip and link, where the reference export puts it.
@@ -1072,10 +1074,34 @@ impl SvgPlan {
             for _ in 0..frame_clip_count {
                 svg.push_str("</g>");
             }
+            #[cfg(feature = "svg-source-groups")]
+            svg.push_str("</g>");
         }
         svg.push_str("</svg>");
         Ok(())
     }
+}
+
+/// Source IDs are encoded as hexadecimal UTF-8, so even unusual authored IDs
+/// survive SVG ID namespacing without becoming fragment syntax or markup.
+/// The ordinary writer remains unchanged unless the integration opts in.
+#[cfg(feature = "svg-source-groups")]
+fn push_source_group<W: SvgSink + ?Sized>(
+    svg: &mut W,
+    id: Option<&str>,
+) -> Result<(), FormatEncodeError> {
+    svg.push_str("<g");
+    if let Some(id) = id {
+        svg.push_str(" id=\"drawing-element-");
+        for byte in id.as_bytes() {
+            write!(svg, "{byte:02x}").map_err(|_| {
+                FormatEncodeError::Encoding("failed to write SVG source identity".to_owned())
+            })?;
+        }
+        svg.push('"');
+    }
+    svg.push('>');
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -77,6 +77,41 @@ fn attribution(svg: &str) -> Result<Option<String>, String> {
 mod tests {
     use super::*;
     #[test]
+    fn source_groups_keep_unicode_identities_and_own_all_their_vector_paths() {
+        let id = "Capture<&\" 🙂";
+        let source = serde_json::json!({
+            "type": "excalidraw", "version": 2,
+            "elements": [{"id": id, "type": "rectangle", "updated": 1, "x": 0, "y": 0,
+                "width": 140, "height": 80, "backgroundColor": "#b2f2bb", "fillStyle": "solid"}]
+        });
+        let rendered = render(&source.to_string()).unwrap();
+        let suffix = format!(
+            "drawing-element-{}",
+            id.as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let document = roxmltree::Document::parse(&rendered.svg).unwrap();
+        let groups: Vec<_> = document
+            .descendants()
+            .filter(|node| {
+                node.has_tag_name("g")
+                    && node.attribute("id").is_some_and(|id| id.ends_with(&suffix))
+            })
+            .collect();
+        assert_eq!(groups.len(), 1);
+        assert!(
+            groups[0]
+                .descendants()
+                .any(|node| node.has_tag_name("path"))
+        );
+        assert_eq!(rendered.drawing.unwrap().origin, [-10.0, -10.0]);
+        assert_eq!(rendered.drawing.unwrap().size, [160.0, 100.0]);
+        assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+    }
+
+    #[test]
     fn native_scene_keeps_real_fonts_raster_pixels_and_static_attribution() {
         let source = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
         let rendered = render(source).unwrap();
@@ -93,6 +128,20 @@ mod tests {
         assert!(!rendered.svg.contains("<script"));
         assert!(rendered.svg.contains("drawing-attribution"));
         assert!(rendered.svg.contains("data:image/png;base64,"));
+        let document = roxmltree::Document::parse(&rendered.svg).unwrap();
+        let objects = document
+            .descendants()
+            .filter(|node| {
+                node.has_tag_name("g")
+                    && node
+                        .attribute("id")
+                        .is_some_and(|id| id.starts_with("graph-0-drawing-element-"))
+            })
+            .count();
+        assert_eq!(
+            objects, 8,
+            "shapes, text, arrows, freehand and images retain their individual identities"
+        );
         assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
         let image = image::load_from_memory(&rendered.png).unwrap().to_rgba8();
         assert!(

@@ -46,7 +46,7 @@ bpmnkit-spec = "=0.2.1"
 
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 
-excalidraw-render = { version = "=0.1.0", default-features = false, features = ["cjk", "svg-text-outlines"] }
+excalidraw-render = { version = "=0.1.0", default-features = false, features = ["cjk", "svg-text-outlines", "svg-source-groups"] }
 base64 = "0.22"
 data-url = "0.3"
 quick-xml = "0.41"

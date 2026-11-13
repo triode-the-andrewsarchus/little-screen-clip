@@ -29,6 +29,15 @@ the existing subset/notice accounting is retained. Native contours remain under
 the existing geometry/output budgets. Placeholder diagnostic labels still use
 ordinary SVG text. Tests cover mixed Latin, CJK and RTL text as actual paths.
 
+The opt-in `svg-source-groups` extension wraps each rendered object's existing
+paths, text, image and clipping in a group with a reversible source ID. It reuses
+the renderer's existing source correspondence and encodes authored IDs as UTF-8
+hex, preserving them through SVG namespace isolation without treating them as
+markup or fragment syntax. Frame names stay with their frame. This adds no
+geometry or resource loader and leaves the upstream writer unchanged when off.
+It supplies object correspondence for the native vector canvas; it is not itself
+a replacement for the previous raster canvas.
+
 The unmodified document-model dependency is from
 https://github.com/sagikazarmark/excaliplot/tree/29392d10d9c504ec22d67f37a4dd545a63d5b371
 and the locked crates.io 0.2.0 release. Its root MIT and Apache license texts are
