@@ -130,7 +130,6 @@ impl Document {
                     limits,
                 )
                 .ok_or("Diagram preview pixels unavailable")?;
-                self.guard.check()?;
                 let mut warnings = rendered.warnings;
                 let vector =
                     match little_clip_render::diagram::retained::prepare_preview(&rendered.svg)
@@ -142,6 +141,8 @@ impl Document {
                             None
                         }
                     };
+                // Publish only after all worker-side pixel/vector preparation.
+                self.guard.check()?;
                 Ok((image, vector, warnings))
             });
         match rendered {
