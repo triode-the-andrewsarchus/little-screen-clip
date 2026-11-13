@@ -47,93 +47,6 @@ fn apply_explicit_positions(nodes: &mut Vec<LayoutNode>, explicit_positions: &Ha
     }
 }
 
-/// Lift an element ID to system level for system context views.
-///
-/// - Person IDs → kept as-is
-/// - SoftwareSystem IDs → kept as-is
-/// - Container/Component IDs → lifted to their parent system's ID
-///
-/// Returns None if the element cannot be found or mapped.
-fn lift_to_system_level(
-    element_id: ElementId,
-    model: &structurizr_core::model::Model,
-) -> Option<ElementId> {
-    // Check people first - return as-is
-    for person in &model.people {
-        if person.id() == element_id {
-            return Some(element_id);
-        }
-    }
-
-    // Check software systems and their children
-    for system in &model.software_systems {
-        // Direct system match
-        if system.id() == element_id {
-            return Some(element_id);
-        }
-
-        // Check containers
-        for container in &system.containers {
-            if container.id() == element_id {
-                return Some(system.id()); // Lift to parent system
-            }
-
-            // Check components
-            for component in &container.components {
-                if component.id() == element_id {
-                    return Some(system.id()); // Lift to parent system
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Create edges for a system context view by lifting container/component-level
-/// relationships to system level.
-///
-/// This ensures proper graph connectivity for layout:
-/// - person → container becomes person → system
-/// - system_a.container → system_b.container becomes system_a → system_b
-fn create_system_context_edges(
-    model: &structurizr_core::model::Model,
-    element_ids: &[String],
-) -> Vec<LayoutEdge> {
-    let element_id_set: HashSet<&str> = element_ids.iter().map(|s| s.as_str()).collect();
-    let mut seen_edges: HashSet<(String, String)> = HashSet::new();
-    let mut edges = Vec::new();
-
-    for rel in &model.relationships {
-        // Lift source and target to system level
-        let lifted_source = lift_to_system_level(rel.source_id, model);
-        let lifted_target = lift_to_system_level(rel.destination_id, model);
-
-        if let (Some(source_id), Some(target_id)) = (lifted_source, lifted_target) {
-            let source_str = source_id.to_string();
-            let target_str = target_id.to_string();
-
-            // Only include if both are in the view's elements
-            if element_id_set.contains(source_str.as_str())
-                && element_id_set.contains(target_str.as_str())
-                && source_str != target_str  // Skip self-loops
-            {
-                // Deduplicate - only add each edge once
-                let edge_key = (source_str.clone(), target_str.clone());
-                if !seen_edges.contains(&edge_key) {
-                    seen_edges.insert(edge_key);
-                    edges.push(LayoutEdge {
-                        source: source_str,
-                        target: target_str,
-                    });
-                }
-            }
-        }
-    }
-
-    edges
-}
-
 /// Tracks the bounding box of all content in the SVG.
 /// Used to calculate dynamic viewBox dimensions.
 #[derive(Debug, Clone, Copy)]
@@ -589,133 +502,92 @@ impl SvgRenderer {
         self.show_legend = false;
     }
 
+    /// Render exactly the resolved static selection; empty selections stay empty.
+    fn render_static(
+        &self,
+        workspace: &Workspace,
+        properties: &ViewProperties,
+        kind: ViewType,
+        scope: Option<ElementId>,
+    ) -> Result<String> {
+        let model = workspace.model();
+        let elements: Vec<_> = properties
+            .elements
+            .iter()
+            .map(|element| ElementInfo::static_element(model, element.id, kind, scope))
+            .collect::<Result<_>>()?;
+        let selected: HashSet<_> = elements.iter().map(|element| element.id).collect();
+        let requested: HashSet<_> = properties
+            .relationships
+            .iter()
+            .map(|relationship| relationship.id)
+            .collect();
+        let relationships: Vec<_> = model
+            .relationships
+            .iter()
+            .filter(|relationship| {
+                requested.contains(&relationship.id)
+                    && selected.contains(&relationship.source_id)
+                    && selected.contains(&relationship.destination_id)
+            })
+            .cloned()
+            .collect();
+        let element_ids: Vec<_> = elements
+            .iter()
+            .map(|element| element.id.to_string())
+            .collect();
+        let edges: Vec<_> = relationships
+            .iter()
+            .map(|relationship| LayoutEdge {
+                source: relationship.source_id.to_string(),
+                target: relationship.destination_id.to_string(),
+            })
+            .collect();
+        let node_sizes: Vec<_> = element_ids
+            .iter()
+            .map(|id| (id.clone(), Size::default()))
+            .collect();
+        let layout = GridLayout::for_view_type(kind, properties.auto_layout.as_ref());
+        let mut nodes: Vec<_> = layout
+            .layout_sugiyama(&element_ids, &node_sizes, &edges)
+            .nodes
+            .into_iter()
+            .map(|node| LayoutNode {
+                id: node.id,
+                position: Position {
+                    x: node.position.x,
+                    y: node.position.y,
+                },
+                size: Size {
+                    width: node.size.width,
+                    height: node.size.height,
+                },
+                rank: node.rank,
+            })
+            .collect();
+        apply_explicit_positions(&mut nodes, &extract_explicit_positions(properties));
+        let active = if kind == ViewType::SystemContext {
+            scope
+        } else {
+            None
+        };
+        self.render_svg_with_active_element(
+            &nodes,
+            &elements,
+            &relationships,
+            &model.groups,
+            workspace.styles(),
+            active,
+        )
+    }
+
     /// Render a system landscape view to SVG.
     pub fn render_system_landscape(
         &self,
         workspace: &Workspace,
         view: &SystemLandscapeView,
     ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        // Collect all elements to render
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Build set of allowed element IDs if view has explicit elements
-        let allowed_ids: Option<HashSet<ElementId>> = if !view.properties.elements.is_empty() {
-            Some(view.properties.elements.iter().map(|e| e.id).collect())
-        } else {
-            None
-        };
-
-        // Step 1: Collect candidate element IDs for this view (respecting allowed_ids)
-        // Include containers/components as "proxy candidates" so person→container relationships count
-        let mut candidate_ids: HashSet<ElementId> = HashSet::new();
-
-        for person in &model.people {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&person.id()) { continue; }
-            }
-            candidate_ids.insert(person.id());
-        }
-
-        for system in &model.software_systems {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&system.id()) { continue; }
-            }
-            candidate_ids.insert(system.id());
-            // Also add containers and components as proxy candidates
-            // This allows person→container relationships to count for connectivity
-            for container in &system.containers {
-                candidate_ids.insert(container.id());
-                for component in &container.components {
-                    candidate_ids.insert(component.id());
-                }
-            }
-        }
-
-        // Step 2: Build connected_ids from relationships where BOTH endpoints are candidates
-        let connected_ids: HashSet<ElementId> = model.relationships
-            .iter()
-            .filter(|rel| candidate_ids.contains(&rel.source_id) && candidate_ids.contains(&rel.destination_id))
-            .flat_map(|rel| [rel.source_id, rel.destination_id])
-            .collect();
-
-        // Step 3: Add elements that are both candidates AND connected within this view
-        // (Only add people and systems - containers/components were just proxy candidates)
-        for person in &model.people {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&person.id()) { continue; }
-            }
-            if !connected_ids.contains(&person.id()) { continue; }
-            element_ids.push(person.id().to_string());
-            elements_info.push(ElementInfo {
-                id: person.id(),
-                name: person.name().to_string(),
-                description: person.properties.description.clone(),
-                element_type: ElementType::Person,
-                technology: None,
-                tags: person.properties.tags.clone(),
-            });
-        }
-
-        for system in &model.software_systems {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&system.id()) { continue; }
-            }
-            // System is connected if: itself is connected OR any of its containers/components are
-            let system_connected = connected_ids.contains(&system.id()) ||
-                system.containers.iter().any(|c| {
-                    connected_ids.contains(&c.id()) ||
-                    c.components.iter().any(|comp| connected_ids.contains(&comp.id()))
-                });
-            if !system_connected { continue; }
-            element_ids.push(system.id().to_string());
-            elements_info.push(ElementInfo {
-                id: system.id(),
-                name: system.name().to_string(),
-                description: system.properties.description.clone(),
-                element_type: ElementType::SoftwareSystem,
-                technology: None,
-                tags: system.properties.tags.clone(),
-            });
-        }
-
-        // Create edges with relationship lifting to system level
-        // This ensures proper graph connectivity (e.g., person→container becomes person→system)
-        let edges = create_system_context_edges(model, &element_ids);
-
-        // Compute layout with view-type-aware direction (C1 = LeftRight)
-        let layout = GridLayout::for_view_type(
-            ViewType::SystemLandscape,
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &model.relationships, &model.groups, styles)
+        self.render_static(workspace, &view.properties, ViewType::SystemLandscape, None)
     }
 
     /// Render a system context view to SVG.
@@ -724,412 +596,32 @@ impl SvgRenderer {
         workspace: &Workspace,
         view: &SystemContextView,
     ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Build set of allowed element IDs if view has explicit elements
-        let allowed_ids: Option<HashSet<ElementId>> = if !view.properties.elements.is_empty() {
-            Some(view.properties.elements.iter().map(|e| e.id).collect())
-        } else {
-            None
-        };
-
-        // Find the main system
-        let main_system = model
-            .software_systems
-            .iter()
-            .find(|s| s.id() == view.software_system_id);
-
-        // Step 1: Collect candidate element IDs for this view (respecting allowed_ids)
-        // Include containers/components as "proxy candidates" so person→container relationships count
-        let mut candidate_ids: HashSet<ElementId> = HashSet::new();
-
-        for person in &model.people {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&person.id()) { continue; }
-            }
-            candidate_ids.insert(person.id());
-        }
-
-        for system in &model.software_systems {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&system.id()) { continue; }
-            }
-            candidate_ids.insert(system.id());
-            // Also add containers and components as proxy candidates
-            // This allows person→container relationships to count for connectivity
-            for container in &system.containers {
-                candidate_ids.insert(container.id());
-                for component in &container.components {
-                    candidate_ids.insert(component.id());
-                }
-            }
-        }
-
-        // Step 2: Build connected_ids from relationships where BOTH endpoints are candidates
-        let connected_ids: HashSet<ElementId> = model.relationships
-            .iter()
-            .filter(|rel| candidate_ids.contains(&rel.source_id) && candidate_ids.contains(&rel.destination_id))
-            .flat_map(|rel| [rel.source_id, rel.destination_id])
-            .collect();
-
-        // Step 3: Add elements that are both candidates AND connected within this view
-        // (Only add people and systems - containers/components were just proxy candidates)
-        // Add all people
-        for person in &model.people {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&person.id()) { continue; }
-            }
-            if !connected_ids.contains(&person.id()) { continue; }
-            element_ids.push(person.id().to_string());
-            elements_info.push(ElementInfo {
-                id: person.id(),
-                name: person.name().to_string(),
-                description: person.properties.description.clone(),
-                element_type: ElementType::Person,
-                technology: None,
-                tags: person.properties.tags.clone(),
-            });
-        }
-
-        // Add all software systems
-        for system in &model.software_systems {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&system.id()) { continue; }
-            }
-            // System is connected if: itself is connected OR any of its containers/components are
-            let system_connected = connected_ids.contains(&system.id()) ||
-                system.containers.iter().any(|c| {
-                    connected_ids.contains(&c.id()) ||
-                    c.components.iter().any(|comp| connected_ids.contains(&comp.id()))
-                });
-            if !system_connected { continue; }
-            element_ids.push(system.id().to_string());
-            let is_main = main_system.map(|m| m.id() == system.id()).unwrap_or(false);
-            elements_info.push(ElementInfo {
-                id: system.id(),
-                name: system.name().to_string(),
-                description: system.properties.description.clone(),
-                element_type: if is_main {
-                    ElementType::SoftwareSystem
-                } else {
-                    ElementType::ExternalSystem
-                },
-                technology: None,
-                tags: system.properties.tags.clone(),
-            });
-        }
-
-        // Create edges with relationship lifting to system level
-        // This ensures proper graph connectivity (e.g., person→container becomes person→system)
-        let edges = create_system_context_edges(model, &element_ids);
-
-        // Compute layout with view-type-aware direction (C1 = LeftRight)
-        let layout = GridLayout::for_view_type(
+        self.render_static(
+            workspace,
+            &view.properties,
             ViewType::SystemContext,
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        // The active element for SystemContextView is the main software system
-        let active_element_id = main_system.map(|s| s.id());
-        self.render_svg_with_active_element(&nodes, &elements_info, &model.relationships, &model.groups, styles, active_element_id)
+            Some(view.software_system_id),
+        )
     }
 
     /// Render a container view to SVG.
-    pub fn render_container(
-        &self,
-        workspace: &Workspace,
-        view: &ContainerView,
-    ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Build set of allowed element IDs if view has explicit elements
-        let allowed_ids: Option<HashSet<ElementId>> = if !view.properties.elements.is_empty() {
-            Some(view.properties.elements.iter().map(|e| e.id).collect())
-        } else {
-            None
-        };
-
-        // Step 1: Collect candidate element IDs for this view (respecting allowed_ids)
-        let mut candidate_ids: HashSet<ElementId> = HashSet::new();
-
-        // Add candidate people
-        for person in &model.people {
-            if let Some(ref allowed) = allowed_ids {
-                if !allowed.contains(&person.id()) { continue; }
-            }
-            candidate_ids.insert(person.id());
-        }
-
-        // Add candidate containers from the target system
-        if let Some(system) = model.software_systems.iter().find(|s| s.id() == view.software_system_id) {
-            for container in &system.containers {
-                if let Some(ref allowed) = allowed_ids {
-                    if !allowed.contains(&container.id()) { continue; }
-                }
-                candidate_ids.insert(container.id());
-            }
-        }
-
-        // Add candidate external systems
-        for system in &model.software_systems {
-            if system.id() != view.software_system_id {
-                if let Some(ref allowed) = allowed_ids {
-                    if !allowed.contains(&system.id()) { continue; }
-                }
-                candidate_ids.insert(system.id());
-            }
-        }
-
-        // Step 2: Build connected_ids from relationships where BOTH endpoints are candidates
-        let connected_ids: HashSet<ElementId> = model.relationships
-            .iter()
-            .filter(|rel| candidate_ids.contains(&rel.source_id) && candidate_ids.contains(&rel.destination_id))
-            .flat_map(|rel| [rel.source_id, rel.destination_id])
-            .collect();
-
-        // Step 3: Add elements that are both candidates AND connected within this view
-        // Add people
-        for person in &model.people {
-            if !candidate_ids.contains(&person.id()) { continue; }
-            if !connected_ids.contains(&person.id()) { continue; }
-            element_ids.push(person.id().to_string());
-            elements_info.push(ElementInfo {
-                id: person.id(),
-                name: person.name().to_string(),
-                description: person.properties.description.clone(),
-                element_type: ElementType::Person,
-                technology: None,
-                tags: person.properties.tags.clone(),
-            });
-        }
-
-        // Add containers from the target system
-        if let Some(system) = model.software_systems.iter().find(|s| s.id() == view.software_system_id) {
-            for container in &system.containers {
-                if !candidate_ids.contains(&container.id()) { continue; }
-                if !connected_ids.contains(&container.id()) { continue; }
-                element_ids.push(container.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: container.id(),
-                    name: container.name().to_string(),
-                    description: container.properties.description.clone(),
-                    element_type: ElementType::Container,
-                    technology: container.technology.clone(),
-                    tags: container.properties.tags.clone(),
-                });
-            }
-        }
-
-        // Add external systems
-        for system in &model.software_systems {
-            if system.id() != view.software_system_id {
-                if !candidate_ids.contains(&system.id()) { continue; }
-                if !connected_ids.contains(&system.id()) { continue; }
-                element_ids.push(system.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: system.id(),
-                    name: system.name().to_string(),
-                    description: system.properties.description.clone(),
-                    element_type: ElementType::ExternalSystem,
-                    technology: None,
-                    tags: system.properties.tags.clone(),
-                });
-            }
-        }
-
-        // Build set of element IDs for filtering relationships (from elements_info which has proper ElementId)
-        let element_id_set: HashSet<ElementId> = elements_info.iter()
-            .map(|e| e.id)
-            .collect();
-
-        // Filter relationships to only include those where BOTH endpoints are in the view
-        let filtered_relationships: Vec<_> = model
-            .relationships
-            .iter()
-            .filter(|r| element_id_set.contains(&r.source_id) && element_id_set.contains(&r.destination_id))
-            .cloned()
-            .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (C2 = TopBottom)
-        let layout = GridLayout::for_view_type(
+    pub fn render_container(&self, workspace: &Workspace, view: &ContainerView) -> Result<String> {
+        self.render_static(
+            workspace,
+            &view.properties,
             ViewType::Container,
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        // The active element for ContainerView is the scoped software system
-        let active_element_id = Some(view.software_system_id);
-        self.render_svg_with_active_element(&nodes, &elements_info, &filtered_relationships, &model.groups, styles, active_element_id)
+            Some(view.software_system_id),
+        )
     }
 
     /// Render a component view to SVG.
-    pub fn render_component(
-        &self,
-        workspace: &Workspace,
-        view: &ComponentView,
-    ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Build set of allowed element IDs if view has explicit elements
-        let allowed_ids: Option<HashSet<ElementId>> = if !view.properties.elements.is_empty() {
-            Some(view.properties.elements.iter().map(|e| e.id).collect())
-        } else {
-            None
-        };
-
-        // Find the container
-        let mut target_container = None;
-
-        for system in &model.software_systems {
-            for container in &system.containers {
-                if container.id() == view.container_id {
-                    target_container = Some(container);
-                    break;
-                }
-            }
-            if target_container.is_some() {
-                break;
-            }
-        }
-
-        // For component views, include ALL components in the container
-        // (unlike container views, we don't filter by connectivity - all components are relevant)
-        if let Some(container) = target_container {
-            for component in &container.components {
-                // Only filter if view has explicit elements specified
-                if let Some(ref allowed) = allowed_ids {
-                    if !allowed.contains(&component.id()) { continue; }
-                }
-                element_ids.push(component.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: component.id(),
-                    name: component.name().to_string(),
-                    description: component.properties.description.clone(),
-                    element_type: ElementType::Component,
-                    technology: component.technology.clone(),
-                    tags: component.properties.tags.clone(),
-                });
-            }
-        }
-
-        // Build set of element IDs for filtering relationships
-        let element_id_set: HashSet<ElementId> = elements_info.iter()
-            .map(|e| e.id)
-            .collect();
-
-        // Filter relationships to only include those where BOTH endpoints are in the view
-        let filtered_relationships: Vec<_> = model
-            .relationships
-            .iter()
-            .filter(|r| element_id_set.contains(&r.source_id) && element_id_set.contains(&r.destination_id))
-            .cloned()
-            .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (C3 = LeftRight)
-        let layout = GridLayout::for_view_type(
+    pub fn render_component(&self, workspace: &Workspace, view: &ComponentView) -> Result<String> {
+        self.render_static(
+            workspace,
+            &view.properties,
             ViewType::Component,
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        // The active element for ComponentView is the scoped container
-        let active_element_id = Some(view.container_id);
-        self.render_svg_with_active_element(&nodes, &elements_info, &filtered_relationships, &model.groups, styles, active_element_id)
+            Some(view.container_id),
+        )
     }
 
     /// Render a deployment view to SVG.
@@ -1406,348 +898,83 @@ impl SvgRenderer {
         Ok(svg)
     }
 
-    /// Render a filtered view to SVG.
-    /// This applies tag-based filtering to an existing view.
-    pub fn render_filtered(
-        &self,
-        workspace: &Workspace,
-        view: &FilteredView,
-    ) -> Result<String> {
-        // Find the base view and render it with filtering applied
+    /// Filter the base selection, without admitting elements absent from that view.
+    pub fn render_filtered(&self, workspace: &Workspace, view: &FilteredView) -> Result<String> {
         let views = workspace.views();
-
-        // Try to find the base view in different view collections
-        if let Some(base_view) = views.system_landscape_views.iter()
-            .find(|v| v.properties.key == view.base_view_key)
-        {
-            return self.render_filtered_landscape(workspace, base_view, view);
-        }
-
-        if let Some(base_view) = views.system_context_views.iter()
-            .find(|v| v.properties.key == view.base_view_key)
-        {
-            return self.render_filtered_context(workspace, base_view, view);
-        }
-
-        if let Some(base_view) = views.container_views.iter()
-            .find(|v| v.properties.key == view.base_view_key)
-        {
-            return self.render_filtered_container(workspace, base_view, view);
-        }
-
-        // If base view not found, return an error
-        Err(crate::error::Error::ViewNotFound(view.base_view_key.clone()))
-    }
-
-    /// Helper method to render a filtered system landscape view.
-    fn render_filtered_landscape(
-        &self,
-        workspace: &Workspace,
-        base_view: &SystemLandscapeView,
-        filter: &FilteredView,
-    ) -> Result<String> {
+        let key = &view.base_view_key;
+        let base = views
+            .system_landscape_views
+            .iter()
+            .find(|base| &base.properties.key == key)
+            .map(|base| (&base.properties, ViewType::SystemLandscape, None))
+            .or_else(|| {
+                views
+                    .system_context_views
+                    .iter()
+                    .find(|base| &base.properties.key == key)
+                    .map(|base| {
+                        (
+                            &base.properties,
+                            ViewType::SystemContext,
+                            Some(base.software_system_id),
+                        )
+                    })
+            })
+            .or_else(|| {
+                views
+                    .container_views
+                    .iter()
+                    .find(|base| &base.properties.key == key)
+                    .map(|base| {
+                        (
+                            &base.properties,
+                            ViewType::Container,
+                            Some(base.software_system_id),
+                        )
+                    })
+            })
+            .or_else(|| {
+                views
+                    .component_views
+                    .iter()
+                    .find(|base| &base.properties.key == key)
+                    .map(|base| {
+                        (
+                            &base.properties,
+                            ViewType::Component,
+                            Some(base.container_id),
+                        )
+                    })
+            })
+            .ok_or_else(|| crate::error::Error::ViewNotFound(key.clone()))?;
         let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        for person in &model.people {
-            if self.should_include_element(&person.properties.tags, filter) {
-                element_ids.push(person.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: person.id(),
-                    name: person.name().to_string(),
-                    description: person.properties.description.clone(),
-                    element_type: ElementType::Person,
-                    technology: None,
-                    tags: person.properties.tags.clone(),
-                });
+        let mut properties = base.0.clone();
+        properties.elements.clear();
+        for element in &base.0.elements {
+            let source = model
+                .find_element(element.id)
+                .ok_or_else(|| crate::error::Error::ElementNotFound(element.id.to_string()))?;
+            if Self::includes_tags(&source.properties().tags, view) {
+                properties.elements.push(element.clone());
             }
         }
-
-        for system in &model.software_systems {
-            if self.should_include_element(&system.properties.tags, filter) {
-                element_ids.push(system.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: system.id(),
-                    name: system.name().to_string(),
-                    description: system.properties.description.clone(),
-                    element_type: ElementType::SoftwareSystem,
-                    technology: None,
-                    tags: system.properties.tags.clone(),
-                });
-            }
-        }
-
-        let filtered_relationships: Vec<_> = model
+        let permitted: HashSet<_> = model
             .relationships
             .iter()
-            .filter(|r| self.should_include_relationship(&r.tags, filter))
-            .cloned()
+            .filter(|relationship| Self::includes_tags(&relationship.tags, view))
+            .map(|relationship| relationship.id)
             .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (Dynamic = TopBottom for sequence flow)
-        let layout = GridLayout::for_view_type(
-            ViewType::Dynamic,
-            base_view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from base view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&base_view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &filtered_relationships, &model.groups, styles)
-    }
-
-    /// Helper method to render a filtered system context view.
-    fn render_filtered_context(
-        &self,
-        workspace: &Workspace,
-        base_view: &SystemContextView,
-        filter: &FilteredView,
-    ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        let main_system = model
-            .software_systems
-            .iter()
-            .find(|s| s.id() == base_view.software_system_id);
-
-        for person in &model.people {
-            if self.should_include_element(&person.properties.tags, filter) {
-                element_ids.push(person.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: person.id(),
-                    name: person.name().to_string(),
-                    description: person.properties.description.clone(),
-                    element_type: ElementType::Person,
-                    technology: None,
-                    tags: person.properties.tags.clone(),
-                });
-            }
-        }
-
-        for system in &model.software_systems {
-            if self.should_include_element(&system.properties.tags, filter) {
-                let is_main = main_system.map(|m| m.id() == system.id()).unwrap_or(false);
-                element_ids.push(system.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: system.id(),
-                    name: system.name().to_string(),
-                    description: system.properties.description.clone(),
-                    element_type: if is_main {
-                        ElementType::SoftwareSystem
-                    } else {
-                        ElementType::ExternalSystem
-                    },
-                    technology: None,
-                    tags: system.properties.tags.clone(),
-                });
-            }
-        }
-
-        let filtered_relationships: Vec<_> = model
+        properties
             .relationships
-            .iter()
-            .filter(|r| self.should_include_relationship(&r.tags, filter))
-            .cloned()
-            .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (Filtered context = LeftRight like C1)
-        let layout = GridLayout::for_view_type(
-            ViewType::SystemContext,
-            base_view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from base view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&base_view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &filtered_relationships, &model.groups, styles)
+            .retain(|relationship| permitted.contains(&relationship.id));
+        self.render_static(workspace, &properties, base.1, base.2)
     }
 
-    /// Helper method to render a filtered container view.
-    fn render_filtered_container(
-        &self,
-        workspace: &Workspace,
-        base_view: &ContainerView,
-        filter: &FilteredView,
-    ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        for person in &model.people {
-            if self.should_include_element(&person.properties.tags, filter) {
-                element_ids.push(person.id().to_string());
-                elements_info.push(ElementInfo {
-                    id: person.id(),
-                    name: person.name().to_string(),
-                    description: person.properties.description.clone(),
-                    element_type: ElementType::Person,
-                    technology: None,
-                    tags: person.properties.tags.clone(),
-                });
-            }
-        }
-
-        if let Some(system) = model.software_systems.iter().find(|s| s.id() == base_view.software_system_id) {
-            for container in &system.containers {
-                if self.should_include_element(&container.properties.tags, filter) {
-                    element_ids.push(container.id().to_string());
-                    elements_info.push(ElementInfo {
-                        id: container.id(),
-                        name: container.name().to_string(),
-                        description: container.properties.description.clone(),
-                        element_type: ElementType::Container,
-                        technology: container.technology.clone(),
-                        tags: container.properties.tags.clone(),
-                    });
-                }
-            }
-        }
-
-        for system in &model.software_systems {
-            if system.id() != base_view.software_system_id {
-                if self.should_include_element(&system.properties.tags, filter) {
-                    element_ids.push(system.id().to_string());
-                    elements_info.push(ElementInfo {
-                        id: system.id(),
-                        name: system.name().to_string(),
-                        description: system.properties.description.clone(),
-                        element_type: ElementType::ExternalSystem,
-                        technology: None,
-                        tags: system.properties.tags.clone(),
-                    });
-                }
-            }
-        }
-
-        let filtered_relationships: Vec<_> = model
-            .relationships
-            .iter()
-            .filter(|r| self.should_include_relationship(&r.tags, filter))
-            .cloned()
-            .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout with view-type-aware direction (Filtered container = TopBottom like C2)
-        let layout = GridLayout::for_view_type(
-            ViewType::Container,
-            base_view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply explicit positions from base view properties (e.g., from drag-and-drop)
-        let explicit_positions = extract_explicit_positions(&base_view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &filtered_relationships, &model.groups, styles)
-    }
-
-    /// Check if an element should be included based on the filter.
-    fn should_include_element(&self, element_tags: &[String], filter: &FilteredView) -> bool {
-        let has_matching_tag = filter.tags.iter().any(|ft| element_tags.contains(ft));
-
+    fn includes_tags(tags: &[String], filter: &FilteredView) -> bool {
+        let matched = filter.tags.iter().any(|tag| tags.contains(tag));
         match filter.mode {
-            FilterMode::Include => has_matching_tag || filter.tags.is_empty(),
-            FilterMode::Exclude => !has_matching_tag,
-        }
-    }
-
-    /// Check if a relationship should be included based on the filter.
-    fn should_include_relationship(&self, rel_tags: &[String], filter: &FilteredView) -> bool {
-        let has_matching_tag = filter.tags.iter().any(|ft| rel_tags.contains(ft));
-
-        match filter.mode {
-            FilterMode::Include => has_matching_tag || filter.tags.is_empty(),
-            FilterMode::Exclude => !has_matching_tag,
+            FilterMode::Include => matched || filter.tags.is_empty(),
+            FilterMode::Exclude => !matched,
         }
     }
 
@@ -2993,6 +2220,54 @@ struct ElementInfo {
     tags: Vec<String>,
 }
 
+impl ElementInfo {
+    fn static_element(
+        model: &structurizr_core::model::Model,
+        id: ElementId,
+        kind: ViewType,
+        scope: Option<ElementId>,
+    ) -> Result<Self> {
+        use structurizr_core::model::ElementRef;
+        let element = model
+            .find_element(id)
+            .ok_or_else(|| crate::error::Error::ElementNotFound(id.to_string()))?;
+        let (element_type, technology) = match element {
+            ElementRef::Person(_) => (ElementType::Person, None),
+            ElementRef::SoftwareSystem(_) => {
+                let internal = kind == ViewType::SystemLandscape || Some(id) == scope;
+                (
+                    if internal {
+                        ElementType::SoftwareSystem
+                    } else {
+                        ElementType::ExternalSystem
+                    },
+                    None,
+                )
+            }
+            ElementRef::Container(container) => {
+                (ElementType::Container, container.technology.clone())
+            }
+            ElementRef::Component(component) => {
+                (ElementType::Component, component.technology.clone())
+            }
+            _ => {
+                return Err(crate::error::Error::Render(
+                    "Non-static element in a static view".into(),
+                ))
+            }
+        };
+        let properties = element.properties();
+        Ok(Self {
+            id,
+            name: properties.name.clone(),
+            description: properties.description.clone(),
+            element_type,
+            technology,
+            tags: properties.tags.clone(),
+        })
+    }
+}
+
 /// Entry in the legend for an element type.
 #[derive(Debug, Clone)]
 struct LegendElementEntry {
@@ -3132,7 +2407,10 @@ mod tests {
         // Add a relationship
         model.add_relationship(person_id, system_id, "Uses", None);
 
-        let view = SystemLandscapeView::new("landscape");
+        let mut view = SystemLandscapeView::new("landscape");
+        view.properties.add_element(person_id);
+        view.properties.add_element(system_id);
+        view.properties.add_relationship(workspace.model().relationships[0].id);
 
         // Render without legend
         let renderer = SvgRenderer::default();

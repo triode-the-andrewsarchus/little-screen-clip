@@ -2487,12 +2487,13 @@ Further qualification found correctness work that must precede host integration:
   The [official rule](https://docs.structurizr.com/dsl/implied-relationships)
   lifts endpoints through their containing architecture elements; unrelated
   A→B→C edges must not invent an A→C relationship.
-- [ ] Retain explicitly selected disconnected elements and preserve empty
+- [x] Retain explicitly selected disconnected elements and preserve empty
   selections; do not confuse wildcard scope with global graph connectivity.
   Check context/container/component scope against the
   [official include rules](https://docs.structurizr.com/dsl/language#include).
-- [ ] Qualify filtered/component/deployment behavior and disclose unsupported
-  expressions rather than silently ignoring them.
+- [x] Qualify static component/filtered selections and diagnose unsupported
+  selector expressions instead of silently omitting them.
+- [ ] Qualify dynamic/deployment/custom view behavior and additional DSL forms.
 
 The format checkbox remains open while these and host integration are pending.
 
@@ -2517,3 +2518,50 @@ derivation logic; the import's maximum complexity and clone counts are unchanged
 Renderer-side selection and edge projection are still pending: they must consume
 the resolved model faithfully, including when implied relationships are disabled.
 This is not yet exposed as a supported file or Markdown fence.
+
+### Structurizr resolved view selections
+
+Static views now resolve selected element and relationship IDs in the parser.
+The four C4 renderers share one existing native layout/paint pipeline and honor
+those IDs directly, including an empty selection. The renderer no longer drops
+disconnected explicit members, re-infers model edges, or substitutes the whole
+model when exclusions remove every member. The scoped system remains present in
+a context view, matching the official protected-scope behavior.
+
+Wildcard membership uses the view's documented seed elements and direct
+neighbours, rather than unrelated connected pairs anywhere in the graph. Local
+containers/components survive even if isolated; component views can render their
+selected people, external systems and sibling containers. Invalid scopes,
+unknown/unsupported selectors and ancestor/descendant mixtures produce errors.
+The AST retains include/exclude statements and their term order, supporting
+multiple terms, re-inclusion and wildcard exclusion without parallel selection
+lists. Common title/description/properties/layout/default metadata is retained.
+
+Filtered views refine their base view's selection, so tags cannot admit unrelated
+model members or edges. They reuse the same pipeline for all four static base
+view types, including components; relationship tags can hide edges while keeping
+their nodes. Model containment/metadata enumeration remains owned by core.
+
+Eight new end-to-end parser/SVG regressions check actual painted object IDs, not
+only successful SVG creation: scoped wildcards, disconnected members, duplicates,
+ordered operations, quoted identifiers, empty views, protected context scope,
+disabled implied links, filtered membership/edge tags and metadata propagation.
+All 152 unit/integration tests plus one core rustdoc test pass. The application
+workspace checks the three libraries without warnings, and strict all-target
+Clippy for the shared renderer passes. Additional grammar/view compatibility
+remains pending, including bare metadata property keys and extended views.
+
+Architecture comparison against `before-structurizr-selection` removes 37 clone
+groups (3177 to 3140), lowers duplication by 0.07 percentage points and removes
+122 measured lines despite the new regression suite. The three previously
+complex static-render entrypoints fall below the hotspot threshold; the new
+selection functions stay below it. Shared property conversion also removes
+repeated construction branches from the workspace builder. Raw classification
+still reports changed-file clone warnings: the six core declaration groups are
+byte-identical to the baseline, and remaining parser/renderer field/keyword
+patterns were inspected. They do not justify replacing typed view adapters with
+a larger generic framework. Unchanged Python cycles are not new dependencies.
+
+This is a backend correction, committed separately from the implied-relationship
+fix. Host routing, graphical UI and native acceptance remain pending; the
+Structurizr format checkbox stays open.

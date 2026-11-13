@@ -30,3 +30,8 @@ commits, separate from this pristine import.
 - Correct implied relationships to lift containment endpoints, enabled by
   default, rather than calculate transitive graph reachability. Preserve explicit
   pairs and relationship metadata; reject unsupported Java strategy names.
+
+- Resolve static view membership by scope, preserve authored selection order and
+  empty/disconnected selections, and report unsupported terms. Core owns static
+  element enumeration/metadata. Native static and filtered renderers share one
+  layout/paint path, consuming resolved elements and relationships directly.

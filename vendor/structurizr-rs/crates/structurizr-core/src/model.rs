@@ -671,30 +671,25 @@ impl Model {
         Vec::new()
     }
 
+    /// Iterate static C4 elements in deterministic model order.
+    pub fn architecture_elements(&self) -> impl Iterator<Item = ElementRef<'_>> {
+        self.people
+            .iter()
+            .map(ElementRef::Person)
+            .chain(self.software_systems.iter().flat_map(|system| {
+                std::iter::once(ElementRef::SoftwareSystem(system)).chain(
+                    system.containers.iter().flat_map(|container| {
+                        std::iter::once(ElementRef::Container(container))
+                            .chain(container.components.iter().map(ElementRef::Component))
+                    }),
+                )
+            }))
+    }
+
     /// Find an element by its ID across all element types.
     pub fn find_element(&self, id: ElementId) -> Option<ElementRef<'_>> {
-        // Check people
-        for person in &self.people {
-            if person.id() == id {
-                return Some(ElementRef::Person(person));
-            }
-        }
-
-        // Check software systems and their containers/components
-        for system in &self.software_systems {
-            if system.id() == id {
-                return Some(ElementRef::SoftwareSystem(system));
-            }
-            for container in &system.containers {
-                if container.id() == id {
-                    return Some(ElementRef::Container(container));
-                }
-                for component in &container.components {
-                    if component.id() == id {
-                        return Some(ElementRef::Component(component));
-                    }
-                }
-            }
+        if let Some(element) = self.architecture_elements().find(|element| element.id() == id) {
+            return Some(element);
         }
 
         // Check deployment nodes
@@ -725,23 +720,22 @@ pub enum ElementRef<'a> {
 }
 
 impl<'a> ElementRef<'a> {
-    pub fn id(&self) -> ElementId {
+    /// Return the shared identity, labels, tags and metadata of this element.
+    pub fn properties(&self) -> &'a ElementProperties {
         match self {
-            ElementRef::Person(p) => p.id(),
-            ElementRef::SoftwareSystem(s) => s.id(),
-            ElementRef::Container(c) => c.id(),
-            ElementRef::Component(c) => c.id(),
-            ElementRef::DeploymentNode(d) => d.id(),
+            ElementRef::Person(element) => &element.properties,
+            ElementRef::SoftwareSystem(element) => &element.properties,
+            ElementRef::Container(element) => &element.properties,
+            ElementRef::Component(element) => &element.properties,
+            ElementRef::DeploymentNode(element) => &element.properties,
         }
     }
 
+    pub fn id(&self) -> ElementId {
+        self.properties().id
+    }
+
     pub fn name(&self) -> &str {
-        match self {
-            ElementRef::Person(p) => p.name(),
-            ElementRef::SoftwareSystem(s) => s.name(),
-            ElementRef::Container(c) => c.name(),
-            ElementRef::Component(c) => c.name(),
-            ElementRef::DeploymentNode(d) => d.name(),
-        }
+        &self.properties().name
     }
 }

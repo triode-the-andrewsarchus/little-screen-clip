@@ -241,8 +241,8 @@ pub struct ViewPropertiesNode {
     pub key: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub include: Vec<IncludeExclude>,
-    pub exclude: Vec<IncludeExclude>,
+    /// Include/exclude operations in authored order.
+    pub selection: Vec<SelectionOperation>,
     pub auto_layout: Option<AutoLayoutNode>,
     pub properties: HashMap<String, String>,
     /// Background color for the view (e.g., "#1a1a1a" for dark mode).
@@ -258,6 +258,13 @@ pub struct ViewPropertiesNode {
 pub struct AnimationStepNode {
     /// Element identifiers to include in this animation step
     pub elements: Vec<String>,
+}
+
+/// One authored include/exclude statement, preserving its term order.
+#[derive(Debug, Clone)]
+pub enum SelectionOperation {
+    Include(Vec<IncludeExclude>),
+    Exclude(Vec<IncludeExclude>),
 }
 
 /// Include or exclude directive in a view.

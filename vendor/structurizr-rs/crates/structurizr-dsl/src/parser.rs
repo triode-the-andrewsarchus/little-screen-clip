@@ -1220,6 +1220,36 @@ impl Parser {
         Ok(views)
     }
 
+    /// Read one selection statement without consuming the next physical line.
+    fn parse_selection_operation(&mut self) -> Result<SelectionOperation> {
+        let adding = self.check(&TokenKind::Include);
+        let location = self.current().map(|token| token.location);
+        self.advance();
+        let mut entries = Vec::new();
+        loop {
+            let entry = match self.current_kind().cloned() {
+                Some(TokenKind::Star) => IncludeExclude::All,
+                Some(TokenKind::Identifier(name)) => IncludeExclude::Identifier(name),
+                Some(TokenKind::String(expression)) => IncludeExclude::Expression(expression),
+                _ => break,
+            };
+            entries.push(entry);
+            self.advance();
+        }
+        if entries.is_empty() {
+            return Err(Error::Parse(ParseError {
+                message: "Selection requires at least one identifier, wildcard or expression"
+                    .into(),
+                location,
+            }));
+        }
+        Ok(if adding {
+            SelectionOperation::Include(entries)
+        } else {
+            SelectionOperation::Exclude(entries)
+        })
+    }
+
     fn parse_view_properties(&mut self) -> Result<ViewPropertiesNode> {
         let key = self.maybe_string();
         let title = self.maybe_string();
@@ -1229,8 +1259,7 @@ impl Parser {
             key,
             title,
             description,
-            include: Vec::new(),
-            exclude: Vec::new(),
+            selection: Vec::new(),
             auto_layout: None,
             properties: HashMap::new(),
             background: None,
@@ -1250,30 +1279,8 @@ impl Parser {
                         self.advance();
                         break;
                     }
-                    Some(TokenKind::Include) => {
-                        self.advance();
-                        self.skip_newlines_and_comments();
-                        if self.check(&TokenKind::Star) {
-                            self.advance();
-                            props.include.push(IncludeExclude::All);
-                        } else if let Some(TokenKind::String(s)) = self.current_kind().cloned() {
-                            self.advance();
-                            props.include.push(IncludeExclude::Expression(s));
-                        } else if let Some(TokenKind::Identifier(id)) = self.current_kind().cloned() {
-                            self.advance();
-                            props.include.push(IncludeExclude::Identifier(id));
-                        }
-                    }
-                    Some(TokenKind::Exclude) => {
-                        self.advance();
-                        self.skip_newlines_and_comments();
-                        if let Some(TokenKind::String(s)) = self.current_kind().cloned() {
-                            self.advance();
-                            props.exclude.push(IncludeExclude::Expression(s));
-                        } else if let Some(TokenKind::Identifier(id)) = self.current_kind().cloned() {
-                            self.advance();
-                            props.exclude.push(IncludeExclude::Identifier(id));
-                        }
+                    Some(TokenKind::Include | TokenKind::Exclude) => {
+                        props.selection.push(self.parse_selection_operation()?);
                     }
                     Some(TokenKind::AutoLayout) => {
                         self.advance();
@@ -1454,8 +1461,7 @@ impl Parser {
             key,
             title,
             description,
-            include: Vec::new(),
-            exclude: Vec::new(),
+            selection: Vec::new(),
             auto_layout: None,
             properties: HashMap::new(),
             background: None,
@@ -1499,30 +1505,8 @@ impl Parser {
                     let parallel = self.parse_parallel_sequence()?;
                     content.push(DynamicContent::ParallelSequence(parallel));
                 }
-                Some(TokenKind::Include) => {
-                    self.advance();
-                    self.skip_newlines_and_comments();
-                    if self.check(&TokenKind::Star) {
-                        self.advance();
-                        props.include.push(IncludeExclude::All);
-                    } else if let Some(TokenKind::String(s)) = self.current_kind().cloned() {
-                        self.advance();
-                        props.include.push(IncludeExclude::Expression(s));
-                    } else if let Some(TokenKind::Identifier(id)) = self.current_kind().cloned() {
-                        self.advance();
-                        props.include.push(IncludeExclude::Identifier(id));
-                    }
-                }
-                Some(TokenKind::Exclude) => {
-                    self.advance();
-                    self.skip_newlines_and_comments();
-                    if let Some(TokenKind::String(s)) = self.current_kind().cloned() {
-                        self.advance();
-                        props.exclude.push(IncludeExclude::Expression(s));
-                    } else if let Some(TokenKind::Identifier(id)) = self.current_kind().cloned() {
-                        self.advance();
-                        props.exclude.push(IncludeExclude::Identifier(id));
-                    }
+                Some(TokenKind::Include | TokenKind::Exclude) => {
+                    props.selection.push(self.parse_selection_operation()?);
                 }
                 Some(TokenKind::AutoLayout) => {
                     self.advance();
@@ -2528,108 +2512,217 @@ enum ViewType {
     Component,
 }
 
-/// Resolve which elements should be included in a view based on include/exclude directives.
-fn resolve_view_elements(
+/// Whether an explicitly named element is valid at this view's abstraction level.
+fn static_view_allows(
+    model: &Model,
+    kind: ViewType,
+    scope: Option<ElementId>,
+    element: ElementRef<'_>,
+) -> bool {
+    match kind {
+        ViewType::SystemLandscape | ViewType::SystemContext => matches!(
+            element,
+            ElementRef::Person(_) | ElementRef::SoftwareSystem(_)
+        ),
+        ViewType::Container => match element {
+            ElementRef::Person(_) | ElementRef::Container(_) => true,
+            ElementRef::SoftwareSystem(system) => Some(system.id()) != scope,
+            _ => false,
+        },
+        ViewType::Component => match element {
+            ElementRef::Person(_) | ElementRef::Component(_) => true,
+            ElementRef::Container(container) => Some(container.id()) != scope,
+            ElementRef::SoftwareSystem(system) => {
+                Some(system.id()) != scope.and_then(|id| model.ancestor_ids(id).last().copied())
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Resolve wildcard seeds and their permitted direct neighbours, never transitive reachability.
+fn default_static_elements(
+    model: &Model,
+    kind: ViewType,
+    scope: Option<ElementId>,
+) -> Result<HashSet<ElementId>> {
+    let focused = scope.and_then(|id| model.find_element(id));
+    let seeds: HashSet<_> = match (kind, focused) {
+        (ViewType::SystemLandscape, _) => model
+            .architecture_elements()
+            .filter(|element| {
+                matches!(
+                    element,
+                    ElementRef::Person(_) | ElementRef::SoftwareSystem(_)
+                )
+            })
+            .map(|element| element.id())
+            .collect(),
+        (ViewType::SystemContext, Some(ElementRef::SoftwareSystem(system))) => {
+            [system.id()].into_iter().collect()
+        }
+        (ViewType::Container, Some(ElementRef::SoftwareSystem(system))) => system
+            .containers
+            .iter()
+            .map(|container| container.id())
+            .collect(),
+        (ViewType::Component, Some(ElementRef::Container(container))) => container
+            .components
+            .iter()
+            .map(|component| component.id())
+            .collect(),
+        _ => {
+            return Err(Error::Parse(ParseError {
+                message: "Unknown or invalid scope for static view".into(),
+                location: None,
+            }))
+        }
+    };
+    let parent = scope.and_then(|id| model.ancestor_ids(id).last().copied());
+    let neighbours: HashSet<_> = model
+        .architecture_elements()
+        .filter(|element| {
+            if !static_view_allows(model, kind, scope, *element) {
+                return false;
+            }
+            match (kind, element) {
+                (ViewType::Container, ElementRef::Container(_)) => false,
+                (ViewType::Component, ElementRef::Component(_)) => false,
+                (ViewType::Component, ElementRef::Container(container)) => {
+                    model.ancestor_ids(container.id()).last().copied() == parent
+                }
+                _ => true,
+            }
+        })
+        .map(|element| element.id())
+        .collect();
+    let mut selected = seeds.clone();
+    selected.extend(
+        model
+            .relationships
+            .iter()
+            .flat_map(|relationship| {
+                [
+                    (relationship.source_id, relationship.destination_id),
+                    (relationship.destination_id, relationship.source_id),
+                ]
+            })
+            .filter(|(source, destination)| {
+                seeds.contains(source) && neighbours.contains(destination)
+            })
+            .map(|(_, destination)| destination),
+    );
+    Ok(selected)
+}
+
+/// Resolve a named selection term to a permitted model element.
+fn resolve_static_name(
+    model: &Model,
+    kind: ViewType,
+    scope: Option<ElementId>,
+    name: &str,
+    identifiers: &HashMap<String, ElementId>,
+) -> Result<ElementId> {
+    let id = *identifiers.get(name).ok_or_else(|| {
+        Error::Parse(ParseError {
+            message: format!("Unknown element or unsupported static view expression: '{name}'"),
+            location: None,
+        })
+    })?;
+    let element = model
+        .find_element(id)
+        .ok_or_else(|| Error::UndefinedIdentifier(name.into()))?;
+    if !static_view_allows(model, kind, scope, element) {
+        return Err(Error::Parse(ParseError {
+            message: format!("Element '{name}' is not permitted in this view"),
+            location: None,
+        }));
+    }
+    Ok(id)
+}
+
+/// Resolve a complete element/relationship selection; an empty set stays empty.
+fn resolve_static_selection(
     model: &Model,
     view_type: ViewType,
     scope_id: Option<ElementId>,
-    include: &[IncludeExclude],
-    exclude: &[IncludeExclude],
+    operations: &[SelectionOperation],
     identifiers: &HashMap<String, ElementId>,
-) -> Vec<ElementView> {
-    let mut element_ids: Vec<ElementId> = Vec::new();
-
-    // Determine if we should include all (empty include = include all, or explicit include *)
-    let include_all = include.is_empty() || include.iter().any(|i| matches!(i, IncludeExclude::All));
-
-    if include_all {
-        // Include all applicable elements based on view type
-        match view_type {
-            ViewType::SystemLandscape | ViewType::SystemContext => {
-                // All people and all software systems
-                for person in &model.people {
-                    element_ids.push(person.id());
-                }
-                for system in &model.software_systems {
-                    element_ids.push(system.id());
-                }
-            }
-            ViewType::Container => {
-                // All people + target system's containers + all other systems
-                for person in &model.people {
-                    element_ids.push(person.id());
-                }
-                for system in &model.software_systems {
-                    if Some(system.id()) == scope_id {
-                        // Include containers from the target system
-                        for container in &system.containers {
-                            element_ids.push(container.id());
-                        }
+) -> Result<(Vec<ElementView>, Vec<RelationshipView>)> {
+    let defaults = default_static_elements(model, view_type, scope_id)?;
+    let mut selected = HashSet::new();
+    for operation in operations {
+        let (entries, adding) = match operation {
+            SelectionOperation::Include(entries) => (entries, true),
+            SelectionOperation::Exclude(entries) => (entries, false),
+        };
+        for entry in entries {
+            match entry {
+                IncludeExclude::All if adding => selected.extend(defaults.iter().copied()),
+                IncludeExclude::All => selected.clear(),
+                IncludeExclude::Identifier(name) | IncludeExclude::Expression(name) => {
+                    let id = resolve_static_name(model, view_type, scope_id, name, identifiers)?;
+                    if adding {
+                        selected.insert(id);
                     } else {
-                        // Include external systems
-                        element_ids.push(system.id());
+                        selected.remove(&id);
                     }
-                }
-            }
-            ViewType::Component => {
-                // All people + target container's components + sibling containers
-                for person in &model.people {
-                    element_ids.push(person.id());
-                }
-                for system in &model.software_systems {
-                    for container in &system.containers {
-                        if Some(container.id()) == scope_id {
-                            // Include components from the target container
-                            for component in &container.components {
-                                element_ids.push(component.id());
-                            }
-                        } else {
-                            // Include sibling containers
-                            element_ids.push(container.id());
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // Only include specifically listed elements
-        for inc in include {
-            match inc {
-                IncludeExclude::All => {
-                    // Already handled above
-                }
-                IncludeExclude::Identifier(name) => {
-                    if let Some(&id) = identifiers.get(name) {
-                        element_ids.push(id);
-                    }
-                }
-                IncludeExclude::Expression(_expr) => {
-                    // TODO: Implement tag expression matching
-                    // For now, expressions are not supported
                 }
             }
         }
     }
-
-    // Apply excludes
-    for exc in exclude {
-        match exc {
-            IncludeExclude::All => {
-                element_ids.clear();
-            }
-            IncludeExclude::Identifier(name) => {
-                if let Some(&id) = identifiers.get(name) {
-                    element_ids.retain(|&eid| eid != id);
-                }
-            }
-            IncludeExclude::Expression(_expr) => {
-                // TODO: Implement tag expression matching for excludes
-            }
+    // A context view always contains its scoped system, including after exclude *.
+    if matches!(view_type, ViewType::SystemContext) {
+        selected.extend(scope_id);
+    }
+    for &id in &selected {
+        if model
+            .ancestor_ids(id)
+            .iter()
+            .any(|ancestor| selected.contains(ancestor))
+        {
+            return Err(Error::Parse(ParseError {
+                message: "A view cannot contain both an element and its ancestor".into(),
+                location: None,
+            }));
         }
     }
+    let elements = model
+        .architecture_elements()
+        .filter(|element| selected.contains(&element.id()))
+        .map(|element| ElementView::new(element.id()))
+        .collect();
+    let relationships = model
+        .relationships
+        .iter()
+        .filter(|relationship| {
+            selected.contains(&relationship.source_id)
+                && selected.contains(&relationship.destination_id)
+        })
+        .map(|relationship| RelationshipView::new(relationship.id))
+        .collect();
+    Ok((elements, relationships))
+}
 
-    // Convert to ElementView
-    element_ids.into_iter().map(ElementView::new).collect()
+/// Preserve common authored properties and resolve static selections once.
+fn build_static_properties(
+    model: &Model,
+    kind: ViewType,
+    scope: Option<ElementId>,
+    source: ViewPropertiesNode,
+    identifiers: &HashMap<String, ElementId>,
+    fallback_key: String,
+) -> Result<ViewProperties> {
+    let mut properties = ViewProperties::new(source.key.unwrap_or(fallback_key));
+    properties.title = source.title;
+    properties.description = source.description;
+    properties.background = source.background;
+    properties.default = source.default;
+    properties.auto_layout = source.auto_layout.map(convert_auto_layout);
+    properties.properties = source.properties;
+    (properties.elements, properties.relationships) =
+        resolve_static_selection(model, kind, scope, &source.selection, identifiers)?;
+    Ok(properties)
 }
 
 /// Build a Workspace from an AST.
@@ -2777,125 +2870,79 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
     // Process views
     if let Some(views_node) = ast.views {
         for view in views_node.system_landscape {
-            let mut v = SystemLandscapeView::new(
-                view.properties.key.unwrap_or_else(|| "SystemLandscape".to_string()),
-            );
-            if let Some(title) = view.properties.title {
-                v.properties = v.properties.with_title(title);
-            }
-            if let Some(auto_layout) = view.properties.auto_layout {
-                v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-            }
-            if let Some(background) = view.properties.background {
-                v.properties = v.properties.with_background(background);
-            }
-            if view.properties.default {
-                v.properties = v.properties.with_default(true);
-            }
-            // Resolve include/exclude to populate elements
-            v.properties.elements = resolve_view_elements(
+            let properties = build_static_properties(
                 workspace.model(),
                 ViewType::SystemLandscape,
                 None,
-                &view.properties.include,
-                &view.properties.exclude,
+                view.properties,
                 &identifiers,
-            );
-            workspace.views_mut().add_system_landscape_view(v);
+                "SystemLandscape".into(),
+            )?;
+            workspace
+                .views_mut()
+                .add_system_landscape_view(SystemLandscapeView {
+                    properties,
+                    enterprise_boundary_visible: true,
+                });
         }
-
         for view in views_node.system_context {
-            if let Some(&system_id) = identifiers.get(&view.software_system) {
-                let mut v = SystemContextView::new(
-                    view.properties.key.unwrap_or_else(|| format!("SystemContext-{}", view.software_system)),
-                    system_id,
-                );
-                if let Some(title) = view.properties.title {
-                    v.properties = v.properties.with_title(title);
-                }
-                if let Some(auto_layout) = view.properties.auto_layout {
-                    v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-                }
-                if let Some(background) = view.properties.background {
-                    v.properties = v.properties.with_background(background);
-                }
-                if view.properties.default {
-                    v.properties = v.properties.with_default(true);
-                }
-                // Resolve include/exclude to populate elements
-                v.properties.elements = resolve_view_elements(
-                    workspace.model(),
-                    ViewType::SystemContext,
-                    Some(system_id),
-                    &view.properties.include,
-                    &view.properties.exclude,
-                    &identifiers,
-                );
-                workspace.views_mut().add_system_context_view(v);
-            }
+            let system_id = identifiers
+                .get(&view.software_system)
+                .copied()
+                .ok_or_else(|| Error::UndefinedIdentifier(view.software_system.clone()))?;
+            let properties = build_static_properties(
+                workspace.model(),
+                ViewType::SystemContext,
+                Some(system_id),
+                view.properties,
+                &identifiers,
+                format!("SystemContext-{}", view.software_system),
+            )?;
+            workspace
+                .views_mut()
+                .add_system_context_view(SystemContextView {
+                    properties,
+                    software_system_id: system_id,
+                    enterprise_boundary_visible: true,
+                });
         }
-
         for view in views_node.container {
-            if let Some(&system_id) = identifiers.get(&view.software_system) {
-                let mut v = ContainerView::new(
-                    view.properties.key.unwrap_or_else(|| format!("Container-{}", view.software_system)),
-                    system_id,
-                );
-                if let Some(title) = view.properties.title {
-                    v.properties = v.properties.with_title(title);
-                }
-                if let Some(auto_layout) = view.properties.auto_layout {
-                    v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-                }
-                if let Some(background) = view.properties.background {
-                    v.properties = v.properties.with_background(background);
-                }
-                if view.properties.default {
-                    v.properties = v.properties.with_default(true);
-                }
-                // Resolve include/exclude to populate elements
-                v.properties.elements = resolve_view_elements(
-                    workspace.model(),
-                    ViewType::Container,
-                    Some(system_id),
-                    &view.properties.include,
-                    &view.properties.exclude,
-                    &identifiers,
-                );
-                workspace.views_mut().add_container_view(v);
-            }
+            let system_id = identifiers
+                .get(&view.software_system)
+                .copied()
+                .ok_or_else(|| Error::UndefinedIdentifier(view.software_system.clone()))?;
+            let properties = build_static_properties(
+                workspace.model(),
+                ViewType::Container,
+                Some(system_id),
+                view.properties,
+                &identifiers,
+                format!("Container-{}", view.software_system),
+            )?;
+            workspace.views_mut().add_container_view(ContainerView {
+                properties,
+                software_system_id: system_id,
+                external_software_system_boundary_visible: true,
+            });
         }
-
-        // Process component views
         for view in views_node.component {
-            if let Some(&container_id) = identifiers.get(&view.container) {
-                let mut v = ComponentView::new(
-                    view.properties.key.unwrap_or_else(|| format!("Component-{}", view.container)),
-                    container_id,
-                );
-                if let Some(title) = view.properties.title {
-                    v.properties = v.properties.with_title(title);
-                }
-                if let Some(auto_layout) = view.properties.auto_layout {
-                    v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-                }
-                if let Some(background) = view.properties.background {
-                    v.properties = v.properties.with_background(background);
-                }
-                if view.properties.default {
-                    v.properties = v.properties.with_default(true);
-                }
-                // Resolve include/exclude to populate elements
-                v.properties.elements = resolve_view_elements(
-                    workspace.model(),
-                    ViewType::Component,
-                    Some(container_id),
-                    &view.properties.include,
-                    &view.properties.exclude,
-                    &identifiers,
-                );
-                workspace.views_mut().add_component_view(v);
-            }
+            let container_id = identifiers
+                .get(&view.container)
+                .copied()
+                .ok_or_else(|| Error::UndefinedIdentifier(view.container.clone()))?;
+            let properties = build_static_properties(
+                workspace.model(),
+                ViewType::Component,
+                Some(container_id),
+                view.properties,
+                &identifiers,
+                format!("Component-{}", view.container),
+            )?;
+            workspace.views_mut().add_component_view(ComponentView {
+                properties,
+                container_id,
+                external_software_system_boundary_visible: true,
+            });
         }
 
         // Process dynamic views
