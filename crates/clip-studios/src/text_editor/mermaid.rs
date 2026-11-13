@@ -383,7 +383,7 @@ impl MermaidEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         let Some(frame) = frame else { return };
-        if !self.camera.fitted {
+        if !self.camera.fitted && frame.fresh {
             self.camera.fit(frame.layout, rect);
         }
         self.camera.input(ui, response, rect);
@@ -682,6 +682,65 @@ pub(super) fn delayed_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_request_survives_stale_frames_and_fits_the_current_source_on_delivery() {
+        let ctx = egui::Context::default();
+        let mut editor = MermaidEditor::default();
+        let old_layout = little_clip_render::diagram::DrawingLayout {
+            origin: [1000.0, 500.0],
+            size: [100.0, 80.0],
+        };
+        let new_layout = little_clip_render::diagram::DrawingLayout {
+            origin: [0.0; 2],
+            size: [700.0, 200.0],
+        };
+        let mut frame = NativeFrame {
+            texture: egui::TextureId::Managed(0),
+            layout: old_layout,
+            fresh: false,
+            vector: None,
+            geometry: None,
+        };
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(400.0, 250.0), Sense::click_and_drag());
+                editor.camera.fit(old_layout, rect);
+                let old_mapping = editor.camera.image_rect(old_layout, rect);
+                editor.camera.fitted = false; // The existing toolbar Fit request.
+                for _ in 0..2 {
+                    editor.canvas(
+                        ui,
+                        rect,
+                        &response,
+                        Some(&frame),
+                        false,
+                        &AppPalette::default(),
+                    );
+                    assert!(!editor.camera.fitted);
+                    assert_eq!(editor.camera.image_rect(old_layout, rect), old_mapping);
+                }
+                frame.layout = new_layout;
+                frame.fresh = true;
+                // Fresh source-only families can Fit even without an editable
+                // flowchart model or semantic hit-test readiness.
+                editor.canvas(
+                    ui,
+                    rect,
+                    &response,
+                    Some(&frame),
+                    false,
+                    &AppPalette::default(),
+                );
+                assert!(editor.camera.fitted);
+                let fitted = editor.camera.image_rect(new_layout, rect);
+                assert!(rect.contains_rect(fitted));
+                assert!((fitted.center() - rect.center()).length() < 0.01);
+                assert!(fitted.width() > rect.width() * 0.9);
+            });
+        });
+    }
 
     #[test]
     fn actual_node_bounds_win_over_edges_and_diagonal_rectangles_do_not_capture_empty_space() {

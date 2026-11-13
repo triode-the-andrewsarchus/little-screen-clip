@@ -30,4 +30,15 @@ execution remains pending at this checkpoint.
   geometry now comes from the existing bounded outlined tree independently of
   native paint support. Canonical effects remain visible. Three shared SVG tests
   and four studio preview tests pass, including masked hit-bound regressions.
-- [ ] Repeat the actual light/dark editor scenario after rebuilding this fix.
+- [x] Repeat the actual light/dark editor scenario after rebuilding this fix.
+  Both native reports pass: `/tmp/little-clip-mermaid-dark-20261113-07/report.json`
+  and `/tmp/little-clip-mermaid-light-20261113-06/report.json`, including real
+  node/edge interaction and exact Undo/Save.
+- [x] Keep an explicit Fit request pending while previous-source geometry is
+  still displayed. The existing camera flag is consumed only by a fresh frame;
+  a stale-to-fresh egui regression passes in the shared editor suite.
+- [ ] Repeat one-shot Fit in the native scenario after the next rebuild.
+
+The freshness condition raises the existing canvas CCN from 15 to 16. It is the
+required stale/current-source distinction, without a new state owner or
+metric-only helper.
