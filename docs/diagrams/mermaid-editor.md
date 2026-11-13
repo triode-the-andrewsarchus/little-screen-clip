@@ -22,3 +22,12 @@ syntax registration, both application workers and strict all-target Clippy pass.
 The private native acceptance script exercises selection, edits, connections,
 exact Undo/Save and unsupported-family source editing; actual light/dark GUI
 execution remains pending at this checkpoint.
+
+## Native review follow-up
+
+- [x] Retain semantic hit geometry when canonical masks/filters require raster
+  painting. The first actual styled-flowchart review exposed missing selection;
+  geometry now comes from the existing bounded outlined tree independently of
+  native paint support. Canonical effects remain visible. Three shared SVG tests
+  and four studio preview tests pass, including masked hit-bound regressions.
+- [ ] Repeat the actual light/dark editor scenario after rebuilding this fix.

@@ -34,12 +34,25 @@ impl Pixels {
         mut rendered: little_clip_render::diagram::Rendered,
         format: Format,
     ) -> Result<Self, String> {
+        let mut geometry = None;
         let vector = if matches!(
             format,
             Format::Excalidraw | Format::Wireviz | Format::Mermaid
         ) {
             match little_clip_render::diagram::retained::prepare(&rendered.svg).and_then(
-                |prepared| clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images),
+                |prepared| {
+                    if matches!(format, Format::Wireviz | Format::Mermaid) {
+                        geometry = Some(Arc::new(clip_ui::vectors::svg::Geometry::from_tree(
+                            &prepared.tree,
+                            if format == Format::Mermaid {
+                                "graph-0-clip-mermaid-"
+                            } else {
+                                "graph-0-"
+                            },
+                        )));
+                    }
+                    clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images)
+                },
             ) {
                 Ok(scene) => Some(scene),
                 Err(error) => {
@@ -50,17 +63,6 @@ impl Pixels {
         } else {
             None
         };
-        let geometry = matches!(format, Format::Wireviz | Format::Mermaid)
-            .then(|| {
-                vector.as_ref().map(|scene| {
-                    Arc::new(scene.geometry(if format == Format::Mermaid {
-                        "graph-0-clip-mermaid-"
-                    } else {
-                        "graph-0-"
-                    }))
-                })
-            })
-            .flatten();
         let mut reader = image::ImageReader::with_format(
             std::io::Cursor::new(&rendered.png),
             image::ImageFormat::Png,
@@ -423,6 +425,37 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raster_effect_fallback_retains_mermaid_semantic_hit_geometry() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(100, 80)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let rendered = little_clip_render::diagram::Rendered {
+            svg: r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><mask id="m"><rect width="100" height="80" fill="white"/></mask></defs><g id="graph-0-clip-mermaid-node-61-part-0" transform="translate(10 20)"><g mask="url(#m)"><path d="M0 0h10v8h-10Z"/></g></g></svg>"##.into(),
+            png: png.into_inner(),
+            width: 100,
+            height: 80,
+            warnings: Vec::new(),
+            math: None,
+            drawing: None,
+        };
+        let pixels = Pixels::from_rendered(rendered, Format::Mermaid).unwrap();
+        assert!(pixels.artwork.vector.is_none());
+        assert!(
+            pixels
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("raster preview"))
+        );
+        let geometry = pixels.artwork.geometry.unwrap();
+        assert_eq!(geometry.size, egui::vec2(100.0, 80.0));
+        assert_eq!(
+            geometry.groups["graph-0-clip-mermaid-node-61-part-0"],
+            egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(20.0, 28.0))
+        );
+    }
+
     #[test]
     fn drawing_revisions_keep_old_pixels_but_disable_old_geometry_for_new_source() {
         let ctx = egui::Context::default();

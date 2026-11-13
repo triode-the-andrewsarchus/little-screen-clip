@@ -40,15 +40,16 @@ pub struct Replacement {
     pub offset: [f32; 2],
 }
 
-impl Scene {
+impl Geometry {
     /// Collects transformed bounds for groups with a semantic ID prefix.
     ///
     /// Call once during worker preparation; the UI can then hit-test cached
     /// rectangles without traversing or reparsing SVG. Bounds share the source
-    /// coordinate system used by [`Self::paint`].
-    pub fn geometry(&self, prefix: &str) -> Geometry {
+    /// coordinate system used by [`Scene::paint`]. Geometry remains available
+    /// when canonical SVG effects require the caller's raster paint fallback.
+    pub fn from_tree(tree: &usvg::Tree, prefix: &str) -> Self {
         let mut groups = HashMap::new();
-        let mut pending = vec![self.tree.root()];
+        let mut pending = vec![tree.root()];
         while let Some(group) = pending.pop() {
             if !group.id().is_empty() && group.id().starts_with(prefix) {
                 let bounds = group.abs_bounding_box();
@@ -68,10 +69,17 @@ impl Scene {
                 }
             }));
         }
-        Geometry {
-            size: egui::vec2(self.tree.size().width(), self.tree.size().height()),
+        Self {
+            size: egui::vec2(tree.size().width(), tree.size().height()),
             groups,
         }
+    }
+}
+
+impl Scene {
+    /// Collects semantic bounds from this scene's canonical source tree.
+    pub fn geometry(&self, prefix: &str) -> Geometry {
+        Geometry::from_tree(&self.tree, prefix)
     }
     /// Adopts a canonical, outlined tree and its admitted decoded PNG assets.
     ///
@@ -553,6 +561,18 @@ mod tests {
             geometry.groups["terminal-one"],
             egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 36.0))
         );
+    }
+
+    #[test]
+    fn semantic_geometry_survives_effects_that_require_raster_paint() {
+        let tree = usvg::Tree::from_str(r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><mask id="m"><rect width="100" height="80" fill="white"/></mask></defs><g id="node-one" transform="translate(10 20) scale(2)"><g mask="url(#m)"><path d="M0 0h10v8h-10Z"/></g></g></svg>"##, &usvg::Options::default()).unwrap();
+        let geometry = Geometry::from_tree(&tree, "node-");
+        assert_eq!(geometry.size, egui::vec2(100.0, 80.0));
+        assert_eq!(
+            geometry.groups["node-one"],
+            egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 36.0))
+        );
+        assert!(Scene::new(tree, HashMap::new()).is_err());
     }
 
     #[test]
