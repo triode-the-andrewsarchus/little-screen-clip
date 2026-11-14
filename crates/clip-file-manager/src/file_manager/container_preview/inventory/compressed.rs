@@ -73,10 +73,11 @@ impl<R: Read> Read for Bounded<'_, R> {
         Ok(read)
     }
 }
-pub(super) fn load(
+pub(super) fn load_with(
     file: &mut File,
     cancel: &AtomicBool,
     format: Format,
+    members: Members,
 ) -> Result<Inventory, String> {
     let limits = Limits {
         cancel,
@@ -106,17 +107,25 @@ pub(super) fn load(
             Box::new(decoder)
         }
     };
-    inventory(decoder, &limits, DECODED)
+    inventory_with(decoder, &limits, DECODED, members)
 }
+#[cfg(test)]
 fn inventory(input: impl Read, limits: &Limits<'_>, limit: u64) -> Result<Inventory, String> {
+    inventory_with(input, limits, limit, Members::default())
+}
+fn inventory_with(
+    input: impl Read,
+    limits: &Limits<'_>,
+    limit: u64,
+    mut members: Members,
+) -> Result<Inventory, String> {
     let mut input = Bounded {
         inner: input,
         limits,
         remaining: limit,
         label: "64 MiB decoded preview limit; remaining payloads were not verified",
     };
-    let mut members = Members::default();
-    let result = collect(&mut input, &mut members, limit);
+    let result = collect(&mut input, &mut members, limit, limits.cancel);
     match result {
         Ok(complete) => Ok(members.finish(complete)),
         Err(_) if limits.exceeded.get().is_some() => {
@@ -126,7 +135,12 @@ fn inventory(input: impl Read, limits: &Limits<'_>, limit: u64) -> Result<Invent
         Err(error) => Err(error),
     }
 }
-fn collect(input: &mut impl Read, members: &mut Members, limit: u64) -> Result<bool, String> {
+fn collect(
+    input: &mut impl Read,
+    members: &mut Members,
+    limit: u64,
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
     {
         let mut archive = tar::Archive::new(&mut *input);
         // Inspect concatenated TAR streams as well as their compressed members.
@@ -141,13 +155,13 @@ fn collect(input: &mut impl Read, members: &mut Members, limit: u64) -> Result<b
                 .raw_file_position()
                 .checked_add(member.size())
                 .is_none_or(|end| end > limit);
-            members.add_tar(member)?;
-            if beyond_budget || index >= LIMIT {
+            members.add_tar(member, cancel)?;
+            if beyond_budget || index >= members.display_limit.unwrap_or(LIMIT) {
                 members.notice = Some(
                     if beyond_budget {
                         "64 MiB decoded preview limit; remaining payloads were not verified"
                     } else {
-                        "First 32 members shown; remaining payloads were not verified"
+                        "Member count preview limit; remaining payloads were not verified"
                     }
                     .into(),
                 );
@@ -224,6 +238,11 @@ mod tests {
             assert!(ready.archive && ready.complete);
             assert_eq!(ready.children[0].name(), "nested/file.txt");
             assert!(ready.notice.is_none());
+            let source = super::super::FileSource::capture(&path).unwrap();
+            let selected =
+                super::super::read_archive(&source, Some(0), &AtomicBool::new(false)).unwrap();
+            assert!(selected.verified);
+            assert_eq!(selected.payload.as_deref(), Some([42; 4].as_slice()));
             assert_eq!(std::fs::read(&path).unwrap(), encoded);
             assert!(!directory.path().join("nested").exists());
         }
@@ -333,7 +352,7 @@ mod tests {
         assert!(!ready.complete);
         assert_eq!(ready.observed, LIMIT + 1);
         assert_eq!(ready.children.len(), LIMIT);
-        assert!(ready.notice.unwrap().contains("First 32"));
+        assert!(ready.notice.unwrap().contains("Member count"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Visible folder/archive cards share bounded, cancellable inventory ownership.
-mod inventory;
+pub(in crate::file_manager) mod archive;
+pub(in crate::file_manager) mod inventory;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +21,7 @@ use std::{
 pub(super) enum Target<'a> {
     Header(Rect),
     Card(&'a egui::Response),
+    Member(&'a egui::Response, usize),
 }
 
 const CACHE: usize = 32;
@@ -47,6 +49,7 @@ impl Default for Options {
 #[derive(Default)]
 pub(super) struct Previews {
     options: Options,
+    members: archive::Previews,
     nodes: BTreeMap<PathBuf, Node>,
     // User intent outlives visible observations, navigation and studio entry.
     // This is session state, keyed by path, not a payload or metadata cache.
@@ -134,6 +137,7 @@ impl Previews {
         self.configure(options.automatic, options.small_items);
     }
     pub fn clear(&mut self) {
+        self.members.clear();
         self.nodes.clear();
         self.frame_paths.clear();
         self.protected.clear();
@@ -159,12 +163,14 @@ impl Previews {
         self.frame_paths.clear();
     }
     pub fn finish_frame(&mut self, visible: &mut BTreeSet<PathBuf>) {
+        self.members.finish();
         // Nested sections request only when their own row is visible. Merge
         // those admissions with the outer list's visible container rows.
         visible.append(&mut self.frame_paths);
         self.retain(visible);
     }
     pub fn retire(&mut self) {
+        self.members.clear();
         self.retain(&BTreeSet::new());
     }
     pub fn reconcile_roots(&mut self, entries: &[Entry]) {
@@ -350,6 +356,7 @@ impl Previews {
         self.layout_changed = true;
     }
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
+        self.members.begin(ctx);
         let mut changed = std::mem::take(&mut self.layout_changed);
         for node in self.nodes.values_mut() {
             if let Some(result) = node.task.as_ref().and_then(Task::poll) {
@@ -589,6 +596,8 @@ impl Previews {
                     inventory_cards(
                         ui,
                         &ready,
+                        entry,
+                        &mut self.members,
                         files,
                         keep,
                         hidden,
@@ -615,6 +624,8 @@ impl Previews {
 fn inventory_cards(
     ui: &mut Ui,
     ready: &Inventory,
+    container: &Entry,
+    members: &mut archive::Previews,
     files: &mut EntryPreviews,
     keep: &mut BTreeSet<PathBuf>,
     hidden: bool,
@@ -631,7 +642,8 @@ fn inventory_cards(
                 continue;
             }
             let marked = matches!(child, Child::File(entry) if selected.is_some_and(|paths| paths.contains(&entry.path)));
-            let (response, disclosure) = card(ui, child, files, keep, colors, marked);
+            let (response, disclosure) = card(ui, child, files, members, ready.archive_source.as_ref(), keep, colors, marked);
+            if let Child::Member { ordinal, .. } = child { interact(ui, container, Target::Member(&response, *ordinal)); }
             if let Child::File(entry) = child {
                 interact(ui, entry, Target::Card(&response));
                 if let Some(disclosure) = disclosure
@@ -685,10 +697,16 @@ fn nested_disclosure(
     .inner
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Explicit card content/cache and host geometry boundary"
+)]
 fn card(
     ui: &mut Ui,
     child: &Child,
     files: &mut EntryPreviews,
+    members: &mut archive::Previews,
+    member: Option<&little_clip_core::file_source::FileSource>,
     keep: &mut BTreeSet<PathBuf>,
     colors: WorkbenchColors,
     marked: bool,
@@ -725,6 +743,13 @@ fn card(
         Child::File(entry) if !entry.directory && !entry.symlink => {
             keep.insert(entry.path.clone());
             files.listing(entry)
+        }
+        Child::Member {
+            ordinal,
+            directory: false,
+            ..
+        } if ui.clip_rect().intersects(rect) => {
+            member.and_then(|source| members.request(source, *ordinal, Default::default()))
         }
         _ => None,
     };
@@ -769,6 +794,13 @@ fn card(
         label,
         colors.text_primary,
     );
+    (
+        response.on_hover_ui(|ui| card_details(ui, child, ready)),
+        disclosure,
+    )
+}
+
+fn card_details(ui: &mut Ui, child: &Child, ready: Option<&super::shelf::preview::Ready>) {
     let hover = match child {
         Child::File(e) => super::filesystem::display_path(&e.path),
         Child::Member { name, size, .. } => format!(
@@ -776,5 +808,14 @@ fn card(
             super::filesystem::format_size(*size)
         ),
     };
-    (response.on_hover_text(hover), disclosure)
+    ui.label(hover);
+    if let Some(ready) = ready {
+        ui.label(&ready.data.detail);
+        if let Some(texture) = &ready.texture {
+            ui.image((texture.id(), texture.size_vec2()));
+        }
+        if !ready.data.text.is_empty() {
+            ui.monospace(ready.data.text.chars().take(240).collect::<String>());
+        }
+    }
 }

@@ -39,7 +39,7 @@ def fixtures(root):
 def exercise(session, root):
     before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir()}
     session.observe("initial", ["List", "Name"])
-    session.click(645, 160)  # Collapse Shelf on the fixed private output.
+    session.click(730, 160)  # Collapse Shelf on the fixed private output.
     session.observe("compressed-inventories", ["Archive contents", "hello.txt"])
     normal = lambda text: re.sub(r"[^a-z0-9]", "", text.lower())
     with Image.open(session.output / "compressed-inventories.png") as screen:

@@ -3,6 +3,7 @@ mod compressed;
 use std::{
     collections::BTreeSet,
     fs::File,
+    io::Read,
     path::{Component, Path},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -11,13 +12,14 @@ use super::super::filesystem::{self, Entry};
 use little_clip_core::{file_source::FileSource, kernel_interface};
 
 pub(super) const LIMIT: usize = 32;
-const ARCHIVE_ENTRIES: usize = 4096;
+pub(super) const ARCHIVE_ENTRIES: usize = 4096;
 const ARCHIVE_SIZE: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(super) enum Child {
     File(Box<Entry>),
     Member {
+        ordinal: usize,
         name: String,
         directory: bool,
         size: u64,
@@ -50,9 +52,12 @@ pub(super) struct Inventory {
     pub archive: bool,
     pub notice: Option<String>,
     pub source: Option<clip_search::source::SourceRoot>,
+    pub archive_source: Option<FileSource>,
+    pub verified: bool,
+    pub payload: Option<Vec<u8>>,
 }
 
-pub(super) fn archive(path: &Path) -> bool {
+pub(in crate::file_manager) fn archive(path: &Path) -> bool {
     compressed::format(path).is_some()
         || path.extension().is_some_and(|ext| {
             ["zip", "tar"]
@@ -69,21 +74,13 @@ pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, Stri
     } else {
         let mut file =
             kernel_interface::open_content(&entry.path, false).map_err(|e| e.to_string())?;
-        let source = FileSource::capture_file(&file)?;
-        if file.metadata().map_err(|e| e.to_string())?.len() > ARCHIVE_SIZE {
-            return Err("Archive inventory exceeds the 512 MiB source limit".into());
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if entry.identity != Some(filesystem::identity(&metadata)) {
+            return Err("Archive changed before preview".into());
         }
-        let inventory = if entry
-            .path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
-        {
-            zip(&mut file, cancel)
-        } else if let Some(format) = compressed::format(&entry.path) {
-            compressed::load(&mut file, cancel, format)
-        } else {
-            tar(&mut file, cancel)
-        }?;
+        let source = FileSource::capture_file(&file)?;
+        let mut inventory = scan(&mut file, &entry.path, cancel, Members::default())?;
+        inventory.archive_source = Some(source.clone());
         source.check_file(&file)?;
         Ok(inventory)
     }?;
@@ -127,6 +124,9 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         archive: false,
         notice: None,
         source,
+        archive_source: None,
+        verified: complete,
+        payload: None,
     })
 }
 
@@ -138,7 +138,59 @@ fn checkpoint(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
-fn zip(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
+/// Full bounded lookup uses a captured source, never an archive member as a path.
+pub(super) fn read_archive(
+    source: &FileSource,
+    target: Option<usize>,
+    cancel: &AtomicBool,
+) -> Result<Inventory, String> {
+    checkpoint(cancel)?;
+    let mut file =
+        kernel_interface::open_content(source.path(), false).map_err(|e| e.to_string())?;
+    source.check_file(&file)?;
+    let mut result = scan(
+        &mut file,
+        source.path(),
+        cancel,
+        Members {
+            display_limit: Some(ARCHIVE_ENTRIES),
+            target,
+            ..Members::default()
+        },
+    )?;
+    checkpoint(cancel)?;
+    source.check_file(&file)?;
+    if target.is_some() && !result.verified {
+        return Err("Archive scan is incomplete; member payloads were not verified".into());
+    }
+    if target.is_some() && result.payload.is_none() {
+        return Err("Archive member is unavailable or is not a regular file".into());
+    }
+    result.archive_source = Some(source.clone());
+    Ok(result)
+}
+fn scan(
+    file: &mut File,
+    path: &Path,
+    cancel: &AtomicBool,
+    members: Members,
+) -> Result<Inventory, String> {
+    if file.metadata().map_err(|e| e.to_string())?.len() > ARCHIVE_SIZE {
+        return Err("Archive inventory exceeds the 512 MiB source limit".into());
+    }
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+    {
+        zip(file, cancel, members)
+    } else if let Some(format) = compressed::format(path) {
+        compressed::load_with(file, cancel, format, members)
+    } else {
+        tar(file, cancel, members)
+    }
+}
+
+fn zip(input: &mut File, cancel: &AtomicBool, mut members: Members) -> Result<Inventory, String> {
     let mut archive = little_clip_core::zip_content::archive_file(
         input.try_clone().map_err(|e| e.to_string())?,
         ARCHIVE_SIZE,
@@ -146,26 +198,23 @@ fn zip(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
     if archive.len() > ARCHIVE_ENTRIES {
         return Err("Archive exceeds the 4,096-member inventory limit".into());
     }
-    let mut members = Members::default();
     for index in 0..archive.len() {
         checkpoint(cancel)?;
         // Raw access reads central-directory metadata without decompressing payloads.
         let member = archive.by_index_raw(index).map_err(|e| e.to_string())?;
-        let kind = member.unix_mode().unwrap_or(0) & 0o170000;
-        if member.is_symlink() || !matches!(kind, 0 | 0o100000 | 0o040000) {
-            members.omitted += 1;
-            members.observed += 1;
-            continue;
+        let payload = members.add_zip(&member)?;
+        drop(member);
+        if let Some(size) = payload {
+            let mut member = archive.by_index(index).map_err(|e| e.to_string())?;
+            members.read_payload(&mut member, size, cancel)?;
         }
-        members.add(member.name(), member.is_dir(), member.size())?;
     }
     Ok(members.finish(true))
 }
 
-fn tar(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
+fn tar(input: &mut File, cancel: &AtomicBool, mut members: Members) -> Result<Inventory, String> {
     let length = input.metadata().map_err(|e| e.to_string())?.len();
     let mut archive = tar::Archive::new(input);
-    let mut members = Members::default();
     for (index, member) in archive
         .entries_with_seek()
         .map_err(|e| e.to_string())?
@@ -183,7 +232,7 @@ fn tar(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
         {
             return Err("Truncated archive member".into());
         }
-        members.add_tar(member)?;
+        members.add_tar(member, cancel)?;
     }
     Ok(members.finish(true))
 }
@@ -195,9 +244,36 @@ struct Members {
     observed: usize,
     omitted: usize,
     notice: Option<String>,
+    display_limit: Option<usize>,
+    target: Option<usize>,
+    payload: Option<Vec<u8>>,
 }
 impl Members {
-    fn add_tar<R: std::io::Read>(&mut self, member: tar::Entry<'_, R>) -> Result<(), String> {
+    // Header admission selects a regular payload by its stable observed ordinal.
+    fn add_zip<R: Read + ?Sized>(
+        &mut self,
+        member: &zip::read::ZipFile<'_, R>,
+    ) -> Result<Option<u64>, String> {
+        let kind = member.unix_mode().unwrap_or(0) & 0o170000;
+        if member.is_symlink() || !matches!(kind, 0 | 0o100000 | 0o040000) {
+            self.omitted += 1;
+            self.observed += 1;
+            return Ok(None);
+        }
+        let ordinal = self.observed;
+        let directory = member.is_dir() || kind == 0o040000;
+        self.add(member.name(), directory, member.size())?;
+        Ok(
+            (self.target == Some(ordinal) && self.observed > ordinal && !directory)
+                .then_some(member.size()),
+        )
+    }
+
+    fn add_tar<R: std::io::Read>(
+        &mut self,
+        mut member: tar::Entry<'_, R>,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
         let kind = member.header().entry_type();
         if !kind.is_file() && !kind.is_dir() {
             self.omitted += 1;
@@ -206,7 +282,43 @@ impl Members {
         }
         let path = member.path().map_err(|e| e.to_string())?;
         let name = path.to_str().ok_or("Archive member name is not UTF-8")?;
-        self.add(name, kind.is_dir(), member.size())
+        let ordinal = self.observed;
+        self.add(name, kind.is_dir(), member.size())?;
+        if self.target == Some(ordinal) && self.observed > ordinal && kind.is_file() {
+            let size = member.size();
+            self.read_payload(&mut member, size, cancel)?;
+        }
+        Ok(())
+    }
+
+    fn read_payload(
+        &mut self,
+        input: &mut impl Read,
+        size: u64,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        const BYTES: usize = 8 * 1024 * 1024;
+        if size > BYTES as u64 {
+            return Err("Member exceeds the 8 MiB preview limit".into());
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            checkpoint(cancel)?;
+            let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len() + count > BYTES {
+                return Err("Expanded member exceeds the 8 MiB preview limit".into());
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        if bytes.len() as u64 != size {
+            return Err("Truncated archive member".into());
+        }
+        self.payload = Some(bytes);
+        Ok(())
     }
 
     fn add(&mut self, name: &str, directory: bool, size: u64) -> Result<(), String> {
@@ -240,8 +352,9 @@ impl Members {
             return Err("Duplicate archive member path".into());
         }
         self.observed += 1;
-        if self.children.len() < LIMIT {
+        if self.children.len() < self.display_limit.unwrap_or(LIMIT) {
             self.children.push(Child::Member {
+                ordinal: self.observed - 1,
                 name: canonical,
                 directory,
                 size,
@@ -263,6 +376,9 @@ impl Members {
             archive: true,
             notice: self.notice,
             source: None,
+            archive_source: None,
+            verified: scanned_all,
+            payload: self.payload,
         }
     }
 }

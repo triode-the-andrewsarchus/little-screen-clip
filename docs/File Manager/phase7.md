@@ -11,7 +11,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
 - [x] Preview small folders directly in List, with distinct containment styling,
   names, useful existing file previews and obvious child activation. Disclosure
   and opening a folder remain separate actions.
-- [ ] Preview archive contents in the same interaction model. Retain archive
+- [x] Preview archive contents in the same interaction model. Retain archive
   provenance; never treat member names as host paths or extract implicitly.
 - [x] Configurable automatic expansion of small folders, explicit expand/collapse,
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
@@ -659,3 +659,77 @@ open until narrow/wide native review, broader mixed-format/interaction checks an
 whole-milestone verification. Archive member artwork/activation and image-reference
 compatibility acceptance also remain open; this checkpoint does not complete
 Phase 7.
+
+### Archive artwork, member activation and read-only browsing
+
+- [x] Reuse the existing ZIP/TAR/compressed-TAR inventory and path policy for
+  inline cards and a bounded full archive inspector. Cards render image artwork
+  and expose captured text on hover. Clicking a member opens its exact observed
+  ordinal in the inspector; opening the archive itself starts at its virtual
+  root. Infer directories from member prefixes, including archives without
+  explicit directory records. Root/Up navigation stays inside that archive.
+- [x] Preserve the archive origin in the existing editable file header and show
+  the selected member's full archive-relative name separately. Members never
+  become filesystem Entry values, host selections, mutation destinations or
+  extracted paths. Archive renaming uses the existing guarded file operation,
+  rebinds the inspector source and clears its old preview jobs/cache. Closing
+  returns to the browser through its existing viewer lifecycle.
+- [x] Bind member activation to the observed archive revision. Reject a replaced
+  or edited archive before loading its member ordinal; an old card must never
+  select an unrelated member in a new container. Compare the loaded inspector's
+  FileSource with the opening request's captured identity. Each payload lookup
+  opens through the ordinary-content policy and validates the retained source
+  before and after reading, with the existing ReadCheck for guarded sessions.
+- [x] Keep inline inventories at 32 cards. The inspector scans at most 4,096
+  members, with existing 512 MiB encoded-source and compressed 64 MiB decoded,
+  window and cooperative five-second limits. Fetch one regular member at a time,
+  bounded to 8 MiB, and require a fully validated inventory before publishing its
+  payload. Check cancellation between bounded reads. Later duplicate/unsafe names,
+  corrupt trailers, source changes and incomplete scans discard selected bytes.
+  ZIP directory mode remains metadata-only even without a trailing slash.
+- [x] Reuse shared bounded image decoding and preview delivery. Cards use small
+  thumbnails; the chosen inspector image uses up to 1,024 pixels per dimension.
+  Text is validated UTF-8 and limited to 64 KiB at a character boundary, with a
+  visible clipping notice and virtualized lines. Other binary members show
+  metadata rather than being decoded as text. SVG/markup remains text here;
+  this is not an extraction, embedded-resource or full media-editing facility.
+- [x] A separate two-worker/four-queue executor retains actual read ownership.
+  Reuse the Shelf preview cache/delivery mechanism, retaining only visible card
+  requests (at most 128 identities) or the inspector's chosen member. Hidden
+  cards, selection changes, navigation, studio entry and close retire requests.
+  Decoder/source rules stay in the inventory owner instead of being copied into
+  the inspector. Ordinary-file session identity publication is separated from
+  job orchestration; ZIP header admission lives beside TAR member admission.
+- [x] Full file-manager library: 932 passed / 6 ignored with four test threads.
+  Added seven tests cover 80-member inventories and sorted ordinal identity,
+  virtual prefixes, image resolution budgets, binary/UTF-8 behavior, rejected
+  read guards, changed sources, gzip duplicate/trailer failures, oversized members,
+  archive rename and stale-card opening. Existing codec tests now also retrieve
+  a real selected payload through gzip, bzip2, xz and zstd. Strict library/test
+  Clippy, application build, leaf formatting, Python compilation and diff checks
+  pass. Logs: `/tmp/phase7-members-{all-tests,clippy,build}.log`.
+- [x] Native dark/light reports pass at
+  `/tmp/phase7-members-{dark,light}-02/report.json`: inline artwork and expanded
+  images are verified by actual rendered pixels, members open at the clicked
+  position, virtual folders navigate, text and compressed-TAR members render,
+  Back returns to the listing, source hashes remain unchanged and no member paths
+  appear on disk. Both-theme screenshots were visually reviewed. Compressed
+  inventory/large-payload limit regressions pass at
+  `/tmp/phase7-compressed-{dark,light}-04/report.json`; its driver follows the
+  Columns-enabled toolbar's observed Shelf position.
+
+Architecture comparison against `before-phase7-archive-members` reduces aggregate
+percentage duplication by 0.01 points, retains maximum complexity and adds two
+clone clusters. Scoped inspection finds existing cancellation drops, enum variant
+lists, test setup/assertions and renderer parameter lists. The new hover fragment
+shares the usual detail/image/text display vocabulary, but bounds archive text
+and uses monospace versus the ordinary preview's full text/audio handling. No
+second archive parser, path validator, image decoder, job delivery or mutation
+mechanism was added. The existing type dispatcher gains one necessary archive
+case (CCN 17 to 18). New rendering and ZIP/session admission responsibilities do
+not introduce additional high-complexity functions. Reported Python cycles are
+unchanged functions with reordered membership, not new imports.
+
+The archive delivery checkbox is now checked. Whole-milestone narrow/wide,
+Miller interaction/compatibility and workspace acceptance remain open; this does
+not mark Phase 7 complete.

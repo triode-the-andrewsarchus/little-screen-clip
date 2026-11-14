@@ -189,6 +189,18 @@ impl<'a> ListPreviews<'a> {
             self.can_request,
             |ui, child, target| {
                 let response = match target {
+                    super::super::container_preview::Target::Member(response, ordinal) => {
+                        if response.clicked() {
+                            actions.selection = Some((child.path.clone(), false, false));
+                            actions.open = Some(child.path.clone());
+                            actions.open_position =
+                                Some(super::super::DocumentPosition::ArchiveMember(
+                                    ordinal,
+                                    child.revision,
+                                ));
+                        }
+                        return;
+                    }
                     super::super::container_preview::Target::Header(rect) => {
                         let marked = self
                             .selected

@@ -135,6 +135,9 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         archive: false,
         notice: None,
         source: None,
+        archive_source: None,
+        verified: true,
+        payload: None,
     }));
     assert!(
         !node.expanded(Options::default()),
@@ -150,6 +153,9 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         archive: false,
         notice: None,
         source: None,
+        archive_source: None,
+        verified: true,
+        payload: None,
     }));
     node.expanded = Some(false);
     assert!(

@@ -62,6 +62,7 @@ impl Viewers {
     }
     fn editor_source(&self) -> Option<FileSource> {
         match &self.session {
+            Some(ViewerSession::Archive(state)) => Some(state.file_source()),
             Some(ViewerSession::Image(state)) => state.file_source(),
             Some(ViewerSession::Audio(state)) => state.file_source(),
             Some(ViewerSession::Text(state)) => state.file_source(),
@@ -189,6 +190,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         .to_string_lossy()
         .into_owned();
     match viewer {
+        ViewerSession::Archive(state) => state.relocate_file(source),
         ViewerSession::Image(state) => state.relocate_file(path.into(), source),
         ViewerSession::Audio(state) => state.relocate_file(path.into(), source),
         ViewerSession::Text(state) => state.relocate_file(path.into(), source),
