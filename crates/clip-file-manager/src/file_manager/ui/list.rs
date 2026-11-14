@@ -516,14 +516,18 @@ impl GroupSort {
         match self {
             Self::File(column) => manager.sort_by(column),
             Self::Metadata(family, field) => {
+                manager.metadata.toggle_sort(family, field);
                 if manager.single_family.is_some()
                     && field == super::super::metadata::Field::Filename
                 {
-                    manager.sort_by(super::super::sorting::Column::Name);
-                } else {
-                    manager.metadata.toggle_sort(family, field);
-                    manager.finish_sort();
+                    // This menu action resets ordering; unlike a Name header
+                    // click, repeating it must never reverse the direction.
+                    manager.sort = super::super::sorting::Sort {
+                        column: super::super::sorting::Column::Name,
+                        descending: false,
+                    };
                 }
+                manager.finish_sort();
             }
         }
         // In-content headers must stay under the pointer while their rows
@@ -739,6 +743,80 @@ mod tests {
                 assert_eq!(top, previous);
             }
             previous_top = Some(top);
+        }
+    }
+
+    #[test]
+    fn filename_reset_is_idempotent_and_preserves_selection_and_viewport() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "track10.wav",
+            "track2.wav",
+            "track1.wav",
+            "track20.wav",
+            "track03.wav",
+        ] {
+            std::fs::write(root.path().join(name), "fixture").unwrap();
+        }
+        let mut manager = FileManager {
+            pending: None,
+            ..Default::default()
+        };
+        for view in [BrowserView::List, BrowserView::Columns] {
+            manager.commit(
+                filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                    .unwrap(),
+                Navigation::New,
+            );
+            manager.set_view(view);
+            manager.sort_by(Column::Name);
+            manager.select(root.path().join("track2.wav"));
+            manager.location_mut().unwrap().scroll = 151.0;
+            for _ in 0..3 {
+                GroupSort::Metadata(Category::Audio, Field::Filename).apply(&mut manager);
+                let names = manager
+                    .visible
+                    .iter()
+                    .map(|&index| {
+                        manager.directory.as_ref().unwrap().entries[index]
+                            .name
+                            .as_str()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    names,
+                    [
+                        "track1.wav",
+                        "track2.wav",
+                        "track03.wav",
+                        "track10.wav",
+                        "track20.wav"
+                    ]
+                );
+                assert_eq!(manager.location().unwrap().scroll, 151.0);
+                assert_eq!(manager.selected_paths(), [root.path().join("track2.wav")]);
+                assert!(!manager.sort.descending);
+                assert!(manager.metadata.sort(Category::Audio).is_none());
+            }
+        }
+        std::fs::write(root.path().join("photo.png"), "fixture").unwrap();
+        manager.commit(
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap(),
+            Navigation::Refresh,
+        );
+        manager.sort_by(Column::Type);
+        manager
+            .metadata
+            .toggle_sort(Category::Audio, Field::Duration);
+        for _ in 0..2 {
+            GroupSort::Metadata(Category::Audio, Field::Filename).apply(&mut manager);
+            assert_eq!(
+                manager.sort.column,
+                Column::Type,
+                "mixed-folder reset retains type grouping"
+            );
+            assert!(manager.metadata.sort(Category::Audio).is_none());
         }
     }
 
