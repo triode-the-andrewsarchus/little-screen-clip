@@ -9,6 +9,8 @@ use std::{
 };
 
 mod container;
+mod render;
+pub use render::render;
 
 /// Page geometry in 72-dpi document coordinates, preserving authored order.
 #[derive(Debug)]

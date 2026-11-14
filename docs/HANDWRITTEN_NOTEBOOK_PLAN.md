@@ -262,3 +262,24 @@ References inspected directly: [upstream XML loader](https://github.com/xournalp
   nightly CLI. Stable 1.3.8 rejects current transformed text/image layouts, so
   those comparisons use the nightly instead; binary hash and diagnostics are
   recorded with the corpus. No runtime editor dependency is added.
+
+- [x] Extend the oracle corpus to sixteen page exports, adding music staves,
+  dotted/isometric paper, an actual ZIP image attachment and embedded rendered
+  LaTeX PDFs. Fonts are selected through a private deterministic Fontconfig
+  configuration using the same bundled metric families as the portable native
+  reader; no user font settings or upstream rendering algorithms are changed.
+- [x] Implement selected-page native SVG generation/rasterization with pressure
+  contours, caps/dashes/fills, multiply-blended highlighters, ordered layers,
+  transformed text and raster images, wrapping/alignment, ruling, local PDF/
+  image backgrounds and ZIP attachments. Embedded LaTeX uses its stored PDF;
+  no TeX program or notebook-supplied command executes. Background files and
+  staged embedded PDFs retain source fingerprints through rendering.
+- [x] Compare all sixteen independent exports with bounded pixel-difference and
+  foreground-coverage assertions. Raster/photo/PDF cases are especially close;
+  text layout remains an approximation of Pango and does not claim pixel-perfect
+  font shaping/justification. Five backend tests pass, including malformed
+  geometry and missing/remote-resource rejection. The scoped renderer has no
+  clone groups/cycles and maximum function complexity 14 after separating
+  paper configuration, resource resolution, stroke style and text layout.
+- [ ] Connect Xournal to the shared worker dispatch, all three preview routes,
+  clipboard rehydration and native UI acceptance before calling it supported.

@@ -57,7 +57,11 @@ pub(super) fn member(
     bounded(&mut file, limit, cancel)
 }
 
-fn bounded(input: &mut impl Read, limit: usize, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
+pub(super) fn bounded(
+    input: &mut impl Read,
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let mut buffer = [0; 32 * 1024];
     loop {
