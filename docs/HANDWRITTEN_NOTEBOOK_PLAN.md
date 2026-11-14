@@ -310,3 +310,41 @@ rather than introducing another cache, viewer or renderer dispatch.
 
 This is a merge checkpoint for Supernote and Xournal. reMarkable support and the
 final whole-goal audit remain pending.
+
+## reMarkable investigation checkpoint
+
+Integration was merged at `be539806`; remaining work continues on
+`feat/remarkable-notebook-previews`, with baseline `before-remarkable-previews`.
+
+- [x] Compare actual implementation source, not only registry descriptions.
+  `remarkable-rm` 0.1.1's published page parser matches upstream revision
+  `544968f002f230ff55c5d438e843aab5a5e9c552`. It supports v6 only, despite a
+  broader introductory sentence: the actual header reader rejects other versions.
+  It provides scene-item topological ordering, nested groups, root-text layout
+  with anchored ink, layers/visibility, glyph highlights, current color/pen
+  fields, page-size metadata and a native tiny-skia renderer. The renderer
+  approximates tablet pen simulation and skips eraser records, so erased-content
+  semantics require real-fixture checks, not an assumption of perfect fidelity.
+  Its dual MIT/Apache license and independent tablet-thumbnail comparisons make
+  it the first candidate to qualify as a normal crate dependency.
+- [x] Compare alternatives: `remarkable_lines` 0.1.3 (MIT), revision
+  `5b43636f12d1509f462d45ff41687e13321c34b2`, parses v3–v6 but supplies no renderer
+  and warns that versions are lightly tested. `rmconvert`, revision
+  `24c679f8029dbd7a8e1fe7a0d41cfa2b8fa72b57`, assumes a fixed 163-byte front
+  matter and recognizes only a handful of block flags; it is less suitable than
+  the dedicated v6 parser. `rmscene` and `rmc` are useful MIT Python references,
+  but rmc documents multiline text/ink-anchor problems. Scratchydisk's MIT
+  TypeScript renderer also provides legacy synthetic fixtures. C++
+  `librm_lines` is GPL-3.0 and would introduce another native build/FFI boundary;
+  do not import it as the application's first choice while a practical Rust
+  parser/renderer exists.
+- [x] Retain a small independent licensed corpus with immutable hashes, including
+  real v6 text/ink/layer/color/eraser pages, a two-page `.rmdoc`, generated legacy
+  cases and two paired actual tablet thumbnails. Preserve fixtures separately
+  from implementation changes. Total original inputs are under 1 MB.
+- [ ] Qualify the Rust renderer against those inputs and immutable thumbnails;
+  reject malformed/oversized geometry before raster allocation. Resolve gaps in
+  legacy versions, archive page order, templates/PDF backgrounds and deletion
+  semantics explicitly before calling the family supported.
+- [ ] Integrate guarded worker and all three presentation routes, including
+  RealMedia `.rm` collision tests and multi-page selected-page handoff.

@@ -1,0 +1,274 @@
+{
+  "files": [
+    {
+      "path": "archives/LICENSE",
+      "repository": "go-go-golems/remarquee",
+      "revision": "0694a8163ca1ca5f446ff610a961a80491451f84",
+      "original_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/go-go-golems/remarquee/0694a8163ca1ca5f446ff610a961a80491451f84/LICENSE",
+      "sha256": "e90dfa49c973f9df0bb8d159497bc9bde1acb95982360f899759de813a00ebf5",
+      "bytes": 1072,
+      "modified": false
+    },
+    {
+      "path": "archives/Test.rmdoc",
+      "repository": "go-go-golems/remarquee",
+      "revision": "0694a8163ca1ca5f446ff610a961a80491451f84",
+      "original_path": "cmd/remarquee-ui/testdata/Test.rmdoc",
+      "url": "https://raw.githubusercontent.com/go-go-golems/remarquee/0694a8163ca1ca5f446ff610a961a80491451f84/cmd/remarquee-ui/testdata/Test.rmdoc",
+      "sha256": "99ca62a44f0215becfd6e57d7daaee26d6a1240546e662be7fc0a90d94d98221",
+      "bytes": 22934,
+      "modified": false
+    },
+    {
+      "path": "legacy-generated/LICENSE",
+      "repository": "Scratchydisk/remarkable-rm",
+      "revision": "403c345411dc451b6496339a617f2950bb5549fa",
+      "original_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/Scratchydisk/remarkable-rm/403c345411dc451b6496339a617f2950bb5549fa/LICENSE",
+      "sha256": "0a636df905cda54679fa3d20910172c8bbeed18687de4fe15ca99d4e57548640",
+      "bytes": 1089,
+      "modified": false
+    },
+    {
+      "path": "legacy-generated/multi-layer.rm",
+      "repository": "Scratchydisk/remarkable-rm",
+      "revision": "403c345411dc451b6496339a617f2950bb5549fa",
+      "original_path": "test/fixtures/v5/multi-layer.rm",
+      "url": "https://raw.githubusercontent.com/Scratchydisk/remarkable-rm/403c345411dc451b6496339a617f2950bb5549fa/test/fixtures/v5/multi-layer.rm",
+      "sha256": "dc67b26809a1c9976238a63d5838e93e95c50b234949102a24ddb324295cf919",
+      "bytes": 248,
+      "modified": false
+    },
+    {
+      "path": "legacy-generated/simple.rm",
+      "repository": "Scratchydisk/remarkable-rm",
+      "revision": "403c345411dc451b6496339a617f2950bb5549fa",
+      "original_path": "test/fixtures/v5/simple.rm",
+      "url": "https://raw.githubusercontent.com/Scratchydisk/remarkable-rm/403c345411dc451b6496339a617f2950bb5549fa/test/fixtures/v5/simple.rm",
+      "sha256": "f48a792f31f960c9e3b5f782205401f689f900d8ac1eb31fc0cffa08d3cc9ef1",
+      "bytes": 147,
+      "modified": false
+    },
+    {
+      "path": "rmc/LICENSE",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/LICENSE",
+      "sha256": "c953b1b65c977c818e93ead1da9d48a29cc6377c5e8f5d0b828ef4ef8858fc15",
+      "bytes": 1068,
+      "modified": false
+    },
+    {
+      "path": "rmc/erasers.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/erasers.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/erasers.rm",
+      "sha256": "42d86bbd0f23dc834bd0a119c1e056d5eb6ccd5c8e1c22fde5129b841140b441",
+      "bytes": 132933,
+      "modified": false
+    },
+    {
+      "path": "rmc/extended.stroke.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/extended.stroke.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/extended.stroke.rm",
+      "sha256": "cfdc6f0ec1f2dfc9207c6840c915a391cc96e6caf423f81c326f88dd1725a38c",
+      "bytes": 35396,
+      "modified": false
+    },
+    {
+      "path": "rmc/keyboard-checkboxes-and-bullets.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/keyboard-checkboxes-and-bullets.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/keyboard-checkboxes-and-bullets.rm",
+      "sha256": "45c78ea51c5a9bcd10f8342f161db5a06f3a3e24a2e928e88168b1df0f0956c6",
+      "bytes": 1250,
+      "modified": false
+    },
+    {
+      "path": "rmc/pen_size_test.strokes.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/pen_size_test.strokes.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/pen_size_test.strokes.rm",
+      "sha256": "33826875a03e1204456aef530327dfb14bae4f86b3f961c9c381550be73f63dc",
+      "bytes": 101547,
+      "modified": false
+    },
+    {
+      "path": "rmc/text_and_strokes.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/text_and_strokes.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/text_and_strokes.rm",
+      "sha256": "6484c17ec067d21b07a07cc9d9a4e35d67053a8a64d6d1428565e0aaf327f87c",
+      "bytes": 11461,
+      "modified": false
+    },
+    {
+      "path": "rmc/text_multiple_lines.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/text_multiple_lines.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/text_multiple_lines.rm",
+      "sha256": "41a77ec633690184b9ffd4d097adc9bff973d743071f253421dcdf9a854bd57d",
+      "bytes": 419,
+      "modified": false
+    },
+    {
+      "path": "rmc/writing_tools.rm",
+      "repository": "ricklupton/rmc",
+      "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",
+      "original_path": "tests/rm/writing_tools.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmc/da87813a31496d156ca6ea8a27bf5128670fb45a/tests/rm/writing_tools.rm",
+      "sha256": "9266c43d7c7606b97c5a6ee214f523205d85f059883e57ee1bc99349a91574c4",
+      "bytes": 100349,
+      "modified": false
+    },
+    {
+      "path": "rmscene/Bold_Heading_Bullet_Normal.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/Bold_Heading_Bullet_Normal.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/Bold_Heading_Bullet_Normal.rm",
+      "sha256": "2b0322e703b85ef84b764df4a93a44ca43a0f2b0b98371be64cd9a2adefade66",
+      "bytes": 633,
+      "modified": false
+    },
+    {
+      "path": "rmscene/Color_and_tool_v3.14.4.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/Color_and_tool_v3.14.4.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/Color_and_tool_v3.14.4.rm",
+      "sha256": "623bd0aec7448a1eda5ef9e8221e2be4932fb9c18f56450c2e14ec580fb16ce6",
+      "bytes": 21855,
+      "modified": false
+    },
+    {
+      "path": "rmscene/LICENSE",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/LICENSE",
+      "sha256": "c953b1b65c977c818e93ead1da9d48a29cc6377c5e8f5d0b828ef4ef8858fc15",
+      "bytes": 1068,
+      "modified": false
+    },
+    {
+      "path": "rmscene/More_color_highlight_shader_v3.15.4.2.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/More_color_highlight_shader_v3.15.4.2.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/More_color_highlight_shader_v3.15.4.2.rm",
+      "sha256": "a91cb41a1b621d10260c1799dd9a3ee95f3731c4d1fee2e00c8584c1e62bd8a0",
+      "bytes": 12649,
+      "modified": false
+    },
+    {
+      "path": "rmscene/Normal_AB.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/Normal_AB.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/Normal_AB.rm",
+      "sha256": "4c9f5ebd49fefc301a18900b7d2d1fc4e7a58260f6ae40b809f9d6c0580b3b20",
+      "bytes": 358,
+      "modified": false
+    },
+    {
+      "path": "rmscene/Normal_A_stroke_2_layers.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/Normal_A_stroke_2_layers.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/Normal_A_stroke_2_layers.rm",
+      "sha256": "ac9574b43f93c435d2d4be063b646994e04f79dcaa78349eaa0e4b625b4d130d",
+      "bytes": 1196,
+      "modified": false
+    },
+    {
+      "path": "rmscene/Normal_A_stroke_2_layers_v3.3.2.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/Normal_A_stroke_2_layers_v3.3.2.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/Normal_A_stroke_2_layers_v3.3.2.rm",
+      "sha256": "7a72977bfd9e2c71517927fb328e4919bbde785a6330b275e181b2abbcf6076d",
+      "bytes": 5403,
+      "modified": false
+    },
+    {
+      "path": "rmscene/With_SceneInfo_Block.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/With_SceneInfo_Block.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/With_SceneInfo_Block.rm",
+      "sha256": "cc11d4dd781db9a07c83f874deb7e25e379e3a50ec898cb67843e7184fb3e79c",
+      "bytes": 7113,
+      "modified": false
+    },
+    {
+      "path": "rmscene/test-crdt-ordering.rm",
+      "repository": "ricklupton/rmscene",
+      "revision": "d7d86ca3a8ca4965d911886a1660bc8acf654c1a",
+      "original_path": "tests/data/test-crdt-ordering.rm",
+      "url": "https://raw.githubusercontent.com/ricklupton/rmscene/d7d86ca3a8ca4965d911886a1660bc8acf654c1a/tests/data/test-crdt-ordering.rm",
+      "sha256": "dee7343f0dd1139f849b7c7bc26a9e72edd7c6b85d98fb8f8ba0420c93777e0c",
+      "bytes": 636,
+      "modified": false
+    },
+    {
+      "path": "tablet-thumbnails/LICENSE",
+      "repository": "hwangso595/eink-sync",
+      "revision": "33a686ba8ab7dec3fc22d036460b183a0301b4ed",
+      "original_path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/hwangso595/eink-sync/33a686ba8ab7dec3fc22d036460b183a0301b4ed/LICENSE",
+      "sha256": "f074be91c0af8b8ff46c9c6f7cf5198d1cea8e7e702ad3723216b393288e27ba",
+      "bytes": 1067,
+      "modified": false
+    },
+    {
+      "path": "tablet-thumbnails/quicksheets-p2.png",
+      "repository": "hwangso595/eink-sync",
+      "revision": "33a686ba8ab7dec3fc22d036460b183a0301b4ed",
+      "original_path": "test-data/renderer-quality/reference-thumbnails/quicksheets-p2.png",
+      "url": "https://raw.githubusercontent.com/hwangso595/eink-sync/33a686ba8ab7dec3fc22d036460b183a0301b4ed/test-data/renderer-quality/reference-thumbnails/quicksheets-p2.png",
+      "sha256": "7c242924de4d810d97fd893d7de5f8fbb8426ac8b99cf1c89329fdac6cab8218",
+      "bytes": 134544,
+      "modified": false
+    },
+    {
+      "path": "tablet-thumbnails/quicksheets-p2.rm",
+      "repository": "hwangso595/eink-sync",
+      "revision": "33a686ba8ab7dec3fc22d036460b183a0301b4ed",
+      "original_path": "test-data/renderer-quality/rm-files/quicksheets-p2.rm",
+      "url": "https://raw.githubusercontent.com/hwangso595/eink-sync/33a686ba8ab7dec3fc22d036460b183a0301b4ed/test-data/renderer-quality/rm-files/quicksheets-p2.rm",
+      "sha256": "3f6f1f95ad5afe838d6f304acb255ca4be17d8a7828c26db44b7facd985802df",
+      "bytes": 109616,
+      "modified": false
+    },
+    {
+      "path": "tablet-thumbnails/quicksheets-p3.png",
+      "repository": "hwangso595/eink-sync",
+      "revision": "33a686ba8ab7dec3fc22d036460b183a0301b4ed",
+      "original_path": "test-data/renderer-quality/reference-thumbnails/quicksheets-p3.png",
+      "url": "https://raw.githubusercontent.com/hwangso595/eink-sync/33a686ba8ab7dec3fc22d036460b183a0301b4ed/test-data/renderer-quality/reference-thumbnails/quicksheets-p3.png",
+      "sha256": "9c6dacf04a362304dbbd02920f4a58d0b82b0fc32f2795f7a8b6ea3be6355127",
+      "bytes": 47344,
+      "modified": false
+    },
+    {
+      "path": "tablet-thumbnails/quicksheets-p3.rm",
+      "repository": "hwangso595/eink-sync",
+      "revision": "33a686ba8ab7dec3fc22d036460b183a0301b4ed",
+      "original_path": "test-data/renderer-quality/rm-files/quicksheets-p3.rm",
+      "url": "https://raw.githubusercontent.com/hwangso595/eink-sync/33a686ba8ab7dec3fc22d036460b183a0301b4ed/test-data/renderer-quality/rm-files/quicksheets-p3.rm",
+      "sha256": "2c0383711f8c87ad2a180d17be1e4c001f198fb7f037c2e7aca39056c7e80114",
+      "bytes": 32981,
+      "modified": false
+    }
+  ]
+}
