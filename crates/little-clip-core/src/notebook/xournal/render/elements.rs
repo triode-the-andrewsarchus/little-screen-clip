@@ -1,4 +1,5 @@
 use super::*;
+use crate::notebook::container as archives;
 
 pub(super) fn draw(
     svg: &mut String,
@@ -466,7 +467,7 @@ fn image_bytes(
                     .and_then(|n| n.attribute("path").or_else(|| n.attribute("filename")))
             })
             .ok_or("Missing Xournal image attachment")?;
-        container::member(input, reference, 32 * 1024 * 1024, cancel)?
+        archives::member(input, reference, 32 * 1024 * 1024, cancel)?
     } else {
         return Err("Missing Xournal image data".into());
     };

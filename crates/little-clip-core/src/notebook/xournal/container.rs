@@ -1,5 +1,6 @@
 //! Bounded container access. ZIP members stay in memory and are never extracted by name.
 use super::*;
+use crate::notebook::container::{bounded, member};
 use std::io::SeekFrom;
 
 const MAX_SOURCE: u64 = 512 * 1024 * 1024;
@@ -37,49 +38,10 @@ pub(super) fn xml(
     Ok((bytes, false))
 }
 
-pub(super) fn member(
-    input: &mut (impl Read + Seek),
-    name: &str,
-    limit: usize,
-    cancel: &AtomicBool,
-) -> Result<Vec<u8>, String> {
-    input.rewind().map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(input).map_err(|error| error.to_string())?;
-    if archive.len() > 8192 {
-        return Err("Xournal package exceeds the entry budget".into());
-    }
-    let mut file = archive
-        .by_name(name)
-        .map_err(|error| format!("Missing Xournal package member {name}: {error}"))?;
-    if file.enclosed_name().is_none() || file.is_dir() || file.size() > limit as u64 {
-        return Err("Xournal package member exceeds its path/size budget".into());
-    }
-    bounded(&mut file, limit, cancel)
-}
-
-pub(super) fn bounded(
-    input: &mut impl Read,
-    limit: usize,
-    cancel: &AtomicBool,
-) -> Result<Vec<u8>, String> {
-    let mut output = Vec::new();
-    let mut buffer = [0; 32 * 1024];
-    loop {
-        check_cancel(cancel)?;
-        let count = input.read(&mut buffer).map_err(|error| error.to_string())?;
-        if count == 0 {
-            return Ok(output);
-        }
-        if count > limit.saturating_sub(output.len()) {
-            return Err("Expanded Xournal data exceeds its read budget".into());
-        }
-        output.extend_from_slice(&buffer[..count]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notebook::container::{bounded, member};
     use std::io::{Cursor, Write};
 
     #[test]

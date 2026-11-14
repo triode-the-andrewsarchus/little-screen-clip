@@ -5,6 +5,8 @@
 //! and rasterization are synchronous and cannot poll our cancellation token.
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub mod archive;
+
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 65_536;
 const MAX_POINTS: usize = 1_000_000;
@@ -116,22 +118,27 @@ fn validate_geometry(page: &remarkable_rm::Page) -> Result<(), String> {
             validate_line(line)?;
         }
         for glyph in &layer.glyphs {
-            for rect in &glyph.rectangles {
-                if ![rect.x, rect.y, rect.width, rect.height]
-                    .into_iter()
-                    .all(coordinate)
-                    || rect.width < 0.0
-                    || rect.height < 0.0
-                {
-                    return Err("Invalid reMarkable highlight geometry".into());
-                }
-            }
+            validate_highlights(glyph)?;
         }
     }
     validate_text(page)?;
     let size = remarkable_rm::RenderOptions::for_page(page);
     if size.width == 0 || size.height == 0 || size.width > 65_536 || size.height > 65_536 {
         return Err("reMarkable page dimensions exceed the preview limit".into());
+    }
+    Ok(())
+}
+
+fn validate_highlights(glyph: &remarkable_rm::scene::glyph::GlyphRange) -> Result<(), String> {
+    for rect in &glyph.rectangles {
+        if ![rect.x, rect.y, rect.width, rect.height]
+            .into_iter()
+            .all(coordinate)
+            || rect.width < 0.0
+            || rect.height < 0.0
+        {
+            return Err("Invalid reMarkable highlight geometry".into());
+        }
     }
     Ok(())
 }

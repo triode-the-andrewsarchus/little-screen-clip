@@ -380,3 +380,26 @@ Integration was merged at `be539806`; remaining work continues on
 
 Developer image artifacts for this checkpoint: `/tmp/remarkable-native-review/`.
 The corpus remains immutable; runtime output must never replace its references.
+
+### Notebook ZIP index checkpoint
+
+- [x] Index an actual `.rmdoc` through its unique document `.metadata` and
+  `.content`, preserving the explicit live page array rather than sorting ZIP
+  names or trusting `pageCount` over modern `cPages`. Keep per-page template and
+  source-PDF redirection, inserted pages, legacy numeric fallback and deletion
+  flags. Reject ambiguous roots, non-document metadata, unsafe/duplicate IDs,
+  malformed arrays/register values and source/member/page budgets.
+- [x] Reuse Xournal's bounded ZIP member reader in a shared notebook container
+  module. Both formats keep entries in memory instead of extracting by name;
+  cancellation, expanded-size checks and path validation have one owner. The
+  existing Xournal expansion/traversal/truncation tests remain in place.
+- [x] Check modern/legacy metadata policy against remarquee's MIT `pkg/rmdoc`
+  implementation at `0694a8163ca1ca5f446ff610a961a80491451f84`. The separate
+  `remarkable-metadata` Rust crate was also inspected: its narrow public content
+  projection omits PDF redirection, so it does not replace the required page
+  plan. This adapter reads only bounded JSON and does not import an inventory,
+  device connection or CLI subsystem.
+- [x] Run nineteen combined notebook tests and strict all-target core Clippy.
+  The real archive's two raw annotation members also pass v6 qualification.
+  Archive indexing still does not claim rendering of absent template artwork,
+  PDF backgrounds or legacy raw ink; those remain explicit next steps.

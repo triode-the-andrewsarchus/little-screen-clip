@@ -1,4 +1,5 @@
 use super::*;
+use crate::notebook::container as archives;
 use std::{fs::File, io::Write, path::PathBuf};
 
 pub(super) struct Guard {
@@ -103,14 +104,13 @@ fn load_reference(
         .ok_or("Missing Xournal background filename")?;
     let attached = reference.attribute("domain") == Some("attach");
     if packaged && attached {
-        return container::member(input, name, 128 * 1024 * 1024, cancel)
-            .map(|bytes| (bytes, None));
+        return archives::member(input, name, 128 * 1024 * 1024, cancel).map(|bytes| (bytes, None));
     }
     let path = companion(source, name, attached)?;
     let (mut file, identity) = crate::file_source::ReadCheck::default()
         .open(&path, None, cancel)
         .map_err(|error| format!("Xournal background unavailable: {error}"))?;
-    let bytes = container::bounded(&mut file, 128 * 1024 * 1024, cancel)?;
+    let bytes = archives::bounded(&mut file, 128 * 1024 * 1024, cancel)?;
     identity.check_file(&file)?;
     Ok((
         bytes,
