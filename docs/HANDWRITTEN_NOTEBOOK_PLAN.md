@@ -143,8 +143,19 @@ relaunch `current_exe`, and keep pristine imports separate from adaptations.
   versions, footer-authoritative page order, duplicate scalar rejection, per-page
   orientation/dimensions and checked metadata offsets/budgets. No page bitmap is
   decoded by metadata inspection. Three targeted tests and strict core Clippy pass.
-- [ ] Implement selected-page raster/layer decoding and compare pixels against
-  the reference before connecting visible previews.
+- [x] Implement bounded selected-page raster/layer decoding. Seven targeted tests
+  pass, including exact native RGB comparison against eight independent
+  reference pages covering current ink, older pens, landscape orientation and
+  a custom PNG background. Strict core Clippy and leaf formatting checks pass.
+  The reference images also reproduce byte-for-byte. ASA decoding remains
+  unqualified without a real fixture; missing layer visibility is an explicit
+  compatibility error.
+
+Architecture comparison against `before-handwritten-notebooks` flags the
+pristine upstream Python reference import (clone groups and decoder complexity),
+plus unrelated cross-file symbol matches. The application notebook module
+measures zero duplication/cycles and maximum cyclomatic complexity 15. Retain
+the reference unchanged so independent decoder comparisons remain reproducible.
 
 This checkpoint is not preview support: all list/little-screen/large-viewer
 acceptance items above remain required. The goal remains active.

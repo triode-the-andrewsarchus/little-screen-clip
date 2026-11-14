@@ -5,6 +5,9 @@
 //! `vendor/supernote-tool`; local code uses checked offsets and explicit budgets.
 use std::io::{Read, Seek, SeekFrom};
 
+mod raster;
+pub use raster::render;
+
 const MAX_SOURCE: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BLOCK: usize = 1024 * 1024;
 const MAX_METADATA_TOTAL: usize = 16 * 1024 * 1024;
@@ -51,19 +54,7 @@ pub fn has_signature(bytes: &[u8]) -> bool {
 /// scalar fields and inputs exceeding the source/page/metadata budgets.
 pub fn inspect(input: &mut (impl Read + Seek)) -> Result<Document, String> {
     let mut reader = Reader::new(input)?;
-    reader.input.seek(SeekFrom::Start(0)).map_err(io_error)?;
-    let mut signature = [0; 24];
-    reader.input.read_exact(&mut signature).map_err(io_error)?;
-    let (version, legacy) = version(&signature)?;
-    reader
-        .input
-        .seek(SeekFrom::Start(reader.end))
-        .map_err(io_error)?;
-    let footer_address = reader.u32()?;
-    if footer_address == 0 {
-        return Err("Supernote footer address is missing".into());
-    }
-    let footer = reader.metadata(footer_address)?;
+    let (version, legacy, footer) = reader.directory()?;
     let header_address = address(required(&footer, "FILE_FEATURE")?, "header")?;
     let header = reader.metadata(header_address)?;
     let device = scalar(&header, "APPLY_EQUIPMENT")?.map(str::to_owned);
@@ -178,12 +169,26 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
             metadata_left: MAX_METADATA_TOTAL,
         })
     }
+    fn directory(&mut self) -> Result<(String, bool, Properties), String> {
+        self.input.seek(SeekFrom::Start(0)).map_err(io_error)?;
+        let mut signature = [0; 24];
+        self.input.read_exact(&mut signature).map_err(io_error)?;
+        let (version, legacy) = version(&signature)?;
+        self.input
+            .seek(SeekFrom::Start(self.end))
+            .map_err(io_error)?;
+        let footer_address = self.u32()?;
+        if footer_address == 0 {
+            return Err("Supernote footer address is missing".into());
+        }
+        Ok((version, legacy, self.metadata(footer_address)?))
+    }
     fn u32(&mut self) -> Result<u32, String> {
         let mut bytes = [0; 4];
         self.input.read_exact(&mut bytes).map_err(io_error)?;
         Ok(u32::from_le_bytes(bytes))
     }
-    fn metadata(&mut self, address: u32) -> Result<Properties, String> {
+    fn block(&mut self, address: u32, limit: usize) -> Result<Vec<u8>, String> {
         if address == 0 {
             return Ok(Vec::new());
         }
@@ -193,15 +198,16 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
         }
         self.input.seek(SeekFrom::Start(start)).map_err(io_error)?;
         let length = self.u32()? as usize;
-        if length > MAX_METADATA_BLOCK
-            || length > self.metadata_left
-            || start + 4 + length as u64 > self.end
-        {
-            return Err("Supernote metadata block exceeds the source or metadata budget".into());
+        if length > limit || start + 4 + length as u64 > self.end {
+            return Err("Supernote block exceeds the source or decode budget".into());
         }
-        self.metadata_left -= length;
         let mut bytes = vec![0; length];
         self.input.read_exact(&mut bytes).map_err(io_error)?;
+        Ok(bytes)
+    }
+    fn metadata(&mut self, address: u32) -> Result<Properties, String> {
+        let bytes = self.block(address, MAX_METADATA_BLOCK.min(self.metadata_left))?;
+        self.metadata_left -= bytes.len();
         parse_fields(&bytes)
     }
 }
