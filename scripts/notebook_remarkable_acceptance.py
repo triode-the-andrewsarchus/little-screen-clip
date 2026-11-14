@@ -49,6 +49,8 @@ def exercise(session, root):
         return len(columns) == 2
     wait_for(rendered, "two rendered reMarkable page thumbnails", timeout_seconds=45)
     session.observe("02-notice", ["Paper unavailable"])
+    _, notice_y = session.word("02-notice", "Paper")
+    assert notice_y >= y + 20, "The paper notice must not overlap file metadata"
     x = sum(columns[-1]) // 2
     hover_observation(session, "03-page-hover", x, y + 43, ["Page 2"])
     session.click(x, y + 43, delay=.05)

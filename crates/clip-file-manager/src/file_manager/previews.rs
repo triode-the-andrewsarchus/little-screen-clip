@@ -501,10 +501,17 @@ impl EntryPreviews {
             })
             .unwrap_or_default();
         let count = pdf_count.or_else(|| notebook.as_ref().map(|info| info.pages.len()));
-        let selected = self.pdf_pages.show(ui, row, entry, id, count, colors);
-        if let Some(info) = notebook.filter(|info| !info.warnings.is_empty()) {
+        let notice = notebook.filter(|info| !info.warnings.is_empty());
+        let mut preview_row = row;
+        if notice.is_some() {
+            preview_row.max.x -= 152.0;
+        }
+        let selected = self
+            .pdf_pages
+            .show(ui, preview_row, entry, id, count, colors);
+        if let Some(info) = notice {
             let rect = egui::Rect::from_min_size(
-                row.right_top() + egui::vec2(-148.0, 1.0),
+                row.right_top() + egui::vec2(-148.0, 32.0),
                 egui::vec2(146.0, 20.0),
             );
             let accent = ui.visuals().warn_fg_color;

@@ -509,3 +509,15 @@ The corpus remains immutable; runtime output must never replace its references.
   in both appearances. Verify real row artwork, second-page hover/open handoff,
   original/missing-template notices, legacy/current ink, nested paper/PDFs and
   unchanged sources before marking the family supported.
+
+Native review found one concrete layout defect: the paper-availability pill
+covered the Modified timestamp in list rows. Reserve space inside the preview
+strip and place the pill below file metadata, without changing row height.
+The native acceptance runner now asserts that the notice is below the filename
+line. Strict file-manager Clippy and its warning-free rebuild pass for the fix;
+both-appearance acceptance is being rerun on the frozen rebuilt binary.
+
+Local review fixtures are now also available under
+`/home/vega/Documents/type_testing/notebooks/xournal/` and `remarkable/`, alongside
+existing Supernote examples. Copies include source licenses/provenance and the
+needed relative companions; existing user files are preserved.
