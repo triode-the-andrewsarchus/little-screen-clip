@@ -540,3 +540,9 @@ acceptance runner now checks the already-present canonical `Page 11 of 11`
 readout instead of redundantly requiring both copies of the total. Actual
 painted artwork, thumbnail count and page selection checks remain unchanged;
 the repeated light run passes.
+
+### Final workspace test isolation
+
+- [x] Serialize system-helper fixtures that assert process-global admission
+  budgets, and reap their killed local test children before releasing the fixture
+  lock. All nine worker tests pass together; production lifecycle is unchanged.
