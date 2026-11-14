@@ -105,27 +105,27 @@ external resource URLs.
 
 Acceptance checklist (each family must satisfy every applicable row):
 
-- [ ] Header-qualified dispatch, including malformed/unsupported inputs and
+- [x] Header-qualified dispatch, including malformed/unsupported inputs and
   extension collisions; no generic XML/JSON or RealMedia misclassification.
-- [ ] Real source fixtures and independent exported/reference images establish
+- [x] Real source fixtures and independent exported/reference images establish
   visible ink, correct page order, dimensions, layers, orientation and templates.
-- [ ] Supernote current X/X2 and older variants are qualified or have precise,
+- [x] Supernote current X/X2 and older variants are qualified or have precise,
   evidence-based compatibility diagnostics.
-- [ ] Xournal++ and legacy Xournal pages, images/text/pressure/ruling and ordinary
+- [x] Xournal++ and legacy Xournal pages, images/text/pressure/ruling and ordinary
   PDF backgrounds render; incomplete inputs do not become blank-success pages.
-- [ ] reMarkable raw page versions and practical multi-page containers preserve
+- [x] reMarkable raw page versions and practical multi-page containers preserve
   ordering and ordinary backgrounds; current pens, highlights, text and erasers
   have meaningful reference comparisons.
-- [ ] List strips render bounded visible first/last page groups; clicked pages
+- [x] List strips render bounded visible first/last page groups; clicked pages
   remain selected when the large viewer finishes loading.
-- [ ] Little-screen ingestion produces actual notebook page artwork.
-- [ ] Large viewer provides thumbnails, page navigation and useful zoom without
+- [x] Little-screen ingestion produces actual notebook page artwork.
+- [x] Large viewer provides thumbnails, page navigation and useful zoom without
   notebook editing or a browser engine.
-- [ ] Source replacement, cancellation and protected inputs retain existing
+- [x] Source replacement, cancellation and protected inputs retain existing
   guard/lifecycle behavior; malformed data cannot cause unbounded allocation.
-- [ ] Native GUI checks in both themes, appropriate backend/integration tests,
+- [x] Native GUI checks in both themes, appropriate backend/integration tests,
   strict Clippy, formatting and architecture comparison complete.
-- [ ] Accurate catalog/compatibility documentation and review examples complete.
+- [x] Accurate catalog/compatibility documentation and review examples complete.
 
 Personal `.cargo/config.toml` and `config.toml` edits are outside the commits.
 Check disk space before large builds; serialize Cargo and cleanup. Reuse the
@@ -342,11 +342,11 @@ Integration was merged at `be539806`; remaining work continues on
   real v6 text/ink/layer/color/eraser pages, a two-page `.rmdoc`, generated legacy
   cases and two paired actual tablet thumbnails. Preserve fixtures separately
   from implementation changes. Total original inputs are under 1 MB.
-- [ ] Qualify the Rust renderer against those inputs and immutable thumbnails;
+- [x] Qualify the Rust renderer against those inputs and immutable thumbnails;
   reject malformed/oversized geometry before raster allocation. Resolve gaps in
   legacy versions, archive page order, templates/PDF backgrounds and deletion
   semantics explicitly before calling the family supported.
-- [ ] Integrate guarded worker and all three presentation routes, including
+- [x] Integrate guarded worker and all three presentation routes, including
   RealMedia `.rm` collision tests and multi-page selected-page handoff.
 
 ### Native v6 page checkpoint
@@ -375,7 +375,7 @@ Integration was merged at `be539806`; remaining work continues on
   Scoped native adapter metrics have no clone groups and maximum complexity 15.
   Whole-repository comparison reports only reordered cycle descriptions in
   untouched Python/vendor files; maximum workspace complexity is unchanged.
-- [ ] Complete legacy pages, notebook containers/backgrounds, worker dispatch,
+- [x] Complete legacy pages, notebook containers/backgrounds, worker dispatch,
   list/little-screen/large-view acceptance and the final goal audit.
 
 Developer image artifacts for this checkpoint: `/tmp/remarkable-native-review/`.
@@ -430,7 +430,7 @@ The corpus remains immutable; runtime output must never replace its references.
   archive parsing comprehensible; final architecture comparison reports no new
   notebook complexity/duplication/cycle findings. Unchanged Python cycle-order
   reporting still labels the global report a regression.
-- [ ] Render complete archive pages with background policy, add practical RMN
+- [x] Render complete archive pages with background policy, add practical RMN
   handling, connect the existing worker and all three UI routes, and verify the
   final goal. No new file-manager dispatch is enabled at this checkpoint.
 
@@ -476,7 +476,7 @@ The corpus remains immutable; runtime output must never replace its references.
 - [x] Consolidate identical decoder cancellation checks under the notebook owner,
   retaining Acquire observation. Shared page metadata now owns optional warnings;
   existing worker JSON omits empty warnings for compatibility.
-- [ ] Wire the new backend through guarded worker selection, preserve RealMedia
+- [x] Wire the new backend through guarded worker selection, preserve RealMedia
   routing, display warnings and qualify list/little-screen/large-view interaction.
 
 ### Guarded worker and presentation integration checkpoint
@@ -505,7 +505,7 @@ The corpus remains immutable; runtime output must never replace its references.
   actual responsibilities; the complete architecture comparison has no new
   complexity findings, and overall duplication is reduced. Existing clones
   elsewhere in touched large files are not new implementation copies.
-- [ ] Run `scripts/notebook_remarkable_acceptance.py` on the isolated compositor
+- [x] Run `scripts/notebook_remarkable_acceptance.py` on the isolated compositor
   in both appearances. Verify real row artwork, second-page hover/open handoff,
   original/missing-template notices, legacy/current ink, nested paper/PDFs and
   unchanged sources before marking the family supported.
@@ -515,7 +515,7 @@ covered the Modified timestamp in list rows. Reserve space inside the preview
 strip and place the pill below file metadata, without changing row height.
 The native acceptance runner now asserts that the notice is below the filename
 line. Strict file-manager Clippy and its warning-free rebuild pass for the fix;
-both-appearance acceptance is being rerun on the frozen rebuilt binary.
+both-appearance acceptance passes on the frozen rebuilt binary.
 
 Local review fixtures are now also available under
 `/home/vega/Documents/type_testing/notebooks/xournal/` and `remarkable/`, alongside
@@ -546,3 +546,39 @@ the repeated light run passes.
 - [x] Serialize system-helper fixtures that assert process-global admission
   budgets, and reap their killed local test children before releasing the fixture
   lock. All nine worker tests pass together; production lifecycle is unchanged.
+
+### Final acceptance evidence
+
+All three families pass native list-strip, page-hover/open handoff and read-only
+paged-viewer acceptance in both dark and light appearances. Reports are retained
+in `/tmp/notebook-supernote-final-{dark,light}/`,
+`/tmp/notebook-xournal-final-dark/`, `/tmp/notebook-xournal-final-light-02/`,
+`/tmp/remarkable-gui-dark-02/` and `/tmp/remarkable-gui-light-01/`.
+The real worker harness checks header collisions, invalid pages, source integrity
+and IPC rehydration. The display harness compares four complete 1920×462 frames
+against blank-thumbnail controls, proving actual ink survives the IPC path.
+PNG-only RMT paper has a deterministic color regression alongside SVG and PDF.
+
+Compatibility remains intentionally bounded: original Supernote ASA needs a real
+licensed fixture; TOTALPATH and recognition metadata are not implemented.
+reMarkable v5/v6 have real fixtures; v3/v4 have synthetic layout tests only.
+Unsupported retained scene operations fail explicitly. Missing factory paper
+retains ink with a notice, while missing source PDFs and corrupt ink fail.
+Tablet pen textures/text shaping and Xournal Pango layout are approximations.
+
+The final architecture comparison keeps maximum complexity at 274 and reduces
+overall duplication from 7.38% to 7.36%. Its aggregate regression classification
+includes license-text copies, existing clones in touched owners and reordered
+unchanged Python cycle reports; it is not a clean aggregate pass. Notebook
+archive modules were separately measured without clones/cycles or complexity
+findings.
+
+The default highly parallel workspace test run exhausted shared bounded studio
+job queues (19 failures, including explicit QueueFull diagnostics). Validation
+therefore also runs with `RUST_TEST_THREADS=4`; this does not raise application
+queue limits or change production scheduling.
+
+Final merge validation: `RUST_TEST_THREADS=4 cargo test --workspace -j4` passes,
+as does `cargo clippy --workspace --all-targets -j4 -- -D warnings`.
+All Rust files changed from main pass leaf rustfmt checks; generated fixture
+hashes and `git diff --check` pass.
