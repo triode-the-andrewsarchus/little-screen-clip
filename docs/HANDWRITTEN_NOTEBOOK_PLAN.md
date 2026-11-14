@@ -129,3 +129,22 @@ Personal `.cargo/config.toml` and `config.toml` edits are outside the commits.
 Check disk space before large builds; serialize Cargo and cleanup. Reuse the
 existing target directory. Use a frozen executable for GUI checks when workers
 relaunch `current_exe`, and keep pristine imports separate from adaptations.
+
+
+## Initial Supernote implementation checkpoint
+
+- [x] Create the feature branch and establish the architecture baseline.
+- [x] Compare native Rust projects with maintained Python/TypeScript/Go options;
+  distinguish a CLI manifest's MIT declaration from an unlicensed parser.
+- [x] Commit pristine supernotelib reference source separately from local code.
+- [x] Retain three unmodified licensed real X/X2 fixtures with hashes, including
+  ten-page, two-page and current N5/20260016 notebooks.
+- [x] Add bounded native container inspection: header qualification, supported
+  versions, footer-authoritative page order, duplicate scalar rejection, per-page
+  orientation/dimensions and checked metadata offsets/budgets. No page bitmap is
+  decoded by metadata inspection. Three targeted tests and strict core Clippy pass.
+- [ ] Implement selected-page raster/layer decoding and compare pixels against
+  the reference before connecting visible previews.
+
+This checkpoint is not preview support: all list/little-screen/large-viewer
+acceptance items above remain required. The goal remains active.

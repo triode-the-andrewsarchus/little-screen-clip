@@ -40,6 +40,7 @@ pub mod markdown_metadata;
 pub mod media_backend;
 pub mod media_stream;
 pub mod natural_sort;
+pub mod notebook;
 pub mod palette;
 pub mod path_address;
 pub mod path_serde;
