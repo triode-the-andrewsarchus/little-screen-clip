@@ -159,3 +159,19 @@ the reference unchanged so independent decoder comparisons remain reproducible.
 
 This checkpoint is not preview support: all list/little-screen/large-viewer
 acceptance items above remain required. The goal remains active.
+
+## Preview integration checkpoint
+
+- [x] Continue after the merge on `feat/notebook-preview-integration`.
+- [x] Add a disposable native notebook worker using inherited ordinary-file
+  descriptors, parent/held source revalidation, cancellation, bounded output and
+  CPU/address-space/time limits. Wire dispatch into studio hosts, daemon and CLI.
+  A real subprocess acceptance harness verifies header-based identification,
+  ten-page metadata, late-page visible ink, bounded dimensions, rejected pages,
+  pre-cancellation and protected inputs. Strict core Clippy and checks of
+  studios/daemon/CLI pass.
+- [ ] Connect little-screen artwork ingestion and rehydration.
+- [ ] Connect list strips and selected-page handoff.
+- [ ] Extend the shared paged viewer in read-only mode, disabling PDF-only tools.
+
+These are integration checkpoints, not completion of the full format goal.

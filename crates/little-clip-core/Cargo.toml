@@ -5,6 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[[test]]
+name = "notebook_worker"
+harness = false
+
 [features]
 test-support = []
 
