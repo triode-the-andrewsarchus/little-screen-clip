@@ -7,7 +7,9 @@ use zip::ZipArchive;
 /// # Errors
 /// Rejects malformed, duplicate-entry, ZIP64, and oversized containers.
 pub fn archive(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>, String> {
-    if bytes.len() > 64 * 1024 * 1024 || !bytes.starts_with(b"PK\x03\x04") {
+    if bytes.len() > 64 * 1024 * 1024
+        || !(bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06"))
+    {
         return Err("Invalid or oversized content archive".into());
     }
     let count = directory(
@@ -42,7 +44,9 @@ pub fn archive_file(
     }
     let mut signature = [0; 4];
     file.read_exact(&mut signature).map_err(|e| e.to_string())?;
-    if signature != *b"PK\x03\x04" {
+    // A genuinely empty archive starts with its end-of-directory record.
+    // Both forms still pass the same bounded directory validation below.
+    if signature != *b"PK\x03\x04" && signature != *b"PK\x05\x06" {
         return Err("Invalid content ZIP signature".into());
     }
     let tail_length = metadata.len().min(65_557);
@@ -108,6 +112,24 @@ pub fn entry<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_archives_are_valid_but_truncated_directory_records_are_not() {
+        use std::io::Write;
+        let bytes = zip::ZipWriter::new(Cursor::new(Vec::new()))
+            .finish()
+            .unwrap()
+            .into_inner();
+        assert!(archive(&bytes).unwrap().is_empty());
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        assert!(archive_file(file, 1024).unwrap().is_empty());
+        for length in 0..bytes.len() {
+            assert!(archive(&bytes[..length]).is_err());
+        }
+        let mut invalid = bytes.clone();
+        invalid[10] = 1;
+        assert!(archive(&invalid).is_err());
+    }
     #[test]
     fn file_and_memory_readers_share_directory_and_member_limits() {
         use std::io::Write;

@@ -190,3 +190,12 @@ reduces `media_view_toolbar` complexity from 19 to 4. Preference tests share the
 browser setup and acknowledgement polling. The aggregate comparison still flags
 pre-existing clones in touched broad files and unchanged Python cycles; it is not
 reported as an unqualified clean whole-tree architecture result.
+
+### Empty ZIP inventories
+
+- [x] Accept ordinary empty ZIPs in the shared allocation-bounded memory/file
+  readers. Empty ZIPs begin with the end-of-directory signature, rather than a
+  local member header. Both forms retain directory, size and count validation.
+- [x] Shared reader tests verify empty memory/file archives, every truncated
+  directory prefix and inconsistent member counts; both ZIP tests pass
+  (`/tmp/phase7-empty-zip-tests.log`).
