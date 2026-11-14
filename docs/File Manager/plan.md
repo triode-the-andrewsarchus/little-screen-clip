@@ -372,7 +372,7 @@ Make folder structure and useful file attributes easier to see.
 
 ### Scope
 
-- Add Columns with a compact complete-path rail and the shared rich List as its final column, retaining the conventional tree/list view.
+- Add Columns with horizontally scrolling folder columns, resizable dividers, a compact bottom path bar and the shared rich List as its final column, retaining the conventional tree/list view.
 - Add configurable inline previews for small folders, prioritizing direct children and using spare capacity for at most three progressively smaller inline layers. Folders open through square entry targets.
 - Bound automatic expansion depth, concurrent reads, and total visible items; never recursively expand without limits.
 - Extend search scope to the inline-expanded contents through the same location model.
@@ -614,6 +614,6 @@ Phase 3 is accepted and committed as `278091e`. Phase 4 is complete after a curr
 Current active milestone: [Phase 7](phase7.md). Prioritize inline folder/archive
 previews, bounded nested expansion and search integration, meaningful metadata
 groups/headers/sorting, remembered folder views with explicit inheritance, and
-Miller columns with an adjacent preview. Automatic media-view selection is
+Miller columns with a shared rich List in the final column. Automatic media-view selection is
 excluded from the current authorized milestone. Additional format support does
 not hold Phase 4 or Phase 6 open.

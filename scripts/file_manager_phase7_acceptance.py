@@ -36,7 +36,7 @@ def fixtures(root):
 
 def exercise(session, root):
     session.observe("initial", ["a-small", "b-large"])
-    session.click(730, 160)
+    session.click(600, 160)  # Shelf toggle observed in the browser toolbar.
     session.observe("strips", ["a-small", "Inside folder", "Open"])
     # A folder's entry square occupies the same 64px area as its direct cards.
     _, y = session.word("strips", "a-small", minimum_y=210)
@@ -58,11 +58,11 @@ def exercise(session, root):
     session.key("Up", "alt")
     session.observe("member-return", ["a-small", "c-package.zip"])
     session.click(176, 160)
-    session.observe("columns", ["Path", "a-small", "c-package.zip"])
+    session.observe("columns", ["a-small", "c-package.zip"])
     session.address(root / "a-small/nested")
-    session.observe("deep-columns", ["Path", "a-small", "nested", "deep.txt"])
+    session.observe("deep-columns", ["a-small", "nested", "deep.txt"])
     resize(session, 760, 700)
-    session.observe("narrow-columns", ["Path", "a-small", "nested", "deep.txt"])
+    session.observe("narrow-columns", ["a-small", "nested", "deep.txt"])
     resize(session, 1120, 760)
     session.address(root)
     session.observe("columns-root", ["c-package.zip"])
@@ -70,7 +70,7 @@ def exercise(session, root):
     session.key("Home")
     session.key("c")
     session.key("Return")
-    session.observe("archive-columns", ["Path", "Browsing compressed archive", "assets"])
+    session.observe("archive-columns", ["Browsing compressed archive", "assets"])
     session.key("Up", "alt")
     session.observe("columns-archive-parent", ["c-package.zip", "a-small"])
     session.key("q", "ctrl")
@@ -81,4 +81,4 @@ if __name__ == "__main__":
     output, root = media_fixture_directory(args)
     fixtures(root)
     raise SystemExit(run_application_acceptance(args, output, root, exercise,
-        "Square folder activation, complete path rail, shared rich List column and persistent compressed archive status"))
+        "Square folder activation, scrollable folder chain, shared rich List column and persistent compressed archive status"))

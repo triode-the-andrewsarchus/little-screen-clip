@@ -4,20 +4,61 @@ use super::*;
 use std::path::Path;
 
 const WIDTH: f32 = 230.0;
-const RAIL: f32 = 116.0;
+const DIVIDER: f32 = 6.0;
+mod path_bar;
 
-// Every ancestor remains in the compact path rail. The nearest folder also
-// exposes siblings when the viewport can afford a full navigation column.
-fn parents(path: &Path, width: f32) -> Vec<&Path> {
-    if width >= 760.0 {
-        path.parent().into_iter().collect()
-    } else {
-        Vec::new()
+// Ancestors remain real columns; horizontal scrolling changes visibility, not
+// the folder chain. Archive labels resolve back to the same held snapshots.
+fn parents(path: &Path) -> Vec<&Path> {
+    let mut route: Vec<_> = path.ancestors().skip(1).collect();
+    route.reverse();
+    route
+}
+fn column_width(ui: &Ui, path: &Path, default: f32) -> f32 {
+    ui.ctx()
+        .data(|data| data.get_temp::<f32>(Id::new(("miller-column-width", path))))
+        .unwrap_or(default)
+}
+fn divider(ui: &mut Ui, path: &Path, width: f32, height: f32, colors: WorkbenchColors) {
+    let (rect, _) = ui.allocate_exact_size(vec2(DIVIDER, height), Sense::hover());
+    // Directory loads and preview widgets change automatic widget IDs. Keep
+    // the active resize gesture attached to its folder across those frames.
+    let response = ui.interact(
+        rect,
+        Id::new(("miller-divider", path)),
+        Sense::click_and_drag(),
+    );
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        .on_hover_text("Drag to resize column; double-click to reset width");
+    let id = Id::new(("miller-column-width", path));
+    if response.double_clicked() {
+        ui.ctx().data_mut(|data| data.remove::<f32>(id));
+    } else if response.dragged() {
+        let resized = (width + response.drag_delta().x).clamp(160.0, 960.0);
+        ui.ctx().data_mut(|data| data.insert_temp(id, resized));
     }
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        egui::Stroke::new(
+            if response.hovered() || response.dragged() {
+                2.0_f32
+            } else {
+                1.0_f32
+            },
+            if response.hovered() || response.dragged() {
+                colors.accent
+            } else {
+                colors.text_secondary.gamma_multiply(0.3)
+            },
+        ),
+    );
 }
 
 fn heading(ui: &mut Ui, path: &Path) {
-    ui.add(
+    ui.add_sized(
+        vec2(ui.available_width(), ROW_HEIGHT),
         egui::Label::new(
             path.file_name()
                 .unwrap_or(path.as_os_str())
@@ -52,33 +93,54 @@ fn row(ui: &mut Ui, entry: &Entry, selected: bool, colors: WorkbenchColors) -> e
         Rect::from_min_size(rect.min + vec2(4.0, 6.0), vec2(16.0, 16.0)),
         colors.text_secondary,
     );
-    painter.text(
-        rect.min + vec2(26.0, 6.0),
-        egui::Align2::LEFT_TOP,
+    paint_text(
+        ui,
+        rect,
+        26.0,
+        rect.width() - 48.0,
         &entry.name,
-        FontId::proportional(13.0),
         colors.text_primary,
     );
+    if entry.directory || super::super::container_preview::inventory::archive(&entry.path) {
+        painter.text(
+            rect.right_center() - vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            "›",
+            FontId::proportional(18.0),
+            colors.text_secondary,
+        );
+    }
     response.on_hover_text(display_path(&entry.path))
 }
 
-fn panel<R>(
-    ui: &mut Ui,
-    width: f32,
-    height: f32,
-    content: impl FnOnce(&mut Ui) -> R,
-) -> egui::InnerResponse<R> {
-    ui.allocate_ui_with_layout(
-        vec2(width, height),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-            content(ui)
-        },
-    )
-}
-
 impl FileManager {
+    // Both kinds of column share clipping, allocation and background drops.
+    fn column_panel<R>(
+        &mut self,
+        ui: &mut Ui,
+        path: &Path,
+        width: f32,
+        height: f32,
+        content: impl FnOnce(&mut Self, &mut Ui) -> R,
+    ) -> egui::InnerResponse<R> {
+        let panel = ui.allocate_ui_with_layout(
+            vec2(width, height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_size(vec2(width, height));
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                content(self, ui)
+            },
+        );
+        if ui.is_enabled() {
+            self.drop_targets.push((
+                panel.response.rect.intersect(ui.clip_rect()),
+                path.to_path_buf(),
+            ));
+        }
+        panel
+    }
+
     pub(super) fn column_shortcuts(&mut self, ctx: &egui::Context) {
         if self.view == super::super::BrowserView::Columns {
             if key(ctx, Modifiers::NONE, Key::ArrowLeft) {
@@ -123,95 +185,96 @@ impl FileManager {
         palette: &AppPalette,
     ) {
         let current = self.path().to_path_buf();
-        let viewport = ui.available_size();
-        let viewport_id = ui.id().with("miller-viewport");
-        let resized = ui.ctx().data_mut(|data| {
-            let changed = data
-                .get_temp::<egui::Vec2>(viewport_id)
-                .is_some_and(|old| old != viewport);
-            data.insert_temp(viewport_id, viewport);
-            changed
-        });
-        self.reveal_selection |= resized;
-        let mut navigation = None;
         let logical = self
             .archives
             .label(&current)
             .unwrap_or_else(|| current.clone());
-        let branch = self
-            .archive_context()
-            .filter(|snapshot| snapshot.root == current)
-            .map_or_else(
-                || current.clone(),
-                |snapshot| snapshot.source.path().to_path_buf(),
-            );
-        let route = parents(&branch, viewport.x);
-        for parent in &route {
-            self.tree
-                .branches
-                .entry(parent.to_path_buf())
-                .or_default()
-                .expanded = true;
-        }
+        let viewport = ui.available_size();
+        let viewport_id = ui.id().with("miller-viewport");
+        let changed = ui.ctx().data_mut(|data| {
+            let old = data.get_temp::<(PathBuf, egui::Vec2)>(viewport_id);
+            let next = (current.clone(), viewport);
+            data.insert_temp(viewport_id, next.clone());
+            old != Some(next)
+        });
+        // History owns its saved vertical offset. A window resize can reveal
+        // the active row, but returning through history must not replace it.
+        self.reveal_selection |= changed && !self.restore_scroll;
+        let mut navigation = None;
+        let logical_route = parents(&logical);
+        let route: Vec<_> = logical_route
+            .iter()
+            .map(|path| self.archives.resolve(path))
+            .collect();
+        let widths: Vec<_> = route
+            .iter()
+            .map(|path| column_width(ui, path, WIDTH))
+            .collect();
+        let primary_width = column_width(
+            ui,
+            &current,
+            (viewport.x * 0.6).clamp(320.0, 760.0).min(viewport.x),
+        );
+        let content_width =
+            widths.iter().map(|width| width + DIVIDER).sum::<f32>() + primary_width + DIVIDER;
         let restore = self.restore_scroll;
-        ui.horizontal_top(|ui| {
-            panel(ui, RAIL, viewport.y, |ui| {
-                ui.strong("Path");
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_source("column-path")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let mut ancestors: Vec<_> = logical.ancestors().collect();
-                        ancestors.reverse();
-                        for path in ancestors {
-                            let selected = path == logical;
-                            let label = path
-                                .file_name()
-                                .unwrap_or(path.as_os_str())
-                                .to_string_lossy();
-                            let response = ui
-                                .add_sized(
-                                    [ui.available_width(), 32.0],
-                                    egui::SelectableLabel::new(
-                                        selected,
-                                        egui::RichText::new(label).size(12.0),
-                                    ),
-                                )
-                                .on_hover_text(display_path(path));
-                            if response.clicked() && !selected {
-                                navigation = Some((path.to_path_buf(), true));
+        let height = (viewport.y - 30.0).max(0.0);
+        let mut area = egui::ScrollArea::horizontal()
+            .id_source("miller-columns")
+            .max_height(height)
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+        if changed || restore {
+            area = area.horizontal_scroll_offset((content_width - viewport.x).max(0.0));
+        }
+        area.show_viewport(ui, |ui, viewport| {
+            ui.set_min_width(content_width);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal_top(|ui| {
+                for (index, (parent, width)) in route.iter().zip(&widths).enumerate() {
+                    ui.push_id(parent, |ui| {
+                        let selected = logical_route.get(index + 1).copied().unwrap_or(&logical);
+                        let selected = parent.join(selected.file_name().unwrap_or_default());
+                        self.column_panel(ui, parent, *width, viewport.height(), |browser, ui| {
+                            if let Some(target) = browser.column_ancestor(
+                                ui,
+                                parent,
+                                &selected,
+                                restore || changed,
+                                colors,
+                            ) {
+                                navigation = Some(target);
                             }
-                        }
+                        });
                     });
-            });
-            ui.separator();
-            for parent in route {
-                ui.push_id(parent, |ui| {
-                    let column = panel(ui, WIDTH, viewport.y, |ui| {
-                        if let Some(target) =
-                            self.column_ancestor(ui, parent, &branch, restore, colors)
-                        {
-                            navigation = Some(target);
-                        }
-                    });
-                    if ui.is_enabled() {
-                        self.drop_targets.push((
-                            column.response.rect.intersect(ui.clip_rect()),
-                            parent.to_path_buf(),
-                        ));
-                    }
+                    divider(ui, parent, *width, viewport.height(), colors);
+                }
+                // Keep the shared rich List as the last column, rather than a
+                // second preview pane with different readers and interactions.
+                ui.push_id("miller-current-column", |ui| {
+                    self.column_panel(
+                        ui,
+                        &current,
+                        primary_width,
+                        viewport.height(),
+                        |browser, ui| {
+                            if ui.clip_rect().intersects(ui.max_rect()) {
+                                browser.list_ui(ui, colors, palette);
+                            } else {
+                                browser.previews.retain(&Default::default());
+                                browser.music_previews.retain(&Default::default());
+                                browser.video_previews.clear();
+                                browser.containers.retire();
+                            }
+                        },
+                    )
                 });
-                ui.separator();
-            }
-            // The final column is the ordinary rich List, including its bounded
-            // preview jobs, selection, scrolling, context actions and exports.
-            ui.push_id("miller-current-column", |ui| {
-                panel(ui, ui.available_width().max(0.0), viewport.y, |ui| {
-                    self.list_ui(ui, colors, palette);
-                });
+                divider(ui, &current, primary_width, viewport.height(), colors);
             });
         });
+        if let Some(path) = self.column_path_bar(ui, colors) {
+            navigation = Some((path, true));
+        }
         if let Some((path, directory)) = navigation {
             if !directory && super::super::container_preview::inventory::archive(&path) {
                 self.open_archive(path);
@@ -230,14 +293,28 @@ impl FileManager {
     }
 
     fn column_ancestor(
-        &self,
+        &mut self,
         ui: &mut Ui,
         parent: &Path,
         current: &Path,
         restore: bool,
         colors: WorkbenchColors,
     ) -> Option<(PathBuf, bool)> {
-        heading(ui, parent);
+        if !ui.clip_rect().intersects(ui.max_rect()) {
+            return None;
+        }
+        self.tree
+            .branches
+            .entry(parent.to_path_buf())
+            .or_default()
+            .expanded = true;
+        heading(
+            ui,
+            &self
+                .archives
+                .label(parent)
+                .unwrap_or_else(|| parent.to_path_buf()),
+        );
         let branch = self.tree.branches.get(parent);
         let Some(directory) = branch.and_then(|branch| branch.directory.as_ref()) else {
             ui.label(
@@ -290,13 +367,74 @@ impl FileManager {
 mod tests {
     use super::*;
     #[test]
-    fn nearby_column_is_optional_but_path_rail_can_represent_every_ancestor() {
-        assert_eq!(
-            parents(Path::new("/a/b/c/d"), 1200.0),
-            [Path::new("/a/b/c")]
+    fn divider_drag_resizes_inside_horizontal_scroll_area() {
+        let ctx = egui::Context::default();
+        let path = Path::new("/parent");
+        let mut center = pos2(0.0, 0.0);
+        for events in [
+            vec![],
+            vec![
+                egui::Event::PointerMoved(pos2(110.0, 50.0)),
+                egui::Event::PointerButton {
+                    pos: pos2(110.0, 50.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerMoved(pos2(150.0, 50.0))],
+            vec![egui::Event::PointerMoved(pos2(190.0, 50.0))],
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 220.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::horizontal()
+                            .horizontal_scroll_offset(200.0)
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.horizontal_top(|ui| {
+                                    let width = column_width(ui, path, 300.0);
+                                    ui.allocate_space(vec2(width, 160.0));
+                                    center = ui.cursor().min + vec2(3.0, 40.0);
+                                    divider(
+                                        ui,
+                                        path,
+                                        width,
+                                        160.0,
+                                        WorkbenchColors::from_palette(&AppPalette::default()),
+                                    );
+                                    ui.allocate_space(vec2(300.0, 160.0));
+                                });
+                            });
+                    });
+                },
+            );
+        }
+        assert!(
+            ctx.data(|d| d.get_temp::<f32>(Id::new(("miller-column-width", path))))
+                .is_some_and(|w| w > 340.0),
+            "divider at {center:?}, dragged={:?}",
+            ctx.dragged_id()
         );
-        assert!(parents(Path::new("/a/b/c/d"), 700.0).is_empty());
-        assert!(parents(Path::new("/"), 1200.0).is_empty());
+    }
+
+    #[test]
+    fn parent_columns_retain_the_complete_ordered_chain() {
+        assert_eq!(
+            parents(Path::new("/a/b/c/d")),
+            [
+                Path::new("/"),
+                Path::new("/a"),
+                Path::new("/a/b"),
+                Path::new("/a/b/c")
+            ]
+        );
+        assert!(parents(Path::new("/")).is_empty());
     }
 
     fn long_listing() -> (tempfile::TempDir, FileManager, PathBuf) {
@@ -328,7 +466,7 @@ mod tests {
 
     #[test]
     fn column_selection_and_parent_route_reveal_include_virtual_row_spacing() {
-        let (root, browser, target) = long_listing();
+        let (root, mut browser, target) = long_listing();
         for spacing in [0.0, 6.0, 12.0] {
             {
                 let ctx = egui::Context::default();

@@ -15,12 +15,49 @@ checkpoints below. Current implementation and acceptance cover:
 - [x] Reserve strip space for every direct child first. Use only spare space for
   in-line subfolder contents, progressively smaller, at most three preview layers.
   Keep reads/cache/entries bounded and expanded-search/selection provenance valid.
-- [x] Keep the complete navigation path reachable in Columns without retaining
-  unlimited full-width columns. Reuse the shared List renderer in the rightmost
+- [x] Keep the complete navigation path reachable in horizontally scrolling Miller
+  columns and a compact bottom path bar. Reuse the shared List renderer in the rightmost
   column; remove the bespoke adjacent preview pane.
 - [x] Give archives a distinct zipped-folder icon and navigate decompressed
   contents through ordinary List/Columns presentation. Keep archive origin and
   lifecycle explicit, with a persistent bottom-bar compressed-archive warning.
+
+### Miller column review correction
+
+- [x] Replace the vertical full-path rail with conventional horizontally scrolling
+  folder columns. Keep older ancestors in the chain; reveal the current column
+  on navigation and resize. A single-line bottom path bar navigates ancestors,
+  exposes older components through overflow and offers Copy path.
+- [x] Drag column dividers to resize; double-click resets the default width.
+  Highlight the selected folder route and mark folders/archives with chevrons.
+- [x] Keep current-folder rich previews, source guards, archive logical paths,
+  ordinary keyboard/history navigation and background drop targets shared.
+  Offscreen columns skip rendering/read admission; hidden rich previews retire.
+- [x] Preserve history's saved vertical scroll offset instead of forcing a
+  selected-row reveal when returning to a folder.
+
+Verification: 951 file-manager tests pass, six ignored; strict affected-crate
+all-target Clippy and the final debug build pass without warnings. Pointer-event
+regression covers resizing inside horizontal scrolling. Native dark evidence:
+`/tmp/finder-columns-dark-05/report.json` (drag/reset, retained ancestors,
+keyboard/history, breadcrumb navigation and window resizing). Native light and
+archive evidence: `/tmp/finder-columns-archives-light-01/report.json`.
+
+Architecture comparison against `before-finder-style-columns`: duplication
+remains 7.3%, clone groups 4,281, dependency cycles 143, average complexity 3.44
+and maximum 274. Shared panel allocation/clipping/drop registration removes
+repeated handling; no affected-code hotspot regression remains. The comparator's
+aggregate regression label comes from reordered members of unchanged Python
+cycles and changing centrality scores in untouched acceptance helpers; review
+confirmed no new dependency edges in this change. Existing directory jobs,
+archive ownership and List preview caches are reused; no new dependency or
+content cache was added.
+
+Design references: Apple's [column view resizing](https://support.apple.com/my-mm/guide/mac-help/mchlp1745/mac)
+and [bottom path bar](https://support.apple.com/en-in/guide/mac-help/mchlp1774/27/mac/27),
+plus KDE's [Miller column implementation notes](https://blogs.kde.org/2026/11/08/dolphin-gets-a-columns-view-again/).
+The earlier rail-based screenshots below are historical verification, superseded
+by this review correction.
 
 ### Review verification
 
@@ -36,9 +73,11 @@ checkpoints below. Current implementation and acceptance cover:
   capacity is reserved first; complete nested groups must fit spare capacity.
   Targeted container tests pass (36); complete file-manager tests passed
   939 with six ignored before the final review integration.
-- Columns now uses a compact full ancestor rail, an optional nearby sibling
-  column and the shared rich List. The old separate preview/pane formatter is
-  removed. Native review caught narrow-name/count crowding; the count now yields
+- Columns uses a horizontally scrolling chain of folder listings, draggable
+  dividers and a one-line bottom path bar with overflow for older ancestors.
+  Navigation reveals the current column; older columns remain reachable by
+  scrolling. The final column uses the shared rich List. The vertical path rail
+  and old separate preview/pane formatter are removed. Native review caught narrow-name/count crowding; the count now yields
   space when the name column is narrow.
 - Archive browsing uses managed temporary workspaces and the existing validated
   ZIP/TAR/compressed-TAR readers. Bounds: 4,096 members, 32 path levels, 512 MiB
@@ -158,8 +197,8 @@ checkpoints below. Current implementation and acceptance cover:
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
 - [x] Search `here` includes displayed ordinary descendants through the
   existing scope model, with accurate provenance, coverage and file actions.
-- [x] Columns retains the complete path in a compact rail, nearby siblings and
-  a shared rich List in the final column. Navigation/history and mixed files
+- [x] Columns retains the complete folder chain through horizontal scrolling,
+  resizable dividers and a bottom breadcrumb bar, with a shared rich List in the final column. Navigation/history and mixed files
   retain their ordinary browser owners; no separate preview pane remains.
 - [x] Persist per-folder view overrides with explicit parent inheritance and a
   way to clear overrides. Browsing creates no sidecars in user folders.
