@@ -12,6 +12,24 @@ mod container;
 mod render;
 pub use render::render;
 
+pub(super) fn has_container_prefix(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x1f, 0x8b])
+        || bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(&[0xef, 0xbb, 0xbf])
+        || bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<')
+}
+
+pub(super) fn has_signature(
+    input: &mut (impl Read + Seek),
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
+    let (bytes, _) = container::xml(input, cancel)?;
+    Ok(
+        crate::xml_content::root(&bytes[..bytes.len().min(64 * 1024)])
+            .is_some_and(|root| root.name().as_ref() == b"xournal"),
+    )
+}
+
 /// Page geometry in 72-dpi document coordinates, preserving authored order.
 #[derive(Debug)]
 pub struct Page {

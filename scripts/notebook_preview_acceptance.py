@@ -38,11 +38,13 @@ def page_columns(path, y):
 
 
 
-def observe_page(session, name, expected):
+def observe_page(session, name, expected, rendered=None):
     session.observe(name, expected, timeout_seconds=45)
     def painted():
         path = session.output / f"{name}.png"
         session.capture_text(name, path, expected)
+        if rendered is not None:
+            return rendered(path)
         with Image.open(path).convert("RGB") as image:
             canvas = image.crop((380, 242, 1165, 712))
             paper = [(x, y) for y in range(canvas.height) for x in range(canvas.width)

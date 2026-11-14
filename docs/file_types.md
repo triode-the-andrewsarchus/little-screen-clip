@@ -700,7 +700,7 @@
     - [x] `.note` — Supernote X/X2; native stored-layer ink and PNG templates, bounded page strips and hover, little-screen artwork, and a read-only paged viewer. Real fixtures qualify 20220011/20230015/20260016, landscape orientation and current N5 ink; unsupported structure/version errors remain explicit.
       - [ ] Original ASA decoder qualification with a real licensed fixture
       - [ ] Native TOTALPATH vector strokes and text recognizer metadata
-    - [ ] `.xopp`, `.xoj` — Xournal++ handwritten notebook (gzipped XML vector strokes, pen pressure/colors, page layers, text annotations, and embedded/referenced PDF backgrounds)
+    - [x] `.xopp`, `.xoj` — Read-only Xournal/Xournal++ notebooks: bounded plain/gzipped XML and ZIP packages, pressure/color strokes, layers, transformed text/images, paper styles, and guarded local/embedded PDF backgrounds. Rendered list strips, little-screen previews and paged viewing; text layout approximates Pango and missing backgrounds report errors.
     - [ ] `.mark`
     - [ ] `.rm`
     - [ ] `.lines`

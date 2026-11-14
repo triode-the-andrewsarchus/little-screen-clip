@@ -70,6 +70,11 @@ pub fn render_page(
     Ok((png, size.width as u32, size.height as u32))
 }
 
+pub(super) fn identify(path: &Path, cancel: &AtomicBool) -> Result<bool, String> {
+    serde_json::from_slice(&request(path, "identify", 0, 0, cancel)?)
+        .map_err(|error| format!("Invalid notebook identification response: {error}"))
+}
+
 fn request(
     path: &Path,
     mode: &str,
@@ -96,10 +101,10 @@ fn request(
         .resource_limit(rustix::process::Resource::As, 768 * 1024 * 1024)
         .resource_limit(rustix::process::Resource::Cpu, 15)
         .resource_limit(rustix::process::Resource::Fsize, MAX_OUTPUT as u64)
-        .max_output_bytes(if mode == "info" {
-            256 * 1024
-        } else {
+        .max_output_bytes(if mode == "page" {
             MAX_OUTPUT
+        } else {
+            256 * 1024
         })
         .own_process_group()
         .die_with_parent()
@@ -170,36 +175,74 @@ fn prepare(input: &mut File, mode: &str, page: usize, edge: u32) -> Result<Vec<u
     input
         .seek(SeekFrom::Start(0))
         .map_err(|error| error.to_string())?;
-    let mut header = [0; 24];
-    input
-        .read_exact(&mut header)
+    let mut header = Vec::with_capacity(super::HEADER_BYTES);
+    Read::by_ref(input)
+        .take(super::HEADER_BYTES as u64)
+        .read_to_end(&mut header)
         .map_err(|error| error.to_string())?;
-    input
-        .seek(SeekFrom::Start(0))
-        .map_err(|error| error.to_string())?;
-    if !super::supernote::has_signature(&header) {
-        return Err("Unrecognized notebook header".into());
-    }
-    match mode {
-        "info" if page == 0 && edge == 0 => {
-            let document = super::supernote::inspect(input)?;
-            let info = Info {
-                format: "Supernote".into(),
-                pages: document
-                    .pages
-                    .into_iter()
-                    .map(|page| PageSize {
-                        width: page.width,
-                        height: page.height,
-                    })
-                    .collect(),
-            };
-            serde_json::to_vec(&info).map_err(|error| error.to_string())
+    input.rewind().map_err(|error| error.to_string())?;
+    let supernote = super::supernote::has_signature(&header);
+    let candidate = super::xournal::has_container_prefix(&header);
+    match (mode, page, edge) {
+        ("identify", 0, 0) => {
+            let identified = supernote
+                || candidate && super::xournal::has_signature(input, &AtomicBool::new(false))?;
+            serde_json::to_vec(&identified).map_err(|error| error.to_string())
         }
-        "page" if (1..=4096).contains(&page) && (1..=4096).contains(&edge) => {
-            super::supernote::render(input, page, edge, &AtomicBool::new(false))
-                .map(|result| result.0)
+        _ if !supernote && !candidate => Err("Unrecognized notebook header".into()),
+        ("info", 0, 0) => {
+            serde_json::to_vec(&prepare_info(input, supernote)?).map_err(|error| error.to_string())
+        }
+        ("page", 1..=4096, 1..=4096) => {
+            prepare_page(input, supernote, page, edge).map(|result| result.0)
         }
         _ => Err("Invalid notebook helper operation".into()),
+    }
+}
+
+fn prepare_info(input: &mut File, supernote: bool) -> Result<Info, String> {
+    if supernote {
+        let document = super::supernote::inspect(input)?;
+        Ok(Info {
+            format: "Supernote".into(),
+            pages: document
+                .pages
+                .into_iter()
+                .map(|page| PageSize {
+                    width: page.width,
+                    height: page.height,
+                })
+                .collect(),
+        })
+    } else {
+        let document = super::xournal::inspect(input, &AtomicBool::new(false))?;
+        Ok(Info {
+            format: "Xournal".into(),
+            pages: document
+                .pages
+                .into_iter()
+                .map(|page| PageSize {
+                    width: page.width.ceil() as u32,
+                    height: page.height.ceil() as u32,
+                })
+                .collect(),
+        })
+    }
+}
+
+fn prepare_page(
+    input: &mut File,
+    supernote: bool,
+    page: usize,
+    edge: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let cancel = AtomicBool::new(false);
+    if supernote {
+        super::supernote::render(input, page, edge, &cancel)
+    } else {
+        let source = crate::file_source::FileSource::capture_file(input)?;
+        let result = super::xournal::render(input, source.path(), page, edge, &cancel)?;
+        source.check_file(input)?;
+        Ok(result)
     }
 }

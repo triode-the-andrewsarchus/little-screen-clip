@@ -251,7 +251,7 @@ report explicit compatibility failures. Xournal and reMarkable remain required.
   authored page fragments/order, malformed roots/versions/dimensions/entities,
   nesting, cancellation, truncated gzip, expansion and ZIP member path/size
   budgets. Strict core Clippy passes. Rendering and UI dispatch remain pending.
-- [ ] Render actual geometry, text/images and guarded backgrounds; compare with
+- [x] Render actual geometry, text/images and guarded backgrounds; compare with
   canonical exports before enabling the three presentation routes.
 
 References inspected directly: [upstream XML loader](https://github.com/xournalpp/xournalpp/blob/4d6810b3760c7b3f90c6a3271d6a5623cfb5481f/src/core/control/xojfile/XmlParser.cpp),
@@ -281,5 +281,32 @@ References inspected directly: [upstream XML loader](https://github.com/xournalp
   geometry and missing/remote-resource rejection. The scoped renderer has no
   clone groups/cycles and maximum function complexity 14 after separating
   paper configuration, resource resolution, stroke style and text layout.
-- [ ] Connect Xournal to the shared worker dispatch, all three preview routes,
+- [x] Connect Xournal to the shared worker dispatch, all three preview routes,
   clipboard rehydration and native UI acceptance before calling it supported.
+
+
+## Xournal integration validation
+
+The shared notebook worker now qualifies Xournal XML roots inside bounded plain,
+gzip and ZIP containers. The existing notebook routes supply list-page strips,
+hover/selected-page handoff, a read-only paged studio, and little-screen image
+payloads with clipboard rehydration. Unrelated XML and gzip content are rejected;
+protected and missing backgrounds produce explicit errors. Header qualification
+also covers indented plain XML.
+
+Validation: twelve notebook backend tests, the real worker/clipboard harness,
+and strict core all-target Clippy pass. Native isolated desktop acceptance covers
+actual rendered artwork, eleven-page strips and last-page opening, legacy ink,
+ZIP images/PDFs, embedded LaTeX, missing-background diagnostics and unchanged
+source hashes. The acceptance script reuses the existing private compositor
+harness and page observer; it does not access the user's desktop or clipboard.
+
+Architecture comparison retains maximum workspace complexity and slightly reduces
+duplication overall. Reported cycles/chokepoints are in untouched Python/vendor
+files. The small duplicate matches are existing SVG dimension vocabulary against
+an independent vendored renderer and explicit notebook acceptance gestures/setup;
+the application shares its XML root reader and existing notebook presentation
+rather than introducing another cache, viewer or renderer dispatch.
+
+This is a merge checkpoint for Supernote and Xournal. reMarkable support and the
+final whole-goal audit remain pending.
