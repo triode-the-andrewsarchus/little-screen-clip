@@ -6,6 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod archive;
+mod legacy;
 
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 65_536;
@@ -17,18 +18,35 @@ pub fn has_signature(bytes: &[u8]) -> bool {
     bytes.starts_with(b"reMarkable .lines file, version=")
 }
 
-/// Parses a v6 page with byte, block and geometry budgets.
+/// Parses a legacy or v6 page with byte, block and geometry budgets.
 ///
 /// # Errors
 /// Rejects cancellation, unsupported versions, malformed data and preview limits.
 /// The caller must retain and validate the guarded source identity.
-pub fn parse_v6(bytes: &[u8], cancel: &AtomicBool) -> Result<remarkable_rm::Page, String> {
+pub fn parse(bytes: &[u8], cancel: &AtomicBool) -> Result<remarkable_rm::Page, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("Notebook preview cancelled".into());
     }
     if bytes.len() > MAX_PAGE_BYTES {
         return Err("reMarkable page exceeds the 16 MiB preview limit".into());
     }
+    let version = std::str::from_utf8(bytes.get(..43).ok_or("Truncated reMarkable header")?)
+        .map_err(|_| "Invalid reMarkable header")?
+        .strip_prefix("reMarkable .lines file, version=")
+        .ok_or("Unrecognized reMarkable page header")?
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "Invalid reMarkable page version")?;
+    let page = match version {
+        3..=5 => legacy::parse(bytes)?,
+        6 => parse_scene(bytes, cancel)?,
+        _ => return Err(format!("Unsupported reMarkable page version {version}")),
+    };
+    validate_geometry(&page)?;
+    Ok(page)
+}
+
+fn parse_scene(bytes: &[u8], cancel: &AtomicBool) -> Result<remarkable_rm::Page, String> {
     let mut scene = ScenePreflight::default();
     for (index, block) in remarkable_rm::blocks::iter_blocks(bytes)
         .map_err(|error| error.to_string())?
@@ -44,9 +62,7 @@ pub fn parse_v6(bytes: &[u8], cancel: &AtomicBool) -> Result<remarkable_rm::Page
         }
     }
     scene.validate()?;
-    let page = remarkable_rm::parse_page(bytes).map_err(|error| error.to_string())?;
-    validate_geometry(&page)?;
-    Ok(page)
+    remarkable_rm::parse_page(bytes).map_err(|error| error.to_string())
 }
 
 /// Saved tombstones normally refer to records already absent from the file.
@@ -187,22 +203,18 @@ fn coordinate(value: f64) -> bool {
     value.is_finite() && value.abs() <= 1_000_000.0
 }
 
-/// Renders a raw v6 page's real ink and text within a requested longest edge.
+/// Renders a raw page's real ink and text within a requested longest edge.
 ///
 /// No template or PDF companion is inferred from a raw page. Containers must
 /// resolve those assets separately before promising a complete notebook view.
 ///
 /// # Errors
 /// Returns parser, geometry, cancellation, pixel-budget or PNG encoding errors.
-pub fn render_v6(
-    bytes: &[u8],
-    edge: u32,
-    cancel: &AtomicBool,
-) -> Result<(Vec<u8>, u32, u32), String> {
+pub fn render(bytes: &[u8], edge: u32, cancel: &AtomicBool) -> Result<(Vec<u8>, u32, u32), String> {
     if !(1..=4096).contains(&edge) {
         return Err("reMarkable preview edge must be in 1..=4096".into());
     }
-    let page = parse_v6(bytes, cancel)?;
+    let page = parse(bytes, cancel)?;
     let size = remarkable_rm::RenderOptions::for_page(&page);
     let scale = f64::from(edge) / f64::from(size.width.max(size.height));
     let width = (f64::from(size.width) * scale).round().max(1.0) as u32;
@@ -236,7 +248,7 @@ mod tests {
                 }
                 let bytes = std::fs::read(&path).unwrap();
                 assert!(has_signature(&bytes));
-                let (png, width, height) = render_v6(&bytes, 320, &cancel)
+                let (png, width, height) = render(&bytes, 320, &cancel)
                     .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
                 assert!(width <= 320 && height <= 320);
                 assert!(
@@ -252,6 +264,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn real_and_generated_legacy_pages_keep_layers_geometry_and_visible_ink() {
+        let cancel = AtomicBool::new(false);
+        for file in [
+            "legacy-real/test_v5_advent_of_code.rm",
+            "legacy-real/test_v5_math.rm",
+            "legacy-generated/simple.rm",
+            "legacy-generated/multi-layer.rm",
+        ] {
+            let bytes = std::fs::read(corpus().join(file)).unwrap();
+            let page = parse(&bytes, &cancel).unwrap();
+            assert!(!page.layers.is_empty());
+            if file.ends_with("test_v5_advent_of_code.rm") {
+                assert_eq!(page.layers.len(), 1);
+                assert_eq!(page.layers[0].lines.len(), 139);
+            }
+            let generated = file.starts_with("legacy-generated/");
+            let (png, width, height) =
+                render(&bytes, if generated { 1872 } else { 512 }, &cancel).unwrap();
+            let image = image::load_from_memory(&png).unwrap().to_rgb8();
+            assert_eq!(image.dimensions(), (width, height));
+            assert!(
+                image
+                    .pixels()
+                    .filter(|pixel| pixel.0.iter().any(|channel| *channel < 200))
+                    .count()
+                    > if generated { 0 } else { 20 },
+                "{file}"
+            );
+            if let Some(dir) = std::env::var_os("REMARKABLE_REVIEW_DIR") {
+                std::fs::create_dir_all(&dir).unwrap();
+                image
+                    .save(Path::new(&dir).join(format!(
+                        "{}.png",
+                        Path::new(file).file_stem().unwrap().to_string_lossy()
+                    )))
+                    .unwrap();
+            }
+        }
+        let mut bytes = std::fs::read(corpus().join("legacy-generated/simple.rm")).unwrap();
+        let page = parse(&bytes, &cancel).unwrap();
+        let point = page.layers[0].lines[0].points[0];
+        assert_eq!((point.x, point.y), (-602.0, 200.0));
+        assert_eq!((point.speed, point.width, point.pressure), (200, 4, 204));
+        assert!(parse(&bytes[..bytes.len() - 1], &cancel).is_err());
+        // The older layout omits the second reserved stroke-header word.
+        // These are explicit synthetic compatibility probes, not real captures.
+        bytes.drain(67..71);
+        for version in *b"34" {
+            bytes[b"reMarkable .lines file, version=".len()] = version;
+            let page = parse(&bytes, &cancel).unwrap();
+            assert_eq!(page.layers[0].lines[0].points.len(), 3);
+        }
+        bytes[b"reMarkable .lines file, version=".len()] = b'2';
+        assert!(parse(&bytes, &cancel).unwrap_err().contains("version 2"));
+    }
+
     // Image differences are measured against native tablet thumbnails, never
     // snapshots produced by the parser/renderer being qualified.
     #[test]
@@ -259,7 +328,7 @@ mod tests {
         for (name, maximum_error) in [("quicksheets-p2", 20.0), ("quicksheets-p3", 10.0)] {
             let base = corpus().join("tablet-thumbnails");
             let bytes = std::fs::read(base.join(format!("{name}.rm"))).unwrap();
-            let (png, width, height) = render_v6(&bytes, 512, &AtomicBool::new(false)).unwrap();
+            let (png, width, height) = render(&bytes, 512, &AtomicBool::new(false)).unwrap();
             let expected = image::open(base.join(format!("{name}.png")))
                 .unwrap()
                 .to_luma8();
@@ -319,16 +388,16 @@ mod tests {
             "Another author's IDs remain distinct"
         );
         let bytes = std::fs::read(corpus().join("tablet-thumbnails/quicksheets-p3.rm")).unwrap();
-        let mut page = parse_v6(&bytes, &AtomicBool::new(false)).unwrap();
+        let mut page = parse(&bytes, &AtomicBool::new(false)).unwrap();
         page.layers[0].lines[0].points[0].x = f32::NAN;
         assert!(validate_geometry(&page).is_err());
-        assert!(parse_v6(&bytes[..bytes.len() - 1], &AtomicBool::new(false)).is_err());
+        assert!(parse(&bytes[..bytes.len() - 1], &AtomicBool::new(false)).is_err());
         let mut excess = remarkable_rm::blocks::FILE_HEADER.to_vec();
         for _ in 0..=MAX_BLOCKS {
             excess.extend_from_slice(&[0, 0, 0, 0, 0, 1, 1, 0]);
         }
         assert!(
-            parse_v6(&excess, &AtomicBool::new(false))
+            parse(&excess, &AtomicBool::new(false))
                 .unwrap_err()
                 .contains("block preview limit")
         );
@@ -338,12 +407,12 @@ mod tests {
     fn page_budgets_and_header_collisions_fail_explicitly() {
         let cancel = AtomicBool::new(false);
         assert!(!has_signature(b".RMF\0\0\0\0"));
-        assert!(parse_v6(b".RMF\0\0\0\0", &cancel).is_err());
+        assert!(parse(b".RMF\0\0\0\0", &cancel).is_err());
         let bytes = std::fs::read(corpus().join("rmscene/Normal_AB.rm")).unwrap();
-        assert!(render_v6(&bytes, 0, &cancel).is_err());
-        assert!(render_v6(&bytes, 4097, &cancel).is_err());
-        assert!(parse_v6(&bytes, &AtomicBool::new(true)).is_err());
-        assert!(parse_v6(&vec![0; MAX_PAGE_BYTES + 1], &cancel).is_err());
+        assert!(render(&bytes, 0, &cancel).is_err());
+        assert!(render(&bytes, 4097, &cancel).is_err());
+        assert!(parse(&bytes, &AtomicBool::new(true)).is_err());
+        assert!(parse(&vec![0; MAX_PAGE_BYTES + 1], &cancel).is_err());
         let invalid = remarkable_rm::Page {
             paper_size: Some((u32::MAX, 1)),
             ..Default::default()

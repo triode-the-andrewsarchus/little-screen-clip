@@ -141,42 +141,49 @@ fn modern_pages(modern: &Value) -> Result<Vec<Page>, String> {
     }
     let mut pages = Vec::new();
     for record in records {
-        let deleted = register(record, "deleted")?
+        if let Some(page) = modern_page(record)? {
+            pages.push(page);
+        }
+    }
+
+    Ok(pages)
+}
+
+fn modern_page(record: &Value) -> Result<Option<Page>, String> {
+    let deleted = register(record, "deleted")?
+        .map(|value| {
+            value
+                .as_i64()
+                .ok_or("Invalid reMarkable page deletion flag")
+        })
+        .transpose()?
+        .unwrap_or(0);
+    match deleted {
+        0 => {}
+        1 => return Ok(None),
+        _ => return Err("Unsupported reMarkable page deletion flag".into()),
+    }
+
+    let id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("Missing reMarkable page identifier")?;
+    let pdf_page = register(record, "redir")?
+        .map(pdf_reference)
+        .transpose()?
+        .flatten();
+    Ok(Some(Page {
+        id: id.to_owned(),
+        pdf_page,
+        template: register(record, "template")?
             .map(|value| {
                 value
-                    .as_i64()
-                    .ok_or("Invalid reMarkable page deletion flag")
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or("Invalid reMarkable template reference")
             })
-            .transpose()?
-            .unwrap_or(0);
-        match deleted {
-            0 => {}
-            1 => continue,
-            _ => return Err("Unsupported reMarkable page deletion flag".into()),
-        }
-
-        let id = record
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or("Missing reMarkable page identifier")?;
-        let pdf_page = register(record, "redir")?
-            .map(pdf_reference)
-            .transpose()?
-            .flatten();
-        pages.push(Page {
-            id: id.to_owned(),
-            pdf_page,
-            template: register(record, "template")?
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or("Invalid reMarkable template reference")
-                })
-                .transpose()?,
-        });
-    }
-    Ok(pages)
+            .transpose()?,
+    }))
 }
 
 fn legacy_pages(content: &Value, has_pdf: bool) -> Result<Vec<Page>, String> {
@@ -276,7 +283,7 @@ mod tests {
                 &AtomicBool::new(false),
             )
             .unwrap();
-            super::super::parse_v6(&bytes, &AtomicBool::new(false)).unwrap();
+            super::super::parse(&bytes, &AtomicBool::new(false)).unwrap();
         }
     }
 

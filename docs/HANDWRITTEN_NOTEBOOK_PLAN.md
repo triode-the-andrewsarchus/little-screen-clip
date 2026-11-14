@@ -3,8 +3,8 @@
 Active goal: add read-only Supernote `.note`, Xournal++ `.xopp` / legacy Xournal
 `.xoj`, and reMarkable notebook previews, in that priority order, on the branch
 `feat/handwritten-notebook-previews`, merged at the requested checkpoint.
-Integration continues on `feat/notebook-preview-integration`. Work is committed
-in bounded steps.
+Supernote/Xournal integration was merged at `be539806`; remaining reMarkable
+work continues on `feat/remarkable-notebook-previews`, committed in bounded steps.
 
 Completion requires all three presentation routes for every family: rendered
 file-manager list strips (with real page selection), a rendered little-screen
@@ -403,3 +403,33 @@ The corpus remains immutable; runtime output must never replace its references.
   The real archive's two raw annotation members also pass v6 qualification.
   Archive indexing still does not claim rendering of absent template artwork,
   PDF backgrounds or legacy raw ink; those remain explicit next steps.
+
+
+### Legacy page adapter checkpoint
+
+- [x] Use the normal `remarkable_lines = 0.1.3` MIT registry crate for v3–v5
+  decoding. It has no dependencies. Adapt its stroke model into the selected
+  native renderer instead of copying a binary parser or adding a second
+  rasterizer. Preserve layer/point order and colors, normalize the top-left
+  legacy origin to the renderer's top-center origin, and round packed pressure,
+  direction, speed and width units once. Reject invalid float geometry and
+  unsupported selection/erase-all tools explicitly.
+- [x] Qualify the two actual v5 handwriting pages and both generated v5 cases;
+  the Advent of Code page retains its independently specified 139 strokes.
+  Assert exact coordinates and normalized point units from the generated source.
+  v3/v4 are covered by explicitly synthetic older-header/layout probes; real
+  v3/v4 captures remain unavailable, so do not describe them as tablet-qualified.
+  Truncated legacy sources and v2 have explicit errors.
+- [x] Visually inspect a real math-page raster; real legacy files render at strip
+  resolution, while tiny generated strokes are checked at native resolution.
+  This is meaningful visible-ink/geometry coverage, not an independent tablet
+  pixel-fidelity claim for legacy pens. The two independent v6 tablet comparisons
+  remain unchanged and pass.
+- [x] Twenty combined notebook backend tests and strict all-target core Clippy
+  pass. Separate modern-page register policy from collection traversal to keep
+  archive parsing comprehensible; final architecture comparison reports no new
+  notebook complexity/duplication/cycle findings. Unchanged Python cycle-order
+  reporting still labels the global report a regression.
+- [ ] Render complete archive pages with background policy, add practical RMN
+  handling, connect the existing worker and all three UI routes, and verify the
+  final goal. No new file-manager dispatch is enabled at this checkpoint.
