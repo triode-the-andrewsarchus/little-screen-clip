@@ -276,10 +276,13 @@ impl FileManager {
         columns
     }
     fn list_contents(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
+        self.tick_metadata(ui.ctx());
         let columns = self.list_header(ui, colors);
+        let anchor = self.list_anchor();
         if self.containers.poll(ui.ctx()) | self.previews.poll(ui.ctx()) {
             self.reconcile_selection();
             self.rebuild_list_offsets();
+            self.restore_list_anchor(anchor);
         }
         self.music_previews.poll(ui.ctx());
         self.video_previews.poll(ui.ctx());
@@ -351,15 +354,18 @@ impl FileManager {
         };
         let mut group_sort = None;
         let mut hash_priority = Vec::new();
+        let metadata = &self.metadata;
         let search = &self.search;
         let images = &self.search.images;
         let answers = &self.search.answers;
         let mut answer_priority = Vec::new();
         let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
             let family = sort.and_then(|sort| sort.group_at(directory, &self.visible, index));
-            let (rect, clicked) = group_header(ui, rect, family, columns, sort, colors);
-            group_sort = clicked.or(group_sort);
             let entry = &directory.entries[self.visible[index]];
+            let columns = columns.for_entry(sort, entry);
+            previews.columns = columns;
+            let (rect, clicked) = group_header(ui, rect, family, columns, sort, metadata, colors);
+            group_sort = clicked.or(group_sort);
             let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
             let (rect, detail) = search.result_row(ui, rect, entry, colors);
             let (mut response, engaged) =
@@ -367,6 +373,7 @@ impl FileManager {
             if let Some(detail) = detail {
                 response = response.union(detail);
             }
+            metadata.paint_cells(ui, columns, rect, entry, colors);
             hash_priority.push(entry.path.clone());
             images.paint_cell(ui, columns, rect, entry, colors);
             answers.paint_cells(
@@ -411,7 +418,7 @@ impl FileManager {
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         self.list_audio(play);
         if let Some(column) = group_sort {
-            self.sort_by(column);
+            column.apply(self);
             self.focus_list = true;
         }
     }
@@ -436,14 +443,34 @@ impl FileManager {
     }
 }
 
+#[derive(Clone, Copy)]
+enum GroupSort {
+    File(super::super::sorting::Column),
+    Metadata(
+        super::super::sorting::Category,
+        super::super::metadata::Field,
+    ),
+}
+impl GroupSort {
+    fn apply(self, manager: &mut FileManager) {
+        match self {
+            Self::File(column) => manager.sort_by(column),
+            Self::Metadata(family, field) => {
+                manager.metadata.toggle_sort(family, field);
+                manager.finish_sort();
+            }
+        }
+    }
+}
 fn group_header(
     ui: &mut Ui,
     rect: Rect,
     family: Option<super::super::sorting::Category>,
     columns: ListColumns,
     sort: Option<super::super::sorting::Sort>,
+    metadata: &super::super::metadata::Metadata,
     colors: WorkbenchColors,
-) -> (Rect, Option<super::super::sorting::Column>) {
+) -> (Rect, Option<GroupSort>) {
     let Some(family) = family else {
         return (rect, None);
     };
@@ -454,18 +481,29 @@ fn group_header(
     let rect = Rect::from_min_max(rect.min, pos2(rect.right(), content.top()));
     ui.painter().rect_filled(rect, 0.0, colors.recessed);
     let title = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 24.0));
+    let label = if family == super::super::sorting::Category::Audio {
+        format!("{} · {}", family.label(), metadata.status())
+    } else {
+        family.label().into()
+    };
     paint_text(
         ui,
         title,
         8.0,
         title.width() - 16.0,
-        family.label(),
+        &label,
         colors.text_primary,
     );
     let header = Rect::from_min_max(pos2(rect.left(), title.bottom()), rect.max);
     let clicked = ui
         .push_id(("family_header", family), |ui| {
-            columns.sort_header(ui, header, sort, colors)
+            let file = columns
+                .sort_header(ui, header, sort, colors)
+                .map(GroupSort::File);
+            metadata
+                .paint_header(ui, columns, header, family, colors)
+                .map(|field| GroupSort::Metadata(family, field))
+                .or(file)
         })
         .inner;
     (content, clicked)

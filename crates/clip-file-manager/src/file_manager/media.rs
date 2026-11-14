@@ -11,6 +11,7 @@ pub(in crate::file_manager) struct MusicMetadata {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub genre: String,
     pub duration: f32,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,

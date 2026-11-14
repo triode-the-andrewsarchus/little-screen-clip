@@ -360,16 +360,18 @@ fn music_card<'a>(
         rect.min + vec2(left, 0.0),
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
-    let details = metadata.map(|m| {
-        let mut fields: Vec<&str> = [&m.title, &m.artist, &m.album]
-            .into_iter()
-            .map(String::as_str)
-            .filter(|text| !text.is_empty())
-            .collect();
-        let duration = format!("{:.0} s", m.duration);
-        fields.push(&duration);
-        fields.join(" · ")
-    });
+    let details = metadata
+        .filter(|_| columns.is_none_or(|columns| columns.metadata.is_none()))
+        .map(|m| {
+            let mut fields: Vec<&str> = [&m.title, &m.artist, &m.album]
+                .into_iter()
+                .map(String::as_str)
+                .filter(|text| !text.is_empty())
+                .collect();
+            let duration = format!("{:.0} s", m.duration);
+            fields.push(&duration);
+            fields.join(" · ")
+        });
     media_header(ui, text, entry, details, columns, colors);
     if let Some(metadata) = metadata {
         let wave = Rect::from_min_max(

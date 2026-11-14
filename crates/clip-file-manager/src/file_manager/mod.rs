@@ -37,6 +37,7 @@ use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
+mod metadata;
 mod previews;
 mod scene_strip;
 pub(crate) mod search;
@@ -219,6 +220,7 @@ pub(crate) struct FileManager {
     directory: Option<Directory>,
     visible: Vec<usize>,
     sort: sorting::Sort,
+    metadata: metadata::Metadata,
     pending: Option<Request>,
     error: Option<String>,
     failed: Option<(PathBuf, Navigation)>,
@@ -311,6 +313,7 @@ impl FileManager {
             directory: None,
             visible: Vec::new(),
             sort: sorting::Sort::default(),
+            metadata: metadata::Metadata::default(),
             pending: None,
             error: None,
             failed: None,
@@ -415,6 +418,7 @@ impl FileManager {
     }
 
     fn stop_previews(&mut self) {
+        self.metadata.retire();
         self.previews.multisample.clear();
         self.constellation.stop_playback();
         self.constellation.stop_map_audition = false;
@@ -784,6 +788,13 @@ impl FileManager {
             self.search.filter(directory, &mut self.visible);
             self.search.answers.reconcile(directory, &self.visible);
             self.search.answers.sort(directory, &mut self.visible);
+            self.metadata.reconcile(directory, &self.visible);
+            if self
+                .list_sort()
+                .is_some_and(|sort| sort.column == sorting::Column::Type)
+            {
+                self.metadata.order(directory, &mut self.visible);
+            }
             self.search.paginate(&mut self.visible);
         }
         self.reconcile_selection();

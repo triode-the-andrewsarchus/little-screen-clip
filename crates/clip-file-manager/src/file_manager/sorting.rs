@@ -204,8 +204,6 @@ impl FileManager {
                 matches!(column, Column::Modified | Column::Created)
             },
         };
-        self.type_navigation.clear();
-        self.gallery_layout.invalidate_order();
         if let Some(query) = &mut self.search.applied {
             query.sort = Some(super::search::query::Sort {
                 field: match column {
@@ -218,6 +216,11 @@ impl FileManager {
                 descending: self.sort.descending,
             });
         }
+        self.finish_sort();
+    }
+    pub(super) fn finish_sort(&mut self) {
+        self.type_navigation.clear();
+        self.gallery_layout.invalidate_order();
         self.rebuild_visible();
         self.reveal_selection = self.selection_count() > 0;
         if let Some(location) = self.location_mut() {

@@ -444,3 +444,58 @@ unseen files. Reuse their tag parsing for lightweight summaries, add genre, and
 retain those small revision-checked summaries independently of visible waveform
 textures. Keep missing/pending values last in either direction and selected-file
 identity stable as values arrive.
+
+### Audio family metadata columns and sorting
+
+- [x] Give the Audio section Artist, Album, Genre and Duration headers and values.
+  Clicking a metadata header sorts inside that family; clicking again reverses
+  it. Family ordering and conventional sorts remain available. Missing tags,
+  unsupported members, pending values and failures remain last in both directions;
+  equal values preserve the existing natural filename order. Numeric durations
+  sort numerically, not by their display strings. These are session secondary
+  sorts; no new command syntax or persisted search schema is introduced.
+- [x] Reuse the music tag parser, adding genre and passing cancellation into its
+  bounded media probe. Metadata summaries never request waveform, cover or PCM
+  decoding. Keep at most 8,192 small revision-keyed summaries and two pending
+  reads per browser on a shared two-worker/four-queue executor. Queue saturation
+  retries admission; retirement cancels reads and resets scheduling so returning
+  to the view can retry unfinished files. The section reports progress and the
+  summary limit; additional files remain accessible and explicitly unanalyzed.
+- [x] Check ordinary source revisions around reads and retain the existing search
+  PreviewContext checks. Reconcile summaries against current candidates and retire
+  them on path/source-context changes. Known summaries survive ordinary preview
+  retirement; they do not retain audio payloads or textures. Candidate scanning
+  happens on listing reconciliation, rather than scanning the folder every frame.
+  Completed tags paint immediately; active metadata sorts coalesce updates over
+  200 ms. Ordinary metadata completion does not rebuild an unsorted listing.
+- [x] Preserve selected-file identity and the top visible file/within-row offset
+  during background reordering. Share that List anchor mechanism with asynchronous
+  container-height updates. Explicit header sorts use the browser's existing sort
+  completion behavior. Audio headings omit the duplicate tag/title summary when
+  those fields have their own columns; other media views retain their details.
+- [x] Six focused tests cover typed/case-folded values, stable ordering and missing
+  values in both directions, source revision/context invalidation, scroll/selection
+  retention, summary capacity and retirement, and actual genre/album/artist/duration
+  extraction from a tagged WAV with no preview artifacts. Full file-manager library
+  passes 912 tests / 6 ignored (`/tmp/phase7-audio-metadata-all-tests.log`). Strict
+  library/test Clippy, application build, leaf formatting, Python compilation and
+  diff whitespace checks pass.
+- [x] Native dark/light reports pass at
+  `/tmp/phase7-audio-metadata-{dark,light}-03/report.json`: each audio metadata field,
+  both artist/duration directions, absent artist placement, real tagged WAVs and
+  mixed Audio/Images headers. Screenshots were visually reviewed in both themes.
+  The driver explicitly selects List when the existing automatic behavior initially
+  chooses Music; earlier short fixture names were replaced after a dark OCR
+  mismatch despite correct rendered ordering.
+
+Architecture comparison against `before-phase7-audio-metadata` adds no excessive
+complexity function or production clone. Its one added clone is seven lines of
+necessary typed command setup/assertions shared by two native-media tests; no
+extra abstraction is introduced solely to hide that fixture setup. Remaining cycle
+flags reorder unchanged Python members. The cache reuses the shared cancellable
+Task delivery and source guards; explicit sorts share browser sort completion.
+
+The main metadata acceptance item stays open: useful image/video/document fields,
+related ordering and final mixed/narrow-window validation remain required. The
+new scroll anchoring is an initial shared mechanism, not final proof for every
+nested-expansion and layout-change scenario.

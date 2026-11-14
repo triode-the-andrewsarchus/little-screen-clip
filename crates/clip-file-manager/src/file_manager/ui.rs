@@ -820,6 +820,35 @@ impl FileManager {
         scroll
     }
 
+    pub(super) fn list_anchor(&self) -> Option<(PathBuf, f32)> {
+        let scroll = self.location()?.scroll;
+        let row = self
+            .list_offsets
+            .partition_point(|offset| *offset <= scroll)
+            .saturating_sub(1);
+        let entry = self
+            .directory
+            .as_ref()?
+            .entries
+            .get(*self.visible.get(row)?)?;
+        Some((entry.path.clone(), scroll - self.list_offsets[row]))
+    }
+    pub(super) fn restore_list_anchor(&mut self, anchor: Option<(PathBuf, f32)>) {
+        let Some((path, within)) = anchor else { return };
+        let Some(row) = self.visible.iter().position(|index| {
+            self.directory
+                .as_ref()
+                .is_some_and(|directory| directory.entries[*index].path == path)
+        }) else {
+            return;
+        };
+        let offset = self.list_offsets[row]
+            + within.min((self.list_offsets[row + 1] - self.list_offsets[row]).max(0.0));
+        if let Some(location) = self.location_mut() {
+            location.scroll = offset;
+        }
+        self.restore_scroll = true;
+    }
     fn tree_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         ui.heading("Folders");
         ui.separator();
@@ -1129,22 +1158,26 @@ pub(super) fn strip_cells(
 /// Absolute table positions shared by the header and every mixed List row.
 #[derive(Clone, Copy)]
 pub(super) struct ListColumns {
+    left: f32,
     size: f32,
     modified: f32,
     right: f32,
     extra: Option<f32>,
     extra_count: usize,
+    metadata: Option<(f32, f32)>,
 }
 
 impl ListColumns {
     pub(super) fn new(header: Rect) -> Self {
         let name_width = (header.width() - 245.0).max(header.width() * 0.4);
         Self {
+            left: header.left(),
             size: header.left() + name_width,
             modified: header.left() + name_width + 90.0,
             right: header.right(),
             extra: None,
             extra_count: 0,
+            metadata: None,
         }
     }
     pub(super) fn with_extra(mut self) -> Self {
@@ -1159,8 +1192,32 @@ impl ListColumns {
         self.extra_count = count;
         self
     }
+    pub(super) fn for_entry(
+        mut self,
+        sort: Option<super::sorting::Sort>,
+        entry: &super::filesystem::Entry,
+    ) -> Self {
+        if sort.is_some_and(|sort| sort.column == super::sorting::Column::Type)
+            && super::sorting::family(entry) == super::sorting::Category::Audio
+        {
+            let end = self.extra.unwrap_or(self.right);
+            let available = (end - self.left).max(0.0);
+            let left = self.left + (available * 0.4).max(120.0).min(available);
+            self.metadata = Some((left, end));
+        }
+        self
+    }
+    pub(super) fn metadata_cell(self, row: Rect, index: usize) -> Option<Rect> {
+        let (left, right) = self.metadata?;
+        let width = (right - left) / super::metadata::Field::AUDIO.len() as f32;
+        Some(Rect::from_min_max(
+            pos2(left + index as f32 * width, row.top()),
+            pos2(left + (index + 1) as f32 * width, row.top() + ROW_HEIGHT),
+        ))
+    }
     fn name_end(self) -> f32 {
-        self.extra.unwrap_or(self.size)
+        self.metadata
+            .map_or_else(|| self.extra.unwrap_or(self.size), |range| range.0)
     }
     pub(super) fn extra_cell(self, row: Rect) -> Option<Rect> {
         self.extra_cell_at(row, 0)
@@ -1177,6 +1234,9 @@ impl ListColumns {
     }
 
     fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
+        if self.metadata.is_some() && self.extra.is_none() {
+            return;
+        }
         paint_text(ui, row, self.size - row.left(), 85.0, size, color);
         paint_text(
             ui,
@@ -1207,7 +1267,11 @@ impl ListColumns {
             (Column::Name, "Name", header.left() + 64.0, self.name_end()),
             (Column::Size, "Size", self.size, self.modified),
             (Column::Modified, "Modified", self.modified, self.right),
-        ] {
+        ]
+        .into_iter()
+        .filter(|(column, ..)| {
+            self.metadata.is_none() || matches!(column, Column::Type | Column::Name)
+        }) {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
             let response = ui
                 .interact(
