@@ -68,6 +68,12 @@ by this review correction.
 
 ### Review verification
 
+- [x] Clicking in-content type-family sort headers preserves the pixel scroll
+  offset, including audio duration toggles and filename reset. An offscreen
+  selection does not trigger a reveal. The shared List/Columns scroll path is
+  covered by a rendered-scroll regression test. Full file-manager tests pass
+  (953 passed, six ignored), with strict all-target Clippy clean.
+
 - [x] Keep filenames legible in narrow List/Columns rows: optional line/page
   counts yield their horizontal reservation when the name column is narrow.
   Native column inspection and shared List rendering cover this.

@@ -476,6 +476,7 @@ enum GroupSort {
 }
 impl GroupSort {
     fn apply(self, manager: &mut FileManager) {
+        let scroll = manager.location().map_or(0.0, |location| location.scroll);
         match self {
             Self::File(column) => manager.sort_by(column),
             Self::Metadata(family, field) => {
@@ -483,6 +484,12 @@ impl GroupSort {
                 manager.finish_sort();
             }
         }
+        // In-content headers must stay under the pointer while their rows
+        // reorder. Do not jump to the top or reveal an offscreen selection.
+        if let Some(location) = manager.location_mut() {
+            location.scroll = scroll;
+        }
+        manager.reveal_selection = false;
     }
 }
 fn group_header(
@@ -530,4 +537,66 @@ fn group_header(
         })
         .inner;
     (content, clicked)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file_manager::{
+        BrowserView, Navigation, filesystem,
+        metadata::Field,
+        sorting::{Category, Column},
+    };
+
+    #[test]
+    fn family_header_sort_preserves_rendered_scroll_with_an_offscreen_selection() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..80 {
+            std::fs::write(root.path().join(format!("track-{index:02}.wav")), "fixture").unwrap();
+        }
+        let directory =
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        let mut manager = FileManager {
+            pending: None,
+            ..Default::default()
+        };
+        manager.commit(directory, Navigation::New);
+        manager.select(root.path().join("track-00.wav"));
+        for view in [BrowserView::List, BrowserView::Columns] {
+            manager.set_view(view);
+            manager.sort_by(Column::Type);
+            for sort in [
+                GroupSort::Metadata(Category::Audio, Field::Duration),
+                GroupSort::Metadata(Category::Audio, Field::Duration),
+                GroupSort::Metadata(Category::Audio, Field::Filename),
+                GroupSort::File(Column::Size),
+            ] {
+                manager.location_mut().unwrap().scroll = 1377.0;
+                sort.apply(&mut manager);
+                assert_eq!(manager.location().unwrap().scroll, 1377.0);
+                assert!(manager.restore_scroll);
+                assert!(!manager.reveal_selection);
+                let ctx = egui::Context::default();
+                let mut rendered_scroll = None;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 320.0))),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let height = *manager.list_offsets.last().unwrap();
+                            let output = manager
+                                .list_scroll(ROW_HEIGHT)
+                                .show(ui, |ui| ui.set_min_height(height));
+                            rendered_scroll = Some(output.state.offset.y);
+                        });
+                    },
+                );
+                assert_eq!(rendered_scroll, Some(1377.0));
+                assert_eq!(manager.selected_paths(), [root.path().join("track-00.wav")]);
+            }
+        }
+    }
 }
