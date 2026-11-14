@@ -256,6 +256,9 @@ impl PdfDocumentTools {
 
 impl PdfEditorState {
     pub(super) fn start_existing_ocr_check(&mut self) -> bool {
+        if self.source.read_only() {
+            return false;
+        }
         let candidate = self.sibling_output_path("ocr");
         if !candidate.is_file() {
             return false;
@@ -308,6 +311,9 @@ impl PdfEditorState {
     }
 
     pub(super) fn poll_document_tools(&mut self, ctx: &egui::Context, now: f64) {
+        if self.source.read_only() {
+            return;
+        }
         let page = self.selected_page.filter(|_| self.info_job.is_none());
         self.document_tools.service_layout(
             &self.path,

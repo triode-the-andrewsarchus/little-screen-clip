@@ -11,6 +11,7 @@ mod navigation;
 mod output;
 mod page_cache;
 mod preview_jobs;
+mod source;
 mod studio;
 
 use crate::icons::Icon;
@@ -21,6 +22,7 @@ use little_clip_core::pdf::{
     PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
+use source::PageSource;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +57,7 @@ struct PdfPageDecodeSlot {
     >,
     ready: Option<egui::ColorImage>,
     cancelled: bool,
+    cancel: Arc<AtomicBool>,
 }
 
 enum PdfDecodePoll {
@@ -69,7 +72,7 @@ enum PdfDecodePoll {
 impl PdfPageDecodeSlot {
     fn start(
         raster: Arc<PdfPageRasterResource>,
-        source: Option<(PathBuf, u32)>,
+        source: Option<(PathBuf, u32, PageSource)>,
         ctx: &egui::Context,
         check: crate::file_source::ReadCheck,
     ) -> Self {
@@ -78,11 +81,18 @@ impl PdfPageDecodeSlot {
         let decode_limit = ctx
             .input(|input| input.max_texture_side)
             .min(PAGE_DETAIL_MAX_DIM as usize) as u32;
-        let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(10), move || {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(30), move || {
             let result = (|| {
-                let raster = if let Some((source, render_width)) = source {
-                    let (png, width, height) = check.read(&AtomicBool::new(false), || {
-                        render_pdf_page_preview(&source, worker_raster.page_num(), render_width)
+                let raster = if let Some((source, render_width, backend)) = source {
+                    let (png, width, height) = check.read(&worker_cancel, || {
+                        backend.render(
+                            &source,
+                            worker_raster.page_num(),
+                            render_width,
+                            &worker_cancel,
+                        )
                     })?;
                     let path = worker_raster._raster_directory.path().join(format!(
                         "page-{}-{render_width}px.png",
@@ -114,10 +124,12 @@ impl PdfPageDecodeSlot {
             rx,
             ready: None,
             cancelled: false,
+            cancel,
         }
     }
 
     fn cancel(&mut self) {
+        self.cancel.store(true, Ordering::Release);
         self.ticket.cancel();
         self.cancelled = true;
         self.ready = None;
@@ -529,6 +541,8 @@ pub struct PdfPageItem {
 
 /// Interactive state for the multi-page PDF thumbnail grid editor.
 pub struct PdfEditorState {
+    source: PageSource,
+    info_cancel: Option<Arc<AtomicBool>>,
     read_check: crate::file_source::ReadCheck,
     pub path: PathBuf,
     pub title: String,
@@ -570,6 +584,8 @@ impl PdfEditorState {
             .unwrap_or_else(|| "document.pdf".to_string());
 
         Self {
+            source: PageSource::Pdf,
+            info_cancel: None,
             read_check: Default::default(),
             path,
             title,
@@ -653,6 +669,15 @@ impl PdfEditorState {
         state
     }
 
+    /// Opens handwritten pages with PDF navigation and zoom, without PDF editing tools.
+    pub fn new_notebook_checked(path: PathBuf, check: crate::file_source::ReadCheck) -> Self {
+        let mut state = Self::without_jobs(path);
+        state.source = PageSource::Notebook;
+        state.read_check = check;
+        state.start_info_worker();
+        state
+    }
+
     /// Opens a one-page document using a page raster already owned by another view.
     pub fn from_shared_page_raster(path: PathBuf, raster: Arc<PdfPageRasterResource>) -> Self {
         let mut state = Self::without_jobs(path);
@@ -676,6 +701,9 @@ impl PdfEditorState {
 
 impl Drop for PdfEditorState {
     fn drop(&mut self) {
+        if let Some(cancel) = &self.info_cancel {
+            cancel.store(true, Ordering::Release);
+        }
         self.cancel_edit_worker();
         self.cancel_preview_worker();
         if let Some(job) = &mut self.decode_job {

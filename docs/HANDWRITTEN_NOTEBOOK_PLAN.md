@@ -176,7 +176,12 @@ acceptance items above remain required. The goal remains active.
   omits payload bytes, and ordinary-text fallback for a misleading `.note`.
   PDF, Office and notebook artwork share first-page item construction.
 - [ ] Connect list strips and selected-page handoff.
-- [ ] Extend the shared paged viewer in read-only mode, disabling PDF-only tools.
+- [x] Extend the shared paged viewer in read-only mode, disabling PDF-only
+  editing, OCR, text indexing, layout extraction and application handoff controls.
+  Reuse the existing page cache, zoom and thumbnail navigation; selected-page
+  and metadata workers carry cancellation through to native notebook children.
+  All 63 paged-viewer tests pass, including direct mutation admission guards and
+  shortcut/action visibility checks in both themes.
 
 These are integration checkpoints, not completion of the full format goal.
 
@@ -193,3 +198,10 @@ only member order. No additional application framework or raster cache is added.
   evidence in `/tmp/notebook-gui-dark-04/04-selected-page.png` confirms that
   double-clicking the tenth thumbnail opens Page 10 of 10 through asynchronous
   notebook loading. The fix also preserves existing PDF/text strip positions.
+
+The paged header now keeps PDF actions together, reducing accidental branching
+in the shared renderer. The remaining `load` dispatch complexity increase
+(18 to 22) is the notebook qualification/compatibility branch; future notebook
+formats share that branch. Header reads reuse core's guarded opening and source
+revalidation in both the browser loader and metadata previews. No second page
+cache or notebook editing subsystem is introduced.

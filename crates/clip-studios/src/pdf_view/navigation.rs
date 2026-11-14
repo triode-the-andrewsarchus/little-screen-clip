@@ -349,6 +349,9 @@ impl PdfEditorState {
     }
 
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) -> bool {
+        if self.source.read_only() {
+            return false;
+        }
         self.navigation.poll(ctx);
         if !self.navigation.attempted && self.info_job.is_none() {
             self.navigation.start(

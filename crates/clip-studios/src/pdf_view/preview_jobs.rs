@@ -2,6 +2,9 @@ use super::*;
 
 impl PdfEditorState {
     pub(super) fn start_info_worker(&mut self) {
+        if let Some(cancel) = self.info_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         if let Some((ticket, _)) = self.info_job.take() {
             ticket.cancel();
         }
@@ -17,9 +20,12 @@ impl PdfEditorState {
         self.page_count = 0;
         let path = self.path.clone();
         let check = self.read_check.clone();
+        let source = self.source;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.info_cancel = Some(cancel.clone());
         self.info_job = Some(
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-                check.read(&AtomicBool::new(false), || get_pdf_info(&path))
+                check.read(&cancel, || source.info(&path, &cancel))
             }),
         );
     }
@@ -37,6 +43,7 @@ impl PdfEditorState {
             Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
         };
         self.info_job = None;
+        self.info_cancel = None;
         let info = match result {
             Ok(Ok(info)) => info,
             failure => {
@@ -46,9 +53,9 @@ impl PdfEditorState {
                     Ok(Ok(_)) => unreachable!(),
                 };
                 self.status_toast
-                    .set(format!("PDF metadata unavailable: {reason}"), now);
+                    .set(format!("Document metadata unavailable: {reason}"), now);
                 PdfInfo {
-                    page_count: 1,
+                    page_count: usize::from(!self.source.read_only()),
                     title: None,
                     author: None,
                     page_size: None,
@@ -72,12 +79,17 @@ impl PdfEditorState {
     }
 
     pub(super) fn start_preview_worker(&mut self) {
-        self.start_preview_worker_on(BackgroundJobs::global(), render_pdf_page_preview);
+        let source = self.source;
+        self.start_preview_worker_on(BackgroundJobs::global(), move |path, page, edge, cancel| {
+            source.render(path, page, edge, cancel)
+        });
     }
 
     pub(super) fn start_preview_worker_on<F>(&mut self, jobs: &BackgroundJobs, render_page: F)
     where
-        F: Fn(&Path, usize, u32) -> Result<(Vec<u8>, u32, u32), String> + Send + 'static,
+        F: Fn(&Path, usize, u32, &AtomicBool) -> Result<(Vec<u8>, u32, u32), String>
+            + Send
+            + 'static,
     {
         self.cancel_preview_worker();
         let raster_cache = match tempfile::tempdir() {
@@ -108,7 +120,11 @@ impl PdfEditorState {
             raster_cache,
             tx,
             Arc::clone(&cancelled),
-            move |path, page, width| check.read(&source_cancel, || render_page(path, page, width)),
+            move |path, page, width| {
+                check.read(&source_cancel, || {
+                    render_page(path, page, width, &source_cancel)
+                })
+            },
         );
         self.preview_rx = Some(rx);
         self.preview_job = Some((ticket, job_rx));

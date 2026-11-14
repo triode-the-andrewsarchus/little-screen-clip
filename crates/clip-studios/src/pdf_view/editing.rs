@@ -14,7 +14,7 @@ impl PdfEditorState {
     }
 
     pub fn delete_current_page(&mut self, now: f64) {
-        if self.info_job.is_some() {
+        if self.source.read_only() || self.info_job.is_some() {
             return;
         }
         let Some(cur) = self.selected_page else {
@@ -30,7 +30,7 @@ impl PdfEditorState {
     }
 
     pub fn rotate_current_page(&mut self, degrees: u32, now: f64) {
-        if self.info_job.is_some() {
+        if self.source.read_only() || self.info_job.is_some() {
             return;
         }
         let Some(cur) = self.selected_page else {
@@ -69,6 +69,9 @@ impl PdfEditorState {
     ) where
         F: FnOnce(&Path, &Path) -> Result<(), String> + Send + 'static,
     {
+        if self.source.read_only() {
+            return;
+        }
         if self.edit_in_progress {
             self.status_toast
                 .set("A PDF edit is already in progress", now);

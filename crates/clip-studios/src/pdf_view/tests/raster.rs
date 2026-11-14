@@ -128,7 +128,7 @@ fn saturated_preview_queue_reports_an_error_instead_of_loading_forever() {
     for page in &mut state.pages {
         page.raster = None;
     }
-    state.start_preview_worker_on(&jobs, |_, _, _| panic!("full queue must not render"));
+    state.start_preview_worker_on(&jobs, |_, _, _, _| panic!("full queue must not render"));
     let ctx = egui::Context::default();
     let _ = ctx.run(
         egui::RawInput {
@@ -186,7 +186,7 @@ fn dropping_editor_cancels_queued_preview_before_rendering() {
     let render_count = Arc::new(AtomicUsize::new(0));
     let worker_count = Arc::clone(&render_count);
     let mut state = raster_state(1, 16);
-    state.start_preview_worker_on(&jobs, move |_, _, _| {
+    state.start_preview_worker_on(&jobs, move |_, _, _, _| {
         worker_count.fetch_add(1, Ordering::SeqCst);
         Ok((vec![1], 1, 1))
     });
@@ -235,7 +235,7 @@ fn active_preview_publishes_selected_page_and_rejects_changed_source_during_late
         }
         let (started_tx, started_rx) = channel();
         let (release_tx, release_rx) = channel();
-        state.start_preview_worker_on(&jobs, move |_, page_num, max_dim| {
+        state.start_preview_worker_on(&jobs, move |_, page_num, max_dim, _| {
             started_tx.send((page_num, max_dim)).unwrap();
             if page_num == 1 {
                 release_rx.recv().unwrap();
@@ -305,7 +305,7 @@ fn cancelling_active_render_discards_stale_page_and_releases_cache() {
     for page in &mut state.pages {
         page.raster = None;
     }
-    state.start_preview_worker_on(&jobs, move |_, _, _| {
+    state.start_preview_worker_on(&jobs, move |_, _, _, _| {
         render_count.fetch_add(1, Ordering::SeqCst);
         started_tx.send(()).unwrap();
         release_rx.recv().unwrap();
@@ -423,7 +423,7 @@ fn pdf_detail_rerenders_validate_before_reopening_the_selected_source() {
     let raster = state.pages[0].raster.clone().unwrap();
     let job = PdfPageDecodeSlot::start(
         raster,
-        Some((state.path.clone(), 1024)),
+        Some((state.path.clone(), 1024, PageSource::Pdf)),
         &egui::Context::default(),
         crate::file_source::ReadCheck::new(|_| Err("source context expired".into())),
     );

@@ -200,6 +200,7 @@ pub(super) fn blocked_decode(
         rx,
         ready: None,
         cancelled: false,
+        cancel: Arc::new(AtomicBool::new(false)),
     });
     (release, ticket)
 }
