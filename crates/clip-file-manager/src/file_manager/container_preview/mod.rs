@@ -17,6 +17,7 @@ use std::{
 
 const CACHE: usize = 32;
 const READS: usize = 2;
+const CHOICES: usize = 4096;
 const FRESHNESS: Duration = Duration::from_secs(5);
 // Directory metadata may stall on a remote mount. Keep its actual executing
 // reads at two, even after a UI delivery deadline, without starving navigation.
@@ -39,6 +40,9 @@ impl Default for Options {
 pub(super) struct Previews {
     options: Options,
     nodes: BTreeMap<PathBuf, Node>,
+    // User intent outlives visible observations, navigation and studio entry.
+    // This is session state, keyed by path, not a payload or metadata cache.
+    choices: BTreeMap<PathBuf, bool>,
     layout_changed: bool,
 }
 struct Node {
@@ -115,11 +119,15 @@ impl Previews {
         self.nodes.retain(|path, _| visible.contains(path));
     }
     pub fn height(&self, entry: &Entry) -> f32 {
-        if self
-            .nodes
-            .get(&entry.path)
-            .map_or(self.options.automatic, |node| node.expanded(self.options))
-        {
+        if self.nodes.get(&entry.path).map_or_else(
+            || {
+                self.choices
+                    .get(&entry.path)
+                    .copied()
+                    .unwrap_or(self.options.automatic)
+            },
+            |node| node.expanded(self.options),
+        ) {
             108.0
         } else {
             28.0
@@ -160,10 +168,12 @@ impl Previews {
             return;
         }
         let active = self.nodes.values().filter(|n| n.task.is_some()).count();
-        let node = self
-            .nodes
-            .entry(entry.path.clone())
-            .or_insert_with(|| Node::new(entry.revision));
+        let choice = self.choices.get(&entry.path).copied();
+        let node = self.nodes.entry(entry.path.clone()).or_insert_with(|| {
+            let mut node = Node::new(entry.revision);
+            node.expanded = choice;
+            node
+        });
         if node.revision != entry.revision {
             let expanded = node.expanded;
             *node = Node::new(entry.revision);
@@ -202,17 +212,23 @@ impl Previews {
         _palette: &AppPalette,
     ) -> Option<(PathBuf, bool)> {
         self.request(entry);
+        let can_choose = self.choices.len() < CHOICES || self.choices.contains_key(&entry.path);
         let node = self.nodes.get_mut(&entry.path)?;
         let expanded = node.expanded(self.options);
         let toggle =
             Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2(24.0, 24.0));
         ui.allocate_ui_at_rect(toggle, |ui| {
             if ui
-                .small_button(if expanded { "−" } else { "+" })
+                .add_enabled(
+                    can_choose,
+                    egui::Button::new(if expanded { "−" } else { "+" }).small(),
+                )
                 .on_hover_text("Show or hide contained files")
+                .on_disabled_hover_text("This session has reached its 4,096 folder-preview choices")
                 .clicked()
             {
                 node.expanded = Some(!expanded);
+                self.choices.insert(entry.path.clone(), !expanded);
                 if expanded {
                     node.task = None;
                 }

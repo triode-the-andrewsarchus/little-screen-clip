@@ -199,3 +199,44 @@ fn disabling_automatic_previews_retires_automatic_reads_and_preserves_manual_cho
     previews.request(&entry(root.path(), "folder"));
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
 }
+
+#[test]
+fn explicit_choices_survive_scrolling_view_changes_and_folder_history() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("folder")).unwrap();
+    let source = entry(root.path(), "folder");
+    let mut previews = Previews::default();
+    // A click records intent separately from the visible observation cache.
+    previews.choices.insert(source.path.clone(), false);
+    previews.request(&source);
+    assert_eq!(previews.height(&source), 28.0);
+    assert!(previews.nodes[&source.path].task.is_none());
+    previews.retain(&BTreeSet::new());
+    assert!(previews.nodes.is_empty());
+    assert_eq!(previews.height(&source), 28.0);
+    previews.request(&source);
+    assert!(previews.nodes[&source.path].task.is_none());
+    previews.clear(); // Folder change, studio entry or view switch.
+    previews.configure(true, 32);
+    previews.request(&source);
+    assert_eq!(previews.height(&source), 28.0);
+    assert!(previews.nodes[&source.path].task.is_none());
+
+    previews.clear();
+    previews.choices.insert(source.path.clone(), true);
+    previews.configure(false, 1);
+    previews.request(&source);
+    assert_eq!(previews.height(&source), 108.0);
+    assert!(previews.nodes[&source.path].task.is_some());
+    let token = previews.nodes[&source.path]
+        .task
+        .as_ref()
+        .unwrap()
+        .token
+        .clone();
+    previews.clear();
+    assert!(token.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(previews.height(&source), 108.0);
+    previews.request(&source);
+    assert_eq!(previews.nodes[&source.path].expanded, Some(true));
+}

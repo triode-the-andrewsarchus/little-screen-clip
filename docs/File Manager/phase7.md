@@ -199,3 +199,17 @@ reported as an unqualified clean whole-tree architecture result.
 - [x] Shared reader tests verify empty memory/file archives, every truncated
   directory prefix and inconsistent member counts; both ZIP tests pass
   (`/tmp/phase7-empty-zip-tests.log`).
+
+### Expansion intent across cache retirement
+
+- [x] Keep explicit expand/collapse choices separately from visible inventories.
+  Scrolling offscreen, opening a studio, switching views and folder/history
+  navigation retire reads and thumbnails without resetting the user's choice.
+  Choices follow paths for this session; at 4,096 chosen paths, new overrides are
+  disabled with an explanation rather than silently evicting earlier choices.
+- [x] Nine container tests pass, including cache retirement, folder/view reset,
+  automatic-setting changes and cancellation of retired expanded reads. The
+  extended native dark check passes at
+  `/tmp/phase7-choices-dark-01/report.json`, verifying a collapsed folder stays
+  collapsed after navigating away and back, and still re-expands/opens children.
+  This does not complete nested inline expansion or child selection/search.
