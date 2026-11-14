@@ -237,11 +237,11 @@ Turn previews into complete everyday gallery and playback workflows.
 ### Scope
 
 - Photo grid with adjustable thumbnail size, selection, next/previous viewing, and slideshow controls. Inspired by iPhone's gallery.
-- Music view with metadata columns, cover art, selectable waveforms and explicitly started single-track playback. No bottom player dock, queue, automatic next track, repeat or shuffle.
-  - Activates when in a folder that's 75% (threshold configurable) audio files
+- Audio List rows with metadata columns, cover art, selectable waveforms and explicitly started single-track playback. The separate Music and Videos views have been retired; no bottom player dock, volume control, queue, automatic next track, repeat or shuffle.
+  - Audio and video folders use List unless another remaining view is explicitly chosen.
   - Each preview is the album art (or missing stand in) and waveform, where the waveform has a navigable playhead and can be selceted in and copy-pasted from directly.
   - This will take careful considering for rendering, to handle huge folders without slow down
-- Stop music on folder navigation through any entry point, Escape, switching to List, and closing Files. Space plays an active Music range once between zero-crossing-snapped endpoints; otherwise it stops playback. Completed tracks stop rather than advancing or repeating.
+- Stop music on folder navigation through any entry point, Escape, changing views, and closing Files. Space plays a focused List/Columns audio range once between zero-crossing-snapped endpoints; otherwise it stops playback. Completed tracks stop rather than advancing or repeating.
 - Video browsing and playback through an assessed reusable backend; establish codec and resource expectations.
 - Keep subfolders and non-media files accessible in media views.
 - Provide manual view choice before automatic type-based selection is introduced in Phase 7.

@@ -2,6 +2,18 @@
 
 Status: complete against the Phase 5 scope and completion gate in [plan.md](plan.md). Phase 4 remains in progress independently. The backend and resource limits below are part of this delivery.
 
+## Current presentation
+
+The dedicated Music and Videos views were removed during Phase 7 review.
+List now owns their waveform/timeline previews and interactions. The view choices
+are List, Columns, Photos and Constellation. Audio folders no longer switch to a
+separate view, and the old music-threshold configuration is ignored. Saved
+`music`/`videos` view choices load as List. Focused List/Columns waveform ranges
+retain Space audition, Ctrl+C range export and Ctrl+V paste; playback failures
+and loading/copy activity use the existing bottom summary bar. No volume control
+or duplicate playback/copy toolbar is added. The sections below preserve the
+original implementation history; see [phase7.md](phase7.md) for current evidence.
+
 ## Photo gallery
 
 The manual **Photos** view follows [photo_grid_spec.md](../../photo_grid_spec.md). Its half-square grid allows exactly five shapes: 2×2, 3×2, 4×2, 2×3 and 2×4. Bounded row candidates and two-row memoized lookahead minimize crop loss plus wasted space and ending penalties. Descenders start/end on even X coordinates and participate in the next row; a final descender without following images is illegal. All ordinary row boundaries have even widths. Cropping is centered presentation only. Selection insets, checkmarks, Select mode, Ctrl/Shift selection, menus, file dragging and ordinary file operations remain shared with the list.

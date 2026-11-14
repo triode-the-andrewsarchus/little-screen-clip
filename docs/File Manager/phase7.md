@@ -114,8 +114,35 @@ checkpoints below. Current implementation and acceptance cover:
   release ownership and range focus (`/tmp/list-range-focus-tests.log`). Native
   private-sink PCM checks verify click playback, Escape stop and Space range
   audition (`/tmp/list-media-native-dark-02/report.json`).
-- [ ] Remove redundant Music/Videos screens and default selection, retaining
-  their waveform/timeline functionality in List and migrating old view choices.
+- [x] Remove redundant Music/Videos screens, tabs, automatic selection thresholds
+  and separate row-offset tables. Remaining choices are List, Columns, Photos
+  and Constellation. List/Columns retain the shared audio/video strip renderers,
+  playback, hover previews, range-copy/paste, and embedded studios. No duplicate
+  volume or copy/paste toolbar remains. Errors and loading/copy activity use the
+  existing bottom summary bar; successful copy completion stays quiet.
+- [x] Read saved `music` and `videos` preferences as List through serde aliases,
+  preserving the remaining folder overrides and inheritance. New writes use
+  `list`. Remove the unused music-threshold config field while tolerating the old
+  key in existing configs. Regression tests cover migration, manual history,
+  default audio folders, waveform focus and Space range playback in List/Columns.
+  The host-level Space test runs in a disposable process because dropping a real
+  host deliberately shuts down the process-wide system collector.
+- [x] File-manager tests pass (949 passed, six ignored; serialized to avoid the
+  unrelated cooperating-lock/fork timing sensitivity). Configuration tests pass
+  (11). Strict affected-crate/all-target Clippy and native build pass without
+  warnings. Logs: `/tmp/remove-media-views-tests.log`,
+  `/tmp/remove-media-views-config-tests.log`, `/tmp/remove-media-views-clippy.log`
+  and `/tmp/remove-media-views-build.log`.
+- [x] Native private-compositor/private-audio verification passes:
+  `/tmp/list-media-native-dark-02/report.json`. The driver
+  `scripts/file_manager_list_media_acceptance.py` verifies the four retained tabs,
+  waveform click playback, Space range audition, Escape stop, video timeline
+  activation and return from the embedded player.
+- [x] Architecture reviewed against `before-remove-media-views`: NLOC decreases
+  by 87 including new regression tests, two clone groups disappear, and average
+  and maximum complexity stay unchanged. The remaining function flag is the
+  additional waveform-release condition required to retain keyboard ownership;
+  the duplicate view renderers and automatic selection mechanism are removed.
 
 ## Required delivery and acceptance
 

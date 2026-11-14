@@ -12,8 +12,6 @@ impl BrowserView {
             Self::List => "List",
             Self::Columns => "Columns",
             Self::Photos => "Photos",
-            Self::Music => "Music",
-            Self::Videos => "Videos",
             Self::Constellation => "Constellation",
         }
     }

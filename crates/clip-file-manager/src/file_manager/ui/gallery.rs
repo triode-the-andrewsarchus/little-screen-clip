@@ -26,20 +26,7 @@ impl FileManager {
         }
         self.type_navigation.clear();
         self.retire_media_previews();
-        if self.view == super::super::BrowserView::Constellation
-            || matches!(
-                view,
-                super::super::BrowserView::List
-                    | super::super::BrowserView::Columns
-                    | super::super::BrowserView::Videos
-                    | super::super::BrowserView::Constellation
-            )
-        {
-            self.stop_previews();
-        }
-        if view == super::super::BrowserView::Music && self.view != view {
-            self.shelf.open = false;
-        }
+        self.stop_previews();
         if view == super::super::BrowserView::Constellation {
             let path = self.path().to_path_buf();
             self.constellation.check_and_load_folder(&path);
@@ -75,8 +62,6 @@ impl FileManager {
                             Tab::new(super::super::BrowserView::List, "List"),
                             Tab::new(super::super::BrowserView::Columns, "Columns"),
                             Tab::new(super::super::BrowserView::Photos, "Photos"),
-                            Tab::new(super::super::BrowserView::Music, "Music"),
-                            Tab::new(super::super::BrowserView::Videos, "Videos"),
                             Tab::new(super::super::BrowserView::Constellation, "Constellation"),
                         ],
                         palette,

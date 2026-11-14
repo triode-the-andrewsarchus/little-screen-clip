@@ -221,10 +221,6 @@ impl FileManager {
                     self.columns_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Photos {
                     self.gallery_ui(ui, colors, palette);
-                } else if self.view == super::BrowserView::Music {
-                    self.music_ui(ui, colors, palette);
-                } else if self.view == super::BrowserView::Videos {
-                    self.video_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Constellation {
                     self.constellation_ui(ui, colors, palette);
                 } else {
@@ -794,11 +790,7 @@ impl FileManager {
                             || (entry.directory && selected.starts_with(&entry.path))
                     })
             }) {
-                scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
-                    self.music_offsets[index]
-                } else if self.view == super::BrowserView::Videos {
-                    self.video_offsets[index]
-                } else {
+                scroll = scroll.vertical_scroll_offset({
                     let base = self
                         .list_offsets
                         .get(index)

@@ -68,7 +68,7 @@ fn exact_overrides_and_nearest_explicit_ancestor_inherit_by_path_components() {
     assert!(state.effective(Path::new("/photos-backup")).is_none());
     state.update(
         Path::new("/photos/work"),
-        Some(choice(BrowserView::Music, true)),
+        Some(choice(BrowserView::Columns, true)),
     );
     assert_eq!(
         state
@@ -76,7 +76,7 @@ fn exact_overrides_and_nearest_explicit_ancestor_inherit_by_path_components() {
             .unwrap()
             .1
             .view,
-        BrowserView::Music
+        BrowserView::Columns
     );
     state.update(Path::new("/photos/work"), None);
     assert_eq!(
@@ -91,7 +91,7 @@ fn loading_missing_state_creates_nothing_and_saves_merge_unrelated_folders() {
     assert!(store::read(&path).unwrap().0.folders.is_empty());
     assert!(!path.parent().unwrap().exists());
     store::save(&path, &change("/photos", BrowserView::Photos, true)).unwrap();
-    store::save(&path, &change("/music", BrowserView::Music, false)).unwrap();
+    store::save(&path, &change("/music", BrowserView::Columns, false)).unwrap();
     let (state, _) = store::read(&path).unwrap();
     assert_eq!(state.folders.len(), 2);
     assert_eq!(
@@ -100,7 +100,7 @@ fn loading_missing_state_creates_nothing_and_saves_merge_unrelated_folders() {
     );
     assert_eq!(
         state.exact(Path::new("/music")),
-        Some(choice(BrowserView::Music, false))
+        Some(choice(BrowserView::Columns, false))
     );
     store::save(
         &path,
@@ -154,10 +154,10 @@ fn cooperating_writer_lock_is_nonblocking_and_does_not_lose_existing_settings() 
     let original = std::fs::read(&path).unwrap();
     let directory = little_clip_core::kernel_interface::pin_content_directory(root.path()).unwrap();
     let held = store::lock(&directory).unwrap();
-    assert!(store::save(&path, &change("/music", BrowserView::Music, false)).is_err());
+    assert!(store::save(&path, &change("/music", BrowserView::Columns, false)).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), original);
     drop(held);
-    store::save(&path, &change("/music", BrowserView::Music, false)).unwrap();
+    store::save(&path, &change("/music", BrowserView::Columns, false)).unwrap();
     assert_eq!(store::read(&path).unwrap().0.folders.len(), 2);
 }
 #[test]
@@ -208,12 +208,12 @@ fn late_preference_acknowledgement_keeps_a_newer_manual_view_choice() {
         Some(choice(BrowserView::Photos, false)),
         Some(epoch),
     );
-    browser.set_view(BrowserView::Music);
+    browser.set_view(BrowserView::Columns);
     settle_browser(&mut browser, &jobs);
-    assert_eq!(browser.view, BrowserView::Music);
+    assert_eq!(browser.view, BrowserView::Columns);
     assert_eq!(
         browser.location().unwrap().manual_view,
-        Some(BrowserView::Music)
+        Some(BrowserView::Columns)
     );
     assert_eq!(
         browser.view_preferences.effective(&folder),
@@ -240,20 +240,53 @@ fn changing_saved_inheritance_does_not_replace_the_current_temporary_view() {
     let mut browser = browser_in(&folder);
     browser.view_preferences = Preferences::new(state);
     settle(&mut browser.view_preferences, &jobs);
-    browser.set_view(BrowserView::Music);
+    browser.set_view(BrowserView::Columns);
     browser.view_preferences.change(
         folder.clone(),
         Some(choice(BrowserView::Photos, true)),
         None,
     );
     settle_browser(&mut browser, &jobs);
-    assert_eq!(browser.view, BrowserView::Music);
+    assert_eq!(browser.view, BrowserView::Columns);
     assert_eq!(
         browser.location().unwrap().manual_view,
-        Some(BrowserView::Music)
+        Some(BrowserView::Columns)
     );
     assert_eq!(
         browser.view_preferences.effective(&folder.join("child")),
         Some(BrowserView::Photos)
     );
+}
+
+#[test]
+fn retired_media_view_preferences_load_as_list_without_losing_other_folders() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("views.json");
+    let mut state = State::default();
+    state.update(Path::new("/audio"), Some(choice(BrowserView::List, true)));
+    state.update(Path::new("/movies"), Some(choice(BrowserView::List, false)));
+    state.update(
+        Path::new("/photos"),
+        Some(choice(BrowserView::Photos, true)),
+    );
+    let mut json = serde_json::to_value(&state).unwrap();
+    json["folders"][0]["preference"]["view"] = "music".into();
+    json["folders"][1]["preference"]["view"] = "videos".into();
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    let (loaded, _) = store::read(&path).unwrap();
+    assert_eq!(
+        loaded.effective(Path::new("/audio/child")).unwrap().1.view,
+        BrowserView::List
+    );
+    assert_eq!(
+        loaded.exact(Path::new("/movies")).unwrap().view,
+        BrowserView::List
+    );
+    assert_eq!(
+        loaded.exact(Path::new("/photos")).unwrap().view,
+        BrowserView::Photos
+    );
+    let normalized = serde_json::to_value(&loaded).unwrap();
+    assert_eq!(normalized["folders"][0]["preference"]["view"], "list");
+    assert_eq!(normalized["folders"][1]["preference"]["view"], "list");
 }

@@ -1,6 +1,6 @@
+//! Audio strips shared by List and Columns, with guarded playback and range export.
 use super::super::BrowserView;
 use super::*;
-use clip_ui::buttons::ButtonRole;
 
 #[derive(Clone, PartialEq)]
 pub(in crate::file_manager) struct MusicRange {
@@ -17,21 +17,6 @@ pub(in crate::file_manager) fn waveform_id() -> Id {
 
 impl FileManager {
     pub(in crate::file_manager) fn activate_media_view(&mut self) {
-        let count = self.directory.as_ref().map_or(0, |d| {
-            self.visible
-                .iter()
-                .filter(|i| d.entries[**i].regular_file)
-                .count()
-        });
-        let automatic = if count > 0
-            && self.audio_entries.len() * 100 >= count * self.music_threshold as usize
-        {
-            BrowserView::Music
-        } else if count > 0 && self.video_count * 100 >= count * 75 {
-            BrowserView::Videos
-        } else {
-            BrowserView::List
-        };
         if self.view == BrowserView::Constellation {
             let folder = self.path().to_path_buf();
             self.constellation.check_and_load_folder(&folder);
@@ -47,170 +32,17 @@ impl FileManager {
             self.location()
                 .and_then(|l| l.manual_view)
                 .or_else(|| self.view_preferences.effective(self.path()))
-                .unwrap_or(automatic)
+                .unwrap_or(BrowserView::List)
         };
         if self.view != view {
-            if matches!(
-                view,
-                BrowserView::List | BrowserView::Columns | BrowserView::Videos
-            ) {
-                self.stop_previews();
-            }
+            self.stop_previews();
             self.retire_media_previews();
-            if view == BrowserView::Music {
-                self.shelf.open = false;
-            }
         }
         self.view = view;
     }
     pub(in crate::file_manager) fn copy_music_range(&mut self) {
         if let Some(range) = &self.music_selection {
             self.music.copy_range(range.clone());
-        }
-    }
-    fn music_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Title · Artist · Album · Duration");
-            if ui
-                .add(
-                    egui::Slider::new(&mut self.music_threshold, 1..=100)
-                        .suffix("%")
-                        .text("Auto Music threshold"),
-                )
-                .changed()
-            {
-                self.activate_media_view();
-            }
-            if ui
-                .add(ButtonRole::Secondary.button("Use automatic view", palette))
-                .clicked()
-            {
-                if let Some(location) = self.location_mut() {
-                    location.manual_view = None;
-                }
-                self.activate_media_view();
-            }
-        });
-        let range = self.music_selection.clone();
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    range.is_some(),
-                    ButtonRole::Primary.button("Copy audio selection", palette),
-                )
-                .clicked()
-                && let Some(range) = &range
-            {
-                self.music.copy_range(range.clone());
-            }
-            if ui
-                .add(ButtonRole::Secondary.button("Paste as file", palette))
-                .clicked()
-            {
-                self.paste_files();
-            }
-            ui.add(
-                egui::Label::new(range.as_ref().map_or_else(
-                    || "No audio selected".into(),
-                    |range| {
-                        format!(
-                            "Selected {:.2}–{:.2} s",
-                            range.start.min(range.end),
-                            range.start.max(range.end)
-                        )
-                    },
-                ))
-                .truncate(true),
-            );
-        });
-        if self.music.busy() {
-            ui.spinner();
-        }
-        if let Some(status) = self.music.status() {
-            ui.add(egui::Label::new(status).truncate(true));
-        }
-        ui.label("Click an audio strip to play or seek. Space plays the selected range; Escape stops playback. Selection edges snap to zero crossings. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
-    }
-    pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
-        // Register the shared waveform focus target every frame so egui retains it
-        // after the pointer leaves the per-file waveform widget.
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            waveform_id(),
-            Sense::focusable_noninteractive(),
-        );
-        self.music_toolbar(ui, palette);
-        self.music_previews.poll(ui.ctx());
-        let scroll = self.list_scroll(108.0);
-        let Some(directory) = &self.directory else {
-            ui.label("Loading folder…");
-            return;
-        };
-        let selected = current_selection(&self.history, self.index);
-        let mut actions = ListActions::for_browser(self);
-        let can_edit = self.can_edit();
-        let count = self.selection_count();
-        let background = actions.background(ui, can_edit, count > 0);
-        let mut targets = Vec::new();
-        let mut paths = std::collections::BTreeSet::new();
-        let mut play = None;
-        let mut seek = None;
-        let output = media_rows(ui, scroll, &self.music_offsets, |ui, index, rect| {
-            let entry = &directory.entries[self.visible[index]];
-            let (rect, detail) = self.search.result_row(ui, rect, entry, colors);
-            let mut response = media_row(
-                ui,
-                rect,
-                selected.is_some_and(|s| s.contains(&entry.path)),
-                colors,
-            );
-            let is_audio =
-                entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-            let ready = if is_audio && paths.len() < 128 {
-                paths.insert(entry.path.clone());
-                self.music_previews.music(ui.ctx(), entry)
-            } else {
-                None
-            };
-            let (engaged, time) = preview_row(
-                ui,
-                rect,
-                entry,
-                None,
-                ready,
-                &mut response,
-                &mut self.music_selection,
-                &self.music,
-                colors,
-            );
-            if let Some(detail) = detail {
-                response = response.union(detail);
-            }
-            if !engaged {
-                actions.row(ui, &response, entry, selected, can_edit, count);
-            } else {
-                actions.selection = Some((entry.path.clone(), false, false));
-            }
-            if entry.directory {
-                targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
-            }
-            if let Some(time) = time {
-                play = Some(entry.path.clone());
-                seek = Some(time);
-            }
-        });
-        self.music_previews.retain(&paths);
-        if ui.is_enabled() {
-            self.drop_targets.extend(targets);
-        }
-        self.finish_listing(ui, actions, output.state.offset.y, &background);
-        if let Some(path) = play {
-            self.midi.stop();
-            let guard = self.search_source_guard(&path);
-            self.music.play(&path, guard);
-            if let Some(time) = seek {
-                self.music.seek(time);
-            }
         }
     }
 }

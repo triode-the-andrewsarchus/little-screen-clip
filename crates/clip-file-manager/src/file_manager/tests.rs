@@ -70,13 +70,13 @@ fn internal_rack_stop_cancels_pending_map_load_without_poisoning_other_music() {
     manager.retire_constellation_audition();
     assert!(!manager.music.busy());
     assert!(manager.music.current().is_none());
-    // A request left by the old view cannot retire an explicit new Music preview.
+    // A request left by the old view cannot retire an explicit new List preview.
     manager.constellation.stop_playback();
-    manager.view = BrowserView::Music;
+    manager.view = BrowserView::List;
     manager.music.play(&path, None);
     manager.retire_constellation_audition();
     assert_eq!(manager.music.current(), Some(&path));
-    // Owner-level stop already handles Music and must consume its own signal.
+    // Owner-level stop already handles audio and must consume its own signal.
     manager.view = BrowserView::Constellation;
     manager.stop_previews();
     manager.music.play(&path, None);
@@ -249,7 +249,7 @@ fn photo_collection_excludes_hidden_and_nonimages_without_filtering_browser_entr
 }
 
 #[test]
-fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive_refresh() {
+fn audio_folders_default_to_list_and_manual_history_choices_survive_refresh() {
     let temp = tempfile::tempdir().unwrap();
     let child = temp.path().join("subfolder");
     std::fs::create_dir(&child).unwrap();
@@ -257,26 +257,25 @@ fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive
         std::fs::write(temp.path().join(name), "fixture").unwrap();
     }
     let (mut manager, jobs) = loaded(temp.path());
-    assert_eq!(manager.view, BrowserView::Music);
+    assert_eq!(manager.view, BrowserView::List);
     assert_eq!(manager.visible.len(), 5);
     manager.music.play(&temp.path().join("b.mp3"), None);
-    manager.set_view(BrowserView::List);
+    manager.set_view(BrowserView::Columns);
     manager.refresh();
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     manager.navigate(child, Navigation::New);
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     assert_eq!(manager.music.current(), None);
     manager.history_step(false);
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     manager.location_mut().unwrap().manual_view = None;
-    manager.music_threshold = 76;
     manager.activate_media_view();
     assert_eq!(manager.view, BrowserView::List);
     manager.toggle_hidden();
-    assert_eq!(manager.view, BrowserView::Music);
+    assert_eq!(manager.view, BrowserView::List);
 }
 
 #[test]
@@ -989,7 +988,7 @@ fn large_directory_virtualizes_rows_and_restores_history_viewport() {
 }
 
 #[test]
-fn large_audio_directory_virtualizes_music_and_restores_history_viewport() {
+fn large_audio_directory_virtualizes_waveforms_and_restores_history_viewport() {
     exercise_large_directory("wav");
 }
 
@@ -997,7 +996,7 @@ fn large_audio_directory_virtualizes_music_and_restores_history_viewport() {
 fn waveform_keyboard_focus_survives_frames_and_routes_clipboard_keys() {
     let (directory, _) = folder_fixture();
     let (mut manager, _jobs, ctx) = rendered(directory.path());
-    manager.set_view(BrowserView::Music);
+    manager.set_view(BrowserView::List);
     frame(&mut manager, &ctx, vec![]);
     let id = super::ui::music::waveform_id();
     ctx.memory_mut(|memory| memory.request_focus(id));
@@ -1028,7 +1027,7 @@ fn exercise_large_directory(extension: &str) {
     let (mut manager, jobs) = loaded(temp.path());
     let loaded_ms = started.elapsed().as_millis();
     assert_eq!(manager.visible.len(), 10_001);
-    for view in [BrowserView::List, BrowserView::Photos, BrowserView::Music] {
+    for view in [BrowserView::List, BrowserView::Photos, BrowserView::Columns] {
         manager.set_view(view);
         manager.location_mut().unwrap().scroll = 0.0;
         manager.restore_scroll = true;

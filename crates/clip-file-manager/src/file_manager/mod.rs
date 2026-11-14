@@ -120,11 +120,10 @@ pub(super) enum DocumentPosition {
 #[serde(rename_all = "snake_case")]
 pub(in crate::file_manager) enum BrowserView {
     #[default]
+    #[serde(alias = "music", alias = "videos")]
     List,
     Columns,
     Photos,
-    Music,
-    Videos,
     Constellation,
 }
 
@@ -262,12 +261,9 @@ pub(crate) struct FileManager {
     view: BrowserView,
     view_epoch: u64,
     view_preferences: view_preferences::Preferences,
-    music_threshold: u8,
     video_timeline_decimation: u8,
     music_previews: previews::EntryPreviews,
     video_previews: video_timeline::Previews,
-    video_count: usize,
-    video_offsets: Vec<f32>,
     list_offsets: Vec<f32>,
     thumbnail_edge: f32,
     gallery_columns: usize,
@@ -285,7 +281,6 @@ pub(crate) struct FileManager {
     music: music::Music,
     midi: midi_strip::Preview,
     audio_entries: Vec<PathBuf>,
-    music_offsets: Vec<f32>,
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
@@ -351,12 +346,9 @@ impl FileManager {
             view: BrowserView::List,
             view_epoch: 0,
             view_preferences: Default::default(),
-            music_threshold: 75,
             video_timeline_decimation: 1,
             music_previews: previews::EntryPreviews::default(),
             video_previews: Default::default(),
-            video_count: 0,
-            video_offsets: vec![0.0],
             list_offsets: vec![0.0],
             thumbnail_edge: 160.0,
             gallery_columns: 1,
@@ -374,7 +366,6 @@ impl FileManager {
             music: music::Music::default(),
             midi: midi_strip::Preview::default(),
             audio_entries: Vec::new(),
-            music_offsets: vec![0.0],
             music_selection: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
@@ -822,31 +813,14 @@ impl FileManager {
         }
         self.reconcile_selection();
         self.audio_entries.clear();
-        self.video_count = 0;
-        self.video_offsets.clear();
-        self.video_offsets.push(0.0);
-        self.music_offsets.clear();
-        self.music_offsets.push(0.0);
         if let Some(directory) = &self.directory {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
                 let audio =
                     entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-                let video = entry.is_video();
-                self.video_count += usize::from(video);
-                self.video_offsets.push(
-                    self.video_offsets.last().copied().unwrap_or(0.0)
-                        + if video { VIDEO_ROW_HEIGHT } else { 28.0 }
-                        + self.search.result_height(entry),
-                );
                 if audio {
                     self.audio_entries.push(entry.path.clone());
                 }
-                self.music_offsets.push(
-                    self.music_offsets.last().copied().unwrap_or(0.0)
-                        + if audio { 108.0 } else { 28.0 }
-                        + self.search.result_height(entry),
-                );
             }
         }
         self.activate_media_view();
