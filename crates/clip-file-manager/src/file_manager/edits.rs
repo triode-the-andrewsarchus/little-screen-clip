@@ -100,9 +100,7 @@ impl FileManager {
             _ => None,
         };
         let parent = match &action {
-            NamingAction::Rename(source) if source_guard.is_some() => {
-                source.parent().unwrap_or(self.path()).to_path_buf()
-            }
+            NamingAction::Rename(source) => source.parent().unwrap_or(self.path()).to_path_buf(),
             _ => self.path().to_path_buf(),
         };
         self.edits.dialog = Some(NameDialog {
@@ -560,6 +558,44 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&redirected).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+    }
+    #[test]
+    fn contained_file_rename_uses_its_actual_parent_without_relocating_to_the_browser_root() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("contained");
+        std::fs::create_dir(&folder).unwrap();
+        let source = folder.join("old.txt");
+        std::fs::write(&source, b"contained bytes").unwrap();
+        std::fs::write(root.path().join("new.txt"), b"root sibling").unwrap();
+        let mut browser = FileManager::default();
+        browser.commit(
+            super::super::filesystem::read_directory(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap(),
+            Navigation::New,
+        );
+        browser.begin_naming(NamingAction::Rename(source.clone()));
+        let dialog = browser.edits.dialog.take().unwrap();
+        assert_eq!(dialog.parent, folder);
+        assert!(dialog.source_guard.is_none());
+        let renamed = NamingOperation {
+            action: dialog.action,
+            parent: dialog.parent,
+            name: "new.txt".into(),
+            selection_revision: 0,
+            source_guard: None,
+        }
+        .execute()
+        .unwrap();
+        assert_eq!(renamed, folder.join("new.txt"));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(renamed).unwrap(), b"contained bytes");
+        assert_eq!(
+            std::fs::read(root.path().join("new.txt")).unwrap(),
+            b"root sibling"
+        );
     }
     #[test]
     fn create_and_rename_never_overwrite_existing_files_or_links() {

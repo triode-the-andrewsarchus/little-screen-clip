@@ -241,3 +241,15 @@ The expansion-choice native light check also passes at
 Phase 7 requirements open: nested selectable/searchable contents, richer archive
 member previews/opening and compressed formats, metadata groups/sorts and Miller
 columns, followed by the full milestone acceptance audit.
+
+### Contained-entry naming preparation
+
+- [x] Capture every rename's actual source parent, including ordinary contained
+  files, rather than using the browser root unless a search guard exists. The
+  execution-time same-parent check and retained-directory mutation path remain
+  authoritative; previously an ordinary child rename would fail that check.
+- [x] Six naming tests pass (`/tmp/phase7-child-rename-tests.log`). The new test
+  begins a contained-file rename from its ancestor's browser location, executes
+  the captured operation, and verifies exact bytes remain in the child folder
+  while a same-named root sibling is untouched. This prepares child actions;
+  it does not yet expose/select children in the browser location model.
