@@ -1428,6 +1428,20 @@ pub(super) fn media_header(
         );
         header.max.x = (columns.name_end() - 8.0).max(header.left());
     }
+    // Optional summaries yield to the filename, including in narrow typed
+    // columns. Match paint_text's font and retain a small glyph-edge margin.
+    let filename_width = ui
+        .painter()
+        .layout_no_wrap(
+            entry.name.clone(),
+            FontId::proportional(14.0),
+            colors.text_primary,
+        )
+        .size()
+        .x
+        .ceil()
+        + 2.0;
+    let details_budget = (header.width() - filename_width - 12.0).max(0.0);
     let details_width = details.as_ref().map_or(0.0, |details| {
         ui.painter()
             .layout_no_wrap(
@@ -1437,9 +1451,10 @@ pub(super) fn media_header(
             )
             .size()
             .x
-            .min(header.width() * 0.7)
+            .min(details_budget)
     });
-    let name_width = (header.width() - details_width - 12.0).max(0.0);
+    let gap = if details_width > 0.0 { 12.0 } else { 0.0 };
+    let name_width = (header.width() - details_width - gap).max(0.0);
     paint_text(
         ui,
         header,
@@ -1448,7 +1463,7 @@ pub(super) fn media_header(
         &entry.name,
         colors.text_primary,
     );
-    if let Some(details) = &details {
+    if let Some(details) = details.as_ref().filter(|_| details_width > 0.0) {
         paint_text(
             ui,
             header,

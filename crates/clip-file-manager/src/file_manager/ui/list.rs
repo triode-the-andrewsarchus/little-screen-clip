@@ -743,6 +743,46 @@ mod tests {
     }
 
     #[test]
+    fn media_summaries_yield_to_short_filenames_in_narrow_headers() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("harbor.ics"), "fixture").unwrap();
+        let directory =
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        let entry = &directory.entries[0];
+        let ctx = egui::Context::default();
+        for width in [95.0, 130.0, 260.0] {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    media_header(
+                        ui,
+                        Rect::from_min_size(pos2(10.0, 10.0), vec2(width, ROW_HEIGHT)),
+                        entry,
+                        Some("5 events · UTC (2 shown) · additional summary".into()),
+                        None,
+                        WorkbenchColors::from_palette(&AppPalette::default()),
+                    );
+                });
+            });
+            let name = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == entry.name => {
+                        Some((shape.clip_rect, text))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                name.0
+                    .contains_rect(Rect::from_min_size(name.1.pos, name.1.galley.size())),
+                "filename clipped at width {width}"
+            );
+        }
+    }
+
+    #[test]
     fn typed_columns_reserve_and_paint_size_and_modified_for_every_metadata_family() {
         let root = tempfile::tempdir().unwrap();
         for name in ["sound.wav", "photo.png", "movie.mp4", "book.pdf"] {
