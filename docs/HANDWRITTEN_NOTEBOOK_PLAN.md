@@ -1,0 +1,131 @@
+# Handwritten notebook previews
+
+Active goal: add read-only Supernote `.note`, Xournal++ `.xopp` / legacy Xournal
+`.xoj`, and reMarkable notebook previews, in that priority order, on the branch
+`feat/handwritten-notebook-previews`. Work is committed in bounded steps.
+
+Completion requires all three presentation routes for every family: rendered
+file-manager list strips (with real page selection), a rendered little-screen
+preview, and a large paged viewer with thumbnails, page navigation and zoom.
+Parsing a file or displaying an embedded cover alone does not complete a family.
+No editing, device connection, cloud sync or notebook conversion workflow is
+required. Ordinary file-manager navigation and source identity guards remain.
+
+## Library investigation
+
+Checked public upstream source/manifests and registry metadata on 2026-11-13.
+These are implementation candidates, not claims of supported formats.
+
+### Supernote — first priority
+
+- [supernote_pdf](https://github.com/RohanGautam/supernote_pdf), registry 0.1.1:
+  native Rust, manifest explicitly declares MIT. It is a binary-only, single-file
+  converter, not a drop-in parser library. It loads/renders whole notebooks for
+  PDF output, and its limited device/layer handling needs comparison with real
+  current files before reuse. A missing repository LICENSE file is distinct
+  from its explicit manifest license declaration.
+- [snlib](https://github.com/Walnut356/snlib): independent Rust container and
+  `TOTALPATH` investigation. The inspected manifest/repository provides no
+  license grant. Do not import its code without a license. It also leaves bitmap
+  decoding as a TODO, so it is not a complete preview renderer.
+- [supernote-tool / supernotelib](https://github.com/jya-dev/supernote-tool),
+  inspected commit `c1019f1c290ed5b586a9518978dbb78240b882d3`: Apache-2.0,
+  parser/renderer covers original ASA, X and X2, including the 20260016 signature,
+  grayscale variants, orientations, visibility and templates. This is the first
+  reference for fidelity comparisons. Preserve a pristine source import before
+  adaptations or any attributed native port.
+- [supernote-typescript](https://github.com/philips/supernote-typescript):
+  Apache-2.0; modern raster/vector paths, recognition metadata and useful real
+  fixtures/reference exports. Its image-js/PDF integration is not a Rust drop-in.
+  Native `TOTALPATH` data must be distinguished from bitmap tracing; do not claim
+  traced bitmaps are original vector strokes.
+- [sntool](https://github.com/jdlugosz963/sntool): MIT Go implementation, small
+  layered parser/decoder. Worth comparing for ASA/RLE details, but using it would
+  add a companion build/runtime boundary instead of a compiled Rust library.
+
+Working direction: use the licensed, mature implementation as a reference and
+oracle; investigate a bounded native page reader/decoder rather than invoking a
+whole-notebook PDF converter for every visible row. Decide from real-fixture
+comparisons. Preserve encoded raster ink faithfully where that is the source's
+canonical representation; vector availability must not compromise correctness.
+
+### Xournal / Xournal++ — second priority
+
+Crates.io searches for `xournal` and `xopp` found no dedicated parser/renderer.
+The [canonical project](https://github.com/xournalpp/xournalpp) documents gzipped
+XML, legacy compatibility and external PDF backgrounds. Review its current
+loader/serializer and rendering semantics, not just example XML. The existing
+flate2/quick-xml/image/font/PDF mechanisms may make a focused native reader more
+appropriate than linking the entire C++ editor. Important cases are pressure
+widths, pen/highlighter/eraser behavior, layers, text, embedded images, ruling,
+orientation and guarded PDF backgrounds. Missing backgrounds need a visible
+explanation; existing backgrounds must actually be rendered.
+
+### reMarkable — third priority
+
+- [remarkable-rm](https://github.com/citizen-stig/remarkable-tablet-cli-rs),
+  registry 0.1.1: Rust v6 parser and raster renderer; dual MIT/Apache-2.0. Inspect
+  actual parser, CRDT ordering, color/text/eraser coverage and error paths before
+  selecting it. Its own description still labels rendering work in progress.
+- [remarkable_lines](https://github.com/Lyr-7D1h/remarkable-lines), registry 0.1.3:
+  Rust parser advertising versions 3–6; explicitly cautions about incomplete
+  testing. Compare format coverage and licenses with the renderer candidate.
+- [remarkable-rm TypeScript](https://github.com/Scratchydisk/remarkable-rm):
+  v5/v6 SVG, pen simulation and newer color fields; useful alternative and
+  comparison corpus. Evaluate the license before any code reuse.
+- Also examine [rmscene](https://github.com/ricklupton/rmscene),
+  [rmc](https://github.com/ricklupton/rmc), and
+  [rmconvert](https://github.com/YakBarber/rmconvert), plus practical `.rmdoc`
+  exports and `.rmn` archives. Raw `.rm` pages alone must not be mistaken for an
+  entire notebook. RealMedia also uses `.rm`; dispatch requires a matching header.
+
+## Architecture and validation
+
+Reuse candidates were queried and the baseline `before-handwritten-notebooks`
+was established before implementation. Current useful owners:
+
+- Core `FileSource` / `ReadCheck`, guarded ordinary-file reads, CommandRequest,
+  existing cancellable task and staging mechanisms.
+- File-manager `pdf_strip::Pages` / shared preview delivery and page-at-open
+  preservation; shared studio PDF thumbnail/detail caches and page viewport.
+- Little-screen file ingestion and first-page image payloads; existing bounded
+  SVG/raster painting and bundled fonts.
+
+Prefer extending page-source dispatch and read-only presentation in those owners
+to a second page cache/viewer or converting every notebook page to temporary PDF.
+Do not accidentally expose PDF delete/rotate/OCR-write controls or shortcuts on
+notebooks. Parsing and decoding stay on bounded workers. Preview dimensions,
+page counts, decompression, metadata blocks and retained pixel/source memory
+must be bounded independently of notebook length. Preserve source revisions and
+selected page through asynchronous loading. Companion files and archive members
+must obey ordinary-file guards and never follow arbitrary archive paths or
+external resource URLs.
+
+Acceptance checklist (each family must satisfy every applicable row):
+
+- [ ] Header-qualified dispatch, including malformed/unsupported inputs and
+  extension collisions; no generic XML/JSON or RealMedia misclassification.
+- [ ] Real source fixtures and independent exported/reference images establish
+  visible ink, correct page order, dimensions, layers, orientation and templates.
+- [ ] Supernote current X/X2 and older variants are qualified or have precise,
+  evidence-based compatibility diagnostics.
+- [ ] Xournal++ and legacy Xournal pages, images/text/pressure/ruling and ordinary
+  PDF backgrounds render; incomplete inputs do not become blank-success pages.
+- [ ] reMarkable raw page versions and practical multi-page containers preserve
+  ordering and ordinary backgrounds; current pens, highlights, text and erasers
+  have meaningful reference comparisons.
+- [ ] List strips render bounded visible first/last page groups; clicked pages
+  remain selected when the large viewer finishes loading.
+- [ ] Little-screen ingestion produces actual notebook page artwork.
+- [ ] Large viewer provides thumbnails, page navigation and useful zoom without
+  notebook editing or a browser engine.
+- [ ] Source replacement, cancellation and protected inputs retain existing
+  guard/lifecycle behavior; malformed data cannot cause unbounded allocation.
+- [ ] Native GUI checks in both themes, appropriate backend/integration tests,
+  strict Clippy, formatting and architecture comparison complete.
+- [ ] Accurate catalog/compatibility documentation and review examples complete.
+
+Personal `.cargo/config.toml` and `config.toml` edits are outside the commits.
+Check disk space before large builds; serialize Cargo and cleanup. Reuse the
+existing target directory. Use a frozen executable for GUI checks when workers
+relaunch `current_exe`, and keep pristine imports separate from adaptations.
