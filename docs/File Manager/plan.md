@@ -611,9 +611,8 @@ Unresolved later-phase decisions should not block the basic browser.
 Phase 3 is accepted and committed as `278091e`. Phase 4 is complete after a current-source and both-theme native audit; shared studios, bounded listing previews, guarded saves and protected exports are recorded in [phase4.md](phase4.md). Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
 
 
-Current active milestone: [Phase 7](phase7.md). Prioritize inline folder/archive
-previews, bounded nested expansion and search integration, meaningful metadata
-groups/headers/sorting, remembered folder views with explicit inheritance, and
-Miller columns with a shared rich List in the final column. Automatic media-view selection is
-excluded from the current authorized milestone. Additional format support does
-not hold Phase 4 or Phase 6 open.
+Current active milestone: [Phase 8](phase8.md). Phase 7 is complete and merged
+as `bf6bf73e`; its [closeout](phase7_closeout.md) records the current-source audit,
+workspace gate, native workflows and intentional limits. Start organization work
+with explicit virtual Home and static file/folder pins. Additional format support
+and optional Phase 7 warm/cool exploration do not hold this milestone open.

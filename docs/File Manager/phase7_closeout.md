@@ -13,7 +13,7 @@ Personal `.cargo/config.toml` and `config.toml` changes stay outside commits.
 - [x] 5. Update selected acceptance drivers and reconcile historical/current documentation.
 - [x] 6. Pass workspace tests, strict all-target Clippy, owned-source formatting and canonical build.
 - [x] Record requirement-by-requirement review checkpoint and remaining intentional limits.
-- [ ] Merge Phase 7 into main, preserving personal configuration changes.
+- [x] Merge Phase 7 into main, preserving personal configuration changes.
 - [ ] Start Phase 8 with its roadmap and a first usable implementation slice.
 
 ## Evidence
@@ -158,3 +158,10 @@ is optional, new automatic views and audio similarity are excluded. Home,
 organization marks/sets, visibility and project schemas remain Phase 8 work.
 This is the technical review checkpoint for the authorized merge, not a claim
 that future user review cannot find further issues.
+
+## Merge
+
+Merged with `--no-ff` as `bf6bf73e` on main. The complete Phase 7 branch is an
+ancestor of main; the merge has no additional source changes beyond the tested
+branch. Both personal configuration files were restored with identical SHA-256
+hashes. Phase 8 starts on `feat/file-manager-phase8` from that merge.
