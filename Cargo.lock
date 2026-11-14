@@ -6195,6 +6195,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "symphonia",
+ "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tinypsd",

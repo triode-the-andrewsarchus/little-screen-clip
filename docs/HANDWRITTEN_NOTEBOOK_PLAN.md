@@ -444,3 +444,37 @@ The corpus remains immutable; runtime output must never replace its references.
   longer silently inherits that thumbnail ceiling. A real PDF regression test
   verifies a requested 2048-pixel background stays at 2048, and the canonical
   Xournal/Supernote comparisons still pass.
+
+### Complete archive-page backend checkpoint
+
+- [x] Index plain RMN TAR exports through the same authored document plan as
+  RMDOC ZIPs. Keep bounded entry tables and seek only retained payload offsets;
+  reject traversal, duplicate canonical names, TAR links/special entries,
+  truncation and source/member/count limits. Never extract by archive paths.
+- [x] Resolve nested RMT templates through their actual `template.json` identity,
+  including an archive filename that differs from `fileName`. Decode only the
+  selected SVG/PNG artwork, with bounded XML/image budgets, bundled fonts and
+  no external resource resolver. SVG image/foreign/script payloads and external
+  hrefs fail explicitly; ordinary vector templates and PNG artwork are supported.
+- [x] Apply legacy `.pagedata`, preserve modern template references, composite
+  selected annotation ink over template/PDF backgrounds, honor source-PDF page
+  redirection and render intentionally empty inserted pages. Present corrupt ink
+  and missing source PDFs remain errors. Missing factory paper artwork instead
+  produces a structured metadata warning while retaining usable real ink.
+- [x] Retain explicitly derived RMN/RMT and PDF-redirection fixtures with our own
+  paper/PDF artwork and the already licensed real v5/v6 ink. These exercise the
+  documented archive layouts without pretending to be untouched tablet exports.
+  See RCU's [RMN/RMT appendices](https://www.davisr.me/projects/rcu/manual.pdf),
+  pages 53–56 (printed numbering). No RCU implementation is imported.
+- [x] Twenty-six combined notebook backend tests and strict all-target core
+  Clippy pass, including independent tablet comparisons, known background colors,
+  source-page order, actual ink, empty insertion, missing PDF/corrupt ink errors,
+  TAR limits and resource rejection. Scoped archive modules have no clone groups,
+  dependency cycles or complexity findings (maximum function complexity 14).
+  Whole-repository findings are unchanged Python ordering noise and an existing
+  PDF edit fallback clone outside these changes; its source is unchanged.
+- [x] Consolidate identical decoder cancellation checks under the notebook owner,
+  retaining Acquire observation. Shared page metadata now owns optional warnings;
+  existing worker JSON omits empty warnings for compatibility.
+- [ ] Wire the new backend through guarded worker selection, preserve RealMedia
+  routing, display warnings and qualify list/little-screen/large-view interaction.

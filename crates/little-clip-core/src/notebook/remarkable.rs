@@ -6,7 +6,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod archive;
+mod background;
 mod legacy;
+mod package;
+pub mod preview;
 
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 65_536;
@@ -211,20 +214,41 @@ fn coordinate(value: f64) -> bool {
 /// # Errors
 /// Returns parser, geometry, cancellation, pixel-budget or PNG encoding errors.
 pub fn render(bytes: &[u8], edge: u32, cancel: &AtomicBool) -> Result<(Vec<u8>, u32, u32), String> {
+    let page = parse(bytes, cancel)?;
+    let options = output_options(&page, edge)?;
+    render_model(&page, options, None, cancel)
+}
+
+fn output_options(
+    page: &remarkable_rm::Page,
+    edge: u32,
+) -> Result<remarkable_rm::RenderOptions, String> {
     if !(1..=4096).contains(&edge) {
         return Err("reMarkable preview edge must be in 1..=4096".into());
     }
-    let page = parse(bytes, cancel)?;
-    let size = remarkable_rm::RenderOptions::for_page(&page);
+    let size = remarkable_rm::RenderOptions::for_page(page);
     let scale = f64::from(edge) / f64::from(size.width.max(size.height));
-    let width = (f64::from(size.width) * scale).round().max(1.0) as u32;
-    let height = (f64::from(size.height) * scale).round().max(1.0) as u32;
-    let png = remarkable_rm::render_page(&page, remarkable_rm::RenderOptions { width, height })
+    Ok(remarkable_rm::RenderOptions {
+        width: (f64::from(size.width) * scale).round().max(1.0) as u32,
+        height: (f64::from(size.height) * scale).round().max(1.0) as u32,
+    })
+}
+
+fn render_model(
+    page: &remarkable_rm::Page,
+    options: remarkable_rm::RenderOptions,
+    background: Option<&remarkable_rm::BackgroundImage>,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Notebook preview cancelled".into());
+    }
+    let png = remarkable_rm::render_page_with_background(page, options, background)
         .map_err(|error| error.to_string())?;
     if cancel.load(Ordering::Relaxed) {
         return Err("Notebook preview cancelled".into());
     }
-    Ok((png, width, height))
+    Ok((png, options.width, options.height))
 }
 
 #[cfg(test)]

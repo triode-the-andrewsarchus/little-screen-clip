@@ -7,7 +7,26 @@ mod vector;
 mod worker;
 pub mod xournal;
 
-pub use worker::{Info, PageSize, inspect, render_page, run_worker_cli};
+pub use worker::{inspect, render_page, run_worker_cli};
+
+use serde::{Deserialize, Serialize};
+
+/// Native page dimensions, in authored order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Read-only notebook summary without decoded ink or source-specific offsets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Info {
+    pub format: String,
+    pub pages: Vec<PageSize>,
+    /// Source artwork that is unavailable while the actual ink remains usable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
 
 const HEADER_BYTES: usize = 4096;
 
@@ -47,4 +66,12 @@ pub fn has_header(
     };
     source.check_file(&input)?;
     Ok(recognized)
+}
+
+pub(super) fn check_cancel(cancel: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        Err("Notebook preview cancelled".into())
+    } else {
+        Ok(())
+    }
 }

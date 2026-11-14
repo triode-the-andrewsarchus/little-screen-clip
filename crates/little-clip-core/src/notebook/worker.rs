@@ -1,6 +1,6 @@
 //! Disposable notebook readers sharing the ordinary-file and command boundaries.
+use super::{Info, PageSize};
 use crate::{CommandRequest, file_source::ReadCheck};
-use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -11,20 +11,6 @@ use std::{
 
 const FLAG: &str = "--internal-notebook-worker";
 const MAX_OUTPUT: usize = 64 * 1024 * 1024;
-
-/// Native page dimensions, in authored order.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PageSize {
-    pub width: u32,
-    pub height: u32,
-}
-
-/// Read-only notebook summary without decoded ink or source-specific offsets.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Info {
-    pub format: String,
-    pub pages: Vec<PageSize>,
-}
 
 /// Inspects an ordinary notebook on a bounded disposable worker.
 ///
@@ -205,6 +191,7 @@ fn prepare_info(input: &mut File, supernote: bool) -> Result<Info, String> {
         let document = super::supernote::inspect(input)?;
         Ok(Info {
             format: "Supernote".into(),
+            warnings: Vec::new(),
             pages: document
                 .pages
                 .into_iter()
@@ -218,6 +205,7 @@ fn prepare_info(input: &mut File, supernote: bool) -> Result<Info, String> {
         let document = super::xournal::inspect(input, &AtomicBool::new(false))?;
         Ok(Info {
             format: "Xournal".into(),
+            warnings: Vec::new(),
             pages: document
                 .pages
                 .into_iter()

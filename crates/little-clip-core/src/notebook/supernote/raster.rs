@@ -2,13 +2,11 @@
 //!
 //! RATTA_RLE/ASA interpretation is checked against the retained Apache-2.0
 //! supernotelib reference (copyright 2020 jya), not against traced vector ink.
+use super::super::check_cancel;
 use super::*;
 use base64::Engine;
 use image::{GrayImage, Rgb, RgbImage};
-use std::{
-    io::Cursor,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{io::Cursor, sync::atomic::AtomicBool};
 
 const LAYERS: &[&str] = &["MAINLAYER", "LAYER1", "LAYER2", "LAYER3", "BGLAYER"];
 const MAX_BITMAP: usize = 32 * 1024 * 1024;
@@ -343,13 +341,6 @@ fn asa(data: &[u8], page: &Page) -> Result<RgbImage, String> {
         *target = Rgb([value; 3]);
     }
     Ok(image)
-}
-fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) {
-        Err("Notebook preview cancelled".into())
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

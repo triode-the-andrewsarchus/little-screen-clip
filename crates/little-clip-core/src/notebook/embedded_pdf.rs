@@ -16,7 +16,8 @@ impl EmbeddedPdf {
         Ok(Self { file, source })
     }
     pub fn page(&self, page: usize, edge: u32) -> Result<Vec<u8>, String> {
-        let result = crate::pdf::render_pdf_page_bounded(self.file.path(), page, edge)?.0;
+        let result =
+            crate::pdf::render_pdf_page_png(self.file.path(), page, edge.clamp(1, 4096), true)?.0;
         self.source.check_file(self.file.as_file())?;
         Ok(result)
     }

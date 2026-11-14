@@ -1,13 +1,12 @@
-//! Lazy `.rmdoc` ZIP indexing; document metadata, never ZIP enumeration, orders pages.
-use crate::notebook::container::zip_member;
+//! Lazy reMarkable notebook indexing; document metadata, never ZIP enumeration, orders pages.
+use super::package::Package;
 use serde_json::Value;
 use std::{
     collections::HashSet,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek},
     sync::atomic::AtomicBool,
 };
 
-const MAX_SOURCE: u64 = 512 * 1024 * 1024;
 const MAX_METADATA: usize = 1024 * 1024;
 
 /// A live page's source annotation and background references, in authored order.
@@ -34,20 +33,16 @@ pub struct Index {
 /// Rejects ambiguous roots, unsupported document types, malformed metadata,
 /// unsafe page IDs, duplicate live pages and entry/page/source-size limits.
 pub fn inspect(input: &mut (impl Read + Seek), cancel: &AtomicBool) -> Result<Index, String> {
-    if input
-        .seek(SeekFrom::End(0))
-        .map_err(|error| error.to_string())?
-        > MAX_SOURCE
-    {
-        return Err("reMarkable archive exceeds 512 MiB".into());
-    }
-    input.rewind().map_err(|error| error.to_string())?;
-    let mut zip = zip::ZipArchive::new(input).map_err(|error| error.to_string())?;
-    if zip.len() > 8192 {
-        return Err("reMarkable archive exceeds the entry budget".into());
-    }
-    let roots: Vec<_> = zip
-        .file_names()
+    let mut package = Package::open(input, cancel)?;
+    from_package(&mut package, cancel)
+}
+
+pub(super) fn from_package<R: Read + Seek>(
+    package: &mut Package<R>,
+    cancel: &AtomicBool,
+) -> Result<Index, String> {
+    let roots: Vec<_> = package
+        .names()
         .filter_map(|name| name.strip_suffix(".metadata"))
         .filter(|name| component(name))
         .map(str::to_owned)
@@ -55,31 +50,33 @@ pub fn inspect(input: &mut (impl Read + Seek), cancel: &AtomicBool) -> Result<In
     let [root] = roots.as_slice() else {
         return Err("Expected one reMarkable document root".into());
     };
-    let metadata: Value = serde_json::from_slice(&zip_member(
-        &mut zip,
-        &format!("{root}.metadata"),
-        MAX_METADATA,
-        cancel,
-    )?)
+    let metadata: Value = serde_json::from_slice(
+        &package
+            .read(&format!("{root}.metadata"), MAX_METADATA, cancel)?
+            .ok_or("Missing reMarkable document metadata")?,
+    )
     .map_err(|error| format!("Invalid reMarkable metadata: {error}"))?;
     if metadata.get("type").and_then(Value::as_str) != Some("DocumentType") {
         return Err("Not a reMarkable document archive".into());
     }
-    let content: Value = serde_json::from_slice(&zip_member(
-        &mut zip,
-        &format!("{root}.content"),
-        MAX_METADATA,
-        cancel,
-    )?)
+    let content: Value = serde_json::from_slice(
+        &package
+            .read(&format!("{root}.content"), MAX_METADATA, cancel)?
+            .ok_or("Missing reMarkable document content")?,
+    )
     .map_err(|error| format!("Invalid reMarkable content: {error}"))?;
-    let file_type = content
-        .get("fileType")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let file_type = match content.get("fileType") {
+        None => "",
+        Some(value) => value.as_str().ok_or("Invalid reMarkable document type")?,
+    };
     if !matches!(file_type, "" | "notebook" | "pdf" | "epub") {
         return Err(format!("Unsupported reMarkable document type: {file_type}"));
     }
-    let pages = page_plan(&content, matches!(file_type, "pdf" | "epub"))?;
+    let mut pages = page_plan(&content, matches!(file_type, "pdf" | "epub"))?;
+    if content.get("cPages").is_none() {
+        legacy_templates(package, root, &mut pages, cancel)?;
+    }
+
     Ok(Index {
         root: root.clone(),
         title: metadata
@@ -90,6 +87,23 @@ pub fn inspect(input: &mut (impl Read + Seek), cancel: &AtomicBool) -> Result<In
         file_type: file_type.to_owned(),
         pages,
     })
+}
+
+fn legacy_templates<R: Read + Seek>(
+    package: &mut Package<R>,
+    root: &str,
+    pages: &mut [Page],
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    if let Some(data) = package.read(&format!("{root}.pagedata"), MAX_METADATA, cancel)? {
+        let data = std::str::from_utf8(&data).map_err(|_| "Invalid reMarkable pagedata")?;
+        for (page, template) in pages.iter_mut().zip(data.lines()) {
+            if !matches!(template, "" | "Blank") {
+                page.template = Some(template.to_owned());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn component(name: &str) -> bool {
@@ -255,6 +269,7 @@ fn pdf_reference(value: &Value) -> Result<Option<u32>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notebook::container::zip_member;
     use serde_json::json;
     use std::{
         io::{Cursor, Write},
