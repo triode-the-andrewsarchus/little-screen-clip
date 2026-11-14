@@ -23,7 +23,9 @@ keyboard focus, and a release frame could reactivate default list focus. Both
 rows now request focus and mouse gestures retain ownership through release.
 `cargo test -p clip-file-manager --lib bookmark_and_mount_rows_keep -j4` passes
 in both views using mounted-folder fixtures, without invoking mount operations.
-The remaining native keyboard matrix is recorded below when complete.
+Each rendered frame refreshes the fixture scan timestamp, so a slow test never
+falls through to the host mount inventory. Native keyboard evidence is recorded
+below.
 
 Task 1: `cargo test -p clip-file-manager --lib media_summaries_yield -j4` passes.
 The shared header reserves measured filename width before optional summaries at

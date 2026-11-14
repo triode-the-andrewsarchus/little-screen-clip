@@ -821,6 +821,7 @@ mod tests {
             let ctx = egui::Context::default();
             egui_extras::install_image_loaders(&ctx);
             let render = |manager: &mut FileManager, events| {
+                manager.mounts.last_scan = Some(Instant::now());
                 ctx.run(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
