@@ -21,6 +21,29 @@ checkpoints below. These changes must be completed before final acceptance:
   contents through ordinary List/Columns presentation. Keep archive origin and
   lifecycle explicit, with a persistent bottom-bar compressed-archive warning.
 
+### Review verification in progress
+
+- [x] Fix mixed-size SVG icon softness. egui 0.27 caches textures without the
+  SVG size hint; icon URIs now distinguish raster sizes. Regression test loads
+  16px, 40px and 64px versions in one context and verifies their actual sizes.
+  `cargo test -p clip-ui raster_size_tests` passes.
+- Folder strips are fixed-height with 64/44/32px inline layers. Direct-child
+  capacity is reserved first; complete nested groups must fit spare capacity.
+  Targeted container tests pass (36); complete file-manager tests passed
+  939 with six ignored before the final review integration.
+- Columns now uses a compact full ancestor rail, an optional nearby sibling
+  column and the shared rich List. The old separate preview/pane formatter is
+  removed. Native review caught narrow-name/count crowding; the count now yields
+  space when the name column is narrow.
+- Archive browsing uses managed temporary workspaces and the existing validated
+  ZIP/TAR/compressed-TAR readers. Bounds: 4,096 members, 32 path levels, 512 MiB
+  encoded source, 64 MiB expanded per snapshot and 256 MiB retained history cache.
+  Links/special members, unsafe/duplicate paths, prefix collisions, truncation,
+  failed checksums and incomplete scans fail without publishing a partial folder.
+  The original archive stays unchanged. Browser mutations into snapshots are
+  disabled; outgoing drags are Copy-only; text editing requires Save As.
+- Final native dark/light runs and final strict checks remain pending.
+
 ## Required delivery and acceptance
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;

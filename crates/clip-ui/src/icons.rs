@@ -536,7 +536,14 @@ impl Icon {
 
     /// Creates an `egui::Image` with the exact square dimension.
     pub fn image(&self, size: f32) -> egui::Image<'static> {
-        egui::Image::from_bytes(self.uri(), self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
+        // egui 0.27's texture cache ignores the SVG size hint. Distinct raster
+        // sizes need distinct keys, or a small toolbar icon softens larger cards.
+        let uri = format!(
+            "{}-{}px.svg",
+            self.uri().trim_end_matches(".svg"),
+            size.ceil().max(1.0) as u32
+        );
+        egui::Image::from_bytes(uri, self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
     }
 
     /// Creates an `egui::Image` with exact square dimension and color tint.
@@ -706,6 +713,28 @@ mod tests {
                 icon,
                 res.err()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod raster_size_tests {
+    use super::*;
+    #[test]
+    fn painting_large_icon_after_small_icon_does_not_reuse_the_small_raster() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        for edge in [16.0, 40.0, 64.0, 16.0] {
+            let texture = Icon::Folder
+                .image(edge)
+                .load_for_size(&ctx, Vec2::splat(edge))
+                .unwrap();
+            match texture {
+                egui::load::TexturePoll::Ready { texture } => {
+                    assert_eq!(texture.size, Vec2::splat(edge))
+                }
+                _ => panic!("Embedded SVG did not load synchronously"),
+            }
         }
     }
 }
