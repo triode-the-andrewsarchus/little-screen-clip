@@ -33,3 +33,16 @@ Stable 1.3.8 cannot load the current transformed text/image fixture layout;
 the nightly can. Its legacy packaged PDF fixture contains `pageno="1ll"` and
 `"2ll"`; upstream warns about trailing characters but renders pages 1 and 2.
 Keep that compatibility evidence distinct from a clean modern integer field.
+
+Reference font policy: exports use a private Fontconfig configuration pointing
+only at the application's bundled fonts. Generic Sans/Serif/Monospace and their
+metric equivalents select Arimo/Tinos/Cousine, with the existing CJK fallback.
+This removes the host desktop's font substitutions from layout comparisons; it
+does not modify Xournal++ or any document bytes. The export script records the
+policy and does not alter user font settings. Earlier exploratory exports used
+the host's Noto Sans default and are not the committed comparison baseline.
+
+Additional unmodified qualification fixtures from the same pinned revision:
+
+- `packaged/image.xopp` from `test/files/packaged_xopp/imgAttachment/new.xopp`, SHA-256 `3eb290d1b764d2f4ee1c273209b77fe44d15bcb5e7ddd774ad4dafc72b8b1524`.
+- `load/latex-fileversion-5.xopp` from `test/files/load/latex-fileversion-5.xopp`, SHA-256 `e74e9dacf6f586437b9797112aca11fb65a8e8e585d4f78c53eb1d7649cfa37a`.

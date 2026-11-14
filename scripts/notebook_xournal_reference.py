@@ -21,6 +21,12 @@ CASES = [
     ("load/pages.xopp", 3, "lined-page"),
     ("load/pages.xopp", 11, "image-background"),
     ("load/relativePaths.xopp", 1, "external-pdf"),
+    ("load/pages.xopp", 5, "staves-page"),
+    ("load/pages.xopp", 7, "dotted-page"),
+    ("load/pages.xopp", 8, "isodotted-page"),
+    ("load/pages.xopp", 9, "isograph-page"),
+    ("packaged/image.xopp", 1, "packaged-image"),
+    ("load/latex-fileversion-5.xopp", 1, "embedded-latex"),
     ("packaged/stroke.xopp", 1, "packaged-stroke"),
     ("packaged/pdf-background.xopp", 2, "packaged-pdf-page-2"),
 ]
@@ -38,6 +44,17 @@ def main():
     with tempfile.TemporaryDirectory(prefix="xournal-reference-home-") as home:
         env = os.environ | {"HOME": home, "XDG_CONFIG_HOME": home + "/config",
                             "XDG_DATA_HOME": home + "/data", "XDG_CACHE_HOME": home + "/cache"}
+        # Generic document fonts are resolved identically on any developer host.
+        # This changes font selection only; the upstream renderer remains untouched.
+        fonts = Path(__file__).resolve().parent.parent / "crates/little-clip-render/assets/fonts"
+        config = Path(home) / "fonts.conf"
+        aliases = {"Sans": "Arimo", "sans-serif": "Arimo", "Liberation Sans": "Arimo",
+                   "Serif": "Tinos", "serif": "Tinos", "Times New Roman": "Tinos",
+                   "Monospace": "Cousine", "monospace": "Cousine", "Courier New": "Cousine"}
+        from xml.sax.saxutils import escape
+        rules = "".join(f'<alias binding="strong"><family>{escape(name)}</family><prefer><family>{family}</family></prefer></alias>' for name, family in aliases.items())
+        config.write_text(f'<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig><dir>{escape(str(fonts))}</dir><cachedir>{escape(home)}/font-cache</cachedir>{rules}</fontconfig>')
+        env["FONTCONFIG_FILE"] = str(config)
         env.pop("DISPLAY", None)
         env.pop("WAYLAND_DISPLAY", None)
         for name, page, label in CASES:
@@ -50,6 +67,7 @@ def main():
             if process.returncode or not destination.is_file():
                 raise RuntimeError(f"Reference export failed for {name}, page {page}: {diagnostic}")
             results.append(dict(source=name, page=page, image=destination.name,
+                                font_policy="bundled Arimo/Tinos/Cousine and CJK fallback",
                                 sha256=hashlib.sha256(destination.read_bytes()).hexdigest(),
                                 diagnostic=diagnostic))
     (output / "reference-exports.json").write_text(json.dumps(results, indent=2) + "\n")
