@@ -226,3 +226,30 @@ Supernote presentation now works in all three requested routes for qualified
 X/X2 fixtures. Original ASA sources still need a real licensed fixture to
 qualify their existing decoder; unknown versions and missing layer visibility
 report explicit compatibility failures. Xournal and reMarkable remain required.
+
+## Xournal investigation and corpus checkpoint
+
+- [x] Establish `before-xournal-preview` at `fae43fde`. Registry queries for
+  `xopp` still return no crates; `xournal` returns only unrelated utilities.
+- [x] Compare the canonical C++ loader/renderer with Rnote's Rust importer
+  (`crates/rnote-engine/src/fileformats/xoppformat.rs`, revision
+  `83a76367dbd3d6c461c10553c45231799a25ea4b`). Rnote's parser is coupled to its
+  engine traits/model, decompresses without an expansion bound, and does not
+  handle the upstream ZIP test containers. Importing the complete engine would
+  bring much more than a document reader. Use a focused bounded reader with
+  existing flate2/quick-xml XML preflight and the already-used native resvg
+  renderer, rather than importing a GTK editor or copying either codebase.
+- [x] Retain unmodified licensed fixtures: original Xournal 0.4.5, modern pressure/
+  eraser/highlighter strokes, named layers, background styles, transformed text
+  and images, a relative external PDF, and ZIP-contained stroke/PDF documents.
+  Their companion paths, hashes and source revision are recorded alongside them.
+- [x] Obtain the official Xournal++ 1.3.8 x86_64 AppImage for development-only
+  reference exports. Its extracted CLI renders PNG without a display; it is not
+  shipped or invoked by the application. Initial canonical stroke export succeeds.
+- [ ] Implement bounded gzipped XML/plain XML/ZIP container reads and page index.
+- [ ] Render actual geometry, text/images and guarded backgrounds; compare with
+  canonical exports before enabling the three presentation routes.
+
+References inspected directly: [upstream XML loader](https://github.com/xournalpp/xournalpp/blob/4d6810b3760c7b3f90c6a3271d6a5623cfb5481f/src/core/control/xojfile/XmlParser.cpp),
+[stroke renderer](https://github.com/xournalpp/xournalpp/blob/4d6810b3760c7b3f90c6a3271d6a5623cfb5481f/src/core/view/StrokeView.cpp),
+[Rnote importer](https://github.com/flxzt/rnote/blob/83a76367dbd3d6c461c10553c45231799a25ea4b/crates/rnote-engine/src/fileformats/xoppformat.rs).
