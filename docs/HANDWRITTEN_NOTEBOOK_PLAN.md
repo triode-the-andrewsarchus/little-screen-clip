@@ -170,8 +170,19 @@ acceptance items above remain required. The goal remains active.
   ten-page metadata, late-page visible ink, bounded dimensions, rejected pages,
   pre-cancellation and protected inputs. Strict core Clippy and checks of
   studios/daemon/CLI pass.
-- [ ] Connect little-screen artwork ingestion and rehydration.
+- [x] Connect little-screen artwork ingestion and IPC rehydration. The real
+  subprocess harness checks visible premultiplied page thumbnails, original-file
+  association, page-count labels, exact PNG regeneration after serialization
+  omits payload bytes, and ordinary-text fallback for a misleading `.note`.
+  PDF, Office and notebook artwork share first-page item construction.
 - [ ] Connect list strips and selected-page handoff.
 - [ ] Extend the shared paged viewer in read-only mode, disabling PDF-only tools.
 
 These are integration checkpoints, not completion of the full format goal.
+
+Integration architecture review: the global comparison reports clone flags on
+modified files, including unchanged payload construction and the required early
+worker dispatch in independent executables. Clone groups decrease by two and
+maximum complexity is unchanged. The reported CLI complexity is the existing
+async body renamed from `main` to `run_cli`; an unrelated Python cycle changes
+only member order. No additional application framework or raster cache is added.

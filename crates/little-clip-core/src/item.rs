@@ -575,7 +575,7 @@ impl ClipItem {
             return Self::from_directory(path.to_path_buf());
         }
         type MediaLoader = fn(&Path) -> Option<ClipItem>;
-        let media: [(bool, MediaLoader); 7] = [
+        let media: [(bool, MediaLoader); 8] = [
             (crate::animation::is_video_path(path), |p| {
                 Self::from_video(p.to_path_buf())
             }),
@@ -588,6 +588,10 @@ impl ClipItem {
                 Self::from_raw_image_file,
             ),
             (crate::pdf::is_pdf_path(path), Self::from_pdf_file),
+            (
+                crate::notebook::is_candidate_path(path),
+                Self::from_notebook_file,
+            ),
             (
                 crate::document::is_office_document(path),
                 Self::from_office_document_file,
@@ -693,75 +697,83 @@ impl ClipItem {
     }
 
     fn from_pdf_file(path: &Path) -> Option<Self> {
-        let (page1_bytes, w, h) = crate::pdf::render_pdf_page_preview(path, 1, 800).ok()?;
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "document.pdf".to_string());
-        let page_count = crate::pdf::get_pdf_info(path)
-            .map(|i| i.page_count)
+        let page = crate::pdf::render_pdf_page_preview(path, 1, 800).ok()?;
+        let count = crate::pdf::get_pdf_info(path)
+            .map(|info| info.page_count)
             .unwrap_or(1);
-        let file_size_kb = std::fs::metadata(path)
-            .map(|m| m.len() as f64 / 1024.0)
-            .unwrap_or(0.0);
-        let subtitle = format!("PDF ({} pg) • {:.1} KB", page_count, file_size_kb);
-        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
-
-        Some(Self {
-            id: Uuid::new_v4(),
-            created_at: current_unix_timestamp(),
-            payload: ClipPayload::Image {
-                bytes: page1_bytes,
-                path: Some(path.to_path_buf()),
-                width: w,
-                height: h,
-                mime: "application/pdf".to_string(),
-                thumbnail,
-            },
-            title: file_name,
-            subtitle,
-            details: vec![format!("{} pages", page_count), "PDF".to_string()],
-            handler_tag: "PDF (DOCUMENT)".to_string(),
-        })
+        Some(Self::from_document_page(
+            path,
+            page,
+            count,
+            "PDF",
+            "application/pdf",
+        ))
     }
 
     fn from_office_document_file(path: &Path) -> Option<Self> {
         let pdf_path = crate::document::ensure_rendered_pdf(path).ok()?;
-        let (page1_bytes, w, h) = crate::pdf::render_pdf_page_preview(&pdf_path, 1, 800).ok()?;
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "document".to_string());
-        let page_count = crate::pdf::get_pdf_info(&pdf_path)
-            .map(|i| i.page_count)
+        let page = crate::pdf::render_pdf_page_preview(&pdf_path, 1, 800).ok()?;
+        let count = crate::pdf::get_pdf_info(&pdf_path)
+            .map(|info| info.page_count)
             .unwrap_or(1);
+        let label = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_uppercase())
+            .unwrap_or_else(|| "DOC".into());
+        Some(Self::from_document_page(
+            path,
+            page,
+            count,
+            &label,
+            crate::document::guess_office_mime(path),
+        ))
+    }
+
+    fn from_notebook_file(path: &Path) -> Option<Self> {
+        let source = crate::file_source::FileSource::capture(path).ok()?;
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let info = crate::notebook::inspect(path, &cancel).ok()?;
+        let page = crate::notebook::render_page(path, 1, 800, &cancel).ok()?;
+        source.check().ok()?;
+        Some(Self::from_document_page(
+            path,
+            page,
+            info.pages.len(),
+            &info.format,
+            "application/x-handwritten-notebook",
+        ))
+    }
+
+    fn from_document_page(
+        path: &Path,
+        (bytes, width, height): (Vec<u8>, u32, u32),
+        page_count: usize,
+        label: &str,
+        mime: &str,
+    ) -> Self {
         let file_size_kb = std::fs::metadata(path)
             .map(|m| m.len() as f64 / 1024.0)
             .unwrap_or(0.0);
-        let ext = path
-            .extension()
-            .map(|e| e.to_string_lossy().to_uppercase())
-            .unwrap_or_else(|| "DOC".to_string());
-        let subtitle = format!("{} ({} pg) • {:.1} KB", ext, page_count, file_size_kb);
-        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
-        let mime = crate::document::guess_office_mime(path).to_string();
-
-        Some(Self {
+        let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
+        Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
-                bytes: page1_bytes,
+                bytes,
                 path: Some(path.to_path_buf()),
-                width: w,
-                height: h,
-                mime,
+                width,
+                height,
+                mime: mime.into(),
                 thumbnail,
             },
-            title: file_name,
-            subtitle,
-            details: vec![format!("{} pages", page_count), ext.clone()],
-            handler_tag: format!("{ext} (DOCUMENT)"),
-        })
+            title: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".into()),
+            subtitle: format!("{label} ({page_count} pg) • {file_size_kb:.1} KB"),
+            details: vec![format!("{page_count} pages"), label.into()],
+            handler_tag: format!("{label} (DOCUMENT)"),
+        }
     }
 
     fn from_text_or_code_file(path: &Path) -> Option<Self> {
@@ -1388,7 +1400,18 @@ impl ClipItem {
                 let actual_bytes = if !bytes.is_empty() {
                     bytes.clone()
                 } else if let Some(p) = path {
-                    crate::kernel_interface::read_content(p).ok()?
+                    if mime == "application/x-handwritten-notebook" {
+                        crate::notebook::render_page(
+                            p,
+                            1,
+                            800,
+                            &std::sync::atomic::AtomicBool::new(false),
+                        )
+                        .ok()?
+                        .0
+                    } else {
+                        crate::kernel_interface::read_content(p).ok()?
+                    }
                 } else {
                     return None;
                 };
