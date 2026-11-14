@@ -320,7 +320,7 @@ impl FileManager {
             Sense::focusable_noninteractive(),
         );
         self.midi.render_feedback(ui, palette);
-        let scroll = self.list_scroll(ROW_HEIGHT);
+        let scroll = self.list_scroll(ui, ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {
                 "Loading folder…"
@@ -588,7 +588,7 @@ mod tests {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             let height = *manager.list_offsets.last().unwrap();
                             let output = manager
-                                .list_scroll(ROW_HEIGHT)
+                                .list_scroll(ui, ROW_HEIGHT)
                                 .show(ui, |ui| ui.set_min_height(height));
                             rendered_scroll = Some(output.state.offset.y);
                         });

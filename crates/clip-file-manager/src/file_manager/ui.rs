@@ -767,7 +767,7 @@ impl FileManager {
         }
     }
 
-    fn list_scroll(&mut self, row_height: f32) -> egui::ScrollArea {
+    fn list_scroll(&mut self, ui: &Ui, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("file_manager_listing")
             .auto_shrink([false, false]);
@@ -814,7 +814,20 @@ impl FileManager {
                             sort.group_at(self.directory.as_ref()?, &self.visible, index)
                         })
                         .map_or(0.0, |_| GROUP_HEADER_HEIGHT);
-                    base + heading + nested
+                    let top = base + heading + nested;
+                    let height = ui.available_height().max(1.0);
+                    let bottom = self
+                        .list_offsets
+                        .get(index + 1)
+                        .copied()
+                        .unwrap_or(top + row_height);
+                    // Reveal only the part outside the viewport. A selection
+                    // change inside it must not evict and reload visible strips.
+                    // Oversized rows align their top instead of oscillating.
+                    let lower = (bottom.min(top + height) - height).max(0.0);
+                    self.location()
+                        .map_or(0.0, |location| location.scroll)
+                        .clamp(lower, top.max(lower))
                 });
             }
             self.reveal_selection = false;

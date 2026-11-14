@@ -68,6 +68,14 @@ by this review correction.
 
 ### Review verification
 
+- [x] Arrow selection in List and Columns leaves already-visible rows in place,
+  scrolling only enough to reveal a row crossing the viewport edge. Oversized
+  rows align at their top. The shared viewport bounds are used before row
+  virtualization and preview retention. A rendered-frame regression verifies
+  stable overlapping preview texture IDs painted in each successive frame,
+  minimal edge scrolling and return toward the top across both views. Full
+  file-manager tests pass (954 passed, six ignored).
+
 - [x] Clicking in-content type-family sort headers preserves the pixel scroll
   offset, including audio duration toggles and filename reset. An offscreen
   selection does not trigger a reveal. The shared List/Columns scroll path is
