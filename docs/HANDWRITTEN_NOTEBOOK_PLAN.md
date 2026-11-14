@@ -521,3 +521,22 @@ Local review fixtures are now also available under
 `/home/vega/Documents/type_testing/notebooks/xournal/` and `remarkable/`, alongside
 existing Supernote examples. Copies include source licenses/provenance and the
 needed relative companions; existing user files are preserved.
+
+### Frame-level image checkerboard regression
+
+- [x] A real notebook-to-display test exposed a pre-existing tiny-skia debug
+  assertion before the card could finish. The debugger confirmed a one-pixel
+  final checker tile at x=503.5 (169-pixel checker width), entering the AA
+  zero-interior rectangle path. This affects ordinary odd-width image previews
+  too, rather than notebook decoding alone.
+- [x] Draw adjacent checkerboard tiles without anti-aliasing: they need hard
+  edges and must not create translucent seams. The exact half-pixel/one-pixel
+  geometry has a regression test; all four real notebook display cases now
+  render complete 1920×462 frames with actual ink surviving IPC thumbnails.
+
+Native Xournal light review showed correct page eleven artwork and selection,
+but OCR intermittently read the separate `11 pages` badge as `1 pages`. Its
+acceptance runner now checks the already-present canonical `Page 11 of 11`
+readout instead of redundantly requiring both copies of the total. Actual
+painted artwork, thumbnail count and page selection checks remain unchanged;
+the repeated light run passes.
