@@ -295,7 +295,11 @@ impl FileManager {
         .contains(&focused);
         // Explicit sidebar/strip focus, clicks and Tab choose their own target.
         if owns_arrows
-            || ctx.input(|input| input.pointer.any_pressed() || input.key_pressed(Key::Tab))
+            || ctx.input(|input| {
+                input.pointer.any_down()
+                    || input.pointer.any_released()
+                    || input.key_pressed(Key::Tab)
+            })
         {
             self.focus_list = false;
             return false;

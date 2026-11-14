@@ -18,6 +18,13 @@ Personal `.cargo/config.toml` and `config.toml` changes stay outside commits.
 
 ## Evidence
 
+Task 3 audit found a sidebar handoff bug: bookmark/mount clicks did not claim
+keyboard focus, and a release frame could reactivate default list focus. Both
+rows now request focus and mouse gestures retain ownership through release.
+`cargo test -p clip-file-manager --lib bookmark_and_mount_rows_keep -j4` passes
+in both views using mounted-folder fixtures, without invoking mount operations.
+The remaining native keyboard matrix is recorded below when complete.
+
 Task 1: `cargo test -p clip-file-manager --lib media_summaries_yield -j4` passes.
 The shared header reserves measured filename width before optional summaries at
 95/130/260px; this keeps calendar and other custom row names legible.

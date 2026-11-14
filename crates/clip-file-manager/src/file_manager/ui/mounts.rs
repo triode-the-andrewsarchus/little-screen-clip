@@ -98,6 +98,7 @@ impl FileManager {
         }
 
         if response.clicked() {
+            response.request_focus();
             if entry.is_mounted {
                 open = entry.mount_point.clone();
             } else {
