@@ -348,3 +348,35 @@ Integration was merged at `be539806`; remaining work continues on
   semantics explicitly before calling the family supported.
 - [ ] Integrate guarded worker and all three presentation routes, including
   RealMedia `.rm` collision tests and multi-page selected-page handoff.
+
+### Native v6 page checkpoint
+
+- [x] Add `remarkable-rm = 0.1.1` as a normal registry dependency, without
+  vendoring or rewriting its implementation. Its newer resvg dependency adds a
+  second renderer version; preserve existing 0.37 callers instead of coupling
+  this feature to a workspace-wide SVG upgrade. Only five packages are added.
+- [x] Bound raw pages to 16 MiB, 65,536 blocks, one million points, one MiB of
+  text, finite coordinate ranges and bounded source/output dimensions. The
+  backend is documented for disposable workers; synchronous upstream scene
+  assembly/rasterization still needs the existing process timeout/memory limit.
+  No file dispatch is enabled at this checkpoint.
+- [x] Qualify all seventeen retained real raw v6 fixtures, including text, layers,
+  newer colors and eraser pages. Empty deletion envelopes are common and do
+  not themselves mean unsupported visible content. Preflight preserves that
+  case but rejects deletion intervals overlapping retained live IDs and
+  unsupported text/tombstone payloads, rather than displaying erased ink.
+- [x] Compare actual native tablet thumbnails at 384 × 512: heavy pencil mean
+  grayscale error 11.146 (limit 20), ink recall .972, precision 1.000; mixed
+  pressure error 3.154 (limit 10), recall .979, precision 1.000. These are direct
+  grayscale MAEs, not upstream's blended block score. A blank output control
+  fails ink matching. This establishes approximate pen appearance/geometry,
+  not exact tablet texture or full complex-page fidelity.
+- [x] Run sixteen combined notebook tests and strict all-target core Clippy.
+  Scoped native adapter metrics have no clone groups and maximum complexity 15.
+  Whole-repository comparison reports only reordered cycle descriptions in
+  untouched Python/vendor files; maximum workspace complexity is unchanged.
+- [ ] Complete legacy pages, notebook containers/backgrounds, worker dispatch,
+  list/little-screen/large-view acceptance and the final goal audit.
+
+Developer image artifacts for this checkpoint: `/tmp/remarkable-native-review/`.
+The corpus remains immutable; runtime output must never replace its references.

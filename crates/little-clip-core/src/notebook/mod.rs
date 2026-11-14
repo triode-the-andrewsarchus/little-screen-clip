@@ -1,4 +1,5 @@
 //! Read-only handwritten notebook formats and bounded page preparation.
+pub mod remarkable;
 pub mod supernote;
 mod worker;
 pub mod xournal;
