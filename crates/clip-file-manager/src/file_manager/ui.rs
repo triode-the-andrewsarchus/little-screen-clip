@@ -1164,7 +1164,7 @@ pub(super) struct ListColumns {
     right: f32,
     extra: Option<f32>,
     extra_count: usize,
-    metadata: Option<(f32, f32)>,
+    metadata: Option<(f32, f32, super::sorting::Category)>,
 }
 
 impl ListColumns {
@@ -1197,19 +1197,29 @@ impl ListColumns {
         sort: Option<super::sorting::Sort>,
         entry: &super::filesystem::Entry,
     ) -> Self {
+        let family = super::sorting::family(entry);
         if sort.is_some_and(|sort| sort.column == super::sorting::Column::Type)
-            && super::sorting::family(entry) == super::sorting::Category::Audio
+            && !super::metadata::Field::for_family(family).is_empty()
         {
             let end = self.extra.unwrap_or(self.right);
             let available = (end - self.left).max(0.0);
             let left = self.left + (available * 0.4).max(120.0).min(available);
-            self.metadata = Some((left, end));
+            self.metadata = Some((left, end, family));
         }
         self
     }
+    pub(super) fn metadata_fields(self) -> &'static [super::metadata::Field] {
+        self.metadata.map_or(&[], |(_, _, family)| {
+            super::metadata::Field::for_family(family)
+        })
+    }
     pub(super) fn metadata_cell(self, row: Rect, index: usize) -> Option<Rect> {
-        let (left, right) = self.metadata?;
-        let width = (right - left) / super::metadata::Field::AUDIO.len() as f32;
+        let (left, right, _) = self.metadata?;
+        let fields = self.metadata_fields();
+        if index >= fields.len() {
+            return None;
+        }
+        let width = (right - left) / fields.len() as f32;
         Some(Rect::from_min_max(
             pos2(left + index as f32 * width, row.top()),
             pos2(left + (index + 1) as f32 * width, row.top() + ROW_HEIGHT),
@@ -1237,12 +1247,12 @@ impl ListColumns {
         if self.metadata.is_some() && self.extra.is_none() {
             return;
         }
-        paint_text(ui, row, self.size - row.left(), 85.0, size, color);
+        paint_text(ui, row, self.size - row.left() + 5.0, 80.0, size, color);
         paint_text(
             ui,
             row,
-            self.modified - row.left(),
-            self.right - self.modified,
+            self.modified - row.left() + 5.0,
+            self.right - self.modified - 10.0,
             modified,
             color,
         );
@@ -1273,52 +1283,63 @@ impl ListColumns {
             self.metadata.is_none() || matches!(column, Column::Type | Column::Name)
         }) {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
-            let response = ui
-                .interact(
-                    cell,
-                    ui.make_persistent_id(("files_sort", column)),
-                    Sense::click(),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(format!("Sort by {label}; click again to reverse"));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
-            if response.hovered() {
-                ui.painter().rect_filled(cell, 2.0, colors.recessed);
-            }
-            let active = sort.is_some_and(|sort| sort.column == column);
-            let color = if active {
-                colors.accent
-            } else {
-                colors.text_secondary
-            };
-            paint_text(ui, cell, 0.0, cell.width() - 18.0, label, color);
-            if active {
-                let width = ui
-                    .painter()
-                    .layout_no_wrap(label.into(), FontId::proportional(14.0), color)
-                    .size()
-                    .x;
-                let arrow = Rect::from_center_size(
-                    pos2(cell.left() + width + 10.0, cell.center().y),
-                    vec2(14.0, 14.0),
-                );
-                (if sort.is_some_and(|sort| sort.descending) {
-                    Icon::ArrowDown
-                } else {
-                    Icon::ArrowUp
-                })
-                .paint(
-                    &ui.painter().with_clip_rect(cell.intersect(ui.clip_rect())),
-                    arrow,
-                    color,
-                );
-            }
+            let active = sort
+                .filter(|sort| sort.column == column)
+                .map(|sort| sort.descending);
+            let response = sort_heading(
+                ui,
+                cell,
+                ui.make_persistent_id(("files_sort", column)),
+                label,
+                active,
+                colors,
+            )
+            .on_hover_text(format!("Sort by {label}; click again to reverse"));
             if response.clicked() {
                 clicked = Some(column);
             }
         }
         clicked
     }
+}
+
+/// Shared fixed-rectangle sort header; text clipping never grows the table layout.
+pub(super) fn sort_heading(
+    ui: &mut Ui,
+    cell: Rect,
+    id: Id,
+    label: &str,
+    active: Option<bool>,
+    colors: WorkbenchColors,
+) -> egui::Response {
+    let response = ui
+        .interact(cell, id, Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
+    if response.hovered() {
+        ui.painter().rect_filled(cell, 2.0, colors.recessed);
+    }
+    let color = if active.is_some() {
+        colors.accent
+    } else {
+        colors.text_secondary
+    };
+    paint_text(ui, cell, 5.0, cell.width() - 23.0, label, color);
+    if let Some(descending) = active {
+        let arrow =
+            Rect::from_center_size(pos2(cell.right() - 9.0, cell.center().y), vec2(14.0, 14.0));
+        (if descending {
+            Icon::ArrowDown
+        } else {
+            Icon::ArrowUp
+        })
+        .paint(
+            &ui.painter().with_clip_rect(cell.intersect(ui.clip_rect())),
+            arrow,
+            color,
+        );
+    }
+    response
 }
 
 pub(super) fn media_header(
@@ -1904,6 +1925,30 @@ pub(super) fn information_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_sort_labels_keep_fixed_bounds_in_narrow_cells() {
+        let ctx = egui::Context::default();
+        let colors = WorkbenchColors::from_palette(&AppPalette::default());
+        for width in [28.0, 60.0, 160.0] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (cell, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                    let before = ui.min_rect();
+                    let response = sort_heading(
+                        ui,
+                        cell,
+                        Id::new("bounded_header"),
+                        "Megapixels",
+                        Some(false),
+                        colors,
+                    );
+                    assert_eq!(response.rect, cell);
+                    assert_eq!(ui.min_rect(), before);
+                });
+            });
+        }
+    }
 
     #[test]
     fn explicit_inspection_preserves_request_mode_for_ordinary_file() {

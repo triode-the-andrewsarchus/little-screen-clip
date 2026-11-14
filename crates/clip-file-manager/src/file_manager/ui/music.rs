@@ -361,7 +361,7 @@ fn music_card<'a>(
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
     let details = metadata
-        .filter(|_| columns.is_none_or(|columns| columns.metadata.is_none()))
+        .filter(|_| columns.is_none_or(|columns| columns.metadata_fields().is_empty()))
         .map(|m| {
             let mut fields: Vec<&str> = [&m.title, &m.artist, &m.album]
                 .into_iter()

@@ -21,7 +21,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
   the conventional List retained. Mixed/unsupported files remain accessible.
 - [x] Persist per-folder view overrides with explicit parent inheritance and a
   way to clear overrides. Browsing creates no sidecars in user folders.
-- [ ] Sort/group by broad content family (all images together). Each group gets
+- [x] Sort/group by broad content family (all images together). Each group gets
   appropriate metadata headers and sortable fields. Audio artist/album/genre,
   useful image/video/document metadata, deterministic missing values and stable
   selected-file identity while background metadata arrives.
@@ -499,3 +499,75 @@ The main metadata acceptance item stays open: useful image/video/document fields
 related ordering and final mixed/narrow-window validation remain required. The
 new scroll anchoring is an initial shared mechanism, not final proof for every
 nested-expansion and layout-change scenario.
+
+### Image, video and document family metadata
+
+- [x] Add Images width/height/megapixels, Video duration/width/height/codec and
+  Documents title/author/pages, using the same secondary-sort owner as Audio.
+  Compare exact numeric values independently of rounded display strings. Photo
+  dimensions follow observed orientation. Reflowed EPUBs do not invent page
+  counts; unsupported or unavailable properties stay unknown and sort last.
+  Short audio/video durations display milliseconds instead of rounding to zero.
+- [x] Reuse the shared photo header cache, selected non-cover video stream reader,
+  PDF info reader and notebook info helper. Separate video header facts from the
+  playback pixel budget, preserving the existing decoder admission limit. A large
+  video can have useful header facts even when its preview cannot be decoded.
+- [x] Add cancellable photo/PDF header entrypoints while preserving existing
+  callers. Add seekable EPUB package metadata through the existing bounded ZIP/XML
+  parser; it reads no chapter/artwork payloads and retains no book container.
+  Full Book parsing shares tag extraction with the header path. These helpers
+  retain ordinary-source checks and do not change persisted inventory/cache/search
+  representations. Header tags alone do not establish complete book readability.
+- [x] Share the existing bounded summary executor, revision/source-context checks,
+  candidate budget and coalesced sorting across families. Count progress per
+  family. Handwriting hints use the notebook page inspector, while Jupyter cells
+  are not mislabeled as handwritten pages. Document tag readers currently cover
+  PDF, EPUB and the supported handwriting containers; other formats retain unknown
+  properties and their normal browser/preview access. Office files are not rendered
+  merely to obtain sort keys.
+- [x] Add a metadata-header context menu to restore that family's natural filename
+  order without clearing another family's choice. Centralize file/metadata sort
+  headers into one fixed-rectangle control, with clipped labels, SVG direction
+  arrows, distinct identities and no layout growth in narrow cells. Align ordinary
+  Size/Modified values with the shared header padding; the existing mixed-media
+  alignment test caught and now guards the padding regression. Suppress duplicate
+  photo dimensions and video descriptions when those facts have their own columns;
+  video audio-track descriptions remain available.
+- [x] Full core library: 440 passed / 3 ignored. Full file-manager library: 917
+  passed / 6 ignored. Ten focused metadata tests cover typed fields, independent
+  family counts/reset, source lifetimes, exact pixel arithmetic, header-only images,
+  real selected-stream/EPUB facts, capacity and selection/scroll continuity. Core
+  tests include package-only EPUB tags with absent chapters, PDF count/cancellation
+  and cancellation before returning cached photo headers. The narrow-header test
+  checks actual interaction/layout bounds for long labels in 28/60/160-pixel cells.
+- [x] Strict core/file-manager library/test Clippy and the application build pass
+  without warnings. Core rustdoc with `-D warnings` and 12 doctests pass; rendered
+  pages for the new APIs were inspected. Leaf formatting, Python compilation and
+  diff whitespace checks pass. Logs:
+  `/tmp/phase7-family-metadata-{core-all-tests,all-tests,clippy,build,rustdoc,doctests}.log`.
+- [x] Native dark/light family reports pass at
+  `/tmp/phase7-family-metadata-{dark,light}-04/report.json`: oriented JPEG dimensions,
+  exact pixel and video property order, PDF/EPUB title/author/count order, unknown
+  reflowed page counts, family reset and independent sort retention. Audio
+  regressions pass at `/tmp/phase7-family-audio-{dark,light}-01/report.json`; general
+  name/size/date/type and section-header regressions pass at
+  `/tmp/phase7-family-sorting-{dark,light}-01/report.json`. Both-theme screenshots
+  were visually reviewed.
+
+Native scenarios explicitly select List after filters because existing automatic
+media selection can switch to Videos. The document scenario uses an extension
+regex: the existing `:document` selector still means supported extracted-text
+formats, rather than every member of the broader browser Documents section.
+Those Phase 6 selector semantics were preserved. Native ordering checks inspect
+filename crops in the actual observed rows, avoiding full-window OCR losses of
+filename punctuation and active-header arrows; checks select the interiors of
+observed labels rather than rounded boundary pixels.
+
+Architecture comparison against `before-phase7-family-metadata` introduces no
+excessive-complexity function and reduces aggregate duplication by 0.01 percentage
+points. Reviewed clone flags are existing music/video view setup, PDF mutation
+fallbacks and typed native-fixture command setup, not new duplicated header/read
+policies. The shared header control removes separate rendering implementations;
+format-specific loaders delegate to their existing owners. The metadata delivery
+item is now checked; final whole-milestone narrow/wide, lifecycle, compatibility
+and workspace validation remain under the separate unchecked acceptance gate.

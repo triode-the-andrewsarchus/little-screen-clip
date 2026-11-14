@@ -12,6 +12,8 @@ use std::{
     time::Duration,
 };
 
+mod read;
+
 const CAPACITY: usize = 8192;
 type Key = (PathBuf, u64);
 type ResultSummary = Result<Summary, String>;
@@ -22,15 +24,40 @@ pub(super) enum Field {
     Album,
     Genre,
     Duration,
+    Width,
+    Height,
+    Pixels,
+    Codec,
+    Title,
+    Author,
+    Pages,
+    Filename,
 }
 impl Field {
     pub const AUDIO: [Self; 4] = [Self::Artist, Self::Album, Self::Genre, Self::Duration];
+    pub fn for_family(family: Category) -> &'static [Self] {
+        match family {
+            Category::Audio => &Self::AUDIO,
+            Category::Image => &[Self::Width, Self::Height, Self::Pixels],
+            Category::Video => &[Self::Duration, Self::Width, Self::Height, Self::Codec],
+            Category::Document => &[Self::Title, Self::Author, Self::Pages],
+            _ => &[],
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Artist => "Artist",
             Self::Album => "Album",
             Self::Genre => "Genre",
             Self::Duration => "Duration",
+            Self::Width => "Width",
+            Self::Height => "Height",
+            Self::Pixels => "Megapixels",
+            Self::Codec => "Codec",
+            Self::Title => "Title",
+            Self::Author => "Author",
+            Self::Pages => "Pages",
+            Self::Filename => "Filename",
         }
     }
 }
@@ -40,6 +67,12 @@ struct Summary {
     album: String,
     genre: String,
     duration: Option<u64>,
+    width: Option<u32>,
+    height: Option<u32>,
+    codec: String,
+    title: String,
+    author: String,
+    pages: Option<u64>,
 }
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum Value {
@@ -47,24 +80,47 @@ enum Value {
     Number(u64),
 }
 impl Summary {
+    fn text(&self, field: Field) -> Option<&str> {
+        match field {
+            Field::Artist => Some(&self.artist),
+            Field::Album => Some(&self.album),
+            Field::Genre => Some(&self.genre),
+            Field::Codec => Some(&self.codec),
+            Field::Title => Some(&self.title),
+            Field::Author => Some(&self.author),
+            _ => None,
+        }
+    }
+    fn number(&self, field: Field) -> Option<u64> {
+        match field {
+            Field::Duration => self.duration,
+            Field::Width => self.width.map(u64::from),
+            Field::Height => self.height.map(u64::from),
+            Field::Pixels => self
+                .width
+                .zip(self.height)
+                .map(|(width, height)| u64::from(width) * u64::from(height)),
+            Field::Pages => self.pages,
+            _ => None,
+        }
+    }
     fn value(&self, field: Field) -> Option<Value> {
-        let text = match field {
-            Field::Artist => &self.artist,
-            Field::Album => &self.album,
-            Field::Genre => &self.genre,
-            Field::Duration => return self.duration.map(Value::Number),
-        };
-        (!text.is_empty()).then(|| Value::Text(text.to_lowercase()))
+        self.text(field)
+            .filter(|text| !text.is_empty())
+            .map(|text| Value::Text(text.to_lowercase()))
+            .or_else(|| self.number(field).map(Value::Number))
     }
     fn cell(&self, field: Field) -> String {
-        match field {
-            Field::Artist => self.artist.clone(),
-            Field::Album => self.album.clone(),
-            Field::Genre => self.genre.clone(),
-            Field::Duration => self.duration.map_or_else(String::new, |ms| {
-                format!("{}:{:02}", ms / 60_000, ms / 1000 % 60)
-            }),
+        if let Some(text) = self.text(field) {
+            return text.into();
         }
+        self.number(field)
+            .map_or_else(String::new, |number| match field {
+                Field::Duration if number < 1000 => format!("{number} ms"),
+                Field::Duration => format!("{}:{:02}", number / 60_000, number / 1000 % 60),
+                Field::Pixels => format!("{:.2} MP", number as f64 / 1_000_000.0),
+                _ => number.to_string(),
+            })
     }
 }
 #[derive(Default)]
@@ -75,7 +131,7 @@ pub(super) struct Metadata {
     pending: Vec<(Entry, Task<ResultSummary>)>,
     sorts: HashMap<Category, (Field, bool)>,
     total: usize,
-    finished: usize,
+    progress: HashMap<Category, (usize, usize)>,
     candidates: Vec<usize>,
     cursor: usize,
     order_dirty: bool,
@@ -86,7 +142,7 @@ fn eligible(entry: &Entry) -> bool {
         && entry.system.is_none()
         && !entry.symlink
         && entry.identity.is_some()
-        && little_clip_core::audio::is_audio_path(&entry.path)
+        && read::supported(entry)
 }
 fn key(entry: &Entry) -> Key {
     (entry.path.clone(), entry.revision)
@@ -94,26 +150,6 @@ fn key(entry: &Entry) -> Key {
 fn jobs() -> &'static little_clip_core::BackgroundJobs {
     static JOBS: OnceLock<little_clip_core::BackgroundJobs> = OnceLock::new();
     JOBS.get_or_init(|| little_clip_core::BackgroundJobs::new(2, 4))
-}
-fn load(entry: &Entry, cancel: &std::sync::atomic::AtomicBool) -> ResultSummary {
-    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err("Metadata read cancelled".into());
-    }
-    super::filesystem::check_revision(&entry.path, entry.revision)?;
-    let source = crate::file_source::FileSource::capture(&entry.path)?;
-    let metadata = super::music::preview::metadata(&entry.path, cancel);
-    source.check()?;
-    super::filesystem::check_revision(&entry.path, entry.revision)?;
-    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err("Metadata read cancelled".into());
-    }
-    Ok(Summary {
-        artist: metadata.artist.trim().into(),
-        album: metadata.album.trim().into(),
-        genre: metadata.genre.trim().into(),
-        duration: (metadata.duration.is_finite() && metadata.duration > 0.0)
-            .then(|| (f64::from(metadata.duration) * 1000.0) as u64),
-    })
 }
 impl Metadata {
     pub fn retire(&mut self) {
@@ -126,7 +162,9 @@ impl Metadata {
             self.retire();
             self.values.clear();
             self.cursor = 0;
-            self.finished = 0;
+            for progress in self.progress.values_mut() {
+                progress.0 = 0;
+            }
             self.order_dirty = false;
             self.last_order = None;
             self.path = path.into();
@@ -136,9 +174,14 @@ impl Metadata {
     pub fn reconcile(&mut self, directory: &Directory, visible: &[usize]) {
         let mut candidates = Vec::new();
         self.total = 0;
+        self.progress.clear();
         for &index in visible {
             if eligible(&directory.entries[index]) {
                 self.total += 1;
+                self.progress
+                    .entry(sorting::family(&directory.entries[index]))
+                    .or_default()
+                    .1 += 1;
                 if candidates.len() < CAPACITY {
                     candidates.push(index);
                 }
@@ -155,11 +198,15 @@ impl Metadata {
             self.cursor = 0;
         }
         self.candidates = candidates;
-        self.finished = self.values.len();
+        for &index in &self.candidates {
+            let entry = &directory.entries[index];
+            if self.values.contains_key(&key(entry)) {
+                self.progress.entry(sorting::family(entry)).or_default().0 += 1;
+            }
+        }
     }
     pub fn step(&mut self, ctx: &egui::Context, directory: &Directory) -> bool {
         self.order_dirty |= self.poll();
-        self.finished = self.values.len();
         while self.pending.len() < 2 && self.cursor < self.candidates.len() {
             let entry = &directory.entries[self.candidates[self.cursor]];
             self.cursor += 1;
@@ -176,7 +223,7 @@ impl Metadata {
             self.pending.push((
                 entry.clone(),
                 Task::start(jobs(), Duration::from_secs(15), move |cancel| {
-                    context.read(&source.path, cancel, || load(&source, cancel))
+                    context.read(&source.path, cancel, || read::load(&source, cancel))
                 }),
             ));
         }
@@ -205,23 +252,27 @@ impl Metadata {
                     self.cursor = 0;
                     continue;
                 }
-                self.values.insert(
+                let old = self.values.insert(
                     key(&entry),
                     result
                         .map_err(|error| format!("{error:?}"))
                         .and_then(|value| value),
                 );
+                if old.is_none() {
+                    self.progress.entry(sorting::family(&entry)).or_default().0 += 1;
+                }
                 changed = true;
             }
         }
         changed
     }
-    pub fn status(&self) -> String {
+    pub fn status(&self, family: Category) -> String {
+        let (finished, total) = self.progress.get(&family).copied().unwrap_or_default();
         format!(
             "Metadata {}/{}{}",
-            self.finished,
-            self.total,
-            if self.values.len() >= CAPACITY && self.finished < self.total {
+            finished,
+            total,
+            if self.values.len() >= CAPACITY && self.total > CAPACITY && finished < total {
                 " · summary limit reached; remaining files unanalyzed"
             } else {
                 ""
@@ -257,6 +308,10 @@ impl Metadata {
         self.sorts.get(&family).copied()
     }
     pub fn toggle_sort(&mut self, family: Category, field: Field) {
+        if field == Field::Filename {
+            self.sorts.remove(&family);
+            return;
+        }
         let descending = self
             .sort(family)
             .is_some_and(|sort| sort.0 == field && !sort.1);
@@ -327,32 +382,22 @@ impl Metadata {
         colors: crate::ui_appearance::WorkbenchColors,
     ) -> Option<Field> {
         let mut clicked = None;
-        for (index, field) in Field::AUDIO.into_iter().enumerate() {
+        for (index, field) in columns.metadata_fields().iter().copied().enumerate() {
             let Some(cell) = columns.metadata_cell(row, index) else {
                 break;
             };
             let active = self.sort(family).filter(|sort| sort.0 == field);
-            let label = match active {
-                Some((_, true)) => format!("{} ↓", field.label()),
-                Some(_) => format!("{} ↑", field.label()),
-                None => field.label().into(),
-            };
-            let text = egui::RichText::new(label).color(if active.is_some() {
-                colors.accent
-            } else {
-                colors.text_secondary
-            });
-            if ui
-                .put(cell, egui::Button::new(text).frame(false))
-                .on_hover_text(format!(
-                    "Sort this family by {}; missing values stay last. {}",
-                    field.label(),
-                    self.status()
-                ))
-                .clicked()
-            {
+            let response = super::ui::sort_heading(ui, cell, ui.make_persistent_id(("metadata_sort", field)), field.label(), active.map(|sort| sort.1), colors)
+                .on_hover_text(format!("Sort this family by {}; missing values stay last. Right-click for filename order. {}", field.label(), self.status(family)));
+            if response.clicked() {
                 clicked = Some(field);
             }
+            response.context_menu(|ui| {
+                if ui.button("Filename order").clicked() {
+                    clicked = Some(Field::Filename);
+                    ui.close_menu();
+                }
+            });
         }
         clicked
     }
@@ -364,7 +409,7 @@ impl Metadata {
         entry: &Entry,
         colors: crate::ui_appearance::WorkbenchColors,
     ) {
-        for (index, field) in Field::AUDIO.into_iter().enumerate() {
+        for (index, field) in columns.metadata_fields().iter().copied().enumerate() {
             let Some(cell) = columns.metadata_cell(row, index) else {
                 break;
             };
@@ -492,11 +537,11 @@ mod tests {
         assert!(!state.values.contains_key(&key(&stale)));
         state.configure(&directory.path, &PreviewContext::empty_results());
         assert!(state.values.is_empty());
-        let error = load(&stale, &AtomicBool::new(false)).err();
+        let error = read::load(&stale, &AtomicBool::new(false)).err();
         // The original revision remains current on disk, but a replacement
         // observation must be rejected before reading any payload.
         assert!(error.is_none());
-        assert!(load(&directory.entries[0], &AtomicBool::new(false)).is_err());
+        assert!(read::load(&directory.entries[0], &AtomicBool::new(false)).is_err());
     }
     #[test]
     fn metadata_reorder_preserves_the_scroll_anchor_and_selected_file() {
@@ -544,7 +589,11 @@ mod tests {
         state.reconcile(&directory, &visible);
         assert_eq!(state.candidates.len(), CAPACITY);
         assert_eq!(state.total, CAPACITY + 3);
-        assert!(state.status().contains("remaining files unanalyzed"));
+        assert!(
+            state
+                .status(Category::Audio)
+                .contains("remaining files unanalyzed")
+        );
         assert_eq!(
             state.cell(&directory.entries[CAPACITY], Field::Artist),
             "Not analyzed"
@@ -557,6 +606,60 @@ mod tests {
         assert!(state.values.is_empty());
         assert_eq!(state.total, 1);
         assert_eq!(state.candidates, [CAPACITY]);
+    }
+
+    #[test]
+    fn family_fields_sort_exact_pixels_and_pages_and_keep_independent_progress() {
+        let (_folder, mut directory) = fixture();
+        directory.entries.truncate(3);
+        let mut state = Metadata::default();
+        for (index, entry) in directory.entries.iter_mut().enumerate() {
+            entry.path.set_extension("png");
+            entry.name = format!("picture-{index}.png");
+            state.values.insert(
+                key(entry),
+                Ok(Summary {
+                    width: Some([10, 2, 3][index]),
+                    height: Some(10),
+                    ..Default::default()
+                }),
+            );
+        }
+        let mut visible = vec![0, 1, 2];
+        state.reconcile(&directory, &visible);
+        assert!(state.status(Category::Image).starts_with("Metadata 3/3"));
+        assert!(state.status(Category::Audio).starts_with("Metadata 0/0"));
+        for descending in [false, true] {
+            state.toggle_sort(Category::Image, Field::Pixels);
+            state.order(&directory, &mut visible);
+            assert_eq!(
+                visible,
+                if descending {
+                    vec![0, 2, 1]
+                } else {
+                    vec![1, 2, 0]
+                }
+            );
+        }
+        state.toggle_sort(Category::Document, Field::Pages);
+        state.toggle_sort(Category::Image, Field::Filename);
+        assert!(state.sort(Category::Image).is_none());
+        assert_eq!(state.sort(Category::Document), Some((Field::Pages, false)));
+        let summary = Summary {
+            width: Some(u32::MAX),
+            height: Some(u32::MAX),
+            pages: Some(10),
+            duration: Some(305),
+            ..Default::default()
+        };
+        assert!(summary.value(Field::Pixels) == Some(Value::Number(u64::from(u32::MAX).pow(2))));
+        assert!(summary.value(Field::Pages) == Some(Value::Number(10)));
+        assert_eq!(summary.cell(Field::Duration), "305 ms");
+        assert_eq!(
+            Field::for_family(Category::Document),
+            [Field::Title, Field::Author, Field::Pages]
+        );
+        assert!(Field::for_family(Category::Folder).is_empty());
     }
 
     #[test]
@@ -587,7 +690,7 @@ mod tests {
         let directory =
             super::super::filesystem::read_directory(folder.path(), &AtomicBool::new(false))
                 .unwrap();
-        let summary = load(&directory.entries[0], &AtomicBool::new(false)).unwrap();
+        let summary = read::load(&directory.entries[0], &AtomicBool::new(false)).unwrap();
         assert_eq!(summary.artist, "Artist");
         assert_eq!(summary.album, "Album");
         assert_eq!(summary.genre, "Jazz");

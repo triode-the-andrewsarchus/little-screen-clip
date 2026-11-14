@@ -119,6 +119,8 @@ fn format_family(entry: &Entry) -> Category {
         Category::Scene
     } else if super::font_strip::known(&entry.path) {
         Category::Font
+    } else if little_clip_core::notebook::is_candidate_path(&entry.path) {
+        Category::Document
     } else if extension_category(&extension) != Category::Other {
         extension_category(&extension)
     } else if super::text_strip::known_text(&entry.path) {

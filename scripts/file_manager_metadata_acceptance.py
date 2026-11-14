@@ -45,7 +45,7 @@ def exercise(session, root):
     session.click(*positions["Duration"])
     ordered(session, "duration-descending", ["cedar.wav", "birch.wav", "amber.wav"])
     session.click(*session.word("list-start", "Type", minimum_y=190))
-    session.observe("images-retain-file-columns", ["Images", "picture.png", "Size", "Modified", "Audio", "Artist"])
+    session.observe("images-use-image-columns", ["Images", "picture.png", "Width", "Height", "Audio", "Artist"])
 
 
 if __name__ == "__main__":

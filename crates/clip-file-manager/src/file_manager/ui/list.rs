@@ -481,8 +481,8 @@ fn group_header(
     let rect = Rect::from_min_max(rect.min, pos2(rect.right(), content.top()));
     ui.painter().rect_filled(rect, 0.0, colors.recessed);
     let title = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 24.0));
-    let label = if family == super::super::sorting::Category::Audio {
-        format!("{} · {}", family.label(), metadata.status())
+    let label = if !super::super::metadata::Field::for_family(family).is_empty() {
+        format!("{} · {}", family.label(), metadata.status(family))
     } else {
         family.label().into()
     };

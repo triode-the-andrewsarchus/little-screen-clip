@@ -153,6 +153,16 @@ pub(super) struct VideoMetadata {
 }
 
 pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, String> {
+    let metadata = inspect_video_header(path, &std::sync::atomic::AtomicBool::new(false))?;
+    validate_video_dimensions(metadata.dimensions)?;
+    Ok(metadata)
+}
+
+// Header inspection is independent of the playback decoder's pixel budget.
+pub(super) fn inspect_video_header(
+    path: &std::path::Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<VideoMetadata, String> {
     let source = FileSource::capture(path)?;
     let probe = little_clip_core::media_backend::probe_request(
         little_clip_core::media_backend::VIDEO_FORMATS,
@@ -161,7 +171,7 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
     .map_err(|e| e.to_string())?
     .timeout(Duration::from_secs(3))
     .max_output_bytes(64 * 1024)
-    .run()
+    .run_cancellable(cancel)
     .map_err(|e| format!("Cannot inspect video: {e}"))?;
     if !probe.status.success() || probe.stdout_truncated {
         return Err("Cannot inspect video. Check the file or open externally.".into());
@@ -219,12 +229,24 @@ fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), 
     let (index, stream) = selected_video_stream(value)?;
     let width = stream["width"].as_u64().unwrap_or(0);
     let height = stream["height"].as_u64().unwrap_or(0);
-    if width == 0 || height == 0 || width > 4096 || height > 4096 || width * height > 4096 * 2160 {
-        return Err("Video dimensions are invalid or exceed the 4096×2160 pixel budget; use Open externally.".into());
+    if width == 0 || height == 0 || width > u64::from(u32::MAX) || height > u64::from(u32::MAX) {
+        return Err("Video dimensions are invalid".into());
     }
     let duration_ms = timing::Track::from_stream(value, stream)
         .map_or(0, |track| ((track.start + track.duration) * 1000.0) as u64);
     Ok((index, width as u32, height as u32, duration_ms))
+}
+
+fn validate_video_dimensions((width, height): (u32, u32)) -> Result<(), String> {
+    if width == 0
+        || height == 0
+        || width > 4096
+        || height > 4096
+        || u64::from(width) * u64::from(height) > 4096 * 2160
+    {
+        return Err("Video dimensions are invalid or exceed the 4096×2160 pixel budget; use Open externally.".into());
+    }
+    Ok(())
 }
 
 pub(in crate::file_manager) use little_clip_core::media_stream::selected_video_stream;
@@ -286,7 +308,9 @@ mod tests {
         });
         assert_eq!(stream_metadata(&metadata).unwrap(), (1, 1920, 1080, 3500));
         metadata["streams"][1]["width"] = serde_json::json!(8192);
-        assert!(stream_metadata(&metadata).is_err());
+        let (_, width, height, _) = stream_metadata(&metadata).unwrap();
+        assert_eq!((width, height), (8192, 1080));
+        assert!(validate_video_dimensions((width, height)).is_err());
         assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
     }
 }

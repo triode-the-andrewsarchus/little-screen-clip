@@ -217,6 +217,9 @@ fn video_card(
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
     let details = ready.and_then(|ready| ready.as_ref().ok()).map(|ready| {
+        if columns.is_some_and(|columns| !columns.metadata_fields().is_empty()) {
+            return ready.metadata.audio_description.clone();
+        }
         format!(
             "{} · {}",
             ready.metadata.description, ready.metadata.audio_description

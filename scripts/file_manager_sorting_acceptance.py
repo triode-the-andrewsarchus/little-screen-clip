@@ -49,8 +49,8 @@ def exercise(session, root):
     session.observe("family-headers", ["Audio", "Images"])
     sort_header(session, "type-groups", "Type")
     ordered(session, "type-groups-reversed", ["Alpha.jpg", "Gamma.png", "Beta.wav"])
-    session.click(*session.word("type-groups-reversed", "Size", minimum_y=260))
-    ordered(session, "group-header-size", ["Alpha.jpg", "Beta.wav", "Delta.mp3"])
+    session.click(*session.word("type-groups-reversed", "Name", minimum_y=260))
+    ordered(session, "group-header-name", ["Alpha.jpg", "Beta.wav", "Delta.mp3"])
 
 
 def main():
