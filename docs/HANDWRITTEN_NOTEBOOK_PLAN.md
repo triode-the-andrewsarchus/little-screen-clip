@@ -433,3 +433,14 @@ The corpus remains immutable; runtime output must never replace its references.
 - [ ] Render complete archive pages with background policy, add practical RMN
   handling, connect the existing worker and all three UI routes, and verify the
   final goal. No new file-manager dispatch is enabled at this checkpoint.
+
+### Shared background preparation
+
+- [x] Reuse the existing Xournal native SVG/font owner and retained temporary PDF
+  holder as notebook-level helpers for the next archive renderer. No second
+  font database, external SVG path resolver or temporary PDF lifecycle is added.
+- [x] Add an explicitly square-bounded detail PDF render path up to 4096 pixels.
+  Compact thumbnails keep their 1024 ceiling; notebook background detail no
+  longer silently inherits that thumbnail ceiling. A real PDF regression test
+  verifies a requested 2048-pixel background stays at 2048, and the canonical
+  Xournal/Supernote comparisons still pass.

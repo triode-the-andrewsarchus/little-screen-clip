@@ -475,7 +475,7 @@ fn image_bytes(
 }
 
 fn embedded_pdf(bytes: &[u8], node: Node<'_>, scale: f64) -> Result<(String, f64, f64), String> {
-    let pdf = background::Pdf::new(bytes)?;
+    let pdf = crate::notebook::embedded_pdf::EmbeddedPdf::new(bytes)?;
     let (width, height) = pdf.dimensions()?;
     let transform = if let Some(matrix) = node.attribute("matrix") {
         let matrix = numbers(matrix)?;

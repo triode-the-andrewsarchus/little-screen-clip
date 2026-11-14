@@ -1,7 +1,9 @@
 //! Read-only handwritten notebook formats and bounded page preparation.
 mod container;
+mod embedded_pdf;
 pub mod remarkable;
 pub mod supernote;
+mod vector;
 mod worker;
 pub mod xournal;
 

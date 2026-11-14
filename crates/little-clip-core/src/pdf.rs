@@ -92,6 +92,16 @@ pub fn render_pdf_page_thumbnail(
     render_pdf_page_png(path, page, max_dim.clamp(1, 1024), true)
 }
 
+/// Renders an embedded document background with both edges bounded, up to 4K.
+/// Compact list thumbnails retain their existing separate 1024-pixel ceiling.
+pub(crate) fn render_pdf_page_bounded(
+    path: &Path,
+    page: usize,
+    edge: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    render_pdf_page_png(path, page, edge.clamp(1, 4096), true)
+}
+
 fn render_pdf_page_png(
     path: &Path,
     page: usize,
