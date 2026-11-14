@@ -51,6 +51,36 @@
       "modified": false
     },
     {
+      "path": "legacy-real/Cargo.toml.upstream",
+      "repository": "Lyr-7D1h/remarkable-lines",
+      "revision": "5b43636f12d1509f462d45ff41687e13321c34b2",
+      "original_path": "Cargo.toml",
+      "url": "https://raw.githubusercontent.com/Lyr-7D1h/remarkable-lines/5b43636f12d1509f462d45ff41687e13321c34b2/Cargo.toml",
+      "sha256": "0a234c3e2d6e5afcf31d86df907b578a89c74dd2bf77568132afe10a175aca64",
+      "bytes": 297,
+      "modified": false
+    },
+    {
+      "path": "legacy-real/test_v5_advent_of_code.rm",
+      "repository": "Lyr-7D1h/remarkable-lines",
+      "revision": "5b43636f12d1509f462d45ff41687e13321c34b2",
+      "original_path": "tests/fixtures/test_v5_advent_of_code.rm",
+      "url": "https://raw.githubusercontent.com/Lyr-7D1h/remarkable-lines/5b43636f12d1509f462d45ff41687e13321c34b2/tests/fixtures/test_v5_advent_of_code.rm",
+      "sha256": "440a9d9bcdd176ccc9dccb3b6a42677f32ed2da97c2b26a9d717e5e37369a93c",
+      "bytes": 153147,
+      "modified": false
+    },
+    {
+      "path": "legacy-real/test_v5_math.rm",
+      "repository": "Lyr-7D1h/remarkable-lines",
+      "revision": "5b43636f12d1509f462d45ff41687e13321c34b2",
+      "original_path": "tests/fixtures/test_v5_math.rm",
+      "url": "https://raw.githubusercontent.com/Lyr-7D1h/remarkable-lines/5b43636f12d1509f462d45ff41687e13321c34b2/tests/fixtures/test_v5_math.rm",
+      "sha256": "a36d5302e08e86385abb6e17ee69d60c52aa73cb1a800112347986e942d3fe65",
+      "bytes": 446332,
+      "modified": false
+    },
+    {
       "path": "rmc/LICENSE",
       "repository": "ricklupton/rmc",
       "revision": "da87813a31496d156ca6ea8a27bf5128670fb45a",

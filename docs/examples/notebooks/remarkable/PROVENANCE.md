@@ -34,3 +34,8 @@ that they contain different page revisions. No such pair is retained here.
 The corpus is a qualification input, not a support declaration. Rendering,
 container ordering/backgrounds, bounded workers and all three presentation
 routes still require implementation and verification.
+
+`legacy-real/` adds Lyr and remarkable-lines contributors' two actual v5 test
+pages (math and Advent of Code), with their original package MIT declaration
+and pinned source hashes. Unlike the generated legacy cases, these exercise
+substantial real handwriting. They are not independent image references.
