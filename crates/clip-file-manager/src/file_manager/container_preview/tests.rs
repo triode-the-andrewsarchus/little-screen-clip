@@ -348,7 +348,7 @@ fn browser_with_expanded_container(
 }
 
 #[test]
-fn expanded_children_share_selection_keyboard_navigation_and_mutability() {
+fn expanded_children_share_pointer_selection_and_mutability() {
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("folder");
     std::fs::create_dir(&folder).unwrap();
@@ -364,8 +364,7 @@ fn expanded_children_share_selection_keyboard_navigation_and_mutability() {
             .collect::<Vec<_>>(),
         ["folder", "a.txt", "b.txt"]
     );
-    browser.select(folder.clone());
-    browser.move_selection_by(1, false);
+    browser.select(folder.join("a.txt"));
     assert_eq!(browser.selected_paths(), [folder.join("a.txt")]);
     assert!(browser.selection_is_mutable());
     browser.select_with(folder.join("b.txt"), false, true);
@@ -390,7 +389,7 @@ fn expanded_children_share_selection_keyboard_navigation_and_mutability() {
 }
 
 #[test]
-fn columns_arrow_navigation_skips_inline_children_and_uses_their_parent_row() {
+fn list_and_columns_arrow_navigation_skips_inline_children_and_uses_their_parent_row() {
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("a-folder");
     let next = root.path().join("b-folder");
@@ -398,22 +397,27 @@ fn columns_arrow_navigation_skips_inline_children_and_uses_their_parent_row() {
     std::fs::create_dir(&next).unwrap();
     let child = folder.join("nested");
     std::fs::create_dir(&child).unwrap();
-    let mut browser = browser_with_expanded_container(root.path(), "a-folder");
-    browser.set_view(super::super::BrowserView::Columns);
-    browser.select(folder.clone());
-    browser.move_selection_by(1, false);
-    assert_eq!(browser.selected_paths(), std::slice::from_ref(&next));
-    browser.move_selection_by(-1, false);
-    assert_eq!(browser.selected_paths(), std::slice::from_ref(&folder));
-    // Clicking a preview still selects it. The next arrow resumes folder-row
-    // navigation relative to the preview's owning row, rather than jumping.
-    browser.select(child.clone());
-    assert_eq!(browser.selected_paths(), [child]);
-    browser.move_selection_by(1, false);
-    assert_eq!(browser.selected_paths(), [next]);
-    browser.move_selection_by(-1, false);
-    browser.move_selection_by(-1, false);
-    assert_eq!(browser.selected_paths(), [folder]);
+    for view in [
+        super::super::BrowserView::List,
+        super::super::BrowserView::Columns,
+    ] {
+        let mut browser = browser_with_expanded_container(root.path(), "a-folder");
+        browser.set_view(view);
+        browser.select(folder.clone());
+        browser.move_selection_by(1, false);
+        assert_eq!(browser.selected_paths(), std::slice::from_ref(&next));
+        browser.move_selection_by(-1, false);
+        assert_eq!(browser.selected_paths(), std::slice::from_ref(&folder));
+        // Clicking a preview still selects it. The next arrow resumes relative
+        // to the preview's owning row, rather than jumping to the first row.
+        browser.select(child.clone());
+        assert_eq!(browser.selected_paths(), std::slice::from_ref(&child));
+        browser.move_selection_by(1, false);
+        assert_eq!(browser.selected_paths(), std::slice::from_ref(&next));
+        browser.move_selection_by(-1, false);
+        browser.move_selection_by(-1, false);
+        assert_eq!(browser.selected_paths(), std::slice::from_ref(&folder));
+    }
 }
 
 #[test]

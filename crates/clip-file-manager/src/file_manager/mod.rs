@@ -893,9 +893,10 @@ impl FileManager {
 
     fn move_selection_by(&mut self, delta: isize, extend: bool) {
         let mut entries = self.displayed_entries();
-        // Miller columns navigate folder rows. Inline descendants remain
-        // clickable previews, rather than additional stops between those rows.
-        let folder_rows = self.view == BrowserView::Columns && !self.search.has_result_sources();
+        // Lists and Miller columns navigate folder rows. Inline descendants
+        // remain clickable previews, rather than extra keyboard stops.
+        let folder_rows = matches!(self.view, BrowserView::List | BrowserView::Columns)
+            && !self.search.has_result_sources();
         if folder_rows {
             entries.retain(|entry| entry.path.parent() == Some(self.path()));
         }
