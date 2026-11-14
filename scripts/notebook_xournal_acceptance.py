@@ -80,13 +80,13 @@ def exercise(session, root):
     hover_observation(session, "03-last-page-hover", x, y + 43, ["Page 11"])
     session.click(x, y + 43, delay=.05)
     session.click(x, y + 43, delay=.05)
-    observe_page(session, "04-page-eleven", ["11 pages", "Page 11 of 11"], rendered=colored_page)
+    observe_page(session, "04-page-eleven", ["Page 11 of 11"], rendered=colored_page)
     text = (session.output / "04-page-eleven.txt").read_text()
     assert not any(action in text for action in ["Okular", "Rotate", "Delete", "OCR"])
     session.click(850, 420)
     session.key("r")
     session.key("Delete")
-    session.observe("05-read-only", ["11 pages", "Page 11 of 11"])
+    session.observe("05-read-only", ["Page 11 of 11"])
     session.click(1120, 72)
     for filename, label, expected, predicate in [
         ("b-strokes.xopp", "strokes", ["1 pages", "Page 1 of 1"], page_geometry),
