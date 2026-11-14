@@ -50,7 +50,8 @@ impl FileManager {
         self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
         self.sync_preview_context();
-        self.sync_modal_focus(ui.ctx());
+        let settle_focus = self.sync_browser_focus(ui.ctx());
+        let focus_handoff = self.focus_list;
         self.shortcuts(ui.ctx());
         ui.set_enabled(!self.browser_modal());
         self.toolbar(ui, palette);
@@ -62,8 +63,18 @@ impl FileManager {
         self.docked_panels(ui, palette);
         // A coalesced header click can also clear focus during the later list
         // background interaction. Restore it only after that interaction ends.
-        if std::mem::take(&mut self.focus_list) {
-            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        if std::mem::take(&mut self.focus_list) && !self.browser_modal() && !popup_open(ui.ctx()) {
+            let text_focus = ui
+                .memory(|memory| memory.focused())
+                .and_then(|id| egui::TextEdit::load_state(ui.ctx(), id))
+                .is_some();
+            if !text_focus {
+                ui.memory_mut(|memory| memory.request_focus(list_id()));
+                self.focus_list = settle_focus || !focus_handoff;
+                if self.focus_list {
+                    ui.ctx().request_repaint();
+                }
+            }
         }
         ui.memory_mut(|memory| {
             for id in [
@@ -267,12 +278,47 @@ impl FileManager {
         self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
     }
 
-    fn sync_modal_focus(&mut self, ctx: &egui::Context) {
+    fn sync_browser_focus(&mut self, ctx: &egui::Context) -> bool {
         let modal = self.browser_modal();
-        if self.was_modal && !modal {
-            ctx.memory_mut(|memory| memory.request_focus(list_id()));
-        }
+        let focused = ctx.memory(|memory| memory.focused());
+        let default_list = matches!(
+            self.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        ) && focused.is_none();
+        let requested = self.was_modal || self.focus_list || default_list;
         self.was_modal = modal;
+        let owns_arrows = [
+            Some(tree_id()),
+            Some(music::waveform_id()),
+            Some(super::midi_strip::focus_id()),
+        ]
+        .contains(&focused);
+        // Explicit sidebar/strip focus, clicks and Tab choose their own target.
+        if owns_arrows
+            || ctx.input(|input| input.pointer.any_pressed() || input.key_pressed(Key::Tab))
+        {
+            self.focus_list = false;
+            return false;
+        }
+        if !modal && !popup_open(ctx) && requested {
+            self.focus_list = true;
+            ctx.memory_mut(|memory| memory.request_focus(list_id()));
+            // egui 0.27 installs a focus lock only after the target owned the
+            // previous frame. Repaint until that handoff settles, retaining
+            // arrows even if egui's pending directional focus runs meanwhile.
+            return focused != Some(list_id())
+                || ctx.input(|input| {
+                    [
+                        Key::ArrowUp,
+                        Key::ArrowDown,
+                        Key::ArrowLeft,
+                        Key::ArrowRight,
+                    ]
+                    .into_iter()
+                    .any(|key| input.key_pressed(key))
+                });
+        }
+        false
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {

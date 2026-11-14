@@ -242,6 +242,7 @@ pub(crate) struct FileManager {
     search: search::Search,
     reveal_target: Option<PathBuf>,
     focus_address: bool,
+    // Retain a keyboard handoff until egui's focus lock has settled.
     focus_list: bool,
     address_editing: bool,
     edits: edits::EditState,

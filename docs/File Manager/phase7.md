@@ -68,6 +68,17 @@ by this review correction.
 
 ### Review verification
 
+- [x] List and Columns are the default arrow-key target when nothing else owns
+  focus. Switching to either view and returning from a studio explicitly hand
+  focus back before processing the next frame's keys. Sidebar, text, media-strip
+  and modal focus remain authoritative; closing a modal still restores browsing.
+  Regression checks cover immediate startup/return keys, address and sidebar
+  focus. Native image Enter → Escape → Down → Enter checks pass in both List
+  and Columns, with the actual canvas confirming the next image; calendar,
+  toolpath and notebook Escape return checks also pass. Evidence:
+  `/tmp/browser-focus-return-dark-03/report.json`. Full file-manager tests:
+  957 passed, six ignored; final build and strict all-target Clippy are clean.
+
 - [x] Type-group headers pin to the top of the scrolling list and are pushed
   out by the next family header. Both drawing and hit testing are clipped below
   the pinned bar; header gestures cannot drag the surrounding scroll area.

@@ -33,6 +33,10 @@ impl FileManager {
         }
         self.view_epoch = self.view_epoch.wrapping_add(1);
         self.view = view;
+        self.focus_list = matches!(
+            view,
+            super::super::BrowserView::List | super::super::BrowserView::Columns
+        );
         if let Some(location) = self.location_mut() {
             location.manual_view = Some(view);
             location.scroll = 0.0;

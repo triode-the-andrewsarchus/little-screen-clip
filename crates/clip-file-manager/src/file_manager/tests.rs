@@ -507,6 +507,63 @@ fn press(
 }
 
 #[test]
+fn list_and_columns_default_keyboard_focus_and_restore_it_before_the_first_returned_key() {
+    let (root, _child) = folder_fixture();
+    std::fs::write(root.path().join("note.txt"), "fixture").unwrap();
+    for view in [BrowserView::List, BrowserView::Columns] {
+        let (mut manager, _jobs) = loaded(root.path());
+        manager.set_view(view);
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        // No file or background click is needed after opening the browser.
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        let first = manager.location().unwrap().selected.clone();
+        assert!(first.is_some());
+        assert!(
+            ctx.memory(|m| m.has_focus(ui::list_id())),
+            "missing default focus in {view:?}: {:?}",
+            ctx.memory(|m| m.focused())
+        );
+        // The host sets a handoff flag after a viewer closes. It must take
+        // effect before this frame's keys, rather than one frame afterward.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("departed-studio")));
+        manager.focus_list = true;
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_ne!(manager.location().unwrap().selected, first);
+        let selected = manager.location().unwrap().selected.clone();
+        press(&mut manager, &ctx, egui::Key::L, egui::Modifiers::CTRL);
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(manager.location().unwrap().selected, selected);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_address"))));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("file_manager_tree_focus")));
+        frame(&mut manager, &ctx, vec![]);
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(manager.location().unwrap().selected, selected);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_tree_focus"))));
+    }
+}
+
+#[test]
 fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
     let temp = tempfile::tempdir().unwrap();
     let child = temp.path().join("child with spaces");

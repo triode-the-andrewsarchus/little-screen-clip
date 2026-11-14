@@ -472,6 +472,11 @@ impl FileManagerApp {
                         .invalidate_gallery_rating(&path);
                 }
                 if closed {
+                    self.browser.focus_list = matches!(
+                        self.browser.view,
+                        super::BrowserView::List | super::BrowserView::Columns
+                    );
+                    ctx.request_repaint();
                     if let Some(request) = self.pad_studio.take()
                         && let Some(path) = self.viewers.take_audio_result()
                     {
