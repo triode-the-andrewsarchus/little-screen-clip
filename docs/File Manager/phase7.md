@@ -733,3 +733,21 @@ unchanged functions with reordered membership, not new imports.
 The archive delivery checkbox is now checked. Whole-milestone narrow/wide,
 Miller interaction/compatibility and workspace acceptance remain open; this does
 not mark Phase 7 complete.
+
+### Columns row-reveal spacing correction
+
+- [x] Fix current-row and parent-route reveal offsets to include egui's vertical
+  item spacing, matching `ScrollArea::show_rows` and the existing sidebar's
+  arithmetic. A distant selected row could otherwise remain outside the painted
+  virtual range; the wide native review exposed the same error in parent columns.
+- [x] Add an actual rendering regression with 100 directory rows. It checks that
+  the selected last row is painted in both current and ancestor columns, at
+  spacing 0/6/12. Before the fix it fails at spacing 6 in the current column;
+  after the fix all six cases pass. Logs:
+  `/tmp/phase7-columns-spacing-{before,after}.log`.
+- [x] Strict file-manager library/test Clippy and application build pass:
+  `/tmp/phase7-columns-spacing-{clippy,build}.log`.
+
+This correction is committed independently from the ongoing wide/narrow native
+acceptance driver changes. It does not close the remaining Columns or integrated
+Phase 7 acceptance gates.

@@ -224,7 +224,8 @@ impl FileManager {
                 .iter()
                 .position(|entry| current.starts_with(&entry.path))
         {
-            area = area.vertical_scroll_offset(index as f32 * ROW_HEIGHT);
+            area = area
+                .vertical_scroll_offset(index as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y));
         }
         area.show_rows(ui, ROW_HEIGHT, entries.len(), |ui, range| {
             for entry in &entries[range] {
@@ -271,7 +272,8 @@ impl FileManager {
                     .is_some_and(|directory| Some(&directory.entries[*index].path) == active)
             })
         {
-            area = area.vertical_scroll_offset(index as f32 * ROW_HEIGHT);
+            area = area
+                .vertical_scroll_offset(index as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y));
         }
         let output = area.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
             let Some(directory) = self.directory.as_ref() else {
@@ -368,5 +370,61 @@ mod tests {
         assert_eq!(parents(Path::new("/a/b/c/d"), 800.0), [Path::new("/a/b/c")]);
         assert_eq!(parents(Path::new("/a"), 800.0), [Path::new("/")]);
         assert!(parents(Path::new("/"), 800.0).is_empty());
+    }
+
+    #[test]
+    fn column_selection_and_parent_route_reveal_include_virtual_row_spacing() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..100 {
+            std::fs::create_dir(root.path().join(format!("row{index:03}"))).unwrap();
+        }
+        let target = root.path().join("row099");
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut browser = FileManager {
+            pending: None,
+            ..FileManager::default()
+        };
+        browser.commit(
+            super::super::super::filesystem::read_directory(root.path(), &cancel).unwrap(),
+            Navigation::New,
+        );
+        browser.set_view(super::super::super::BrowserView::Columns);
+        browser.select(target.clone());
+        browser
+            .tree
+            .branches
+            .entry(root.path().into())
+            .or_default()
+            .directory =
+            Some(super::super::super::filesystem::read_directory(root.path(), &cancel).unwrap());
+        for spacing in [0.0, 6.0, 12.0] {
+            for ancestor in [false, true] {
+                let ctx = egui::Context::default();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 220.0))),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.spacing_mut().item_spacing.y = spacing;
+                            let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                            if ancestor {
+                                browser.column_ancestor(ui, root.path(), &target, true, colors);
+                            } else {
+                                browser.column_current(
+                                    ui,
+                                    &mut ListActions::default(),
+                                    false,
+                                    true,
+                                    colors,
+                                );
+                            }
+                        });
+                    },
+                );
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099")), "Selected row was outside the painted virtual range: spacing={spacing}, ancestor={ancestor}");
+            }
+        }
     }
 }
