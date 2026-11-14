@@ -109,3 +109,14 @@ contained-row composition into its own rendering responsibility.
 - [x] Eight container tests and strict file-manager library/test Clippy pass;
   the rebuilt desktop binary is warning-free. New cases verify cancellation of
   automatic reads and preservation of explicit choices across settings/revisions.
+
+### Native options review
+
+- [x] Keep preview options readable: give the popup a stable width before laying
+  out its checkbox/slider, with shorter labels. The initial automatic-width
+  layout wrapped its first checkbox into an unnecessarily narrow column.
+- [x] Extended native dark/light reports pass at
+  `/tmp/phase7-options-dark-02/report.json` and
+  `/tmp/phase7-options-light-01/report.json`. They verify automatic-off hides
+  child previews, explicit expansion works while off, automatic-on restores
+  archive previews, plus the original collapse/navigation/history/studio cases.

@@ -95,15 +95,16 @@ impl Previews {
     pub fn settings(&mut self, ui: &mut Ui) {
         let mut options = self.options;
         ui.menu_button("Folder previews", |ui| {
+            ui.set_width(360.0);
             ui.checkbox(
                 &mut options.automatic,
-                "Automatically preview small folders and archives",
+                "Auto-expand small folders and archives",
             );
             ui.add(
                 egui::Slider::new(&mut options.small_items, 1..=inventory::LIMIT)
-                    .text("Small-container item limit"),
+                    .text("Maximum items"),
             );
-            ui.label("Use + / − beside a container to override its preview.");
+            ui.label("Use + or − beside a folder or archive to override.");
         });
         self.configure(options.automatic, options.small_items);
     }

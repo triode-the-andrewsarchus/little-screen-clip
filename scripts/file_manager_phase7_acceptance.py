@@ -36,6 +36,23 @@ def exercise(session, root):
     session.observe("initial", ["a-small", "b-large"])
     session.click(645, 160)  # Collapse Shelf to expose all four fixture rows.
     session.observe("00-contained-files", ["a-small", "Inside folder", "readme.txt", "sun.png", "Archive contents", "payload.json", "manual"])
+    session.click(755, 160)  # Folder previews menu in the observed toolbar.
+    session.observe("preview-settings", ["Auto-expand small folders and archives"])
+    x, y = session.word("preview-settings", "Auto-expand")
+    session.click(x + 5, y)
+    session.key("Escape")
+    session.observe("automatic-off", ["a-small", "b-large", "c-package.zip"])
+    off = (session.output / "automatic-off.txt").read_text()
+    assert "readme.txt" not in off and "payload.json" not in off
+    _, y = session.word("automatic-off", "a-small")
+    session.click(360, y)
+    session.observe("manual-override", ["readme.txt", "sun.png"])
+    session.click(755, 160)
+    session.observe("preview-settings-again", ["Auto-expand small folders and archives"])
+    x, y = session.word("preview-settings-again", "Auto-expand")
+    session.click(x + 5, y)
+    session.key("Escape")
+    session.observe("automatic-on", ["readme.txt", "payload.json", "manual"])
     # The large-folder preview automatically stays collapsed, while small ones
     # expose contained files. No members are extracted to the fixture directory.
     assert not (root / "assets").exists()
