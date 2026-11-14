@@ -109,7 +109,11 @@ impl FileManagerApp {
             browser.search.error = Some(error);
         }
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
-        browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
+        browser.view_preferences = super::view_preferences::Preferences::for_user(&browser.home);
+        browser.containers.configure(
+            config.file_manager.inline_container_previews,
+            usize::from(config.file_manager.small_container_items),
+        );
         browser
             .music_previews
             .set_audio_spectrum(config.file_manager.audio_spectrum);
@@ -350,6 +354,9 @@ impl FileManagerApp {
                     for title in ["File", "Edit", "View"] {
                         ui.menu_button(title, |ui| {
                             if title == "View" {
+                                if !self.viewers.active() {
+                                    self.browser.folder_view_settings(ui, &self.palette);
+                                }
                                 ui.menu_button("Photos", |ui| {
                                     ui.style_mut().wrap = Some(false);
                                     let current_mode = self.browser.photo_mode;
@@ -465,6 +472,11 @@ impl FileManagerApp {
                         .invalidate_gallery_rating(&path);
                 }
                 if closed {
+                    self.browser.focus_list = matches!(
+                        self.browser.view,
+                        super::BrowserView::List | super::BrowserView::Columns
+                    );
+                    ctx.request_repaint();
                     if let Some(request) = self.pad_studio.take()
                         && let Some(path) = self.viewers.take_audio_result()
                     {
@@ -486,7 +498,20 @@ impl FileManagerApp {
                     self.pad_studio = Some(request);
                 }
                 if let Some(path) = self.browser.take_available_open_file() {
+                    self.browser.containers.retire();
                     self.viewers.source_guard = self.browser.search_source_guard(&path);
+                    self.viewers.archive_location =
+                        self.browser.archives.context(&path).map(|snapshot| {
+                            (
+                                snapshot.root.clone(),
+                                self.browser
+                                    .archives
+                                    .label(&snapshot.root)
+                                    .unwrap_or_else(|| snapshot.source.path().to_path_buf()),
+                            )
+                        });
+                    self.viewers.archive_export_directory =
+                        self.browser.archives.export_directory(&path);
                     let document_start = self
                         .browser
                         .document_start
@@ -571,7 +596,10 @@ impl FileManagerApp {
             self.browser.music.stop();
             return self.browser.midi.play_selection();
         }
-        if self.browser.view == super::BrowserView::Music
+        if matches!(
+            self.browser.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        ) && ctx.memory(|memory| memory.has_focus(super::ui::music::waveform_id()))
             && let Some(range) = self.browser.music_selection.clone()
         {
             self.browser.midi.stop();
@@ -612,6 +640,7 @@ impl FileManagerApp {
             || self.browser.transfers.busy()
             || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
+            || self.browser.view_preferences.writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
             || self.browser.shelf.sending()
@@ -737,6 +766,15 @@ impl eframe::App for FileManagerApp {
                             ui.add(
                                 egui::Label::new(self.browser.selection_summary()).truncate(true),
                             );
+                            if self.browser.music.busy() || self.browser.music.copying() { ui.spinner(); }
+                            if let Some(error) = &self.browser.music.error {
+                                ui.separator();
+                                ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate(true)).on_hover_text(error);
+                            }
+                            if let Some(status) = self.browser.archives.status(self.browser.path()) {
+                                ui.separator();
+                                ui.add(egui::Label::new(egui::RichText::new(status).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate(true)).on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
+                            }
                             if let Some(hint) = self
                                 .browser
                                 .type_navigation
@@ -761,6 +799,9 @@ impl eframe::App for FileManagerApp {
             .constellation
             .render_duplicate_warning(ctx, &self.palette);
         self.main_content(ctx);
+        if self.browser.view_preferences.active() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.browser.previews.multisample.finish_frame(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
@@ -792,5 +833,63 @@ pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
 impl Drop for FileManagerApp {
     fn drop(&mut self) {
         super::system::shutdown();
+    }
+}
+
+#[cfg(test)]
+mod media_view_removal_tests {
+    use super::*;
+    #[test]
+    fn list_and_columns_play_ranges_only_with_waveform_focus() {
+        // Dropping a real host shuts down the process-wide system collector.
+        // Keep that lifecycle inside a disposable test process.
+        const CHILD: &str = "LITTLE_CLIP_MEDIA_VIEW_REMOVAL_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "file_manager::app::media_view_removal_tests::list_and_columns_play_ranges_only_with_waveform_focus", "--test-threads=1"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        let (_root, path) =
+            crate::audio_preview::test_support::generate_fixture_wav("list-range", 0.1);
+        let source = crate::file_source::FileSource::capture(&path).unwrap();
+        let mut app = FileManagerApp {
+            vector_runtime: None,
+            browser: FileManager::default(),
+            viewers: super::super::viewers::Viewers::default(),
+            external: Default::default(),
+            palette: Default::default(),
+            native: None,
+            drop_destinations: Default::default(),
+            pad_studio: None,
+            closing: false,
+        };
+        app.browser.pending = None;
+        app.browser.music_selection = Some(super::super::ui::music::MusicRange {
+            path: path.clone(),
+            start: 0.01,
+            end: 0.08,
+            revision: 0,
+            source,
+            snapped: true,
+        });
+        let ctx = egui::Context::default();
+        for view in [
+            super::super::BrowserView::List,
+            super::super::BrowserView::Columns,
+        ] {
+            app.browser.view = view;
+            ctx.memory_mut(|memory| memory.surrender_focus(super::super::ui::music::waveform_id()));
+            assert!(!app.play_space_selection(&ctx));
+            ctx.memory_mut(|memory| memory.request_focus(super::super::ui::music::waveform_id()));
+            assert!(app.play_space_selection(&ctx));
+            assert_eq!(app.browser.music.current(), Some(&path));
+            app.browser.music.stop();
+        }
     }
 }

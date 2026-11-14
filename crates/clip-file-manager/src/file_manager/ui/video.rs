@@ -1,93 +1,6 @@
 //! Timelens rows use ordinary file selection/actions and a playing hover preview.
 use super::super::{filesystem::Entry, video_timeline::Ready};
 use super::*;
-use clip_ui::buttons::ButtonRole;
-
-impl FileManager {
-    pub(super) fn video_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Hover to play a muted preview; click the timeline to play there. Ctrl/Shift-click selects files.");
-            if ui.add(ButtonRole::Secondary.button("Refresh previews", palette)).clicked() {
-                self.video_previews.clear();
-                self.previews.retain(&Default::default());
-            }
-            if ui.add(ButtonRole::Secondary.button("Use automatic view", palette)).clicked() {
-                if let Some(location) = self.location_mut() { location.manual_view = None; }
-                self.activate_media_view();
-            }
-        });
-        self.video_previews.poll(ui.ctx());
-        self.previews.poll(ui.ctx());
-        let scroll = self.list_scroll(super::super::VIDEO_ROW_HEIGHT);
-        let Some(directory) = &self.directory else {
-            ui.label("Loading folder…");
-            return;
-        };
-        let range = visible_media_rows(
-            &self.video_offsets,
-            self.location().map_or(0.0, |l| l.scroll),
-            ui.available_height(),
-        );
-        let nearby: Vec<_> = range
-            .filter_map(|index| directory.entries.get(self.visible[index]))
-            .filter(|entry| entry.is_video())
-            .collect();
-        self.video_previews.retain(&nearby);
-        self.previews
-            .retain(&nearby.iter().map(|entry| entry.path.clone()).collect());
-        let selected = current_selection(&self.history, self.index);
-        let can_edit = self.can_edit();
-        let count = self.selection_count();
-        let mut actions = ListActions::for_browser(self);
-        let background = actions.background(ui, can_edit, count > 0);
-        let mut targets = Vec::new();
-        let mut hovered = false;
-        let mut visible = Vec::new();
-        let output = media_rows(ui, scroll, &self.video_offsets, |ui, index, rect| {
-            let entry = &directory.entries[self.visible[index]];
-            let (rect, detail) = self.search.result_row(ui, rect, entry, colors);
-            let mut response = media_row(
-                ui,
-                rect,
-                selected.is_some_and(|s| s.contains(&entry.path)),
-                colors,
-            );
-            if entry.is_video() {
-                visible.push(entry);
-            }
-            let time = preview_row(
-                ui,
-                rect,
-                entry,
-                None,
-                &mut self.previews,
-                &mut self.video_previews,
-                self.video_timeline_decimation,
-                self.pending.is_none(),
-                colors,
-            );
-            hovered |= time.is_some();
-            if let Some(detail) = detail {
-                response = response.union(detail);
-            }
-            actions.row(ui, &response, entry, selected, can_edit, count);
-            actions.video_click(ui, &response, entry, time, &mut self.video_start);
-            if entry.directory {
-                targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
-            }
-        });
-        self.video_previews.retain(&visible);
-        self.previews
-            .retain(&visible.iter().map(|entry| entry.path.clone()).collect());
-        if !hovered {
-            self.video_previews.clear_hover();
-        }
-        if ui.is_enabled() {
-            self.drop_targets.extend(targets);
-        }
-        self.finish_listing(ui, actions, output.state.offset.y, &background);
-    }
-}
 
 impl ListActions {
     pub(super) fn video_click(
@@ -217,6 +130,9 @@ fn video_card(
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
     let details = ready.and_then(|ready| ready.as_ref().ok()).map(|ready| {
+        if columns.is_some_and(|columns| !columns.metadata_fields().is_empty()) {
+            return ready.metadata.audio_description.clone();
+        }
         format!(
             "{} · {}",
             ready.metadata.description, ready.metadata.audio_description

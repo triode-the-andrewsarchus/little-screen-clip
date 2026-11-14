@@ -40,6 +40,7 @@ pub enum Command {
         id: u64,
         path: PathBuf,
         query: Query,
+        here: Option<crate::here::HereScope>,
         hidden: bool,
         cancel: Arc<AtomicBool>,
     },
@@ -195,6 +196,7 @@ impl Service {
             readers: Default::default(),
             staged_files: Vec::new(),
             next_probe: 0,
+            here: None,
         };
         let thread = std::thread::Builder::new()
             .name("file-search".into())
@@ -426,6 +428,7 @@ impl Work {
     }
 }
 struct Worker {
+    here: Option<crate::here::HereScope>,
     paths: Paths,
     config: FileSearchConfig,
     exclusions: Vec<PathBuf>,
@@ -1097,10 +1100,11 @@ impl Worker {
                 id,
                 path,
                 query,
+                here,
                 hidden,
                 cancel,
             } => {
-                let result = self.search(id, &path, &query, hidden, &cancel);
+                let result = self.search(id, &path, &query, hidden, &cancel, here);
                 if result.is_err() {
                     self.model = None;
                     self.snapshot.lock().unwrap().backend = None;

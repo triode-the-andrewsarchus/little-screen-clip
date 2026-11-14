@@ -808,7 +808,7 @@ impl AudioPreviewState {
                     }
 
                     if ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel [Esc]", palette)).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                         close_dialog = true;
                     }
                 });

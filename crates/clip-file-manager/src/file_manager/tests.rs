@@ -70,13 +70,13 @@ fn internal_rack_stop_cancels_pending_map_load_without_poisoning_other_music() {
     manager.retire_constellation_audition();
     assert!(!manager.music.busy());
     assert!(manager.music.current().is_none());
-    // A request left by the old view cannot retire an explicit new Music preview.
+    // A request left by the old view cannot retire an explicit new List preview.
     manager.constellation.stop_playback();
-    manager.view = BrowserView::Music;
+    manager.view = BrowserView::List;
     manager.music.play(&path, None);
     manager.retire_constellation_audition();
     assert_eq!(manager.music.current(), Some(&path));
-    // Owner-level stop already handles Music and must consume its own signal.
+    // Owner-level stop already handles audio and must consume its own signal.
     manager.view = BrowserView::Constellation;
     manager.stop_previews();
     manager.music.play(&path, None);
@@ -249,7 +249,7 @@ fn photo_collection_excludes_hidden_and_nonimages_without_filtering_browser_entr
 }
 
 #[test]
-fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive_refresh() {
+fn audio_folders_default_to_list_and_manual_history_choices_survive_refresh() {
     let temp = tempfile::tempdir().unwrap();
     let child = temp.path().join("subfolder");
     std::fs::create_dir(&child).unwrap();
@@ -257,26 +257,25 @@ fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive
         std::fs::write(temp.path().join(name), "fixture").unwrap();
     }
     let (mut manager, jobs) = loaded(temp.path());
-    assert_eq!(manager.view, BrowserView::Music);
+    assert_eq!(manager.view, BrowserView::List);
     assert_eq!(manager.visible.len(), 5);
     manager.music.play(&temp.path().join("b.mp3"), None);
-    manager.set_view(BrowserView::List);
+    manager.set_view(BrowserView::Columns);
     manager.refresh();
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     manager.navigate(child, Navigation::New);
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     assert_eq!(manager.music.current(), None);
     manager.history_step(false);
     finish(&mut manager, &jobs);
-    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(manager.view, BrowserView::Columns);
     manager.location_mut().unwrap().manual_view = None;
-    manager.music_threshold = 76;
     manager.activate_media_view();
     assert_eq!(manager.view, BrowserView::List);
     manager.toggle_hidden();
-    assert_eq!(manager.view, BrowserView::Music);
+    assert_eq!(manager.view, BrowserView::List);
 }
 
 #[test]
@@ -505,6 +504,63 @@ fn press(
         *pressed = false;
     }
     frame(manager, ctx, vec![release]);
+}
+
+#[test]
+fn list_and_columns_default_keyboard_focus_and_restore_it_before_the_first_returned_key() {
+    let (root, _child) = folder_fixture();
+    std::fs::write(root.path().join("note.txt"), "fixture").unwrap();
+    for view in [BrowserView::List, BrowserView::Columns] {
+        let (mut manager, _jobs) = loaded(root.path());
+        manager.set_view(view);
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        // No file or background click is needed after opening the browser.
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        let first = manager.location().unwrap().selected.clone();
+        assert!(first.is_some());
+        assert!(
+            ctx.memory(|m| m.has_focus(ui::list_id())),
+            "missing default focus in {view:?}: {:?}",
+            ctx.memory(|m| m.focused())
+        );
+        // The host sets a handoff flag after a viewer closes. It must take
+        // effect before this frame's keys, rather than one frame afterward.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("departed-studio")));
+        manager.focus_list = true;
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_ne!(manager.location().unwrap().selected, first);
+        let selected = manager.location().unwrap().selected.clone();
+        press(&mut manager, &ctx, egui::Key::L, egui::Modifiers::CTRL);
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(manager.location().unwrap().selected, selected);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_address"))));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("file_manager_tree_focus")));
+        frame(&mut manager, &ctx, vec![]);
+        press(
+            &mut manager,
+            &ctx,
+            egui::Key::ArrowDown,
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(manager.location().unwrap().selected, selected);
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_tree_focus"))));
+    }
 }
 
 #[test]
@@ -989,7 +1045,7 @@ fn large_directory_virtualizes_rows_and_restores_history_viewport() {
 }
 
 #[test]
-fn large_audio_directory_virtualizes_music_and_restores_history_viewport() {
+fn large_audio_directory_virtualizes_waveforms_and_restores_history_viewport() {
     exercise_large_directory("wav");
 }
 
@@ -997,7 +1053,7 @@ fn large_audio_directory_virtualizes_music_and_restores_history_viewport() {
 fn waveform_keyboard_focus_survives_frames_and_routes_clipboard_keys() {
     let (directory, _) = folder_fixture();
     let (mut manager, _jobs, ctx) = rendered(directory.path());
-    manager.set_view(BrowserView::Music);
+    manager.set_view(BrowserView::List);
     frame(&mut manager, &ctx, vec![]);
     let id = super::ui::music::waveform_id();
     ctx.memory_mut(|memory| memory.request_focus(id));
@@ -1028,7 +1084,7 @@ fn exercise_large_directory(extension: &str) {
     let (mut manager, jobs) = loaded(temp.path());
     let loaded_ms = started.elapsed().as_millis();
     assert_eq!(manager.visible.len(), 10_001);
-    for view in [BrowserView::List, BrowserView::Photos, BrowserView::Music] {
+    for view in [BrowserView::List, BrowserView::Photos, BrowserView::Columns] {
         manager.set_view(view);
         manager.location_mut().unwrap().scroll = 0.0;
         manager.restore_scroll = true;
@@ -1420,7 +1476,7 @@ fn header_sorting_uses_natural_names_and_keeps_selection_across_size_and_refresh
 }
 
 #[test]
-fn header_type_sorting_keeps_content_categories_and_extensions_contiguous() {
+fn header_type_sorting_groups_broad_families_with_natural_names() {
     use super::sorting::Column;
     let temp = tempfile::tempdir().unwrap();
     for name in [
@@ -1433,15 +1489,76 @@ fn header_type_sorting_keeps_content_categories_and_extensions_contiguous() {
     assert_eq!(
         visible_names(&manager),
         [
-            "e.mp3", "f.MP3", "a.wav", "b.WAV", "c.jpg", "d.JPG", "g.png", "h.PNG"
+            "a.wav", "b.WAV", "e.mp3", "f.MP3", "c.jpg", "d.JPG", "g.png", "h.PNG"
         ]
     );
     manager.sort_by(Column::Type);
     assert_eq!(
         visible_names(&manager),
         [
-            "g.png", "h.PNG", "c.jpg", "d.JPG", "a.wav", "b.WAV", "e.mp3", "f.MP3"
+            "c.jpg", "d.JPG", "g.png", "h.PNG", "a.wav", "b.WAV", "e.mp3", "f.MP3"
         ]
+    );
+}
+
+#[test]
+fn family_headers_are_virtualized_once_per_family_and_preserve_selection() {
+    use super::sorting::{Category, Column};
+    let temp = tempfile::tempdir().unwrap();
+    for name in [
+        "a.jpg",
+        "b.png",
+        "c.wav",
+        "d.mp3",
+        "notes.md",
+        "book.epub",
+        "pack.zip",
+        "piano.sfz",
+    ] {
+        std::fs::write(temp.path().join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(temp.path());
+    let selected = temp.path().join("b.png");
+    manager.select(selected.clone());
+    let plain_height = *manager.list_offsets.last().unwrap();
+    let groups = [
+        Category::Audio,
+        Category::Image,
+        Category::Document,
+        Category::Text,
+        Category::Archive,
+    ];
+    for descending in [false, true] {
+        manager.sort_by(Column::Type);
+        let directory = manager.directory.as_ref().unwrap();
+        let actual = manager
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(position, _)| {
+                manager.sort.group_at(directory, &manager.visible, position)
+            })
+            .collect::<Vec<_>>();
+        let mut expected = groups.to_vec();
+        if descending {
+            expected.reverse();
+        }
+        assert_eq!(actual, expected);
+        assert_eq!(
+            *manager.list_offsets.last().unwrap(),
+            plain_height + groups.len() as f32 * super::ui::GROUP_HEADER_HEIGHT
+        );
+        assert_eq!(
+            manager.location().unwrap().selected.as_ref(),
+            Some(&selected)
+        );
+        assert_eq!(manager.selection_count(), 1);
+    }
+    manager.sort_by(Column::Name);
+    assert_eq!(*manager.list_offsets.last().unwrap(), plain_height);
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&selected)
     );
 }
 
@@ -1844,4 +1961,50 @@ fn returning_to_current_folder_exits_search_and_restores_unfiltered_rows() {
     manager.navigate(temp.path().into(), Navigation::New);
     assert!(!manager.search.open);
     assert_eq!(manager.visible.len(), 2);
+}
+
+#[test]
+fn columns_navigation_keeps_view_and_restores_file_selection_and_scroll_in_history() {
+    let root = tempfile::tempdir().unwrap();
+    let child = root.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    let file = root.path().join("selected.txt");
+    std::fs::write(&file, "column preview").unwrap();
+    let (mut manager, jobs) = loaded(root.path());
+    manager.set_view(BrowserView::Columns);
+    manager.select(file.clone());
+    manager.location_mut().unwrap().scroll = 56.0;
+    manager.navigate(child.clone(), Navigation::New);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), child);
+    assert_eq!(manager.view, BrowserView::Columns);
+    manager.history_step(false);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), root.path());
+    assert_eq!(manager.view, BrowserView::Columns);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&file));
+    assert_eq!(manager.location().unwrap().scroll, 56.0);
+    let names: Vec<_> = manager
+        .displayed_entries()
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    manager.set_view(BrowserView::List);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&file));
+    assert_eq!(
+        manager
+            .displayed_entries()
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>(),
+        names
+    );
+    assert_eq!(
+        serde_json::to_string(&BrowserView::Columns).unwrap(),
+        "\"columns\""
+    );
+    assert_eq!(
+        serde_json::from_str::<BrowserView>("\"columns\"").unwrap(),
+        BrowserView::Columns
+    );
 }

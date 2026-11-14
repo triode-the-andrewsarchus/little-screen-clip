@@ -38,6 +38,8 @@ pub(super) struct Search {
     pub focus: bool,
     pub error: Option<String>,
     pub applied: Option<Query>,
+    pub(super) here: Option<clip_search::here::HereScope>,
+    here_entries: Vec<super::filesystem::Entry>,
     restore: Option<super::Location>,
     restore_sort: Option<super::sorting::Sort>,
     restore_directory: Option<Directory>,
@@ -129,6 +131,24 @@ impl Search {
         }
     }
 
+    pub(super) fn uses_worker(&self, query: &Query) -> bool {
+        query.scope != Scope::Here
+            || self.here.is_some()
+            || matches!(
+                query.operator,
+                Operator::Content(_) | Operator::Embedding(_)
+            )
+    }
+    fn accept_here_sources(&mut self, sources: &[reader::SourceRoot]) {
+        if self
+            .applied
+            .as_ref()
+            .is_some_and(|query| query.scope == Scope::Here)
+            && let Some(here) = &mut self.here
+        {
+            here.accept(sources);
+        }
+    }
     pub(super) fn filter(&self, directory: &Directory, visible: &mut Vec<usize>) {
         let Some(query) = &self.applied else { return };
         visible.retain(|index| query.local_rank(&directory.entries[*index]).is_some());
@@ -164,21 +184,35 @@ impl FileManager {
                     self.add_answer_column(query);
                     return;
                 }
+                if let Err(error) = self.capture_here_search() {
+                    self.search.error = Some(error);
+                    return;
+                }
                 let source = self
                     .search
                     .restore_directory
                     .as_ref()
                     .or(self.directory.as_ref());
-                let Some(directory) = source else {
-                    self.search.error = Some("Open a folder before searching".into());
-                    return;
-                };
-                query.resolve_navigation_scope(directory, self.show_hidden);
+                let directory = source.expect("search location validated before query assembly");
+                query.resolve_navigation_entries(
+                    directory
+                        .entries
+                        .iter()
+                        .chain(self.search.here_entries.iter()),
+                    self.show_hidden,
+                );
                 let selected = self
                     .location()
                     .map(|location| location.selection.clone())
                     .unwrap_or_default();
-                if let Err(error) = self.search.images.begin(&query, directory, &selected) {
+                if let Err(error) = self.search.images.begin(
+                    &query,
+                    directory
+                        .entries
+                        .iter()
+                        .chain(self.search.here_entries.iter()),
+                    &selected,
+                ) {
                     self.search.error = Some(error);
                     return;
                 }
@@ -203,11 +237,7 @@ impl FileManager {
                 if let Some(sort) = super::sorting::for_query(&query) {
                     self.sort = sort;
                 }
-                let remote = query.scope != Scope::Here
-                    || matches!(
-                        query.operator,
-                        Operator::Content(_) | Operator::Embedding(_)
-                    );
+                let remote = self.search.uses_worker(&query);
                 if remote {
                     if self.search.restore_directory.is_none() {
                         self.search.restore_directory = self.directory.clone();
@@ -237,13 +267,12 @@ impl FileManager {
     }
     /// Refresh accepted results without adopting an unfinished or invalid draft.
     pub(in crate::file_manager) fn refresh_search_results(&mut self) -> bool {
-        let Some(query) = self.search.applied.clone().filter(|query| {
-            query.scope != Scope::Here
-                || matches!(
-                    query.operator,
-                    Operator::Content(_) | Operator::Embedding(_)
-                )
-        }) else {
+        let Some(query) = self
+            .search
+            .applied
+            .clone()
+            .filter(|query| self.search.uses_worker(query))
+        else {
             return false;
         };
         self.error = None;
@@ -260,6 +289,26 @@ impl FileManager {
         true
     }
 
+    fn capture_here_search(&mut self) -> Result<(), String> {
+        let directory = self
+            .search
+            .restore_directory
+            .as_ref()
+            .or(self.directory.as_ref())
+            .ok_or("Open a folder before searching")?;
+        if self.search.has_result_sources() {
+            return Ok(());
+        }
+        let (scope, entries) = self
+            .containers
+            .search_scope(directory, self.show_hidden)?
+            .map_or((None, Vec::new()), |(scope, entries)| {
+                (Some(scope), entries)
+            });
+        self.search.here = scope;
+        self.search.here_entries = entries;
+        Ok(())
+    }
     fn submit_search(&mut self, query: &Query) -> Result<(), String> {
         let submitted_at = std::time::Instant::now();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -268,6 +317,9 @@ impl FileManager {
             id: self.search.request_id,
             path: self.path().into(),
             query: query.clone(),
+            here: (query.scope == Scope::Here)
+                .then(|| self.search.here.clone())
+                .flatten(),
             hidden: self.show_hidden,
             cancel,
         };
@@ -355,10 +407,13 @@ impl FileManager {
         }
         if let Some(directory) = &self.directory {
             let origin = self.search.restore_directory.as_ref().unwrap_or(directory);
-            let (changed, error) =
-                self.search
-                    .images
-                    .tick(directory, origin, &self.visible, &self.previews, jobs);
+            let (changed, error) = self.search.images.tick(
+                directory,
+                origin.entries.iter().chain(self.search.here_entries.iter()),
+                &self.visible,
+                &self.previews,
+                jobs,
+            );
             if let Some(error) = error {
                 self.search.error = Some(error);
             }
@@ -384,6 +439,7 @@ impl FileManager {
                 sources,
                 explanations,
             }) => {
+                self.search.accept_here_sources(&sources);
                 self.search.explanations = explanations;
                 self.search.explanation_id = Some(result.id);
                 self.search.source_check_started_at = self.search.submitted_at;
@@ -974,5 +1030,21 @@ mod tests {
             manager.directory.as_ref().unwrap().entries[manager.visible[0]].name,
             "a.txt"
         );
+    }
+    #[test]
+    fn expanded_search_without_a_location_reports_an_error_before_service_admission() {
+        let mut manager = FileManager::default();
+        manager.search.open(":*.txt;scope:here".into());
+        manager.apply_search();
+        assert!(
+            manager
+                .search
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("Open a folder")
+        );
+        assert!(manager.search.service.is_none());
+        assert!(manager.search.applied.is_none());
     }
 }

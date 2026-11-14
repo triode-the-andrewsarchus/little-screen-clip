@@ -49,9 +49,10 @@ def preserve_file_clipboard(env):
 
 
 class Session:
-    def __init__(self, output, env, niri, process, children=None):
+    def __init__(self, output, env, niri, process, children=None, *, logical_size=(1280, 800)):
         self.output, self.env, self.niri, self.process = output, env, niri, process
         self.children = children
+        self.logical_size = logical_size
         self.observations = []
         self.pointer = private.build_private_virtual_pointer(output)
         private.verify_private_wayland_target(env, output / "runtime")
@@ -81,7 +82,10 @@ class Session:
         assert self.process.poll() is not None, 'Close the previous Files client before restarting'
         self.process = self.children.start('files-resumed', [str(binary.resolve()), str(root)],
             env=self.env, cwd=self.output/'scratch', log_path=self.output/'files-resumed.log')
-        private.wait_for_app_window(self.niri, self.env, self.process, self.output)
+        windows, _ = private.wait_for_app_window(self.niri, self.env, self.process, self.output)
+        private.run_checked([str(self.niri), "msg", "action", "focus-window", "--id", str(windows[0]["id"])], env=self.env)
+        wait_for(lambda: any(window.get("is_focused") for window in private.own_windows(
+            self.niri, self.env, {self.process.pid})), "restarted client keyboard focus")
 
     def address(self, path):
         self.key("l", "ctrl")
@@ -89,11 +93,15 @@ class Session:
         self.key("Return")
 
     def click(self, x, y, delay=0.2):
-        private.run_checked([str(self.pointer), "click", "1280", "800", str(x), str(y)], env=self.env)
+        private.run_checked([str(self.pointer), "click", *map(str, self.logical_size), str(x), str(y)], env=self.env)
         time.sleep(delay)
 
+    def scroll(self, x, y, amount, *, horizontal=False):
+        private.run_checked([str(self.pointer), "hscroll" if horizontal else "scroll", *map(str, self.logical_size), str(x), str(y), str(amount)], env=self.env)
+        time.sleep(0.2)
+
     def move_pointer_to_title(self):
-        pointer = subprocess.Popen([str(self.pointer), "move", "1280", "800", "120", "40"], env=self.env, stdout=subprocess.DEVNULL)
+        pointer = subprocess.Popen([str(self.pointer), "move", *map(str, self.logical_size), "120", "40"], env=self.env, stdout=subprocess.DEVNULL)
         time.sleep(0.1)
         pointer.terminate()
         pointer.wait(timeout=3)
@@ -129,9 +137,7 @@ class Session:
             if all("".join(fragment.lower().split()) in rendered for fragment in expected):
                 self.observe(name, expected)
                 return
-            private.run_checked([
-                str(self.pointer), "scroll", "1280", "800", *map(str, position), str(step),
-            ], env=self.env)
+            self.scroll(*position, step)
             time.sleep(0.5)
         raise RuntimeError(f"Unable to find {expected} in bounded inspector scroll")
 
@@ -149,7 +155,9 @@ class Session:
             return text
         # Sparse studios can omit the toolbar in full-window OCR. Inspect the
         # listing and toolbar regions separately while retaining the raw PNG.
-        regions = [
+        regions = getattr(self, "ocr_regions", []) + [
+            ("studio-editor-controls-ocr.png", (96, 196, 1182, 238)),
+            ("studio-close-controls-ocr.png", (482, 458, 800, 502)),
             ("hidden-toggle-ocr.png", (1084, 106, 1170, 130)),
             ("settings-ocr.png", (100, 145, 660, 690)),
             ("menu-ocr.png", (90, 50, 1180, 95)),
@@ -173,7 +181,8 @@ class Session:
             with Image.open(path) as screen:
                 crop = screen.crop(bounds)
                 crop.resize((crop.width * 3, crop.height * 3)).save(region)
-            text += private.run_checked(["tesseract", str(region), "stdout", "--psm", "6"], env=self.env, timeout=_OCR_TIMEOUT)
+            mode = "7" if filename.startswith("strip-title-") else ("11" if filename.startswith("studio-") else "6")
+            text += private.run_checked(["tesseract", str(region), "stdout", "--psm", mode], env=self.env, timeout=_OCR_TIMEOUT)
             visible = "".join(text.lower().split())
             if all("".join(fragment.lower().split()) in visible for fragment in expected):
                 break
@@ -409,14 +418,14 @@ def phase2(session, root):
     (session.output / "context-clipboard.txt").write_text(payload)
 
 
-def isolated_runner(output, appearance, children):
-    args = private.create_parser().parse_args(["--output-dir", str(output), "--appearance", appearance, "--allow-server-decorations"])
+def isolated_runner(output, appearance, children, *, logical_size=(1280, 800)):
+    args = private.create_parser().parse_args(["--output-dir", str(output), "--appearance", appearance, "--allow-server-decorations", "--width", str(logical_size[0]), "--height", str(logical_size[1])])
     config = private.prepare_configuration(args, output)
     with config["niri_config"].open("a") as file:
         file.write('window-rule { match app-id="little-clip-file-manager"; open-floating true; }\n')
     _, env, _ = private.start_compositors(config, args, output, children)
-    env |= {"HOME": str(output / "home"), "XDG_DATA_HOME": str(output / "data")}
-    for key in ["HOME", "XDG_DATA_HOME"]:
+    env |= {"HOME": str(output / "home"), "XDG_DATA_HOME": str(output / "data"), "XDG_STATE_HOME": str(output / "state")}
+    for key in ["HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]:
         Path(env[key]).mkdir()
     private.verify_private_wayland_target(env, config["runtime"])
     private.APP_ID = "little-clip-file-manager"
@@ -453,13 +462,14 @@ def run_application_acceptance(args, output, root, exercise, scope, prepare_envi
     children = private.ChildProcesses()
     report = {"status": "running", "appearance": args.appearance, "scope": scope}
     try:
-        config, env = isolated_runner(output, args.appearance, children)
+        logical_size = getattr(args, "output_size", (1280, 800))
+        config, env = isolated_runner(output, args.appearance, children, logical_size=logical_size)
         if prepare_environment:
             prepare_environment(env, children)
         process = children.start("files", [str(args.binary.resolve()), str(root)], env=env,
                                  cwd=config["scratch"], log_path=output / "files.log")
         _, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
-        session = Session(output, env, config["niri_bin"], process, children)
+        session = Session(output, env, config["niri_bin"], process, children, logical_size=logical_size)
         exercise(session, root)
         session.close(expected_exit_code)
         report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations,

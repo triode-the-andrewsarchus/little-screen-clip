@@ -150,12 +150,17 @@ impl Query {
     }
 
     pub fn resolve_navigation_scope(&mut self, directory: &Directory, hidden: bool) {
+        self.resolve_navigation_entries(directory.entries.iter(), hidden);
+    }
+    /// Resolves progressive fallback against the current logical location entries.
+    pub fn resolve_navigation_entries<'a>(
+        &mut self,
+        mut entries: impl Iterator<Item = &'a Entry>,
+        hidden: bool,
+    ) {
         if self.progressive
             && !self.name.is_empty()
-            && !directory
-                .entries
-                .iter()
-                .any(|entry| (hidden || !entry.hidden) && self.local_rank(entry).is_some())
+            && !entries.any(|entry| (hidden || !entry.hidden) && self.local_rank(entry).is_some())
         {
             self.scope = Scope::Recursive;
         }

@@ -90,12 +90,24 @@ impl FileManager {
         {
             return self.similarity_canvas.entries.iter().collect();
         }
+        let expanded = matches!(
+            self.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        ) && !self.search.has_result_sources();
         self.directory
             .iter()
             .flat_map(|directory| {
                 self.visible
                     .iter()
                     .filter_map(|&index| directory.entries.get(index))
+            })
+            .flat_map(|entry| {
+                let children = if expanded {
+                    self.containers.children(entry, self.show_hidden)
+                } else {
+                    Vec::new()
+                };
+                std::iter::once(entry).chain(children)
             })
             .collect()
     }
@@ -159,24 +171,54 @@ impl FileManager {
         let Some(index) = self.index else {
             return;
         };
-        let paths: BTreeSet<_> = self
-            .displayed_entries()
+        let entries = self.displayed_entries();
+        let paths: BTreeSet<_> = entries.iter().map(|entry| entry.path.clone()).collect();
+        // Unknown ancestor coverage after a refresh cannot prove that a selected
+        // descendant vanished. Retain intent, while mutation still requires an
+        // actual current displayed entry.
+        let selected_parents: BTreeSet<_> = self.history[index]
+            .selection
             .iter()
+            .flat_map(|path| {
+                path.ancestors()
+                    .skip(1)
+                    .take(super::container_preview::DEPTH)
+                    .map(PathBuf::from)
+            })
+            .collect();
+        let unknown: BTreeSet<_> = entries
+            .iter()
+            .filter(|entry| {
+                selected_parents.contains(&entry.path)
+                    && matches!(
+                        self.view,
+                        super::BrowserView::List | super::BrowserView::Columns
+                    )
+                    && !self.search.has_result_sources()
+                    && entry.directory
+                    && super::container_preview::candidate(entry)
+                    && (entry.path.parent() == Some(self.path())
+                        || self.containers.explicitly_expanded(&entry.path))
+                    && self.containers.unknown_children(entry)
+            })
             .map(|entry| entry.path.clone())
             .collect();
+        let available = |path: &PathBuf| {
+            paths.contains(path) || self.containers.pending_selection(path, &unknown)
+        };
         let location = &mut self.history[index];
-        location.selection.retain(|path| paths.contains(path));
+        location.selection.retain(available);
         if location
             .selected
             .as_ref()
-            .is_some_and(|path| !paths.contains(path))
+            .is_some_and(|path| !available(path))
         {
             location.selected = None;
         }
         if location
             .anchor
             .as_ref()
-            .is_some_and(|path| !paths.contains(path))
+            .is_some_and(|path| !available(path))
         {
             location.anchor = location.selected.clone();
         }

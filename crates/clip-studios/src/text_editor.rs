@@ -199,6 +199,23 @@ impl TextSession {
             .as_ref()
             .and_then(|editor| editor.source.clone())
     }
+    /// Requires an explicit destination when editing a temporary source snapshot.
+    ///
+    /// Keeps the loaded preview and draft, but routes the next Save through
+    /// Save As with `directory` as its initial destination. The source snapshot
+    /// is not overwritten; after a successful Save As, ordinary saves resume.
+    pub fn require_save_as(&mut self, directory: &Path) {
+        if let Some(editor) = &mut self.editor {
+            editor.source = None;
+            editor.directory = directory.to_string_lossy().into_owned();
+            editor.name = editor
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
     pub fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
         self.preview.title = path
             .file_name()
@@ -223,7 +240,7 @@ impl TextSession {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         let was_busy = self.busy();
-        if self.close.is_some()
+        if (self.close.is_some() || self.editor.as_ref().is_some_and(|editor| editor.save_as))
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             if let Some(editor) = &mut self.editor
@@ -1780,5 +1797,57 @@ mod tests {
                 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod temporary_source_tests {
+    use super::*;
+    #[test]
+    fn file_save_as_dialog_consumes_escape_without_requesting_studio_close() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut session =
+            TextSession::load(&path, &little_clip_core::AppConfig::default()).unwrap();
+        session.mode = Mode::Edit;
+        session.editor.as_mut().unwrap().save_as = true;
+        let ctx = egui::Context::default();
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| session.ui(ui, &AppPalette::default(), &mut close));
+            },
+        );
+        assert!(!close);
+        assert!(!session.editor.as_ref().unwrap().save_as);
+        assert!(!ctx.input(|input| input.key_pressed(egui::Key::Escape)));
+    }
+
+    #[test]
+    fn temporary_text_edits_require_an_explicit_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut session =
+            TextSession::load(&path, &little_clip_core::AppConfig::default()).unwrap();
+        session.require_save_as(root.path());
+        let editor = session.editor.as_mut().unwrap();
+        editor.text = "edited".into();
+        editor.request_save();
+        assert!(editor.save_as);
+        assert!(editor.pending.is_none());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
     }
 }

@@ -17,8 +17,8 @@ impl WireEditor {
                 input.pointer.interact_pos(),
             )
         });
-        if cancel {
-            self.drag = None;
+        if cancel && self.drag.take().is_some() {
+            ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         }
         if pressed
             && !cancel

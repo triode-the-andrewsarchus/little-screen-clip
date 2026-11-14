@@ -25,6 +25,60 @@ pub struct Book {
     /// Optional archive-local cover resource.
     pub cover: Option<String>,
 }
+/// Publication tags read from the package without retaining the book container.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Metadata {
+    /// Dublin Core title, when supplied by the publication.
+    pub title: String,
+    /// Dublin Core creators, in authored order.
+    pub authors: Vec<String>,
+}
+
+/// Reads only the EPUB package tags through a guarded seekable archive.
+///
+/// Shares package validation with [`Book::parse`]. No chapters or artwork are
+/// decoded, and no archive resources are resolved as filesystem paths. Container
+/// and package XML limits match the existing publication reader. Metadata alone
+/// does not establish that every chapter is supported or readable.
+///
+/// # Errors
+/// Returns cancellation, source changes, malformed archives, or invalid package XML.
+pub fn read_metadata(
+    path: &std::path::Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Metadata, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("EPUB metadata cancelled".into());
+    }
+    let source = crate::file_source::FileSource::capture(path)?;
+    let file =
+        crate::file_source::open_regular_file(path, true).map_err(|error| error.to_string())?;
+    source.check_file(&file)?;
+    let mut archive = crate::zip_content::archive_file(file, 64 * 1024 * 1024)?;
+    let (_, bytes) = package(&mut archive)?;
+    let document = xml(&bytes)?;
+    let metadata = publication_metadata(&document)?;
+    source.check_file(&archive.into_inner())?;
+    source.check()?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("EPUB metadata cancelled".into());
+    }
+    Ok(metadata)
+}
+
+fn publication_metadata(document: &Xml<'_>) -> Result<Metadata, String> {
+    let metadata = named(document.root(), "metadata")
+        .next()
+        .ok_or("Missing EPUB metadata")?;
+    Ok(Metadata {
+        title: named(metadata, "title")
+            .next()
+            .map(text)
+            .unwrap_or_default(),
+        authors: named(metadata, "creator").map(text).collect(),
+    })
+}
+
 pub use crate::html_preview::Block;
 fn xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
     crate::xml_content::validate(bytes, 100_000, 128)?;
@@ -88,11 +142,7 @@ impl Book {
         let metadata = named(doc.root(), "metadata")
             .next()
             .ok_or("Missing EPUB metadata")?;
-        let title = named(metadata, "title")
-            .next()
-            .map(text)
-            .unwrap_or_default();
-        let authors = named(metadata, "creator").map(text).collect();
+        let Metadata { title, authors } = publication_metadata(&doc)?;
         let items = manifest(&doc, &package)?;
         check_encryption(&mut zip, &items)?;
         let cover = cover(metadata, &items);
@@ -132,7 +182,9 @@ impl Book {
         )
     }
 }
-fn package(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>) -> Result<(String, Vec<u8>), String> {
+fn package<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Result<(String, Vec<u8>), String> {
     if entry(zip, "mimetype", 64)? != b"application/epub+zip" {
         return Err("Not an EPUB publication".into());
     }
@@ -326,6 +378,39 @@ mod tests {
         assert!(format!("{:?}", book.chapter(1).unwrap()).contains("harbor"));
         assert!(book.chapter(2).is_err());
     }
+    #[test]
+    fn seekable_package_tags_do_not_require_readable_chapters_or_artwork() {
+        use std::{
+            io::{Cursor, Write},
+            sync::atomic::AtomicBool,
+        };
+        let mut input = archive(BOOK).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for name in ["mimetype", "META-INF/container.xml", "Books/main.opf"] {
+            output
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            output
+                .write_all(&entry(&mut input, name, XML_LIMIT).unwrap())
+                .unwrap();
+        }
+        let bytes = output.finish().unwrap().into_inner();
+        assert!(Book::parse(bytes.clone()).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("package-only.epub");
+        std::fs::write(&path, bytes).unwrap();
+        let metadata = read_metadata(&path, &AtomicBool::new(false)).unwrap();
+        assert_eq!(metadata.title, "A Small Journey");
+        assert_eq!(metadata.authors, ["Example Author"]);
+        assert!(
+            read_metadata(&path, &AtomicBool::new(true))
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        std::fs::write(&path, b"not an EPUB").unwrap();
+        assert!(read_metadata(&path, &AtomicBool::new(false)).is_err());
+    }
+
     #[test]
     fn epub_two_uses_legacy_ncx_labels_without_a_navigation_document() {
         let book = Book::parse(include_bytes!("../tests/fixtures/ebooks/journey-v2.epub").to_vec())

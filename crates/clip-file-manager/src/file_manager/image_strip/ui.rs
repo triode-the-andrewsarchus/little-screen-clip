@@ -15,7 +15,9 @@ pub(in crate::file_manager) fn show(
     colors: WorkbenchColors,
 ) {
     let analysis = ready.and_then(|ready| ready.data.photo.as_deref());
-    let detail = analysis.map(|a| format!("{} × {}", a.dimensions.0, a.dimensions.1));
+    let detail = analysis
+        .filter(|_| columns.is_none_or(|columns| columns.metadata_fields().is_empty()))
+        .map(|a| format!("{} × {}", a.dimensions.0, a.dimensions.1));
     super::super::ui::media_header(
         ui,
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),

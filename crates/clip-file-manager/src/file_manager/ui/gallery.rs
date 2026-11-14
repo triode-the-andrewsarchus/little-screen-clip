@@ -26,24 +26,17 @@ impl FileManager {
         }
         self.type_navigation.clear();
         self.retire_media_previews();
-        if self.view == super::super::BrowserView::Constellation
-            || matches!(
-                view,
-                super::super::BrowserView::List
-                    | super::super::BrowserView::Videos
-                    | super::super::BrowserView::Constellation
-            )
-        {
-            self.stop_previews();
-        }
-        if view == super::super::BrowserView::Music && self.view != view {
-            self.shelf.open = false;
-        }
+        self.stop_previews();
         if view == super::super::BrowserView::Constellation {
             let path = self.path().to_path_buf();
             self.constellation.check_and_load_folder(&path);
         }
+        self.view_epoch = self.view_epoch.wrapping_add(1);
         self.view = view;
+        self.focus_list = matches!(
+            view,
+            super::super::BrowserView::List | super::super::BrowserView::Columns
+        );
         if let Some(location) = self.location_mut() {
             location.manual_view = Some(view);
             location.scroll = 0.0;
@@ -51,6 +44,7 @@ impl FileManager {
         self.restore_scroll = true;
     }
     pub(in crate::file_manager) fn retire_media_previews(&mut self) {
+        self.containers.retire();
         self.constellation.stop_playback();
         self.midi.stop();
         self.gallery_layout.retire();
@@ -70,9 +64,8 @@ impl FileManager {
                         self.view,
                         &[
                             Tab::new(super::super::BrowserView::List, "List"),
+                            Tab::new(super::super::BrowserView::Columns, "Columns"),
                             Tab::new(super::super::BrowserView::Photos, "Photos"),
-                            Tab::new(super::super::BrowserView::Music, "Music"),
-                            Tab::new(super::super::BrowserView::Videos, "Videos"),
                             Tab::new(super::super::BrowserView::Constellation, "Constellation"),
                         ],
                         palette,
@@ -87,87 +80,92 @@ impl FileManager {
                 ui.small("Last-known matches: metadata list");
             }
             self.transfer_toolbar(ui, palette);
-            if self.view == super::super::BrowserView::Photos {
-                if ui
-                    .add(ButtonRole::Secondary.button(
-                        if self.gallery_selecting {
-                            "Done"
-                        } else {
-                            "Select"
-                        },
-                        palette,
-                    ))
-                    .clicked()
-                {
-                    self.gallery_selecting = !self.gallery_selecting;
-                }
-                ui.label("Select multiple: Select mode, Ctrl+click, or Shift+click.");
+            if self.view == super::super::BrowserView::List {
+                self.containers.settings(ui);
             }
-            if self.view == super::super::BrowserView::Photos
-                && self.photo_mode == super::super::gallery::similarity::PhotoMode::Masonry
-            {
-                let is_time = self.sort.column == super::super::sorting::Column::Modified;
-                let sort_label = match (self.sort.column, self.sort.descending) {
-                    (super::super::sorting::Column::Modified, true) => "Sort: Date ↓",
-                    (super::super::sorting::Column::Modified, false) => "Sort: Date ↑",
-                    (super::super::sorting::Column::Name, false) => "Sort: Name (A-Z)",
-                    (super::super::sorting::Column::Name, true) => "Sort: Name (Z-A)",
-                    _ => "Sort: Date ↓",
-                };
-                let sort_resp = ui
-                    .add(ButtonRole::Secondary.button(sort_label, palette))
-                    .on_hover_text(
-                        "Switch photo sorting between Date and Name. Right-click for options.",
-                    );
-                if sort_resp.clicked() {
-                    let next_col = if is_time {
-                        super::super::sorting::Column::Name
-                    } else {
-                        super::super::sorting::Column::Modified
-                    };
-                    self.sort_by(next_col);
-                }
-                sort_resp.context_menu(|ui| {
-                    use super::super::sorting::{Column, Sort};
-                    for (column, descending, label) in [
-                        (Column::Modified, true, "Date (Newest first)"),
-                        (Column::Modified, false, "Date (Oldest first)"),
-                        (Column::Name, false, "Name (A to Z)"),
-                        (Column::Name, true, "Name (Z to A)"),
-                    ] {
-                        let active =
-                            self.sort.column == column && self.sort.descending == descending;
-                        if ui.selectable_label(active, label).clicked() {
-                            self.sort = Sort { column, descending };
-                            self.gallery_layout.invalidate_order();
-                            self.rebuild_visible();
-                            ui.close_menu();
-                        }
-                    }
-                });
+            self.photo_toolbar(ui, palette);
+        });
+    }
 
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.thumbnail_edge, 80.0..=280.0)
-                            .text("Thumbnail size"),
-                    )
-                    .changed()
-                {
-                    if let Some(location) = self.location_mut() {
-                        location.scroll = 0.0;
-                    }
-                    self.restore_scroll = true;
-                }
+    fn photo_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if self.view != super::super::BrowserView::Photos {
+            return;
+        }
+        if ui
+            .add(ButtonRole::Secondary.button(
+                if self.gallery_selecting {
+                    "Done"
+                } else {
+                    "Select"
+                },
+                palette,
+            ))
+            .on_hover_text("Select multiple: Select mode, Ctrl+click, or Shift+click.")
+            .clicked()
+        {
+            self.gallery_selecting = !self.gallery_selecting;
+        }
+        match self.photo_mode {
+            super::super::gallery::similarity::PhotoMode::Masonry => {
+                self.masonry_toolbar(ui, palette)
             }
-            if self.view == super::super::BrowserView::Photos
-                && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
-                && ui
+            super::super::gallery::similarity::PhotoMode::Similarity => {
+                if ui
                     .add(ButtonRole::Secondary.button("Reset View", palette))
                     .clicked()
-            {
-                self.similarity_canvas.reset_view();
+                {
+                    self.similarity_canvas.reset_view();
+                }
+            }
+        }
+    }
+    fn masonry_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let is_time = self.sort.column == super::super::sorting::Column::Modified;
+        let sort_label = match (self.sort.column, self.sort.descending) {
+            (super::super::sorting::Column::Modified, true) => "Sort: Date ↓",
+            (super::super::sorting::Column::Modified, false) => "Sort: Date ↑",
+            (super::super::sorting::Column::Name, false) => "Sort: Name (A-Z)",
+            (super::super::sorting::Column::Name, true) => "Sort: Name (Z-A)",
+            _ => "Sort: Date ↓",
+        };
+        let sort_resp = ui
+            .add(ButtonRole::Secondary.button(sort_label, palette))
+            .on_hover_text("Switch photo sorting between Date and Name. Right-click for options.");
+        if sort_resp.clicked() {
+            let next_col = if is_time {
+                super::super::sorting::Column::Name
+            } else {
+                super::super::sorting::Column::Modified
+            };
+            self.sort_by(next_col);
+        }
+        sort_resp.context_menu(|ui| {
+            use super::super::sorting::{Column, Sort};
+            for (column, descending, label) in [
+                (Column::Modified, true, "Date (Newest first)"),
+                (Column::Modified, false, "Date (Oldest first)"),
+                (Column::Name, false, "Name (A to Z)"),
+                (Column::Name, true, "Name (Z to A)"),
+            ] {
+                let active = self.sort.column == column && self.sort.descending == descending;
+                if ui.selectable_label(active, label).clicked() {
+                    self.sort = Sort { column, descending };
+                    self.gallery_layout.invalidate_order();
+                    self.rebuild_visible();
+                    ui.close_menu();
+                }
             }
         });
+
+        if ui
+            .add(egui::Slider::new(&mut self.thumbnail_edge, 80.0..=280.0).text("Thumbnail size"))
+            .changed()
+        {
+            if let Some(location) = self.location_mut() {
+                location.scroll = 0.0;
+            }
+            self.restore_scroll = true;
+        }
     }
 
     pub(super) fn gallery_ui(

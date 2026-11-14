@@ -418,15 +418,17 @@ impl FileManager {
     }
 
     pub(super) fn selection_is_mutable(&self) -> bool {
-        !self.search.has_offline_results()
-            && self.directory.as_ref().is_some_and(|directory| {
-                !directory.system
-                    && self.selected_paths().iter().all(|path| {
-                        directory
-                            .entries
-                            .iter()
-                            .any(|entry| entry.path == *path && entry.system.is_none())
-                    })
+        let entries = self.displayed_entries();
+        self.archive_context().is_none()
+            && !self.search.has_offline_results()
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| !directory.system)
+            && self.selected_paths().iter().all(|path| {
+                entries
+                    .iter()
+                    .any(|entry| entry.path == *path && entry.system.is_none())
             })
     }
     pub(super) fn copy_selection(&mut self, cut: bool) {
@@ -562,6 +564,17 @@ impl FileManager {
         if self.directory.is_none() {
             return;
         }
+        if self.archives.context(&destination).is_some() {
+            self.set_error(
+                "Archive snapshots are read-only; copy files to an ordinary folder first",
+            );
+            return;
+        }
+        let move_files = move_files
+            && !drag
+                .paths
+                .iter()
+                .any(|path| self.archives.context(path).is_some());
         let guards = match drag.context.guards_for(&drag.paths) {
             Ok(guards) => guards,
             Err(error) => {
@@ -591,17 +604,11 @@ impl FileManager {
         if !paths.is_empty() {
             let selected: BTreeSet<_> = paths.iter().collect();
             let expected = self
-                .directory
-                .as_ref()
-                .map(|directory| {
-                    directory
-                        .entries
-                        .iter()
-                        .filter(|entry| selected.contains(&entry.path))
-                        .map(|entry| (entry.path.clone(), entry.identity))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .displayed_entries()
+                .into_iter()
+                .filter(|entry| selected.contains(&entry.path))
+                .map(|entry| (entry.path.clone(), entry.identity))
+                .collect();
             let search_guards = self.search_source_guards(&paths);
             self.transfers.confirmation = Some(DeleteConfirmation {
                 paths,

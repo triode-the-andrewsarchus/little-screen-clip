@@ -31,7 +31,7 @@ impl Sort {
             .iter()
             .map(|index| {
                 let entry = &directory.entries[*index];
-                let kind = (self.column == Column::Type).then(|| content_type(entry));
+                let kind = (self.column == Column::Type).then(|| family(entry));
                 (*index, entry, entry.name.to_lowercase(), kind)
             })
             .collect();
@@ -72,10 +72,10 @@ pub(super) fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) ->
     }
 }
 
-// Categories deliberately group related extensions; extensions stay contiguous
-// inside each category, with natural names used only as the final tie-breaker.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Category {
+// Families deliberately group related formats; natural names order all members
+// without splitting an image or audio family back into extension groups.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Category {
     Folder,
     Audio,
     Image,
@@ -90,18 +90,25 @@ enum Category {
     System,
 }
 
-fn content_type(entry: &Entry) -> (Category, String) {
+pub(super) fn family(entry: &Entry) -> Category {
+    if entry.directory {
+        Category::Folder
+    } else if entry.system.is_some() || !entry.regular_file {
+        Category::System
+    } else {
+        format_family(entry)
+    }
+}
+
+fn format_family(entry: &Entry) -> Category {
     let extension = entry
         .path
         .extension()
         .map(|v| v.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let category = if entry.directory {
-        Category::Folder
-    } else if entry.system.is_some() || !entry.regular_file {
-        Category::System
-    } else if little_clip_core::audio::is_audio_path(&entry.path)
+    if little_clip_core::audio::is_audio_path(&entry.path)
         || super::midi_strip::is_midi(&entry.path)
+        || entry.is_multisample()
     {
         Category::Audio
     } else if entry.is_photo() {
@@ -112,22 +119,17 @@ fn content_type(entry: &Entry) -> (Category, String) {
         Category::Scene
     } else if super::font_strip::known(&entry.path) {
         Category::Font
+    } else if little_clip_core::notebook::is_candidate_path(&entry.path) {
+        Category::Document
+    } else if extension_category(&extension) != Category::Other {
+        extension_category(&extension)
     } else if super::text_strip::known_text(&entry.path) {
         Category::Text
     } else if super::binary_strip::known(&entry.path) {
         Category::Binary
     } else {
         extension_category(&extension)
-    };
-    // Folder suffixes do not make them different content types.
-    (
-        category,
-        if entry.directory {
-            String::new()
-        } else {
-            extension
-        },
-    )
+    }
 }
 
 fn extension_category(extension: &str) -> Category {
@@ -135,27 +137,91 @@ fn extension_category(extension: &str) -> Category {
         "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
         | "epub" | "cbz" | "gpx" | "sfz" | "sf2" | "nki" | "gcode" | "geojson" | "sqlite"
         | "sqlite3" | "db" | "db3" | "ics" | "eml" | "ipynb" => Category::Document,
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Category::Archive,
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "tgz" | "tbz" | "tbz2" | "txz" | "tzst"
+        | "7z" | "rar" => Category::Archive,
         _ => Category::Other,
     }
 }
 
+// Evaluated when the visible inventory changes, rather than scanning it on
+// every frame. Empty lists have no family header.
+pub(super) fn single_family(directory: &Directory, visible: &[usize]) -> Option<Category> {
+    let first = family(directory.entries.get(*visible.first()?)?);
+    visible
+        .iter()
+        .all(|&index| family(&directory.entries[index]) == first)
+        .then_some(first)
+}
+
+impl Category {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Folder => "Folders",
+            Self::Audio => "Audio",
+            Self::Image => "Images",
+            Self::Video => "Video",
+            Self::Scene => "3D & materials",
+            Self::Font => "Fonts",
+            Self::Document => "Documents",
+            Self::Text => "Text & code",
+            Self::Archive => "Archives",
+            Self::Binary => "Binary files",
+            Self::Other => "Other files",
+            Self::System => "System interfaces",
+        }
+    }
+}
+
+impl Sort {
+    pub fn group_at(
+        self,
+        directory: &Directory,
+        visible: &[usize],
+        index: usize,
+    ) -> Option<Category> {
+        if self.column != Column::Type {
+            return None;
+        }
+        let current = family(directory.entries.get(*visible.get(index)?)?);
+        let previous = index
+            .checked_sub(1)
+            .map(|index| family(&directory.entries[visible[index]]));
+        (previous != Some(current)).then_some(current)
+    }
+}
+
 impl FileManager {
-    pub(super) fn sort_by(&mut self, column: Column) {
-        let answer_active = self
+    pub(super) fn grouped_by_type(&self) -> bool {
+        self.single_family.is_none()
+            && self
+                .list_sort()
+                .is_some_and(|sort| sort.column == Column::Type)
+    }
+    pub(super) fn list_sort(&self) -> Option<Sort> {
+        (self
             .search
             .answers
             .current()
-            .is_some_and(|folder| folder.sort.is_some());
-        if let Some(folder) = self.search.answers.current_mut() {
-            folder.sort = None;
-        }
-        let active = !answer_active
+            .is_none_or(|folder| folder.sort.is_none())
             && !self
                 .search
                 .applied
                 .as_ref()
-                .is_some_and(|query| crate::file_manager::sorting::for_query(query).is_none());
+                .is_some_and(|query| for_query(query).is_none()))
+        .then_some(self.sort)
+    }
+    pub(super) fn sort_by(&mut self, column: Column) {
+        let active = self.list_sort().is_some()
+            && self
+                .single_family
+                .is_none_or(|family| self.metadata.sort(family).is_none());
+        if let Some(family) = self.single_family {
+            self.metadata
+                .toggle_sort(family, super::metadata::Field::Filename);
+        }
+        if let Some(folder) = self.search.answers.current_mut() {
+            folder.sort = None;
+        }
         self.sort = Sort {
             column,
             descending: if active && self.sort.column == column {
@@ -164,8 +230,6 @@ impl FileManager {
                 matches!(column, Column::Modified | Column::Created)
             },
         };
-        self.type_navigation.clear();
-        self.gallery_layout.invalidate_order();
         if let Some(query) = &mut self.search.applied {
             query.sort = Some(super::search::query::Sort {
                 field: match column {
@@ -178,6 +242,11 @@ impl FileManager {
                 descending: self.sort.descending,
             });
         }
+        self.finish_sort();
+    }
+    pub(super) fn finish_sort(&mut self) {
+        self.type_navigation.clear();
+        self.gallery_layout.invalidate_order();
         self.rebuild_visible();
         self.reveal_selection = self.selection_count() > 0;
         if let Some(location) = self.location_mut() {

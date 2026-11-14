@@ -87,6 +87,7 @@ impl Fixture {
         let mut vector = vec![0.0; DIMENSION];
         vector[0] = 1.0;
         Retrieval {
+            here: None,
             progress: None,
             store: &self.store,
             pipeline: "model",
@@ -173,6 +174,7 @@ fn broad_lexical_hints_match_alias_fallback_order_and_every_retained_location() 
     let cancel = Arc::new(AtomicBool::new(false));
     let floors = BTreeMap::new();
     let retrieval = Retrieval {
+        here: None,
         store: &fixture.store,
         pipeline: "model",
         vector: &[],
@@ -341,6 +343,7 @@ fn warmed_cache_keeps_hard_filters_before_corrupt_vector_decoding() {
     let mut vector = vec![0.0; DIMENSION];
     vector[0] = 1.0;
     let mut retrieval = Retrieval {
+        here: None,
         progress: None,
         store: &fixture.store,
         pipeline: "model",
@@ -479,6 +482,7 @@ fn default_cutoffs_reject_weak_scores_and_explicit_overrides_remain_available() 
     vector[0] = 1.0;
     let defaults = BTreeMap::new();
     let mut retrieval = Retrieval {
+        here: None,
         progress: None,
         store: &fixture.store,
         pipeline: "model",
@@ -630,6 +634,7 @@ fn invalid_query_vectors_cannot_silently_change_semantic_ranking() {
     ];
     for vector in invalid {
         let result = Retrieval {
+            here: None,
             progress: None,
             store: &fixture.store,
             pipeline: "model",
@@ -840,6 +845,7 @@ fn semantic_progress_covers_all_admitted_references_and_partial_tail() {
     let cancel = Arc::new(AtomicBool::new(false));
     let floors = BTreeMap::new();
     let mut retrieval = Retrieval {
+        here: None,
         store: &fixture.store,
         pipeline: "model",
         vector: &vector,
@@ -885,6 +891,7 @@ fn lexical_search_needs_no_model_but_rejects_obsolete_extraction_records() {
     let cancel = Arc::new(AtomicBool::new(false));
     let floors = BTreeMap::new();
     let mut retrieval = Retrieval {
+        here: None,
         progress: None,
         store: &fixture.store,
         pipeline: "",
@@ -1465,4 +1472,62 @@ fn modality_count_cannot_overpower_the_lexical_weight() {
         .map(|hit| hit.entry.name)
         .collect::<Vec<_>>();
     assert_eq!(names, ["meaning.txt", "keyword.txt"]);
+}
+
+#[test]
+fn expanded_here_hard_filters_lexical_and_vector_candidates_with_lossless_parents() {
+    use crate::{here::HereScope, source::SourceRoot};
+    use std::os::unix::ffi::OsStringExt;
+    let mut fixture = Fixture::new();
+    let base = fixture.source.path().to_path_buf();
+    let raw = PathBuf::from(std::ffi::OsString::from_vec(b"expanded-\xff".to_vec()));
+    let root_file = fixture.add("needle.txt", "needle", Some(0.9), 1);
+    let child = fixture.add("expanded/needle.txt", "needle", Some(0.95), 1);
+    let raw_file = fixture.add(raw.join("needle.txt"), "needle", Some(0.99), 1);
+    fixture.add("expanded/nested/needle.txt", "needle", Some(1.0), 1);
+    fixture.add("closed/needle.txt", "needle", Some(1.0), 1);
+    let here = HereScope {
+        directories: vec![
+            SourceRoot::capture(&base).unwrap(),
+            SourceRoot::capture(&base.join("expanded")).unwrap(),
+            SourceRoot::capture(&base.join(&raw)).unwrap(),
+        ],
+        ..Default::default()
+    };
+    let query = Query::parse(":file;emb:\"needle\";scope:here").unwrap();
+    let mut vector = vec![0.0; DIMENSION];
+    vector[0] = 1.0;
+    for semantic in [false, true] {
+        for excluded in [false, true] {
+            let exclusions = if excluded {
+                vec![base.join("expanded")]
+            } else {
+                Vec::new()
+            };
+            let hits = Retrieval {
+                here: Some(&here),
+                progress: None,
+                store: &fixture.store,
+                pipeline: "model",
+                vector: if semantic { &vector } else { &[] },
+                path: &base,
+                query: &query,
+                text: "needle",
+                hidden: false,
+                index_hidden: true,
+                show_offline: false,
+                exclusions: &exclusions,
+                floors: &BTreeMap::new(),
+                cancel: &Arc::new(AtomicBool::new(false)),
+            }
+            .search()
+            .unwrap();
+            let paths: BTreeSet<_> = hits.into_iter().map(|hit| hit.entry.path).collect();
+            let mut expected = BTreeSet::from([root_file.path.clone(), raw_file.path.clone()]);
+            if !excluded {
+                expected.insert(child.path.clone());
+            }
+            assert_eq!(paths, expected, "semantic={semantic}, excluded={excluded}");
+        }
+    }
 }

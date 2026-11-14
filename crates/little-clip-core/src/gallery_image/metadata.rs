@@ -43,6 +43,24 @@ pub fn probe_current(path: &Path) -> Result<Metadata, String> {
 /// # Errors
 /// Returns source/revision changes, guarded reads or unavailable header failures.
 pub fn probe(path: &Path, revision: u64) -> Result<Metadata, String> {
+    probe_cancellable(path, revision, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Probes ordinary photo headers using the shared revision cache and cancellation.
+///
+/// Raster headers use guarded native readers; RAW metadata uses a bounded,
+/// cancellable command without developing sensor pixels.
+///
+/// # Errors
+/// Returns cancellation, source/revision changes, or unavailable header failures.
+pub fn probe_cancellable(
+    path: &Path,
+    revision: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Metadata, String> {
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Photo metadata cancelled".into());
+    }
     let source = FileSource::capture(path)?;
     crate::file_inventory::check_revision(path, revision)?;
     let cache = cache_path(path, revision);
@@ -56,10 +74,13 @@ pub fn probe(path: &Path, revision: u64) -> Result<Metadata, String> {
         return Ok(value);
     }
     let value = if crate::raw_image::is_raw_image_path(path) {
-        raw_metadata(path)?
+        raw_metadata(path, cancel)?
     } else {
         raster_metadata(path)?
     };
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Photo metadata cancelled".into());
+    }
     source.check()?;
     if FileSource::capture(path)? != source {
         return Err("Photo changed while probing".into());
@@ -138,7 +159,7 @@ fn header_orientation(reader: &mut BufReader<std::fs::File>, mime: &str) -> u8 {
         .map_or(1, |orientation| orientation.to_exif())
 }
 
-fn raw_metadata(path: &Path) -> Result<Metadata, String> {
+fn raw_metadata(path: &Path, cancel: &std::sync::atomic::AtomicBool) -> Result<Metadata, String> {
     let output = crate::process::CommandRequest::new("exiftool")
         .args([
             "-j",
@@ -153,7 +174,7 @@ fn raw_metadata(path: &Path) -> Result<Metadata, String> {
         .map_err(|error| error.to_string())?
         .timeout(Duration::from_secs(5))
         .max_output_bytes(16 * 1024)
-        .run()
+        .run_cancellable(cancel)
         .map_err(|e| e.to_string())?;
     let values: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
@@ -202,5 +223,23 @@ fn save_cache(path: &Path, metadata: Metadata) {
         && serde_json::to_writer(file.as_file_mut(), &metadata).is_ok()
     {
         let _ = file.persist(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cancelled_photo_headers_do_not_return_cached_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("header.png");
+        image::RgbImage::new(48, 32).save(&path).unwrap();
+        let revision = crate::file_inventory::current_revision(&path).unwrap();
+        assert_eq!(probe(&path, revision).unwrap().width, 48);
+        assert!(
+            probe_cancellable(&path, revision, &std::sync::atomic::AtomicBool::new(true))
+                .unwrap_err()
+                .contains("cancelled")
+        );
     }
 }

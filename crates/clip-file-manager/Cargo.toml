@@ -29,6 +29,11 @@ tracing-subscriber.workspace = true
 rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "symphonia-mkv", "symphonia-aiff"] }
 hound = "3.5.1"
 image = { workspace = true }
+tar = "0.4"
+flate2 = "1.1"
+bzip2 = "0.4"
+xz2 = "0.1"
+zstd = { version = "0.13", default-features = false }
 zip = { version = "7.4", default-features = false, features = ["deflate"] }
 imagesize = "0.12"
 tiny-skia = { workspace = true }

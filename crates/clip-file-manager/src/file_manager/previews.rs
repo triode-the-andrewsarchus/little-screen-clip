@@ -1253,6 +1253,111 @@ mod tests {
     }
 
     #[test]
+    fn arrow_selection_keeps_visible_previews_and_scroll_stable_in_list_and_columns() {
+        use super::super::{BrowserView, FileManager, Navigation, filesystem};
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..20 {
+            image::RgbaImage::from_pixel(24, 24, image::Rgba([40, 100, 180, 255]))
+                .save(root.path().join(format!("image-{index:02}.png")))
+                .unwrap();
+        }
+        let directory =
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        let palette = little_clip_core::palette::AppPalette::default();
+        for view in [BrowserView::List, BrowserView::Columns] {
+            let mut manager = FileManager {
+                pending: None,
+                ..Default::default()
+            };
+            manager.commit(directory.clone(), Navigation::New);
+            manager.set_view(view);
+            manager.shelf.open = false;
+            manager.select(root.path().join("image-00.png"));
+            let ctx = egui::Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            let render = |manager: &mut FileManager| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 720.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| manager.ui(ui, &palette));
+                    },
+                )
+            };
+            let overlap = root.path().join("image-02.png");
+            wait_for_preview(|| {
+                let _ = render(&mut manager);
+                manager
+                    .previews
+                    .identities
+                    .get(&overlap)
+                    .is_some_and(|(_, id)| {
+                        manager
+                            .previews
+                            .cache
+                            .get(*id)
+                            .and_then(|ready| ready.texture.as_ref())
+                            .is_some()
+                    })
+            });
+            let id = manager.previews.identities[&overlap].1;
+            let texture = manager
+                .previews
+                .cache
+                .get(id)
+                .unwrap()
+                .texture
+                .as_ref()
+                .unwrap()
+                .id();
+            for step in 1..=5 {
+                manager.move_selection_by(1, false);
+                for _ in 0..2 {
+                    let output = render(&mut manager);
+                    assert!(
+                        output.shapes.iter().any(|shape| matches!(
+                            &shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture
+                        )),
+                        "overlapping preview disappeared from a rendered frame"
+                    );
+                    let ready = manager
+                        .previews
+                        .cache
+                        .get(id)
+                        .expect("overlapping preview was discarded during arrow navigation");
+                    assert_eq!(ready.texture.as_ref().unwrap().id(), texture);
+                    if step <= 2 {
+                        assert_eq!(
+                            manager.location().unwrap().scroll,
+                            0.0,
+                            "already-visible selection must not scroll"
+                        );
+                    }
+                }
+            }
+            let offset = manager.location().unwrap().scroll;
+            assert!(
+                offset > 0.0 && offset < manager.list_offsets[5],
+                "bottom-edge reveal should move minimally, not align the row to the top: {view:?}, offset={offset}"
+            );
+            manager.move_selection_by(-1, false);
+            let _ = render(&mut manager);
+            assert_eq!(manager.location().unwrap().scroll, offset);
+            for _ in 0..4 {
+                manager.move_selection_by(-1, false);
+                let _ = render(&mut manager);
+            }
+            assert_eq!(manager.location().unwrap().scroll, 0.0);
+        }
+    }
+
+    #[test]
     fn changed_entry_replaces_its_preview_and_retired_entries_release_cached_data() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("note.txt");

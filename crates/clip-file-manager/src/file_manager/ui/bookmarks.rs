@@ -119,6 +119,7 @@ impl FileManager {
                         colors.text_primary,
                     );
                     if response.clicked() {
+                        response.request_focus();
                         open = entry.path.clone();
                     }
                     if !super::popup_open(ui.ctx()) {

@@ -31,10 +31,10 @@ pub(in crate::file_manager) struct ImageOrder {
 }
 
 impl ImageOrder {
-    pub fn begin(
+    pub fn begin<'a>(
         &mut self,
         query: &Query,
-        directory: &Directory,
+        mut entries: impl Iterator<Item = &'a Entry>,
         selected: &BTreeSet<PathBuf>,
     ) -> Result<(), String> {
         let reference = if query
@@ -44,9 +44,7 @@ impl ImageOrder {
             if selected.len() != 1 {
                 return Err("Similarity sorting needs exactly one selected image".into());
             }
-            let entry = directory
-                .entries
-                .iter()
+            let entry = entries
                 .find(|entry| selected.contains(&entry.path))
                 .filter(|entry| entry.is_photo() && !entry.symlink && entry.identity.is_some())
                 .ok_or("Select an ordinary image as the similarity reference")?;
@@ -170,10 +168,10 @@ impl ImageOrder {
             ),
         }
     }
-    pub fn tick(
+    pub fn tick<'a>(
         &mut self,
         directory: &Directory,
-        origin: &Directory,
+        mut origin: impl Iterator<Item = &'a Entry>,
         visible: &[usize],
         previews: &EntryPreviews,
         jobs: &BackgroundJobs,
@@ -182,7 +180,7 @@ impl ImageOrder {
             return (false, None);
         }
         if let Some(reference) = &self.reference
-            && !origin.entries.iter().any(|entry| {
+            && !origin.any(|entry| {
                 entry.path == reference.path
                     && entry.revision == reference.revision
                     && entry.identity == reference.identity
@@ -354,7 +352,7 @@ mod tests {
         order
             .begin(
                 &query,
-                &directory,
+                directory.entries.iter(),
                 &BTreeSet::from([reference.path.clone()]),
             )
             .unwrap();
@@ -409,7 +407,7 @@ mod tests {
         order
             .begin(
                 &Query::parse(":image;sort:dhash").unwrap(),
-                &directory,
+                directory.entries.iter(),
                 &BTreeSet::new(),
             )
             .unwrap();
@@ -421,11 +419,68 @@ mod tests {
         order.order(&directory, &mut visible, false);
         assert_eq!(visible, [1, 0]);
         let query = Query::parse(":image;sort:similarity;ref:selected").unwrap();
-        assert!(order.begin(&query, &directory, &BTreeSet::new()).is_err());
+        assert!(
+            order
+                .begin(&query, directory.entries.iter(), &BTreeSet::new())
+                .is_err()
+        );
         assert!(order.active());
         assert_eq!(order.heading(), "dHash");
         assert_eq!(order.value(a), Some(u64::MAX));
     }
+    #[test]
+    fn expanded_reference_uses_captured_children_and_rejects_a_replaced_child() {
+        let folder = tempfile::tempdir().unwrap();
+        let child = folder.path().join("expanded");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("reference.png"), "fixture").unwrap();
+        let read = |path: &std::path::Path| {
+            crate::file_manager::filesystem::read_directory(path, &AtomicBool::new(false)).unwrap()
+        };
+        let root = read(folder.path());
+        let directory = read(&child);
+        let reference = directory.entries[0].clone();
+        let mut children = [reference.clone()];
+        let mut order = ImageOrder::default();
+        order
+            .begin(
+                &Query::parse(":image;sort:similarity;ref:selected").unwrap(),
+                root.entries.iter().chain(children.iter()),
+                &BTreeSet::from([reference.path.clone()]),
+            )
+            .unwrap();
+        order.reference_checked = true;
+        order.reference_check = Some(Instant::now());
+        order.values.insert(ImageOrder::key(&reference), Ok(123));
+        let pool = BackgroundJobs::new(1, 2);
+        let previews = EntryPreviews::default();
+        let (_, error) = order.tick(
+            &directory,
+            root.entries.iter().chain(children.iter()),
+            &[],
+            &previews,
+            &pool,
+        );
+        assert!(error.is_none());
+        assert_eq!(order.cell(&reference), "0 / 64");
+        assert!(order.pending.is_empty());
+        children[0].revision = reference.revision.wrapping_add(1);
+        let (changed, error) = order.tick(
+            &directory,
+            root.entries.iter().chain(children.iter()),
+            &[],
+            &previews,
+            &pool,
+        );
+        assert!(changed);
+        assert!(error.unwrap().contains("Reference changed"));
+        assert!(order.invalid);
+        assert_eq!(
+            order.reference.as_ref().unwrap().revision,
+            reference.revision
+        );
+    }
+
     #[test]
     fn refreshing_a_replaced_reference_invalidates_instead_of_switching_reference() {
         let (_folder, mut directory) = fixture();
@@ -434,7 +489,7 @@ mod tests {
         order
             .begin(
                 &Query::parse(":image;sort:similarity;ref:selected").unwrap(),
-                &directory,
+                directory.entries.iter(),
                 &BTreeSet::from([reference.path.clone()]),
             )
             .unwrap();
@@ -443,7 +498,7 @@ mod tests {
         let pool = BackgroundJobs::new(1, 2);
         let (changed, error) = order.tick(
             &directory,
-            &directory,
+            directory.entries.iter(),
             &visible,
             &EntryPreviews::default(),
             &pool,

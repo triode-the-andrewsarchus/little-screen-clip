@@ -31,15 +31,30 @@ pub fn is_pdf_path(p: &Path) -> bool {
 
 /// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
+    get_pdf_info_cancellable(path, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Reads page count and document tags without rendering pages.
+///
+/// Uses the guarded `pdfinfo` command with a 30-second deadline and bounded output.
+/// Cancellation terminates and reaps the owned child.
+///
+/// # Errors
+/// Returns guarded-source, cancellation, command, or truncated-output failures.
+pub fn get_pdf_info_cancellable(
+    path: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<PdfInfo, String> {
     let output = CommandRequest::new("pdfinfo")
         .die_with_parent()
         .arg_content_file(path)
         .map_err(|error| error.to_string())?
-        .run()
+        .max_output_bytes(64 * 1024)
+        .run_cancellable(cancel)
         .map_err(|e| format!("Failed to run pdfinfo: {}", e))?;
 
-    if !output.status.success() {
-        return Err("pdfinfo exited with error".to_string());
+    if !output.status.success() || output.stdout_truncated {
+        return Err("pdfinfo failed or exceeded its output limit".to_string());
     }
 
     let stdout = output.stdout_lossy();
@@ -548,6 +563,18 @@ mod tests {
             render_pdf_page_thumbnail(&path, 1, 64)
                 .unwrap_err()
                 .contains("inspection-only")
+        );
+    }
+
+    #[test]
+    fn cancellable_pdf_tags_share_page_counts_and_honor_pre_cancelled_reads() {
+        let (_directory, path) = navigation_fixture();
+        let metadata =
+            get_pdf_info_cancellable(&path, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+        assert_eq!(metadata.page_count, 3);
+        assert_eq!(metadata, get_pdf_info(&path).unwrap());
+        assert!(
+            get_pdf_info_cancellable(&path, &std::sync::atomic::AtomicBool::new(true)).is_err()
         );
     }
 

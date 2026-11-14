@@ -31,7 +31,7 @@ pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &Ato
                             super::super::media::media_frame(path, 0, 0)
                         }
                     });
-                (metadata(path), cover)
+                (metadata(path, cancelled), cover)
             });
             let result = if spectrum {
                 super::spectrum::render(path, duration, cancelled)
@@ -66,7 +66,7 @@ pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &Ato
     data
 }
 
-fn metadata(path: &Path) -> Metadata {
+pub(in crate::file_manager) fn metadata(path: &Path, cancelled: &AtomicBool) -> Metadata {
     let mut metadata = Metadata {
         title: path
             .file_name()
@@ -87,7 +87,7 @@ fn metadata(path: &Path) -> Metadata {
         command
             .timeout(Duration::from_secs(3))
             .max_output_bytes(64 * 1024)
-            .run()
+            .run_cancellable(cancelled)
             .ok()
     });
     if let Some(probe) = probe
@@ -108,6 +108,7 @@ fn metadata(path: &Path) -> Metadata {
             ("title", &mut metadata.title),
             ("artist", &mut metadata.artist),
             ("album", &mut metadata.album),
+            ("genre", &mut metadata.genre),
         ] {
             if let Some(tag) = format["tags"]
                 .as_object()
@@ -332,7 +333,7 @@ mod tests {
         for round in 0..3 {
             for path in &paths {
                 let started = Instant::now();
-                let info = metadata(path);
+                let info = metadata(path, &AtomicBool::new(false));
                 let metadata_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let started = Instant::now();
                 let _cover = super::super::super::media::media_frame(path, 0, 0);
@@ -366,7 +367,7 @@ mod tests {
                 .run()
                 .unwrap();
             assert!(output.status.success(), "{}", output.stderr_lossy());
-            let duration = metadata(&path).duration;
+            let duration = metadata(&path, &AtomicBool::new(false)).duration;
             let mut decoder = super::super::decode_file(&path).unwrap();
             decoder
                 .try_seek(Duration::from_secs_f32(duration * 0.5))

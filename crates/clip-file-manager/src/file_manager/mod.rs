@@ -1,11 +1,13 @@
 //! Folder browsing and file management on the shared bounded executor.
 
 mod app;
+mod archive_browse;
 mod binary_strip;
 mod blend_preview;
 mod bookmarks;
 mod calendar;
 pub(super) mod constellation;
+mod container_preview;
 mod content;
 mod database;
 mod diagram_strip;
@@ -36,6 +38,7 @@ use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
+mod metadata;
 mod previews;
 mod scene_strip;
 pub(crate) mod search;
@@ -50,6 +53,7 @@ mod text_strip;
 mod transfers;
 mod video_playback;
 mod video_timeline;
+mod view_preferences;
 mod viewers;
 pub use app::run;
 #[cfg(test)]
@@ -98,6 +102,7 @@ impl LastStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DocumentPosition {
     VideoAudioTrack,
+    ArchiveMember(usize, u64),
     TextLine(usize),
     PdfPage(usize),
     NotebookCell(usize),
@@ -111,13 +116,14 @@ pub(super) enum DocumentPosition {
     SubtitleCue(usize),
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::file_manager) enum BrowserView {
     #[default]
+    #[serde(alias = "music", alias = "videos")]
     List,
+    Columns,
     Photos,
-    Music,
-    Videos,
     Constellation,
 }
 
@@ -215,13 +221,18 @@ pub(crate) struct FileManager {
     index: Option<usize>,
     directory: Option<Directory>,
     visible: Vec<usize>,
+    single_family: Option<sorting::Category>,
+    list_groups: Vec<(usize, sorting::Category)>,
     sort: sorting::Sort,
+    metadata: metadata::Metadata,
     pending: Option<Request>,
     error: Option<String>,
     failed: Option<(PathBuf, Navigation)>,
     address: String,
     show_hidden: bool,
     tree: FolderTree,
+    containers: container_preview::Previews,
+    archives: archive_browse::Archives,
     bookmarks: bookmarks::Bookmarks,
     bookmark_drop_rect: Option<egui::Rect>,
     native_drag_point: Option<egui::Pos2>,
@@ -231,6 +242,7 @@ pub(crate) struct FileManager {
     search: search::Search,
     reveal_target: Option<PathBuf>,
     focus_address: bool,
+    // Retain a keyboard handoff until egui's focus lock has settled.
     focus_list: bool,
     address_editing: bool,
     edits: edits::EditState,
@@ -250,12 +262,11 @@ pub(crate) struct FileManager {
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
     view: BrowserView,
-    music_threshold: u8,
+    view_epoch: u64,
+    view_preferences: view_preferences::Preferences,
     video_timeline_decimation: u8,
     music_previews: previews::EntryPreviews,
     video_previews: video_timeline::Previews,
-    video_count: usize,
-    video_offsets: Vec<f32>,
     list_offsets: Vec<f32>,
     thumbnail_edge: f32,
     gallery_columns: usize,
@@ -273,7 +284,6 @@ pub(crate) struct FileManager {
     music: music::Music,
     midi: midi_strip::Preview,
     audio_entries: Vec<PathBuf>,
-    music_offsets: Vec<f32>,
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
@@ -295,6 +305,8 @@ impl FileManager {
     fn new(home: PathBuf) -> Self {
         Self {
             tree: FolderTree::new(home.clone()),
+            containers: Default::default(),
+            archives: Default::default(),
             bookmarks: bookmarks::Bookmarks::new(home.join(".config/gtk-3.0/bookmarks")),
             bookmark_drop_rect: None,
             native_drag_point: None,
@@ -303,7 +315,10 @@ impl FileManager {
             index: None,
             directory: None,
             visible: Vec::new(),
+            single_family: None,
+            list_groups: Vec::new(),
             sort: sorting::Sort::default(),
+            metadata: metadata::Metadata::default(),
             pending: None,
             error: None,
             failed: None,
@@ -334,12 +349,11 @@ impl FileManager {
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
             view: BrowserView::List,
-            music_threshold: 75,
+            view_epoch: 0,
+            view_preferences: Default::default(),
             video_timeline_decimation: 1,
             music_previews: previews::EntryPreviews::default(),
             video_previews: Default::default(),
-            video_count: 0,
-            video_offsets: vec![0.0],
             list_offsets: vec![0.0],
             thumbnail_edge: 160.0,
             gallery_columns: 1,
@@ -357,7 +371,6 @@ impl FileManager {
             music: music::Music::default(),
             midi: midi_strip::Preview::default(),
             audio_entries: Vec::new(),
-            music_offsets: vec![0.0],
             music_selection: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
@@ -406,6 +419,7 @@ impl FileManager {
     }
 
     fn stop_previews(&mut self) {
+        self.metadata.retire();
         self.previews.multisample.clear();
         self.constellation.stop_playback();
         self.constellation.stop_map_audition = false;
@@ -414,6 +428,9 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.archives.cancel();
+        let path = self.archives.resolve(&path);
+        self.containers.retire();
         if matches!(navigation, Navigation::Refresh) {
             self.similarity_canvas.invalidate();
         }
@@ -438,7 +455,7 @@ impl FileManager {
             self.pending = None;
             self.error = None;
             self.failed = None;
-            self.address = display_path(self.path());
+            self.address = self.location_label();
             return;
         }
         self.pending = Some(Request {
@@ -470,6 +487,14 @@ impl FileManager {
     }
 
     fn parent(&mut self) {
+        if let Some(snapshot) = self.archive_context()
+            && self.path() == snapshot.root
+        {
+            if let Some(parent) = snapshot.source.path().parent() {
+                self.navigate(parent.to_path_buf(), Navigation::New);
+            }
+            return;
+        }
         if let Some(parent) = self.path().parent() {
             self.navigate(parent.into(), Navigation::New);
         }
@@ -504,6 +529,7 @@ impl FileManager {
     }
 
     fn tick(&mut self, jobs: &BackgroundJobs) {
+        self.tick_archives();
         if self
             .last_status
             .as_ref()
@@ -512,6 +538,7 @@ impl FileManager {
             self.last_status = None;
             self.edits.report = None;
         }
+        self.tick_view_preferences(&view_preferences::IO);
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
@@ -571,7 +598,7 @@ impl FileManager {
                 }
             }
             if !self.address_editing {
-                self.address = display_path(self.path());
+                self.address = self.location_label();
             }
         }
         self.tick_edits(jobs);
@@ -674,6 +701,9 @@ impl FileManager {
     }
 
     fn append_location(&mut self, path: PathBuf) {
+        let manual_view = (self.view == BrowserView::Columns
+            && self.view_preferences.effective(&path).is_none())
+        .then_some(BrowserView::Columns);
         self.history.push(Location {
             path,
             selected: None,
@@ -681,7 +711,7 @@ impl FileManager {
             anchor: None,
             selection_undo: None,
             scroll: 0.0,
-            manual_view: None,
+            manual_view,
         });
         self.index = Some(self.history.len() - 1);
     }
@@ -709,7 +739,17 @@ impl FileManager {
             Navigation::History(index) => self.index = Some(index),
             _ => {}
         }
-        self.tree.reveal(&directory.path);
+        if matches!(navigation, Navigation::Refresh) {
+            self.containers.reconcile_roots(&directory.entries);
+        } else {
+            self.containers.clear();
+        }
+        self.view_preferences.reload();
+        let tree_path = self
+            .archives
+            .export_directory(&directory.path)
+            .unwrap_or_else(|| directory.path.clone());
+        self.tree.reveal(&tree_path);
         self.directory = Some(directory);
         self.rebuild_visible();
         if let Some(path) = self.reveal_target.take() {
@@ -749,6 +789,7 @@ impl FileManager {
     }
 
     fn rebuild_visible(&mut self) {
+        self.single_family = None;
         self.visible = self
             .directory
             .as_ref()
@@ -765,37 +806,30 @@ impl FileManager {
         if let Some(directory) = &self.directory {
             self.sort.apply(directory, &mut self.visible);
             self.search.filter(directory, &mut self.visible);
+            self.single_family = self
+                .search
+                .applied
+                .is_none()
+                .then(|| sorting::single_family(directory, &self.visible))
+                .flatten();
             self.search.answers.reconcile(directory, &self.visible);
             self.search.answers.sort(directory, &mut self.visible);
+            self.metadata.reconcile(directory, &self.visible);
+            if self.single_family.is_some() || self.grouped_by_type() {
+                self.metadata.order(directory, &mut self.visible);
+            }
             self.search.paginate(&mut self.visible);
         }
         self.reconcile_selection();
         self.audio_entries.clear();
-        self.video_count = 0;
-        self.video_offsets.clear();
-        self.video_offsets.push(0.0);
-        self.music_offsets.clear();
-        self.music_offsets.push(0.0);
         if let Some(directory) = &self.directory {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
                 let audio =
                     entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-                let video = entry.is_video();
-                self.video_count += usize::from(video);
-                self.video_offsets.push(
-                    self.video_offsets.last().copied().unwrap_or(0.0)
-                        + if video { VIDEO_ROW_HEIGHT } else { 28.0 }
-                        + self.search.result_height(entry),
-                );
                 if audio {
                     self.audio_entries.push(entry.path.clone());
                 }
-                self.music_offsets.push(
-                    self.music_offsets.last().copied().unwrap_or(0.0)
-                        + if audio { 108.0 } else { 28.0 }
-                        + self.search.result_height(entry),
-                );
             }
         }
         self.activate_media_view();
@@ -804,12 +838,22 @@ impl FileManager {
 
     fn rebuild_list_offsets(&mut self) {
         self.list_offsets.clear();
+        self.list_groups.clear();
         self.list_offsets.push(0.0);
+        let sort = self.list_sort().filter(|_| self.single_family.is_none());
         if let Some(directory) = &self.directory {
-            for index in &self.visible {
+            for (position, index) in self.visible.iter().enumerate() {
                 let entry = &directory.entries[*index];
+                let family =
+                    sort.and_then(|sort| sort.group_at(directory, &self.visible, position));
+                if let Some(family) = family {
+                    self.list_groups.push((position, family));
+                }
+                let heading = family.map_or(0.0, |_| ui::GROUP_HEADER_HEIGHT);
                 let height = if self.search.has_offline_results() {
                     28.0
+                } else if !self.search.has_result_sources() && container_preview::candidate(entry) {
+                    self.containers.height(entry, self.show_hidden)
                 } else if entry.system.is_some()
                     || self.previews.is_text(entry)
                     || entry.has_content_strip()
@@ -823,6 +867,7 @@ impl FileManager {
                 };
                 self.list_offsets.push(
                     self.list_offsets.last().copied().unwrap_or(0.0)
+                        + heading
                         + height
                         + self.search.result_height(entry),
                 );
@@ -832,7 +877,9 @@ impl FileManager {
 
     fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
-        self.rebuild_visible();
+        if !self.refresh_search_results() {
+            self.rebuild_visible();
+        }
     }
 
     fn move_selection(&mut self, down: bool, extend: bool) {
@@ -845,16 +892,25 @@ impl FileManager {
     }
 
     fn move_selection_by(&mut self, delta: isize, extend: bool) {
-        let entries = self.displayed_entries();
+        let mut entries = self.displayed_entries();
+        // Lists and Miller columns navigate folder rows. Inline descendants
+        // remain clickable previews, rather than extra keyboard stops.
+        let folder_rows = matches!(self.view, BrowserView::List | BrowserView::Columns)
+            && !self.search.has_result_sources();
+        if folder_rows {
+            entries.retain(|entry| entry.path.parent() == Some(self.path()));
+        }
         if entries.is_empty() {
             return;
         }
         let selected = self
             .location()
             .and_then(|location| location.selected.as_ref());
-        let index = entries
-            .iter()
-            .position(|entry| Some(&entry.path) == selected);
+        let index = entries.iter().position(|entry| {
+            selected.is_some_and(|path| {
+                path == &entry.path || (folder_rows && path.starts_with(&entry.path))
+            })
+        });
         let index = match index {
             Some(i) => i.saturating_add_signed(delta).min(entries.len() - 1),
             None if delta >= 0 => 0,
@@ -884,11 +940,21 @@ impl FileManager {
 
     fn open_path(&mut self, path: PathBuf) {
         self.type_navigation.clear();
-        if self.directory.as_ref().is_some_and(|dir| {
-            dir.entries
+        if container_preview::inventory::archive(&path)
+            && self
+                .displayed_entries()
                 .iter()
-                .any(|entry| entry.path == path && entry.directory)
-        }) {
+                .any(|entry| entry.path == path && entry.regular_file)
+        {
+            self.open_archive(path);
+            return;
+        }
+        self.archives.cancel();
+        if self
+            .displayed_entries()
+            .iter()
+            .any(|entry| entry.path == path && entry.directory)
+        {
             if self.search_source_guard(&path).is_some() {
                 self.reveal_search_result(path, true);
             } else {
@@ -902,13 +968,12 @@ impl FileManager {
 
 impl FileManager {
     fn tick_watch(&mut self, jobs: &BackgroundJobs) {
-        if self.search.applied.as_ref().is_some_and(|query| {
-            query.scope != search::query::Scope::Here
-                || matches!(
-                    query.operator,
-                    search::query::Operator::Content(_) | search::query::Operator::Embedding(_)
-                )
-        }) {
+        if self
+            .search
+            .applied
+            .as_ref()
+            .is_some_and(|query| self.search.uses_worker(query))
+        {
             self.watch = None;
             return;
         }

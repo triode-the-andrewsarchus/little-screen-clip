@@ -93,6 +93,7 @@ define_icons! {
     Alert,
     Info,
     Folder,
+    FolderZip,
     Lock,
     Unlock,
     Wrap,
@@ -212,6 +213,7 @@ impl Icon {
             Self::Alert => "alert",
             Self::Info => "info",
             Self::Folder => "folder",
+            Self::FolderZip => "folder-zip",
             Self::Lock => "lock",
             Self::Unlock => "unlock",
             Self::Wrap => "wrap",
@@ -331,6 +333,7 @@ impl Icon {
             Self::Alert => "bytes://icons/alert.svg",
             Self::Info => "bytes://icons/info.svg",
             Self::Folder => "bytes://icons/folder.svg",
+            Self::FolderZip => "bytes://icons/folder-zip.svg",
             Self::Lock => "bytes://icons/lock.svg",
             Self::Unlock => "bytes://icons/unlock.svg",
             Self::Wrap => "bytes://icons/wrap.svg",
@@ -470,6 +473,9 @@ impl Icon {
             Self::Alert => include_bytes!("../../little-clip-render/assets/icons/alert.svg"),
             Self::Info => include_bytes!("../../little-clip-render/assets/icons/info.svg"),
             Self::Folder => include_bytes!("../../little-clip-render/assets/icons/folder.svg"),
+            Self::FolderZip => {
+                include_bytes!("../../little-clip-render/assets/icons/folder-zip.svg")
+            }
             Self::Lock => include_bytes!("../../little-clip-render/assets/icons/lock.svg"),
             Self::Unlock => include_bytes!("../../little-clip-render/assets/icons/unlock.svg"),
             Self::Wrap => include_bytes!("../../little-clip-render/assets/icons/wrap.svg"),
@@ -530,7 +536,14 @@ impl Icon {
 
     /// Creates an `egui::Image` with the exact square dimension.
     pub fn image(&self, size: f32) -> egui::Image<'static> {
-        egui::Image::from_bytes(self.uri(), self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
+        // egui 0.27's texture cache ignores the SVG size hint. Distinct raster
+        // sizes need distinct keys, or a small toolbar icon softens larger cards.
+        let uri = format!(
+            "{}-{}px.svg",
+            self.uri().trim_end_matches(".svg"),
+            size.ceil().max(1.0) as u32
+        );
+        egui::Image::from_bytes(uri, self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
     }
 
     /// Creates an `egui::Image` with exact square dimension and color tint.
@@ -700,6 +713,28 @@ mod tests {
                 icon,
                 res.err()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod raster_size_tests {
+    use super::*;
+    #[test]
+    fn painting_large_icon_after_small_icon_does_not_reuse_the_small_raster() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        for edge in [16.0, 40.0, 64.0, 16.0] {
+            let texture = Icon::Folder
+                .image(edge)
+                .load_for_size(&ctx, Vec2::splat(edge))
+                .unwrap();
+            match texture {
+                egui::load::TexturePoll::Ready { texture } => {
+                    assert_eq!(texture.size, Vec2::splat(edge))
+                }
+                _ => panic!("Embedded SVG did not load synchronously"),
+            }
         }
     }
 }

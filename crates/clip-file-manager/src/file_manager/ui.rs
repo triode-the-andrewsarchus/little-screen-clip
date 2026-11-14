@@ -9,6 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
 mod bookmarks;
+mod columns;
 pub(crate) mod gallery;
 mod list;
 mod mounts;
@@ -16,6 +17,7 @@ pub(super) mod music;
 mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
+pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
 
 fn address_id() -> Id {
     Id::new("file_manager_address")
@@ -38,7 +40,7 @@ impl FileManager {
             && self.address_editing
             && key(ctx, Modifiers::NONE, Key::Escape)
         {
-            self.address = display_path(self.path());
+            self.address = self.location_label();
             ctx.memory_mut(|memory| memory.request_focus(list_id()));
         }
     }
@@ -48,7 +50,8 @@ impl FileManager {
         self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
         self.sync_preview_context();
-        self.sync_modal_focus(ui.ctx());
+        let settle_focus = self.sync_browser_focus(ui.ctx());
+        let focus_handoff = self.focus_list;
         self.shortcuts(ui.ctx());
         ui.set_enabled(!self.browser_modal());
         self.toolbar(ui, palette);
@@ -60,8 +63,18 @@ impl FileManager {
         self.docked_panels(ui, palette);
         // A coalesced header click can also clear focus during the later list
         // background interaction. Restore it only after that interaction ends.
-        if std::mem::take(&mut self.focus_list) {
-            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        if std::mem::take(&mut self.focus_list) && !self.browser_modal() && !popup_open(ui.ctx()) {
+            let text_focus = ui
+                .memory(|memory| memory.focused())
+                .and_then(|id| egui::TextEdit::load_state(ui.ctx(), id))
+                .is_some();
+            if !text_focus {
+                ui.memory_mut(|memory| memory.request_focus(list_id()));
+                self.focus_list = settle_focus || !focus_handoff;
+                if self.focus_list {
+                    ui.ctx().request_repaint();
+                }
+            }
         }
         ui.memory_mut(|memory| {
             for id in [
@@ -132,6 +145,7 @@ impl FileManager {
             || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
+            || self.archives.busy()
             || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
                 branch.expanded && branch.directory.is_none() && branch.error.is_none()
@@ -203,18 +217,21 @@ impl FileManager {
                 },
             ))
             .show_inside(ui, |ui| {
-                if ui.is_enabled() && self.view != super::BrowserView::Constellation {
+                if ui.is_enabled()
+                    && !matches!(
+                        self.view,
+                        super::BrowserView::Constellation | super::BrowserView::Columns
+                    )
+                {
                     self.drop_targets.push((
                         ui.available_rect_before_wrap().intersect(ui.clip_rect()),
                         self.path().to_path_buf(),
                     ));
                 }
-                if self.view == super::BrowserView::Photos {
+                if self.view == super::BrowserView::Columns {
+                    self.columns_ui(ui, colors, palette);
+                } else if self.view == super::BrowserView::Photos {
                     self.gallery_ui(ui, colors, palette);
-                } else if self.view == super::BrowserView::Music {
-                    self.music_ui(ui, colors, palette);
-                } else if self.view == super::BrowserView::Videos {
-                    self.video_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Constellation {
                     self.constellation_ui(ui, colors, palette);
                 } else {
@@ -261,12 +278,51 @@ impl FileManager {
         self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
     }
 
-    fn sync_modal_focus(&mut self, ctx: &egui::Context) {
+    fn sync_browser_focus(&mut self, ctx: &egui::Context) -> bool {
         let modal = self.browser_modal();
-        if self.was_modal && !modal {
-            ctx.memory_mut(|memory| memory.request_focus(list_id()));
-        }
+        let focused = ctx.memory(|memory| memory.focused());
+        let default_list = matches!(
+            self.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        ) && focused.is_none();
+        let requested = self.was_modal || self.focus_list || default_list;
         self.was_modal = modal;
+        let owns_arrows = [
+            Some(tree_id()),
+            Some(music::waveform_id()),
+            Some(super::midi_strip::focus_id()),
+        ]
+        .contains(&focused);
+        // Explicit sidebar/strip focus, clicks and Tab choose their own target.
+        if owns_arrows
+            || ctx.input(|input| {
+                input.pointer.any_down()
+                    || input.pointer.any_released()
+                    || input.key_pressed(Key::Tab)
+            })
+        {
+            self.focus_list = false;
+            return false;
+        }
+        if !modal && !popup_open(ctx) && requested {
+            self.focus_list = true;
+            ctx.memory_mut(|memory| memory.request_focus(list_id()));
+            // egui 0.27 installs a focus lock only after the target owned the
+            // previous frame. Repaint until that handoff settles, retaining
+            // arrows even if egui's pending directional focus runs meanwhile.
+            return focused != Some(list_id())
+                || ctx.input(|input| {
+                    [
+                        Key::ArrowUp,
+                        Key::ArrowDown,
+                        Key::ArrowLeft,
+                        Key::ArrowRight,
+                    ]
+                    .into_iter()
+                    .any(|key| input.key_pressed(key))
+                });
+        }
+        false
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -367,6 +423,7 @@ impl FileManager {
     }
 
     fn list_shortcuts(&mut self, ctx: &egui::Context) {
+        self.column_shortcuts(ctx);
         if self.view == super::BrowserView::Photos {
             for (key_code, delta) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
                 if key(ctx, Modifiers::NONE, key_code) {
@@ -470,7 +527,7 @@ impl FileManager {
                 self.submit_address();
                 ui.memory_mut(|memory| memory.request_focus(list_id()));
             } else if output.response.lost_focus() {
-                self.address = display_path(self.path());
+                self.address = self.location_label();
             }
             self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
             self.index_ui(ui);
@@ -561,7 +618,7 @@ impl FileManager {
                     .clicked()
                 {
                     self.pending = None;
-                    self.address = display_path(self.path());
+                    self.address = self.location_label();
                     if self.directory.is_none() {
                         self.set_error("Opening cancelled. Enter another path or retry.");
                     }
@@ -760,7 +817,7 @@ impl FileManager {
         }
     }
 
-    fn list_scroll(&mut self, row_height: f32) -> egui::ScrollArea {
+    fn list_scroll(&mut self, ui: &Ui, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("file_manager_listing")
             .auto_shrink([false, false]);
@@ -773,20 +830,59 @@ impl FileManager {
             if let Some(index) = self.visible.iter().position(|i| {
                 self.location()
                     .and_then(|location| location.selected.as_ref())
-                    == self
-                        .directory
-                        .as_ref()
-                        .map(|directory| &directory.entries[*i].path)
+                    .zip(
+                        self.directory
+                            .as_ref()
+                            .map(|directory| &directory.entries[*i]),
+                    )
+                    .is_some_and(|(selected, entry)| {
+                        selected == &entry.path
+                            || (entry.directory && selected.starts_with(&entry.path))
+                    })
             }) {
-                scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
-                    self.music_offsets[index]
-                } else if self.view == super::BrowserView::Videos {
-                    self.video_offsets[index]
-                } else {
-                    self.list_offsets
+                scroll = scroll.vertical_scroll_offset({
+                    let base = self
+                        .list_offsets
                         .get(index)
                         .copied()
-                        .unwrap_or(index as f32 * row_height)
+                        .unwrap_or(index as f32 * row_height);
+                    let nested = self
+                        .location()
+                        .and_then(|location| location.selected.as_ref())
+                        .zip(
+                            self.directory
+                                .as_ref()
+                                .map(|directory| &directory.entries[self.visible[index]]),
+                        )
+                        .map_or(0.0, |(selected, entry)| {
+                            self.containers
+                                .selection_offset(entry, selected, self.show_hidden)
+                        });
+                    let heading = self
+                        .list_sort()
+                        .and_then(|sort| {
+                            sort.group_at(self.directory.as_ref()?, &self.visible, index)
+                        })
+                        .map_or(0.0, |_| GROUP_HEADER_HEIGHT);
+                    let top = base + heading + nested;
+                    let pinned = if self.grouped_by_type() {
+                        GROUP_HEADER_HEIGHT
+                    } else {
+                        0.0
+                    };
+                    let height = (ui.available_height() - pinned).max(1.0);
+                    let bottom = self
+                        .list_offsets
+                        .get(index + 1)
+                        .copied()
+                        .unwrap_or(top + row_height);
+                    // Reveal only the part outside the viewport. A selection
+                    // change inside it must not evict and reload visible strips.
+                    // Oversized rows align their top instead of oscillating.
+                    let lower = (bottom.min(top + height) - height - pinned).max(0.0);
+                    self.location()
+                        .map_or(0.0, |location| location.scroll)
+                        .clamp(lower, (top - pinned).max(lower))
                 });
             }
             self.reveal_selection = false;
@@ -794,6 +890,35 @@ impl FileManager {
         scroll
     }
 
+    pub(super) fn list_anchor(&self) -> Option<(PathBuf, f32)> {
+        let scroll = self.location()?.scroll;
+        let row = self
+            .list_offsets
+            .partition_point(|offset| *offset <= scroll)
+            .saturating_sub(1);
+        let entry = self
+            .directory
+            .as_ref()?
+            .entries
+            .get(*self.visible.get(row)?)?;
+        Some((entry.path.clone(), scroll - self.list_offsets[row]))
+    }
+    pub(super) fn restore_list_anchor(&mut self, anchor: Option<(PathBuf, f32)>) {
+        let Some((path, within)) = anchor else { return };
+        let Some(row) = self.visible.iter().position(|index| {
+            self.directory
+                .as_ref()
+                .is_some_and(|directory| directory.entries[*index].path == path)
+        }) else {
+            return;
+        };
+        let offset = self.list_offsets[row]
+            + within.min((self.list_offsets[row + 1] - self.list_offsets[row]).max(0.0));
+        if let Some(location) = self.location_mut() {
+            location.scroll = offset;
+        }
+        self.restore_scroll = true;
+    }
     fn tree_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         ui.heading("Folders");
         ui.separator();
@@ -966,9 +1091,11 @@ fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &A
     .clicked()
 }
 
-fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
+pub(super) fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
     if entry.directory {
         Icon::Folder
+    } else if super::container_preview::inventory::archive(&entry.path) {
+        Icon::FolderZip
     } else if little_clip_core::audio::is_audio_path(&entry.path) {
         Icon::Audio
     } else if entry.is_video() {
@@ -1103,22 +1230,26 @@ pub(super) fn strip_cells(
 /// Absolute table positions shared by the header and every mixed List row.
 #[derive(Clone, Copy)]
 pub(super) struct ListColumns {
+    left: f32,
     size: f32,
     modified: f32,
     right: f32,
     extra: Option<f32>,
     extra_count: usize,
+    metadata: Option<(f32, f32, super::sorting::Category)>,
 }
 
 impl ListColumns {
     pub(super) fn new(header: Rect) -> Self {
         let name_width = (header.width() - 245.0).max(header.width() * 0.4);
         Self {
+            left: header.left(),
             size: header.left() + name_width,
             modified: header.left() + name_width + 90.0,
             right: header.right(),
             extra: None,
             extra_count: 0,
+            metadata: None,
         }
     }
     pub(super) fn with_extra(mut self) -> Self {
@@ -1133,8 +1264,38 @@ impl ListColumns {
         self.extra_count = count;
         self
     }
+    pub(super) fn for_family(mut self, family: Option<super::sorting::Category>) -> Self {
+        self.metadata = None;
+        if let Some(family) =
+            family.filter(|family| !super::metadata::Field::for_family(*family).is_empty())
+        {
+            let end = self.extra.unwrap_or(self.size);
+            let available = (end - self.left).max(0.0);
+            let left = self.left + (available * 0.4).max(120.0).min(available);
+            self.metadata = Some((left, end, family));
+        }
+        self
+    }
+    pub(super) fn metadata_fields(self) -> &'static [super::metadata::Field] {
+        self.metadata.map_or(&[], |(_, _, family)| {
+            super::metadata::Field::for_family(family)
+        })
+    }
+    pub(super) fn metadata_cell(self, row: Rect, index: usize) -> Option<Rect> {
+        let (left, right, _) = self.metadata?;
+        let fields = self.metadata_fields();
+        if index >= fields.len() {
+            return None;
+        }
+        let width = (right - left) / fields.len() as f32;
+        Some(Rect::from_min_max(
+            pos2(left + index as f32 * width, row.top()),
+            pos2(left + (index + 1) as f32 * width, row.top() + ROW_HEIGHT),
+        ))
+    }
     fn name_end(self) -> f32 {
-        self.extra.unwrap_or(self.size)
+        self.metadata
+            .map_or_else(|| self.extra.unwrap_or(self.size), |range| range.0)
     }
     pub(super) fn extra_cell(self, row: Rect) -> Option<Rect> {
         self.extra_cell_at(row, 0)
@@ -1151,12 +1312,12 @@ impl ListColumns {
     }
 
     fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
-        paint_text(ui, row, self.size - row.left(), 85.0, size, color);
+        paint_text(ui, row, self.size - row.left() + 5.0, 80.0, size, color);
         paint_text(
             ui,
             row,
-            self.modified - row.left(),
-            self.right - self.modified,
+            self.modified - row.left() + 5.0,
+            self.right - self.modified - 10.0,
             modified,
             color,
         );
@@ -1168,6 +1329,7 @@ impl ListColumns {
         header: Rect,
         sort: Option<super::sorting::Sort>,
         colors: WorkbenchColors,
+        show_type: bool,
     ) -> Option<super::sorting::Column> {
         use super::sorting::Column;
         let mut clicked = None;
@@ -1178,53 +1340,78 @@ impl ListColumns {
                 header.left() + 8.0,
                 header.left() + 64.0,
             ),
-            (Column::Name, "Name", header.left() + 64.0, self.name_end()),
+            (
+                Column::Name,
+                "Name",
+                header.left() + if show_type { 64.0 } else { 8.0 },
+                self.name_end(),
+            ),
             (Column::Size, "Size", self.size, self.modified),
             (Column::Modified, "Modified", self.modified, self.right),
-        ] {
+        ]
+        .into_iter()
+        .filter(|(column, ..)| show_type || *column != Column::Type)
+        {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
-            let response = ui
-                .interact(cell, Id::new(("files_sort", column)), Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(format!("Sort by {label}; click again to reverse"));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
-            if response.hovered() {
-                ui.painter().rect_filled(cell, 2.0, colors.recessed);
-            }
-            let active = sort.is_some_and(|sort| sort.column == column);
-            let color = if active {
-                colors.accent
-            } else {
-                colors.text_secondary
-            };
-            paint_text(ui, cell, 0.0, cell.width() - 18.0, label, color);
-            if active {
-                let width = ui
-                    .painter()
-                    .layout_no_wrap(label.into(), FontId::proportional(14.0), color)
-                    .size()
-                    .x;
-                let arrow = Rect::from_center_size(
-                    pos2(cell.left() + width + 10.0, cell.center().y),
-                    vec2(14.0, 14.0),
-                );
-                (if sort.is_some_and(|sort| sort.descending) {
-                    Icon::ArrowDown
-                } else {
-                    Icon::ArrowUp
-                })
-                .paint(
-                    &ui.painter().with_clip_rect(cell.intersect(ui.clip_rect())),
-                    arrow,
-                    color,
-                );
-            }
+            let active = sort
+                .filter(|sort| sort.column == column)
+                .map(|sort| sort.descending);
+            let response = sort_heading(
+                ui,
+                cell,
+                ui.make_persistent_id(("files_sort", column)),
+                label,
+                active,
+                colors,
+            )
+            .on_hover_text(format!("Sort by {label}; click again to reverse"));
             if response.clicked() {
                 clicked = Some(column);
             }
         }
         clicked
     }
+}
+
+/// Shared fixed-rectangle sort header; text clipping never grows the table layout.
+pub(super) fn sort_heading(
+    ui: &mut Ui,
+    cell: Rect,
+    id: Id,
+    label: &str,
+    active: Option<bool>,
+    colors: WorkbenchColors,
+) -> egui::Response {
+    let response = ui
+        // Own the gesture so a pinned header click cannot start dragging the
+        // surrounding scroll area when the pointer moved during that frame.
+        .interact(cell, id, Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
+    if response.hovered() {
+        ui.painter().rect_filled(cell, 2.0, colors.recessed);
+    }
+    let color = if active.is_some() {
+        colors.accent
+    } else {
+        colors.text_secondary
+    };
+    paint_text(ui, cell, 5.0, cell.width() - 23.0, label, color);
+    if let Some(descending) = active {
+        let arrow =
+            Rect::from_center_size(pos2(cell.right() - 9.0, cell.center().y), vec2(14.0, 14.0));
+        (if descending {
+            Icon::ArrowDown
+        } else {
+            Icon::ArrowUp
+        })
+        .paint(
+            &ui.painter().with_clip_rect(cell.intersect(ui.clip_rect())),
+            arrow,
+            color,
+        );
+    }
+    response
 }
 
 pub(super) fn media_header(
@@ -1245,6 +1432,20 @@ pub(super) fn media_header(
         );
         header.max.x = (columns.name_end() - 8.0).max(header.left());
     }
+    // Optional summaries yield to the filename, including in narrow typed
+    // columns. Match paint_text's font and retain a small glyph-edge margin.
+    let filename_width = ui
+        .painter()
+        .layout_no_wrap(
+            entry.name.clone(),
+            FontId::proportional(14.0),
+            colors.text_primary,
+        )
+        .size()
+        .x
+        .ceil()
+        + 2.0;
+    let details_budget = (header.width() - filename_width - 12.0).max(0.0);
     let details_width = details.as_ref().map_or(0.0, |details| {
         ui.painter()
             .layout_no_wrap(
@@ -1254,9 +1455,10 @@ pub(super) fn media_header(
             )
             .size()
             .x
-            .min(header.width() * 0.7)
+            .min(details_budget)
     });
-    let name_width = (header.width() - details_width - 12.0).max(0.0);
+    let gap = if details_width > 0.0 { 12.0 } else { 0.0 };
+    let name_width = (header.width() - details_width - gap).max(0.0);
     paint_text(
         ui,
         header,
@@ -1265,7 +1467,7 @@ pub(super) fn media_header(
         &entry.name,
         colors.text_primary,
     );
-    if let Some(details) = &details {
+    if let Some(details) = details.as_ref().filter(|_| details_width > 0.0) {
         paint_text(
             ui,
             header,
@@ -1330,6 +1532,7 @@ fn file_row(
     row_background(ui, rect, selected, response.hovered(), colors);
     let rect = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
     let name_width = columns.name_end() - rect.left();
+    let count = count.filter(|_| name_width >= 260.0);
     let icon = if entry.symlink {
         Icon::Link
     } else if entry.directory {
@@ -1392,6 +1595,7 @@ struct ListActions {
     search_results: bool,
     context: super::search::PreviewContext,
     metadata_only: bool,
+    copy_only: bool,
     inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
@@ -1410,6 +1614,7 @@ impl ListActions {
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
+            copy_only: browser.archive_context().is_some(),
             ..Self::default()
         }
     }
@@ -1453,7 +1658,7 @@ impl ListActions {
         };
         response.dnd_set_drag_payload(super::transfers::FileDrag {
             paths,
-            copy_only: false,
+            copy_only: self.copy_only,
             context: self.context.clone(),
         });
         if !marked {
@@ -1711,22 +1916,45 @@ fn visible_media_rows(offsets: &[f32], offset: f32, height: f32) -> std::ops::Ra
         .min(offsets.len().saturating_sub(1));
     first..end
 }
-fn media_rows(
+fn media_rows<R>(
     ui: &mut Ui,
     scroll: egui::ScrollArea,
     offsets: &[f32],
-    mut row: impl FnMut(&mut Ui, usize, Rect),
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+    groups: &[(usize, super::sorting::Category)],
+    mut header: impl FnMut(&mut Ui, Rect, super::sorting::Category) -> Option<R>,
+    mut row: impl FnMut(&mut Ui, usize, Rect) -> Option<R>,
+) -> egui::scroll_area::ScrollAreaOutput<Option<R>> {
     scroll.show_viewport(ui, |ui, viewport| {
         ui.set_min_height(offsets.last().copied().unwrap_or(0.0));
         let origin = ui.min_rect().min;
+        let mut clicked = None;
+        let group = groups
+            .partition_point(|(index, _)| offsets[*index] <= viewport.min.y)
+            .saturating_sub(1);
+        if let Some(&(_, family)) = groups.get(group) {
+            let next = groups
+                .get(group + 1)
+                .map_or(f32::INFINITY, |(index, _)| offsets[*index]);
+            let push = (next - viewport.min.y - GROUP_HEADER_HEIGHT).min(0.0);
+            let pinned = Rect::from_min_size(
+                origin + vec2(0.0, viewport.min.y + push),
+                vec2(ui.available_width(), GROUP_HEADER_HEIGHT),
+            );
+            clicked = header(ui, pinned, family);
+            // Clip both painting and hit testing below the pinned header, so
+            // preview clicks, selection and drop targets cannot pass through it.
+            let mut clip = ui.clip_rect();
+            clip.min.y = clip.min.y.max(pinned.bottom());
+            ui.set_clip_rect(clip);
+        }
         for index in visible_media_rows(offsets, viewport.min.y, viewport.height()) {
             let rect = Rect::from_min_size(
                 origin + vec2(0.0, offsets[index]),
                 vec2(ui.available_width(), offsets[index + 1] - offsets[index]),
             );
-            row(ui, index, rect);
+            clicked = row(ui, index, rect).or(clicked);
         }
+        clicked
     })
 }
 
@@ -1810,6 +2038,30 @@ pub(super) fn information_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_sort_labels_keep_fixed_bounds_in_narrow_cells() {
+        let ctx = egui::Context::default();
+        let colors = WorkbenchColors::from_palette(&AppPalette::default());
+        for width in [28.0, 60.0, 160.0] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (cell, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                    let before = ui.min_rect();
+                    let response = sort_heading(
+                        ui,
+                        cell,
+                        Id::new("bounded_header"),
+                        "Megapixels",
+                        Some(false),
+                        colors,
+                    );
+                    assert_eq!(response.rect, cell);
+                    assert_eq!(ui.min_rect(), before);
+                });
+            });
+        }
+    }
 
     #[test]
     fn explicit_inspection_preserves_request_mode_for_ordinary_file() {

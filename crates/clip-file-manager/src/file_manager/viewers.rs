@@ -19,12 +19,15 @@ use std::{
 };
 
 mod chrome;
+#[cfg(test)]
+mod escape;
 mod gallery;
 mod rename;
 mod video;
 mod video_audio;
 
 enum Loaded {
+    Archive(super::container_preview::archive::Viewer),
     System(Box<super::system::Document>),
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
@@ -52,6 +55,7 @@ enum Loaded {
     External,
 }
 enum ViewerSession {
+    Archive(super::container_preview::archive::Viewer),
     System(super::system::Inspector),
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
@@ -101,6 +105,8 @@ pub(super) struct Viewers {
     office_preview: bool,
     loading: Option<Loading>,
     pub(super) source_guard: Option<super::search::SourceGuard>,
+    pub(super) archive_location: Option<(PathBuf, PathBuf)>,
+    pub(super) archive_export_directory: Option<PathBuf>,
     session: Option<ViewerSession>,
     path: Option<PathBuf>,
     error: Option<String>,
@@ -164,9 +170,15 @@ impl Viewers {
         self.open_on(path, false);
     }
     fn open_on(&mut self, path: PathBuf, system: bool) {
-        self.open_mode(path, system, false);
+        self.open_mode(path, system, false, None);
     }
-    fn open_mode(&mut self, path: PathBuf, system: bool, video_audio: bool) {
+    fn open_mode(
+        &mut self,
+        path: PathBuf,
+        system: bool,
+        video_audio: bool,
+        archive_revision: Option<u64>,
+    ) {
         if self.active() {
             return;
         }
@@ -188,20 +200,7 @@ impl Viewers {
                     super::system::collect(&source, &worker)
                         .map(|document| (Loaded::System(Box::new(document)), None))
                 } else {
-                    let identity = FileSource::capture(&source);
-                    let loaded = if video_audio {
-                        Loaded::VideoAudio(video_audio::Prepared::load(&source, &worker)?)
-                    } else {
-                        load(&source, &config, &worker)?
-                    };
-                    let identity = if matches!(&loaded, Loaded::System(_)) {
-                        None
-                    } else {
-                        let identity = identity?;
-                        identity.check()?;
-                        Some(identity)
-                    };
-                    Ok((loaded, identity))
+                    load_file_session(&source, &config, video_audio, archive_revision, &worker)
                 }
             })
         });
@@ -226,7 +225,9 @@ impl Viewers {
             return;
         }
         if position == super::DocumentPosition::VideoAudioTrack {
-            self.open_mode(path, false, true);
+            self.open_mode(path, false, true, None);
+        } else if let super::DocumentPosition::ArchiveMember(_, revision) = position {
+            self.open_mode(path, false, false, Some(revision));
         } else {
             self.open(path);
         }
@@ -280,11 +281,24 @@ impl Viewers {
                 {
                     state.keep_source_on_save_as();
                 }
+                if let Some(directory) = &self.archive_export_directory {
+                    match &mut opened {
+                        ViewerSession::Text(state) => state.require_save_as(directory),
+                        ViewerSession::Audio(state) => {
+                            state.save_destination_dir = directory.to_string_lossy().into_owned()
+                        }
+                        _ => {}
+                    }
+                }
                 self.session = Some(opened);
             }
             Err(error) => self.error = Some(error),
         }
         match (&mut self.session, self.document_start.take()) {
+            (
+                Some(ViewerSession::Archive(state)),
+                Some(super::DocumentPosition::ArchiveMember(ordinal, _)),
+            ) => state.select(ordinal),
             (
                 Some(ViewerSession::Notebook(state)),
                 Some(super::DocumentPosition::NotebookCell(cell)),
@@ -340,6 +354,12 @@ impl Viewers {
         self.poll(ui.ctx());
         self.poll_file_source(ui.ctx());
         let mut close = std::mem::take(&mut self.close_requested);
+        // A popup owns Escape before either the studio or the host can close.
+        if ui.memory(|memory| memory.any_popup_open())
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            ui.memory_mut(|memory| memory.close_popup());
+        }
         self.gallery_controls(ui, palette);
         let blocked = self.collection_pending()
             || self.collection_modal()
@@ -359,12 +379,20 @@ impl Viewers {
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
         self.rename_ui(ui, palette);
         self.poll_audio_return();
-        if self.session.is_none() {
+        // Studios consume Escape when cancelling their own nested interaction.
+        // Any remaining Escape uses the same guarded close as Back to folder,
+        // including read-only viewers, loading/error screens and text edit mode.
+        if editor_enabled {
             close |=
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         }
         if close {
             self.request_close();
+        }
+        if self.confirm_close
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.confirm_close = false;
         }
         self.close_confirmation(ui, palette);
         !self.active()
@@ -503,6 +531,8 @@ impl Viewers {
         self.source_request = None;
         self.office_preview = false;
         self.source_guard = None;
+        self.archive_location = None;
+        self.archive_export_directory = None;
         self.loading = None;
         self.path = None;
         self.error = None;
@@ -536,6 +566,7 @@ impl Viewers {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
+    Archive,
     Document(Format),
     Image,
     Audio,
@@ -550,7 +581,9 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if path
+    if super::container_preview::inventory::archive(path) {
+        Kind::Archive
+    } else if path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("dsl"))
         || little_clip_core::diagram::Format::from_path(path).is_some()
@@ -585,6 +618,41 @@ fn kind(path: &Path) -> Kind {
     } else {
         Kind::External
     }
+}
+
+// Separate ordinary-file identity admission/publication from job orchestration.
+fn load_file_session(
+    source: &Path,
+    config: &AppConfig,
+    video_audio: bool,
+    archive_revision: Option<u64>,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<(Loaded, Option<FileSource>), String> {
+    if let Some(revision) = archive_revision {
+        super::filesystem::check_revision(source, revision)?;
+    }
+    let identity = FileSource::capture(source);
+    let loaded = if video_audio {
+        Loaded::VideoAudio(video_audio::Prepared::load(source, cancelled)?)
+    } else {
+        load(source, config, cancelled)?
+    };
+    let identity = if matches!(&loaded, Loaded::System(_)) {
+        None
+    } else {
+        let identity = identity?;
+        if let Loaded::Archive(state) = &loaded
+            && state.file_source() != identity
+        {
+            return Err("Archive changed during opening".into());
+        }
+        identity.check()?;
+        if let Some(revision) = archive_revision {
+            super::filesystem::check_revision(source, revision)?;
+        }
+        Some(identity)
+    };
+    Ok((loaded, identity))
 }
 
 fn load(
@@ -628,6 +696,9 @@ fn load(
         ));
     }
     match kind {
+        Kind::Archive => {
+            super::container_preview::archive::Viewer::load(path, cancelled).map(Loaded::Archive)
+        }
         Kind::Document(Format::Multisample) => super::multisample::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::Multisample(Box::new(viewer))),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
@@ -699,6 +770,10 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Archive(mut state) => {
+            state.set_check(check);
+            ViewerSession::Archive(state)
+        }
         Loaded::Handwritten => {
             ViewerSession::Pdf(PdfEditorState::new_notebook_checked(path, check))
         }
@@ -771,6 +846,7 @@ fn session(
 fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
     let ctx = ui.ctx().clone();
     match viewer {
+        ViewerSession::Archive(state) => state.ui(ui, close, palette),
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
         ViewerSession::Multisample(state) => state.ui(ui, close, palette),
@@ -797,7 +873,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
 mod tests {
     use super::*;
 
-    fn finish_loading(viewers: &mut Viewers, ctx: &Context) {
+    pub(super) fn finish_loading(viewers: &mut Viewers, ctx: &Context) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while viewers.loading.is_some() {
             viewers.poll(ctx);
@@ -1056,6 +1132,43 @@ mod tests {
             );
             assert!(viewers.request_close());
         }
+    }
+
+    #[test]
+    fn stale_archive_card_cannot_select_a_replacement_members_ordinal() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("contents.zip");
+        let write = |name: &str| {
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(name.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        };
+        write("original.txt");
+        let directory = super::super::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let revision = directory.entries[0].revision;
+        write("replacement-with-another-name.txt");
+        let ctx = Context::default();
+        let mut viewers = Viewers::default();
+        viewers.open_document_at(
+            path,
+            super::super::DocumentPosition::ArchiveMember(0, revision),
+        );
+        finish_loading(&mut viewers, &ctx);
+        assert!(viewers.session.is_none());
+        assert!(
+            viewers
+                .error
+                .as_ref()
+                .is_some_and(|error| error.contains("changed"))
+        );
     }
 
     #[test]

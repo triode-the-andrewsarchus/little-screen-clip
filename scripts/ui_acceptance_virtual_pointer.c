@@ -54,7 +54,7 @@ static void usage(const char *program) {
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click|right-click <width> <height> <x> <y> | "
             "drag|drag-held|right-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
-            "scroll <width> <height> <x> <y> <logical-units>\n"
+            "scroll|hscroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
 }
@@ -109,6 +109,16 @@ static uint32_t click_button(const char *action) {
     return 0;
 }
 
+static int parse_scroll_axis(const char *action) {
+    if (strcmp(action, "scroll") == 0) {
+        return WL_POINTER_AXIS_VERTICAL_SCROLL;
+    }
+    if (strcmp(action, "hscroll") == 0) {
+        return WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+    }
+    return -1;
+}
+
 static void hold_drag_until_release(void) {
     // Keep this private pointer connected while the test captures the app.
     // EOF, input or a bounded timeout always lets the caller release it.
@@ -131,7 +141,8 @@ int main(int argc, char **argv) {
     int drag_held = argc == 8 && strcmp(argv[1], "drag-held") == 0;
     int drag = right_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
     uint32_t drag_button = right_drag ? BTN_RIGHT : BTN_LEFT;
-    int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
+    int scroll_axis = argc == 7 ? parse_scroll_axis(argv[1]) : -1;
+    int scroll = scroll_axis >= 0;
     int scroll_amount = 0;
     if (!probe && !click && !move && !drag && !scroll) {
         usage(argv[0]);
@@ -202,7 +213,7 @@ int main(int argc, char **argv) {
         if (scroll) {
             zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
             zwlr_virtual_pointer_v1_axis(
-                pointer, time_ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                pointer, time_ms + 1, scroll_axis,
                 wl_fixed_from_int(scroll_amount));
             zwlr_virtual_pointer_v1_frame(pointer);
             if (wl_display_roundtrip(display) < 0) {

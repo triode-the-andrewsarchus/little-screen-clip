@@ -1005,8 +1005,16 @@ impl Worker {
         query: &Query,
         hidden: bool,
         cancel: &Arc<AtomicBool>,
+        here: Option<crate::here::HereScope>,
     ) -> Result<super::super::Results, String> {
-        match &query.operator {
+        self.here = None;
+        self.here = here
+            .map(|scope| {
+                scope.check_shape(path, query.scope)?;
+                scope.prepare(path, hidden, &self.exclusions, cancel)
+            })
+            .transpose()?;
+        let result = match &query.operator {
             Operator::Embedding(text) => self.semantic(id, path, query, text, hidden, cancel),
             Operator::Name | Operator::Regex(_) | Operator::Content(_) => {
                 self.on_demand(path, query, hidden, cancel)
@@ -1014,7 +1022,9 @@ impl Worker {
             Operator::Answer(_) => {
                 Err("Answer commands create session columns rather than search results".into())
             }
-        }
+        };
+        self.here = None;
+        result
     }
     pub(super) fn on_demand(
         &mut self,
@@ -1043,6 +1053,14 @@ impl Worker {
         } else {
             vec![super::super::walk::ScopeRoot::Folder(path.into())]
         };
+        if let Some(here) = &self.here {
+            roots = here
+                .directories
+                .iter()
+                .cloned()
+                .map(super::super::walk::ScopeRoot::Indexed)
+                .collect();
+        }
         if query.progressive && query.scope == Scope::Recursive {
             roots.extend(self.config.always_search.iter().filter_map(|address| {
                 little_clip_core::path_address::decode_path(address)
@@ -1051,7 +1069,7 @@ impl Worker {
                     .map(super::super::walk::ScopeRoot::Folder)
             }));
         }
-        super::super::walk::run(
+        let mut result = super::super::walk::run(
             roots,
             &self.paths.data,
             self.store.as_ref(),
@@ -1059,7 +1077,11 @@ impl Worker {
             query,
             hidden,
             cancel,
-        )
+        )?;
+        if let Some(here) = &self.here {
+            here.filter(path, &mut result, hidden, cancel)?;
+        }
+        Ok(result)
     }
     pub(super) fn semantic(
         &mut self,
@@ -1084,7 +1106,14 @@ impl Worker {
             .roots
             .iter()
             .filter_map(|address| little_clip_core::path_address::decode_path(address).ok())
-            .any(|root| path.starts_with(root));
+            .any(|root| {
+                path.starts_with(&root)
+                    || self.here.as_ref().is_some_and(|here| {
+                        here.directories
+                            .iter()
+                            .any(|directory| directory.path.starts_with(&root))
+                    })
+            });
         if self.config.roots.is_empty() || (query.scope == Scope::Here && !current_enrolled) {
             let mut names = query.clone();
             names.operator = Operator::Name;
@@ -1096,7 +1125,8 @@ impl Worker {
                 "current folder not enrolled"
             };
             result.message = format!(
-                "Filename results only · {coverage}. Click Index to enable content and semantic search."
+                "Filename results only · {coverage}. Click Index to enable content and semantic search. · {}",
+                result.message
             );
             return Ok(result);
         }
@@ -1195,9 +1225,11 @@ impl Worker {
             .as_ref()
             .filter(|_| !vector.is_empty())
             .map(|progress| progress.checked.clone());
+        let here = self.here.clone();
         let store = self.database()?;
         let retrieval_started = Instant::now();
         let hits = super::super::retrieval::Retrieval {
+            here: here.as_ref(),
             progress: progress.as_deref(),
             store,
             pipeline: &pipeline,
@@ -1258,12 +1290,16 @@ impl Worker {
             semantic = !vector.is_empty(), retrieval_ms, verification_ms, evidence_ms,
             total_ms = started.elapsed().as_secs_f64() * 1000.0,
             candidates = hits.len(), entries = entries.len(), "search ranking phases");
-        Ok(super::super::Results {
+        let mut result = super::super::Results {
             entries,
             message,
             sources,
             explanations,
-        })
+        };
+        if let Some(here) = &here {
+            here.filter(path, &mut result, hidden, cancel)?;
+        }
+        Ok(result)
     }
 }
 

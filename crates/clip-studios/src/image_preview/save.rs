@@ -609,7 +609,7 @@ impl ImagePreviewState {
             }
         });
         if blocked {
-            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 *close = true;
             }
             if let Some(texture) = &self.texture {
@@ -821,7 +821,7 @@ impl ImagePreviewState {
             }
         });
         if blocked {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 *close = true;
             }
             if let Some(texture) = &self.texture {

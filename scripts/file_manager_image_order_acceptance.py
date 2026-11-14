@@ -11,6 +11,10 @@ from file_manager_search_acceptance import submit
 
 
 def exercise(session, root):
+    if (root / "album").exists():
+        session.observe("initial-folder", ["List", "album"])
+        session.click(600, 160)
+    reference = (root / "album" if (root / "album").exists() else root) / "Alpha.png"
     session.observe("initial", ["Alpha.png", "Copy.png"])
     session.click(*session.word("initial", "Alpha.png", minimum_y=200))
     submit(session, ':image;sort:similarity;ref:selected')
@@ -25,7 +29,7 @@ def exercise(session, root):
     opposite = session.word("reversed-distance", "Opposite.png", minimum_y=260)
     alpha = session.word("reversed-distance", "Alpha.png", minimum_y=260)
     assert opposite[1] < alpha[1], (opposite, alpha)
-    Image.new("RGB", (80, 40), (80, 20, 180)).save(root / "Alpha.png")
+    Image.new("RGB", (80, 40), (80, 20, 180)).save(reference)
     session.observe("reference-invalidated", ["reapply"], expected_any=["Reference changed", "Reference could not be verified"])
     submit(session, ':image;sort:dhash:desc')
     session.observe("raw-hash", ["4/4 images analyzed", "unsigned dHash-64 order", "Opposite.png"])
@@ -47,12 +51,14 @@ def exercise(session, root):
 
 def main():
     repository = Path(__file__).resolve().parent.parent
-    args = application_arguments(__doc__, repository / "target/debug/clip-file-manager")
+    args = application_arguments(__doc__, repository / "target/debug/clip-file-manager", lambda parser: parser.add_argument("--expanded", action="store_true"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (256, 64))
     image.putdata([(x, x, x) for _ in range(64) for x in range(256)])
-    image.save(root / "Alpha.png")
-    image.save(root / "Copy.png")
+    references = root / "album" if args.expanded else root
+    references.mkdir(exist_ok=True)
+    image.save(references / "Alpha.png")
+    image.save(references / "Copy.png")
     image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(root / "Opposite.png")
     (root / "Unreadable.png").write_text("not an image")
     return run_application_acceptance(args, output, root, exercise,

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub(in crate::file_manager) enum Source {
+    ArchiveMember(super::super::container_preview::archive::Request),
     Checked {
         source: Box<Source>,
         path: PathBuf,
@@ -120,6 +121,7 @@ impl Source {
     fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
         match self {
             Self::Checked { source, .. } => source.execution(),
+            Self::ArchiveMember(_) => (&super::super::container_preview::archive::JOBS, 2, 10),
             Self::System(_) => (super::super::system::jobs(), 2, 3),
             Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
             Self::Gallery { .. }
@@ -182,6 +184,9 @@ impl Source {
                 data
             }
             Source::Payload(payload) => payload_preview(&payload),
+            Source::ArchiveMember(request) => {
+                super::super::container_preview::archive::preview(&request, token)
+            }
             Source::Slot(slot, expected) => slot_preview(slot, expected),
             Source::Gallery {
                 path,
@@ -892,7 +897,7 @@ fn gallery_preview(
     data
 }
 
-fn sized_thumbnail(
+pub(in crate::file_manager) fn sized_thumbnail(
     bytes: &[u8],
     mime: Option<&str>,
     width: u32,

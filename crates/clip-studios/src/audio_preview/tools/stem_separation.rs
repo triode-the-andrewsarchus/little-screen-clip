@@ -684,7 +684,7 @@ impl AudioPreviewState {
             if save {
                 self.save_all_stems();
             }
-            cancel |= ctx.input(|i| i.key_pressed(egui::Key::Escape));
+            cancel |= ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             if cancel {
                 self.stem_separation.save_dialog_open = false;
             }

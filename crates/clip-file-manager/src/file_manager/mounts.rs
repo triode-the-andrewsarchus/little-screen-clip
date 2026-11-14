@@ -773,6 +773,140 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bookmark_and_mount_rows_keep_arrows_out_of_the_file_selection() {
+        use super::super::{
+            BrowserView, FileManager, Navigation,
+            bookmarks::{Bookmark, Bookmarks},
+            filesystem,
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.txt"), "a").unwrap();
+        std::fs::write(root.path().join("b.txt"), "b").unwrap();
+        let uri = url::Url::from_directory_path(root.path())
+            .unwrap()
+            .to_string();
+        let bookmarks_path = root.path().join("bookmarks");
+        std::fs::write(&bookmarks_path, format!("{uri} Focus Bookmark\n")).unwrap();
+        for view in [BrowserView::List, BrowserView::Columns] {
+            let mut manager = FileManager {
+                pending: None,
+                ..Default::default()
+            };
+            manager.commit(
+                filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                    .unwrap(),
+                Navigation::New,
+            );
+            manager.set_view(view);
+            manager.shelf.open = false;
+            manager.bookmarks = Bookmarks::new(bookmarks_path.clone());
+            manager.bookmarks.entries = vec![Bookmark {
+                uri: uri.clone(),
+                label: "Focus Bookmark".into(),
+                path: Some(root.path().into()),
+            }];
+            manager.mounts.entries = vec![MountEntry {
+                id: "focus-fixture".into(),
+                label: "Focus Mount".into(),
+                detail: "fixture mounted folder".into(),
+                mount_point: Some(root.path().into()),
+                device_path: None,
+                filesystem: Some("fixture".into()),
+                is_mounted: true,
+                is_removable: false,
+                kind: MountKind::Drive,
+            }];
+            // Keep the UI fixture independent from the real machine's mount inventory.
+            manager.mounts.last_scan = Some(Instant::now());
+            let ctx = egui::Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            let render = |manager: &mut FileManager, events| {
+                manager.mounts.last_scan = Some(Instant::now());
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            manager.ui(ui, &little_clip_core::palette::AppPalette::default())
+                        });
+                    },
+                )
+            };
+            let _ = render(&mut manager, vec![]);
+            let _ = render(&mut manager, vec![]);
+            manager.select(root.path().join("a.txt"));
+            for label in ["Focus Bookmark", "Focus Mount"] {
+                let output = render(&mut manager, vec![]);
+                let point = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == label
+                                && shape.clip_rect.contains(text.pos) =>
+                        {
+                            Some(text.pos + egui::vec2(5.0, 7.0))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                for pressed in [true, false] {
+                    let _ = render(
+                        &mut manager,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                let _ = render(&mut manager, vec![]);
+                assert!(
+                    !ctx.memory(|m| m.has_focus(super::super::ui::list_id())),
+                    "{label}: click must move focus into the sidebar"
+                );
+                for key in [egui::Key::ArrowUp, egui::Key::ArrowDown] {
+                    let _ = render(
+                        &mut manager,
+                        vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                    let _ = render(
+                        &mut manager,
+                        vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: false,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                    );
+                    assert_eq!(
+                        manager.selected_paths(),
+                        [root.path().join("a.txt")],
+                        "{view:?}: {label} lost arrow ownership"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn initial_scan_is_deferred_and_refresh_retires_stale_results() {
         let mut mounts = Mounts::new();
         assert!(mounts.entries.is_empty());

@@ -29,7 +29,7 @@ impl MidiViewerState {
         }
 
         // 1. Hook up Escape key: clear selection first, or close if no selection
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.selected_region.is_some() {
                 self.selected_region = None;
                 self.play_stop_time = None;

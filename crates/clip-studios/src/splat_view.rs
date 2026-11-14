@@ -225,7 +225,7 @@ impl SplatViewerState {
             mesh.render_ui(ui, palette, close);
             return;
         }
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             *close = true;
             return;
         }

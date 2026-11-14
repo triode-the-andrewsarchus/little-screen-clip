@@ -25,6 +25,18 @@ pub struct SourceRoot {
     pub session: Option<SourceSession>,
 }
 impl SourceRoot {
+    /// Copies known directory observations without I/O or content authorization.
+    /// Callers must revalidate this descriptor on a guarded worker before use.
+    pub fn from_directory(directory: &little_clip_core::file_inventory::Directory) -> Option<Self> {
+        let (device, inode) = directory.object?;
+        Some(Self {
+            path: directory.path.clone(),
+            device,
+            inode,
+            mount: Some(directory.mount?),
+            session: None,
+        })
+    }
     /// Admits a root and captures its mounted-source observations on a worker.
     ///
     /// # Errors

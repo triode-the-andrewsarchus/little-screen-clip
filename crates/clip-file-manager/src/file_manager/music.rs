@@ -90,7 +90,6 @@ pub(super) struct Music {
     pub error: Option<String>,
     seek_pending: Option<f32>,
     copy_job: Option<CopyJob>,
-    notice: Option<String>,
     offset: f32,
     range_playback: bool,
     snapping: Option<selection::Snapping>,
@@ -170,9 +169,8 @@ impl Music {
             .and_then(|job| super::poll_job(&job.receiver))
         {
             self.copy_job = None;
-            match result {
-                Ok(notice) => self.notice = Some(notice),
-                Err(error) => self.error = Some(error),
+            if let Err(error) = result {
+                self.error = Some(error);
             }
         }
         if let Some(result) = self
@@ -271,9 +269,6 @@ impl Music {
     pub fn copying(&self) -> bool {
         self.copy_job.is_some()
     }
-    pub fn status(&self) -> Option<&str> {
-        self.error.as_deref().or(self.notice.as_deref())
-    }
     pub fn copy_range(&mut self, range: super::ui::music::MusicRange) {
         if self.copy_job.is_some() {
             return;
@@ -296,6 +291,5 @@ impl Music {
             cancelled,
             receiver,
         });
-        self.notice = Some("Preparing selected audio for the clipboard…".into());
     }
 }

@@ -46,7 +46,8 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileManagerConfig {
-    pub music_threshold_percent: u8,
+    pub inline_container_previews: bool,
+    pub small_container_items: u8,
     /// Render file-manager audio strips as spectra instead of waveforms.
     pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
@@ -73,7 +74,8 @@ pub struct FileManagerConfig {
 impl Default for FileManagerConfig {
     fn default() -> Self {
         Self {
-            music_threshold_percent: 75,
+            inline_container_previews: true,
+            small_container_items: 8,
             audio_spectrum: false,
             video_timeline_decimation: 1,
             video_subtitles_enabled: false,
@@ -1122,12 +1124,17 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
     }
 
     #[test]
-    fn files_music_threshold_defaults_and_accepts_configuration() {
-        let defaults: AppConfig = toml::from_str("").unwrap();
-        assert_eq!(defaults.file_manager.music_threshold_percent, 75);
-        let configured: AppConfig =
-            toml::from_str("[file_manager]\nmusic_threshold_percent = 60\n").unwrap();
-        assert_eq!(configured.file_manager.music_threshold_percent, 60);
+    fn obsolete_music_threshold_does_not_break_existing_configuration() {
+        let configured: AppConfig = toml::from_str(
+            "[file_manager]\nmusic_threshold_percent = 60\nvideo_timeline_decimation = 4\n",
+        )
+        .unwrap();
+        assert_eq!(configured.file_manager.video_timeline_decimation, 4);
+        assert!(
+            !toml::to_string(&configured.file_manager)
+                .unwrap()
+                .contains("music_threshold")
+        );
     }
 
     #[test]

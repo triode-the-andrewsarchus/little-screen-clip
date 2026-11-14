@@ -1,6 +1,6 @@
 # File Manager Implementation Plan
 
-Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is in progress; [phase4.md](phase4.md) records current capabilities, save contracts and verification evidence. Phase 5 is complete; [phase5.md](phase5.md) records the media workflow audit and verification.
+Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is complete after its current-scope audit; [phase4.md](phase4.md) records supported capabilities, save contracts and verification evidence. Phase 5 is complete; [phase5.md](phase5.md) records the media workflow audit and verification.
 
 The product goals are recorded in [core.md](core.md). This plan turns those goals into a sequence of usable milestones. The later phases describe intended capabilities, not settled specifications: each needs a short design pass before implementation. Phase 1 establishes the browser foundation; subsequent phases build on it.
 
@@ -203,6 +203,8 @@ Copying text or an image elsewhere and pasting into a folder creates a usable fi
 
 ## Phase 4 — Rich previews and built-in editors
 
+Status: complete. [phase4.md](phase4.md) records the 2026-11-14 audit. Further format coverage and editor enhancements are ongoing work.
+
 ### Goal
 
 Inspect supported files and make small edits without opening another application.
@@ -235,11 +237,11 @@ Turn previews into complete everyday gallery and playback workflows.
 ### Scope
 
 - Photo grid with adjustable thumbnail size, selection, next/previous viewing, and slideshow controls. Inspired by iPhone's gallery.
-- Music view with metadata columns, cover art, selectable waveforms and explicitly started single-track playback. No bottom player dock, queue, automatic next track, repeat or shuffle.
-  - Activates when in a folder that's 75% (threshold configurable) audio files
+- Audio List rows with metadata columns, cover art, selectable waveforms and explicitly started single-track playback. The separate Music and Videos views have been retired; no bottom player dock, volume control, queue, automatic next track, repeat or shuffle.
+  - Audio and video folders use List unless another remaining view is explicitly chosen.
   - Each preview is the album art (or missing stand in) and waveform, where the waveform has a navigable playhead and can be selceted in and copy-pasted from directly.
   - This will take careful considering for rendering, to handle huge folders without slow down
-- Stop music on folder navigation through any entry point, Escape, switching to List, and closing Files. Space plays an active Music range once between zero-crossing-snapped endpoints; otherwise it stops playback. Completed tracks stop rather than advancing or repeating.
+- Stop music on folder navigation through any entry point, Escape, changing views, and closing Files. Space plays a focused List/Columns audio range once between zero-crossing-snapped endpoints; otherwise it stops playback. Completed tracks stop rather than advancing or repeating.
 - Video browsing and playback through an assessed reusable backend; establish codec and resource expectations.
 - Keep subfolders and non-media files accessible in media views.
 - Provide manual view choice before automatic type-based selection is introduced in Phase 7.
@@ -370,11 +372,11 @@ Make folder structure and useful file attributes easier to see.
 
 ### Scope
 
-- Add Miller columns with an adjacent file preview, retaining the conventional tree/list view.
-- Add configurable inline expansion for small folders, with a clear background treatment and visible provenance.
+- Add Columns with horizontally scrolling folder columns, resizable dividers, a compact bottom path bar and the shared rich List as its final column, retaining the conventional tree/list view.
+- Add configurable inline previews for small folders, prioritizing direct children and using spare capacity for at most three progressively smaller inline layers. Folders open through square entry targets.
 - Bound automatic expansion depth, concurrent reads, and total visible items; never recursively expand without limits.
 - Extend search scope to the inline-expanded contents through the same location model.
-- Select media-oriented views using a configurable dominant-type threshold, based on content categories rather than extensions.
+- Preserve existing media-oriented view selection. New automatic view-selection behavior is excluded from this authorized phase.
 - Add per-folder view overrides and explicit inheritance from parent folders.
 - Sort audio by artist/album/genre and other types by meaningful metadata, with clear placement of missing values and unrelated files.
 - Implement image dHash/reference sorting through the shared Phase 6 query/sort representation; additional audio similarity metrics require the evaluation described there.
@@ -382,7 +384,7 @@ Make folder structure and useful file attributes easier to see.
 
 ### Completion gate
 
-Mixed folders remain fully navigable. Automatic views and expansion have understandable overrides, and metadata loading does not continually reshuffle a user's active selection.
+The authorized scope is implemented and its six-task closeout and technical review pass; [phase7.md](phase7.md) records the tests, native evidence and practical bounds. Mixed folders remain fully navigable. Per-folder views have explicit inheritance, inline previews have bounded space-driven nesting, and metadata loading preserves active selection. ZIP/TAR and compressed-TAR archives use distinct zipped-folder icons and explicitly opened temporary snapshots in List/Columns, with a persistent bottom-bar warning. Archive edits do not update the original; save or copy content to an ordinary folder to retain it. New automatic view selection and audio sample similarity remain excluded.
 
 ## Phase 8 — Organization and a real Home
 
@@ -606,4 +608,12 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Phase 4 remains in progress. Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
+Phase 3 is accepted and committed as `278091e`. Phase 4 is complete after a current-source and both-theme native audit; shared studios, bounded listing previews, guarded saves and protected exports are recorded in [phase4.md](phase4.md). Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
+
+
+Current active milestone: [Phase 7](phase7.md). Prioritize inline folder/archive
+previews, bounded nested expansion and search integration, meaningful metadata
+groups/headers/sorting, remembered folder views with explicit inheritance, and
+Miller columns with a shared rich List in the final column. Automatic media-view selection is
+excluded from the current authorized milestone. Additional format support does
+not hold Phase 4 or Phase 6 open.
