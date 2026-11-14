@@ -11,7 +11,6 @@ struct ListPreviews<'a> {
     midi: &'a mut super::super::midi_strip::Preview,
     selection: &'a mut Option<music::MusicRange>,
     playback: &'a super::super::music::Music,
-    document_start: &'a mut Option<(PathBuf, super::super::DocumentPosition)>,
     video_start: &'a mut Option<(PathBuf, f64)>,
     decimation: u8,
     can_request: bool,
@@ -134,7 +133,10 @@ impl<'a> ListPreviews<'a> {
             self.hovered_video |= time.is_some();
             actions.video_click(ui, &response, entry, time, self.video_start);
         } else {
-            self.passive_row(ui, rect, entry, &response, colors, palette);
+            let position = self.passive_row(ui, rect, entry, colors, palette);
+            if response.double_clicked() {
+                actions.open_position = position;
+            }
         }
         (response, engaged)
     }
@@ -143,10 +145,9 @@ impl<'a> ListPreviews<'a> {
         ui: &mut Ui,
         rect: Rect,
         entry: &Entry,
-        response: &egui::Response,
         colors: WorkbenchColors,
         palette: &AppPalette,
-    ) {
+    ) -> Option<super::super::DocumentPosition> {
         if entry.system.is_some() {
             self.paths.insert(entry.path.clone());
             self.files
@@ -165,13 +166,11 @@ impl<'a> ListPreviews<'a> {
                 .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
-            let position = self
+            return self
                 .files
                 .show_document(ui, rect, entry, self.columns, colors, palette);
-            if response.double_clicked() {
-                *self.document_start = position.map(|position| (entry.path.clone(), position));
-            }
         }
+        None
     }
 }
 
@@ -268,7 +267,6 @@ impl FileManager {
             videos: &mut self.video_previews,
             selection: &mut self.music_selection,
             playback: &self.music,
-            document_start: &mut self.document_start,
             video_start: &mut self.video_start,
             decimation: self.video_timeline_decimation,
             can_request: self.pending.is_none(),

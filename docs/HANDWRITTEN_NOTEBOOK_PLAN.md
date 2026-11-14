@@ -186,3 +186,10 @@ worker dispatch in independent executables. Clone groups decrease by two and
 maximum complexity is unchanged. The reported CLI complexity is the existing
 async body renamed from `main` to `run_cli`; an unrelated Python cycle changes
 only member order. No additional application framework or raster cache is added.
+
+- [x] Fix list-strip opening positions being overwritten by common row actions.
+  Route the hovered document position through `ListActions.open_position`
+  instead of writing browser state before `finish_listing` replaces it. Native
+  evidence in `/tmp/notebook-gui-dark-04/04-selected-page.png` confirms that
+  double-clicking the tenth thumbnail opens Page 10 of 10 through asynchronous
+  notebook loading. The fix also preserves existing PDF/text strip positions.
