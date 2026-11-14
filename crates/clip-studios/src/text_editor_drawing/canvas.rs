@@ -110,7 +110,16 @@ impl DrawingEditor {
             && ui.memory(|memory| memory.focused().is_none())
             && ui.input(|input| input.key_pressed(egui::Key::Escape));
         if response.has_focus() || escaped_focus {
-            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            // Ghost/retained pixels belong to accepted edits, not a cancellable
+            // interaction. Text-selection IDs can also outlive a closed draft.
+            let cancellable = self.gesture.is_some()
+                || !self.selected.is_empty()
+                || self.tool.is_some()
+                || self.panning
+                || self.text_draft.is_some();
+            if cancellable
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
                 response.request_focus();
                 self.gesture = None;
                 self.ghost = None;
@@ -502,6 +511,42 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, &mut paint);
             },
         );
+    }
+
+    #[test]
+    fn idle_drawing_canvas_leaves_escape_for_its_host_after_cancelling_selection() {
+        let ctx = egui::Context::default();
+        let mut editor = DrawingEditor {
+            selected: vec!["box".into()],
+            ..Default::default()
+        };
+        ui_frame(&ctx, Vec::new(), |ui| {
+            let (_, response) =
+                ui.allocate_exact_size(egui::vec2(200.0, 200.0), egui::Sense::click());
+            response.request_focus();
+        });
+        for expected_remaining in [false, true] {
+            ui_frame(
+                &ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                |ui| {
+                    let (_, response) =
+                        ui.allocate_exact_size(egui::vec2(200.0, 200.0), egui::Sense::click());
+                    editor.keyboard(ui, &response);
+                    assert_eq!(
+                        ui.input(|input| input.key_pressed(egui::Key::Escape)),
+                        expected_remaining
+                    );
+                },
+            );
+            assert!(editor.selected.is_empty());
+        }
     }
 
     #[test]

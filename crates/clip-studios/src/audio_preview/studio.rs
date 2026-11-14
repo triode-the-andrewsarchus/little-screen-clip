@@ -45,7 +45,9 @@ impl AudioPreviewState {
             self.handle_channel_shortcuts(ctx);
         }
         // Nested save dialogs handle Escape themselves, leaving the studio open.
-        if !dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !dialog_open
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             self.stop();
             self.stop_group_playback();
             *close_requested = !self.file_write_pending();

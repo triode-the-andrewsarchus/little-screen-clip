@@ -40,6 +40,11 @@ impl Collection {
         active: Option<&mut ImagePreviewState>,
         palette: &AppPalette,
     ) {
+        if self.export_open
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.export_open = false;
+        }
         if !self.export_open {
             return;
         }

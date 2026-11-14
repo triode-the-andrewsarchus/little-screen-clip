@@ -66,7 +66,9 @@ impl ImagePreviewState {
             ui.is_enabled() && !save_modal_active && !ctx.wants_keyboard_input();
 
         // Global hotkey handling
-        if image_shortcuts_enabled && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if image_shortcuts_enabled
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             if self.ocr_state.in_progress {
                 self.cancel_ocr();
             } else if self.active_mode == ImageToolMode::Crop

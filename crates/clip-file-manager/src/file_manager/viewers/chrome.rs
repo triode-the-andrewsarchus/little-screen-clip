@@ -28,6 +28,7 @@ impl Viewers {
                 ready,
                 ButtonRole::Secondary.button("Back to folder", palette),
             )
+            .on_hover_text("Return to the folder [Esc]")
             .clicked()
         {
             self.close_requested = true;

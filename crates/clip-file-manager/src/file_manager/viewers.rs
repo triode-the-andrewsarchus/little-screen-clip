@@ -19,6 +19,8 @@ use std::{
 };
 
 mod chrome;
+#[cfg(test)]
+mod escape;
 mod gallery;
 mod rename;
 mod video;
@@ -352,6 +354,12 @@ impl Viewers {
         self.poll(ui.ctx());
         self.poll_file_source(ui.ctx());
         let mut close = std::mem::take(&mut self.close_requested);
+        // A popup owns Escape before either the studio or the host can close.
+        if ui.memory(|memory| memory.any_popup_open())
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            ui.memory_mut(|memory| memory.close_popup());
+        }
         self.gallery_controls(ui, palette);
         let blocked = self.collection_pending()
             || self.collection_modal()
@@ -371,12 +379,20 @@ impl Viewers {
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
         self.rename_ui(ui, palette);
         self.poll_audio_return();
-        if self.session.is_none() {
+        // Studios consume Escape when cancelling their own nested interaction.
+        // Any remaining Escape uses the same guarded close as Back to folder,
+        // including read-only viewers, loading/error screens and text edit mode.
+        if editor_enabled {
             close |=
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         }
         if close {
             self.request_close();
+        }
+        if self.confirm_close
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.confirm_close = false;
         }
         self.close_confirmation(ui, palette);
         !self.active()
@@ -857,7 +873,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
 mod tests {
     use super::*;
 
-    fn finish_loading(viewers: &mut Viewers, ctx: &Context) {
+    pub(super) fn finish_loading(viewers: &mut Viewers, ctx: &Context) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while viewers.loading.is_some() {
             viewers.poll(ctx);

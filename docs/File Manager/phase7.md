@@ -74,6 +74,38 @@ checkpoints below. Current implementation and acceptance cover:
   copying, shared List rendering and shared file-control exclusion remove
   duplicate mechanisms rather than moving them between files.
 
+## Post-review fixes
+
+- [x] Make Escape return to the folder consistently for every file-backed viewer.
+  The host previously handled Escape only on loading/error screens; the newer
+  read-only viewers and text edit mode had no common return binding. The host
+  now routes unconsumed Escape through the same guarded close as Back to folder.
+  Popups, rename/export/save dialogs, filters, tool gestures, fullscreen video
+  and unsaved-edit confirmation retain first refusal. Local handlers consume
+  the key they handle, so cancelling a nested action cannot also close its owner.
+  An idle drawing canvas lets Escape reach the host after cancelling selection.
+  Accepted writes/exports remain protected and drafts still require confirmation.
+- [x] Verify real host frames across archive, notebook, comic, EPUB, database,
+  font, geography, toolpath, multisample, calendar, mail and text-edit viewers.
+  Regression tests also cover rename, popups, dirty-image confirmation, file
+  Save As and idle/selected drawing canvases. Affected suites: 946 file-manager
+  tests and 843 studio tests pass (six and 12 ignored respectively). The final
+  drawing change is rechecked by all five canvas tests. Strict all-target Clippy
+  and the native build pass without warnings. Logs:
+  `/tmp/consistent-escape-all-tests.log`, `/tmp/consistent-escape-drawing-tests.log`,
+  `/tmp/consistent-escape-clippy.log` and `/tmp/consistent-escape-build.log`.
+- [x] Native keyboard delivery returns calendar, toolpath and notebook viewers
+  to their existing folders, without clicking Back to folder. Evidence:
+  `/tmp/consistent-escape-native-dark-01/report.json`; reproduction:
+  `scripts/file_manager_escape_acceptance.py`.
+- [x] Architecture reviewed against `before-consistent-viewer-escape`.
+  No renderer, dependency or close lifecycle is duplicated. Global average/max
+  complexity and duplication percentage remain unchanged. The tool flags short
+  repeated input-binding blocks and the drawing/wiring cancellation conditions;
+  these preserve each local editor's first-Escape behavior while the host owns
+  folder return. The drawing guard excludes derived ghost/retained-pixel and
+  dismissed-draft identity state rather than treating these as active gestures.
+
 ## Required delivery and acceptance
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;

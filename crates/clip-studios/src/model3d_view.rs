@@ -284,7 +284,7 @@ impl Model3dViewerState {
     }
 
     pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             *close = true;
             return;
         }

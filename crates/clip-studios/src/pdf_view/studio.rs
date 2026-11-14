@@ -16,7 +16,9 @@ impl PdfEditorState {
         self.poll_edit_worker(ctx, now);
         self.poll_document_tools(ctx, now);
         let navigation_escape = self.navigation_shortcuts(ctx);
-        if !navigation_escape && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if !navigation_escape
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             if self.file_write_pending() {
                 self.status_toast
                     .set("PDF edit is still running; wait for it to finish", now);

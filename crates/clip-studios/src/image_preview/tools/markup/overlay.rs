@@ -427,8 +427,9 @@ impl ImagePreviewState {
                             *text = temp_text;
                         }
 
-                        if ui.input(|inp| {
-                            inp.key_pressed(egui::Key::Enter) || inp.key_pressed(egui::Key::Escape)
+                        if ui.input_mut(|inp| {
+                            inp.key_pressed(egui::Key::Enter)
+                                || inp.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
                         }) {
                             self.markup_state.editing_text_idx = None;
                         }

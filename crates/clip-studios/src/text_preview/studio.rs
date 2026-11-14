@@ -195,7 +195,7 @@ impl TextPreviewState {
     }
 
     pub(super) fn handle_shortcuts(&mut self, ctx: &egui::Context, close: &mut bool) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.show_find {
                 self.show_find = false;
             } else {

@@ -11,7 +11,7 @@ impl SpreadsheetViewerState {
         let now = crate::ui_ext::feedback_time();
 
         // Let Escape clear the filter before closing the spreadsheet viewer.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.search_query.is_empty() {
                 *close = true;
             } else {
