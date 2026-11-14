@@ -418,15 +418,16 @@ impl FileManager {
     }
 
     pub(super) fn selection_is_mutable(&self) -> bool {
+        let entries = self.displayed_entries();
         !self.search.has_offline_results()
-            && self.directory.as_ref().is_some_and(|directory| {
-                !directory.system
-                    && self.selected_paths().iter().all(|path| {
-                        directory
-                            .entries
-                            .iter()
-                            .any(|entry| entry.path == *path && entry.system.is_none())
-                    })
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| !directory.system)
+            && self.selected_paths().iter().all(|path| {
+                entries
+                    .iter()
+                    .any(|entry| entry.path == *path && entry.system.is_none())
             })
     }
     pub(super) fn copy_selection(&mut self, cut: bool) {
@@ -591,17 +592,11 @@ impl FileManager {
         if !paths.is_empty() {
             let selected: BTreeSet<_> = paths.iter().collect();
             let expected = self
-                .directory
-                .as_ref()
-                .map(|directory| {
-                    directory
-                        .entries
-                        .iter()
-                        .filter(|entry| selected.contains(&entry.path))
-                        .map(|entry| (entry.path.clone(), entry.identity))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .displayed_entries()
+                .into_iter()
+                .filter(|entry| selected.contains(&entry.path))
+                .map(|entry| (entry.path.clone(), entry.identity))
+                .collect();
             let search_guards = self.search_source_guards(&paths);
             self.transfers.confirmation = Some(DeleteConfirmation {
                 paths,

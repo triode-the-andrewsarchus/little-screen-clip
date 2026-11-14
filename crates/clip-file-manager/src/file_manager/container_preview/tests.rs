@@ -313,3 +313,155 @@ fn duplicate_tar_members_do_not_publish_an_ambiguous_inventory() {
     .unwrap_err();
     assert!(error.contains("Duplicate archive member path"), "{error}");
 }
+
+fn browser_with_expanded_container(
+    root: &std::path::Path,
+    name: &str,
+) -> super::super::FileManager {
+    let mut browser = super::super::FileManager::default();
+    browser.commit(
+        super::super::filesystem::read_directory(root, &AtomicBool::new(false)).unwrap(),
+        super::super::Navigation::New,
+    );
+    let folder = entry(root, name);
+    let mut node = Node::new(folder.revision);
+    node.ready = Some(Arc::new(
+        inventory::load(&folder, &AtomicBool::new(false)).unwrap(),
+    ));
+    browser.containers.nodes.insert(folder.path, node);
+    browser
+}
+
+#[test]
+fn expanded_children_share_selection_keyboard_navigation_and_mutability() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), b"first").unwrap();
+    std::fs::write(folder.join("b.txt"), b"second").unwrap();
+    std::fs::write(folder.join(".hidden.txt"), b"hidden").unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    assert_eq!(
+        browser
+            .displayed_entries()
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        ["folder", "a.txt", "b.txt"]
+    );
+    browser.select(folder.clone());
+    browser.move_selection_by(1, false);
+    assert_eq!(browser.selected_paths(), [folder.join("a.txt")]);
+    assert!(browser.selection_is_mutable());
+    browser.select_with(folder.join("b.txt"), false, true);
+    assert_eq!(
+        browser.selected_paths(),
+        [folder.join("a.txt"), folder.join("b.txt")]
+    );
+    browser.containers.retire();
+    browser.reconcile_selection();
+    assert_eq!(browser.selection_count(), 2);
+    assert!(
+        browser.selection_is_mutable(),
+        "offscreen snapshots still own the selection"
+    );
+    browser.containers.nodes.get_mut(&folder).unwrap().expanded = Some(false);
+    browser.reconcile_selection();
+    assert_eq!(
+        browser.selection_count(),
+        0,
+        "collapsed children leave the active location model"
+    );
+}
+
+#[test]
+fn refresh_keeps_unknown_child_selection_until_a_complete_observation_proves_absence() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let child = folder.join("selected.txt");
+    std::fs::write(&child, b"selected bytes").unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    browser.select(child.clone());
+    std::fs::remove_file(&child).unwrap();
+    browser.commit(
+        super::super::filesystem::read_directory(root.path(), &AtomicBool::new(false)).unwrap(),
+        super::super::Navigation::Refresh,
+    );
+    assert_eq!(browser.selected_paths(), [child]);
+    assert!(
+        !browser.selection_is_mutable(),
+        "a pending observation cannot authorize mutation"
+    );
+    let source = entry(root.path(), "folder");
+    browser.containers.nodes.get_mut(&folder).unwrap().ready = Some(Arc::new(
+        inventory::load(&source, &AtomicBool::new(false)).unwrap(),
+    ));
+    browser.reconcile_selection();
+    assert_eq!(browser.selection_count(), 0);
+}
+
+#[test]
+fn snapshot_admission_keeps_selected_children_and_evicts_old_unselected_observations() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("selected.txt"), b"selected").unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    browser.select(folder.join("selected.txt"));
+    browser
+        .containers
+        .protect(Some(&browser.location().unwrap().selection.clone()));
+    for i in 0..CACHE {
+        let name = format!("other-{i:02}");
+        let path = root.path().join(&name);
+        std::fs::create_dir(&path).unwrap();
+        if i < CACHE - 1 {
+            let source = entry(root.path(), &name);
+            let mut node = Node::new(source.revision);
+            node.ready = Some(Arc::new(
+                inventory::load(&source, &AtomicBool::new(false)).unwrap(),
+            ));
+            browser.containers.nodes.insert(path, node);
+        }
+    }
+    browser.containers.request(&entry(root.path(), "other-31"));
+    assert_eq!(browser.containers.nodes.len(), CACHE);
+    assert!(browser.containers.nodes.contains_key(&folder));
+    assert_eq!(
+        browser
+            .displayed_entries()
+            .iter()
+            .filter(|e| e.name == "selected.txt")
+            .count(),
+        1
+    );
+    assert!(browser.selection_is_mutable());
+}
+
+#[test]
+fn archive_members_never_become_selectable_or_mutable_host_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file("assets/a.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"archived bytes").unwrap();
+    zip.finish().unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "package.zip");
+    assert_eq!(
+        browser
+            .displayed_entries()
+            .iter()
+            .map(|e| &e.path)
+            .collect::<Vec<_>>(),
+        [&path]
+    );
+    browser.select(root.path().join("assets/a.txt"));
+    assert!(!browser.selection_is_mutable());
+    browser.begin_rename();
+    assert!(browser.edits.dialog.is_none());
+    browser.reconcile_selection();
+    assert_eq!(browser.selection_count(), 0);
+    assert!(!root.path().join("assets").exists());
+}

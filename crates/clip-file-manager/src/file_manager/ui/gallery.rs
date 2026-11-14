@@ -52,7 +52,7 @@ impl FileManager {
         self.restore_scroll = true;
     }
     pub(in crate::file_manager) fn retire_media_previews(&mut self) {
-        self.containers.clear();
+        self.containers.retire();
         self.constellation.stop_playback();
         self.midi.stop();
         self.gallery_layout.retire();

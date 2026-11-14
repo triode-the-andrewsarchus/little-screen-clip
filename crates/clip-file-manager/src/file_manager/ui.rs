@@ -773,10 +773,15 @@ impl FileManager {
             if let Some(index) = self.visible.iter().position(|i| {
                 self.location()
                     .and_then(|location| location.selected.as_ref())
-                    == self
-                        .directory
-                        .as_ref()
-                        .map(|directory| &directory.entries[*i].path)
+                    .zip(
+                        self.directory
+                            .as_ref()
+                            .map(|directory| &directory.entries[*i]),
+                    )
+                    .is_some_and(|(selected, entry)| {
+                        selected == &entry.path
+                            || (entry.directory && selected.parent() == Some(entry.path.as_path()))
+                    })
             }) {
                 scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
                     self.music_offsets[index]

@@ -4,8 +4,10 @@ from pathlib import Path
 import io
 import tarfile
 import zipfile
+import subprocess
+import ui_acceptance_capture as private
 from PIL import Image, ImageDraw
-from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
+from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 
 
 def fixtures(root):
@@ -33,6 +35,15 @@ def fixtures(root):
 
 
 def exercise(session, root):
+    # Isolate real card labels from icons and image thumbnails for the OCR
+    # observer; retain the full native screenshot as the visual evidence.
+    session.ocr_regions = [
+        ("strip-title-folder.png", (410, 302, 525, 324)),
+        ("strip-title-text.png", (573, 302, 687, 324)),
+        ("strip-title-image.png", (735, 302, 849, 324)),
+        ("strip-title-zip.png", (410, 438, 525, 460)),
+        ("strip-title-tar.png", (410, 546, 525, 568)),
+    ]
     session.observe("initial", ["a-small", "b-large"])
     session.click(645, 160)  # Collapse Shelf to expose all four fixture rows.
     session.observe("00-contained-files", ["a-small", "Inside folder", "readme.txt", "sun.png", "Archive contents", "payload.json", "manual"])
@@ -69,13 +80,46 @@ def exercise(session, root):
     _, folder_y = session.word("returned-to-collapsed", "a-small")
     session.click(360, folder_y)
     session.observe("expanded", ["nested", "readme.txt", "sun.png"])
-    x, y = session.word("expanded", "nested")
+    x, y = session.word("expanded", "readme.txt")
+    session.click(x + 2, y)  # A contained file uses the ordinary selection owner.
+    session.key("c", "ctrl")
+    def copied_child():
+        result = subprocess.run(["wl-paste", "--no-newline", "--type", "text/uri-list"],
+            env=session.env, capture_output=True, timeout=5)
+        return result.returncode == 0 and (root / "a-small/readme.txt").as_uri().encode() in result.stdout
+    wait_for(copied_child, "contained file clipboard reference")
+    session.key("F2")
+    session.observe("child-rename", ["Rename", "Name:"])
+    session.key("a", "ctrl")
+    private.run_checked(["wtype", "renamed.txt"], env=session.env)
+    session.key("Return")
+    wait_for(lambda: (root / "a-small/renamed.txt").exists(), "contained rename completion")
+    assert not (root / "a-small/readme.txt").exists()
+    assert not (root / "renamed.txt").exists()
+    def renamed_card_ready():
+        # The completion notice also contains the new name; require that name
+        # in the actual card before clicking through a concurrent folder refresh.
+        session.observe("child-renamed", ["nested"])
+        crop = session.output / "renamed-card-label.png"
+        with Image.open(session.output / "child-renamed.png") as screen:
+            label = screen.crop((573, 302, 687, 324))
+            label.resize((label.width * 3, label.height * 3)).save(crop)
+        text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "7"], env=session.env)
+        return "renamed.txt" in text.lower()
+    wait_for(renamed_card_ready, "renamed contained-file card")
+    x, y = session.word("child-renamed", "nested")
     session.click(x + 2, y, delay=.05)
     session.click(x + 2, y, delay=.05)
     session.observe("nested-folder", ["deep.txt"])
     session.key("Left", "alt")
-    session.observe("returned", ["readme.txt", "a-small"])
-    x, y = session.word("returned", "readme.txt")
+    session.observe("returned", ["renamed.txt", "a-small"])
+    point = session.word("returned", "renamed.txt", required=False)
+    if point is None:
+        # The second card follows the observed nested-folder card. Small names
+        # can be missed by OCR; opening below verifies the exact text payload.
+        x, y = session.word("returned", "nested")
+        point = (x + 160, y)
+    x, y = point
     session.click(x + 2, y, delay=.05)
     session.click(x + 2, y, delay=.05)
     session.observe("01-open-child", ["Contained document opened successfully", "Back to folder"])

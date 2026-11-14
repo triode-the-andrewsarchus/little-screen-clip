@@ -115,6 +115,7 @@ impl FileManager {
 
     pub(super) fn begin_rename(&mut self) {
         if self.selection_count() == 1
+            && self.selection_is_mutable()
             && let Some(source) = self
                 .location()
                 .and_then(|location| location.selection.first())

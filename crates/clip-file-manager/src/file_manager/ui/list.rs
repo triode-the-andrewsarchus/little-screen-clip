@@ -4,6 +4,10 @@ use super::*;
 
 struct ListPreviews<'a> {
     columns: ListColumns,
+    selected: Option<&'a std::collections::BTreeSet<PathBuf>>,
+    can_edit: bool,
+    selection_count: usize,
+    child_targets: Vec<(Rect, PathBuf)>,
     containers: &'a mut super::super::container_preview::Previews,
     container_paths: std::collections::BTreeSet<PathBuf>,
     hidden: bool,
@@ -164,12 +168,15 @@ impl<'a> ListPreviews<'a> {
         actions: &mut ListActions,
     ) -> egui::Response {
         self.container_paths.insert(entry.path.clone());
+        if self.can_request {
+            self.containers.request(entry);
+        }
         let header = Rect::from_min_max(
             rect.min + vec2(26.0, 0.0),
             pos2(rect.right(), rect.top() + 28.0),
         );
         let response = file_row(ui, header, entry, marked, self.columns, None, colors);
-        if let Some((path, directory)) = self.containers.show(
+        self.containers.show(
             ui,
             rect,
             entry,
@@ -178,13 +185,22 @@ impl<'a> ListPreviews<'a> {
             self.hidden,
             colors,
             palette,
-        ) {
-            if directory {
-                actions.navigate_folder = Some(path);
-            } else {
-                actions.open = Some(path);
-            }
-        }
+            self.selected,
+            |ui, response, child| {
+                if child.directory && ui.is_enabled() {
+                    self.child_targets
+                        .push((response.rect.intersect(ui.clip_rect()), child.path.clone()));
+                }
+                actions.row(
+                    ui,
+                    response,
+                    child,
+                    self.selected,
+                    self.can_edit,
+                    self.selection_count,
+                );
+            },
+        );
         response
     }
     fn passive_row(
@@ -262,6 +278,7 @@ impl FileManager {
     fn list_contents(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         let columns = self.list_header(ui, colors);
         if self.containers.poll(ui.ctx()) | self.previews.poll(ui.ctx()) {
+            self.reconcile_selection();
             self.rebuild_list_offsets();
         }
         self.music_previews.poll(ui.ctx());
@@ -305,7 +322,12 @@ impl FileManager {
         let background = actions.background(ui, can_edit, selection_count > 0);
         let mut targets = Vec::new();
         let preview_paths = std::collections::BTreeSet::new();
+        self.containers.protect(selected);
         let mut previews = ListPreviews {
+            selected,
+            can_edit,
+            selection_count,
+            child_targets: Vec::new(),
             containers: &mut self.containers,
             container_paths: Default::default(),
             hidden: self.show_hidden,
@@ -376,6 +398,7 @@ impl FileManager {
         }
         previews.containers.retain(&previews.container_paths);
         let play = previews.play.take();
+        targets.append(&mut previews.child_targets);
         drop(previews);
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.offset.y, &background);

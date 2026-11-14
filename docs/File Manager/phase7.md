@@ -259,3 +259,45 @@ Final verification for this checkpoint: the current full file-manager library
 passes 893 tests with six ignored (`/tmp/phase7-checkpoint-library-tests.log`),
 and strict library/test Clippy passes (`/tmp/phase7-child-rename-clippy.log`).
 Personal `.cargo/config.toml` and `config.toml` edits remain outside commits.
+
+### Ordinary contained-file selection and actions
+
+- [x] Make ordinary contained cards use the browser's existing row selection,
+  context menu, drag, opening and file-action owners. Single-click selects;
+  Ctrl/Shift selection and keyboard movement use the same displayed-entry model.
+  Child folders are real navigation/drop targets. Archive members remain separate
+  read-only member references, never invented host entries.
+- [x] Retain up to 32 folder/archive observations (at most 1,024 displayed child
+  records) independently from visible thumbnail payloads. Hidden reads are still
+  cancelled. Admission evicts old unselected snapshots and protects parents of
+  selected children; exhausted admission is disclosed in the row. Studio/view
+  entry retires reads without discarding retained observations. Navigation to a
+  different location clears them; same-folder refresh validates root revisions.
+- [x] Keep an existing child selection while its refreshed/history observation
+  is unknown. Pending children cannot authorize a mutation. A completed snapshot
+  removes selections it proves absent; collapsing a folder removes its children
+  from the displayed selection model. Delete confirmations retain child entry
+  identities through the existing guarded mutation pipeline, and rename uses
+  the source-parent fix from the preceding checkpoint.
+- [x] Sixteen container tests pass, including child keyboard/range selection,
+  offscreen retention, protected cache admission, pending/absent observations
+  and archive-member separation. Full file-manager library passes 897 tests,
+  with six ignored (`/tmp/phase7-child-selection-library-tests.log`); targeted
+  final fixture checks pass (`/tmp/phase7-child-selection-targeted-tests.log`).
+- [x] Native dark/light reports pass at
+  `/tmp/phase7-child-selection-dark-03/report.json` and
+  `/tmp/phase7-child-selection-light-04/report.json`. They verify the exact child
+  clipboard URI, F2 rename inside its real parent, absence of an incorrectly
+  relocated root file, history return and opening the renamed file's exact text.
+  The observer waits for the renamed card, not the completion notice, before
+  clicking through the asynchronous refresh. Small card labels have dedicated
+  OCR crops; screenshots retain the full native view.
+
+Architecture comparison against `before-phase7-expanded-selection` introduces
+no excessive-CCN function or additional clone group after sharing the new test
+fixture. Maximum complexity stays unchanged and duplication slightly decreases.
+The aggregate still flags pre-existing clones in touched application/gallery/test
+files and reordered unchanged Python cycles; it is not a clean aggregate result.
+Nested inline levels, expanded-scope search and preservation of the visible
+scroll anchor during layout changes remain required work, alongside archive
+member previews/opening, metadata groups/sorts and Miller columns.

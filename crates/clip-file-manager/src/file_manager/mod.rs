@@ -423,7 +423,7 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
-        self.containers.clear();
+        self.containers.retire();
         if matches!(navigation, Navigation::Refresh) {
             self.similarity_canvas.invalidate();
         }
@@ -720,7 +720,11 @@ impl FileManager {
             Navigation::History(index) => self.index = Some(index),
             _ => {}
         }
-        self.containers.clear();
+        if matches!(navigation, Navigation::Refresh) {
+            self.containers.reconcile_roots(&directory.entries);
+        } else {
+            self.containers.clear();
+        }
         self.view_preferences.reload();
         self.tree.reveal(&directory.path);
         self.directory = Some(directory);
@@ -899,11 +903,11 @@ impl FileManager {
 
     fn open_path(&mut self, path: PathBuf) {
         self.type_navigation.clear();
-        if self.directory.as_ref().is_some_and(|dir| {
-            dir.entries
-                .iter()
-                .any(|entry| entry.path == path && entry.directory)
-        }) {
+        if self
+            .displayed_entries()
+            .iter()
+            .any(|entry| entry.path == path && entry.directory)
+        {
             if self.search_source_guard(&path).is_some() {
                 self.reveal_search_result(path, true);
             } else {

@@ -90,12 +90,21 @@ impl FileManager {
         {
             return self.similarity_canvas.entries.iter().collect();
         }
+        let expanded = self.view == super::BrowserView::List && !self.search.has_result_sources();
         self.directory
             .iter()
             .flat_map(|directory| {
                 self.visible
                     .iter()
                     .filter_map(|&index| directory.entries.get(index))
+            })
+            .flat_map(|entry| {
+                let children = if expanded {
+                    self.containers.children(entry, self.show_hidden)
+                } else {
+                    Vec::new()
+                };
+                std::iter::once(entry).chain(children)
             })
             .collect()
     }
@@ -164,19 +173,47 @@ impl FileManager {
             .iter()
             .map(|entry| entry.path.clone())
             .collect();
+        // A fresh expanded-folder read may not have arrived yet after history
+        // navigation or refresh. Unknown coverage cannot prove a child vanished.
+        let selected_parents: BTreeSet<_> = self.history[index]
+            .selection
+            .iter()
+            .filter_map(|path| path.parent().map(PathBuf::from))
+            .collect();
+        let unknown: BTreeSet<_> = self
+            .directory
+            .iter()
+            .flat_map(|directory| {
+                self.visible
+                    .iter()
+                    .filter_map(|&i| directory.entries.get(i))
+            })
+            .filter(|entry| {
+                selected_parents.contains(&entry.path)
+                    && self.view == super::BrowserView::List
+                    && !self.search.has_result_sources()
+                    && entry.directory
+                    && super::container_preview::candidate(entry)
+                    && self.containers.unknown_children(entry)
+            })
+            .map(|entry| entry.path.clone())
+            .collect();
+        let available = |path: &PathBuf| {
+            paths.contains(path) || path.parent().is_some_and(|parent| unknown.contains(parent))
+        };
         let location = &mut self.history[index];
-        location.selection.retain(|path| paths.contains(path));
+        location.selection.retain(available);
         if location
             .selected
             .as_ref()
-            .is_some_and(|path| !paths.contains(path))
+            .is_some_and(|path| !available(path))
         {
             location.selected = None;
         }
         if location
             .anchor
             .as_ref()
-            .is_some_and(|path| !paths.contains(path))
+            .is_some_and(|path| !available(path))
         {
             location.anchor = location.selected.clone();
         }

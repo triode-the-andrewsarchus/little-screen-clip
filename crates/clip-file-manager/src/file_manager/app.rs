@@ -494,7 +494,7 @@ impl FileManagerApp {
                     self.pad_studio = Some(request);
                 }
                 if let Some(path) = self.browser.take_available_open_file() {
-                    self.browser.containers.clear();
+                    self.browser.containers.retire();
                     self.viewers.source_guard = self.browser.search_source_guard(&path);
                     let document_start = self
                         .browser

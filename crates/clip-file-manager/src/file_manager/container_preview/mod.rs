@@ -44,6 +44,9 @@ pub(super) struct Previews {
     // This is session state, keyed by path, not a payload or metadata cache.
     choices: BTreeMap<PathBuf, bool>,
     layout_changed: bool,
+    protected: BTreeSet<PathBuf>,
+    frame_paths: BTreeSet<PathBuf>,
+    sequence: u64,
 }
 struct Node {
     revision: u64,
@@ -52,6 +55,7 @@ struct Node {
     error: Option<String>,
     refreshed: Instant,
     expanded: Option<bool>,
+    touched: u64,
 }
 impl Node {
     fn new(revision: u64) -> Self {
@@ -62,6 +66,7 @@ impl Node {
             error: None,
             refreshed: Instant::now(),
             expanded: None,
+            touched: 0,
         }
     }
     fn expanded(&self, options: Options) -> bool {
@@ -114,9 +119,64 @@ impl Previews {
     }
     pub fn clear(&mut self) {
         self.nodes.clear();
+        self.frame_paths.clear();
+        self.protected.clear();
+    }
+    pub fn protect(&mut self, selected: Option<&BTreeSet<PathBuf>>) {
+        self.protected = selected
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.parent().map(PathBuf::from))
+            .collect();
     }
     pub fn retain(&mut self, visible: &BTreeSet<PathBuf>) {
-        self.nodes.retain(|path, _| visible.contains(path));
+        // Metadata snapshots are the expanded location model, not thumbnail
+        // payloads. Retain bounded observations for keyboard/file actions while
+        // retiring every hidden read. Admission evicts unselected old snapshots.
+        self.nodes.retain(|path, node| {
+            if !visible.contains(path) {
+                node.task = None;
+            }
+            node.ready.is_some() || visible.contains(path)
+        });
+        self.frame_paths.clear();
+    }
+    pub fn retire(&mut self) {
+        self.retain(&BTreeSet::new());
+    }
+    pub fn reconcile_roots(&mut self, entries: &[Entry]) {
+        self.nodes.retain(|path, node| {
+            let Some(entry) = entries.iter().find(|entry| &entry.path == path) else {
+                return false;
+            };
+            if node.revision != entry.revision {
+                let choice = node.expanded;
+                *node = Node::new(entry.revision);
+                node.expanded = choice;
+            }
+            true
+        });
+    }
+    pub fn unknown_children(&self, entry: &Entry) -> bool {
+        self.height(entry) > 28.0
+            && self
+                .nodes
+                .get(&entry.path)
+                .and_then(|node| node.ready.as_ref())
+                .is_none_or(|ready| !ready.complete)
+    }
+    pub fn children<'a>(&'a self, entry: &Entry, hidden: bool) -> Vec<&'a Entry> {
+        self.nodes
+            .get(&entry.path)
+            .filter(|node| node.revision == entry.revision && node.expanded(self.options))
+            .and_then(|node| node.ready.as_ref())
+            .into_iter()
+            .flat_map(|ready| &ready.children)
+            .filter_map(|child| match child {
+                Child::File(entry) if hidden || !entry.hidden => Some(entry.as_ref()),
+                _ => None,
+            })
+            .collect()
     }
     pub fn height(&self, entry: &Entry) -> f32 {
         if self.nodes.get(&entry.path).map_or_else(
@@ -163,10 +223,23 @@ impl Previews {
         }
         changed
     }
-    fn request(&mut self, entry: &Entry) {
+    pub(super) fn request(&mut self, entry: &Entry) {
+        self.frame_paths.insert(entry.path.clone());
         if !self.nodes.contains_key(&entry.path) && self.nodes.len() >= CACHE {
-            return;
+            let oldest = self
+                .nodes
+                .iter()
+                .filter(|(path, _)| {
+                    !self.protected.contains(*path) && !self.frame_paths.contains(*path)
+                })
+                .min_by_key(|(_, node)| node.touched)
+                .map(|(path, _)| path.clone());
+            let Some(oldest) = oldest else {
+                return;
+            };
+            self.nodes.remove(&oldest);
         }
+        self.sequence = self.sequence.wrapping_add(1);
         let active = self.nodes.values().filter(|n| n.task.is_some()).count();
         let choice = self.choices.get(&entry.path).copied();
         let node = self.nodes.entry(entry.path.clone()).or_insert_with(|| {
@@ -179,6 +252,7 @@ impl Previews {
             *node = Node::new(entry.revision);
             node.expanded = expanded;
         }
+        node.touched = self.sequence;
         if !node.expanded(self.options) || active >= READS || node.task.is_some() {
             return;
         }
@@ -210,10 +284,20 @@ impl Previews {
         hidden: bool,
         colors: WorkbenchColors,
         _palette: &AppPalette,
-    ) -> Option<(PathBuf, bool)> {
-        self.request(entry);
+        selected: Option<&BTreeSet<PathBuf>>,
+        mut interact: impl FnMut(&mut Ui, &egui::Response, &Entry),
+    ) {
         let can_choose = self.choices.len() < CHOICES || self.choices.contains_key(&entry.path);
-        let node = self.nodes.get_mut(&entry.path)?;
+        let Some(node) = self.nodes.get_mut(&entry.path) else {
+            ui.painter().text(
+                rect.left_top() + vec2(18.0, 42.0),
+                Align2::LEFT_TOP,
+                "Preview limit reached · open folder to browse",
+                FontId::proportional(12.0),
+                colors.text_secondary,
+            );
+            return;
+        };
         let expanded = node.expanded(self.options);
         let toggle =
             Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2(24.0, 24.0));
@@ -237,7 +321,7 @@ impl Previews {
             }
         });
         if rect.height() <= 30.0 {
-            return None;
+            return;
         }
         let body = Rect::from_min_max(
             pos2(rect.left() + 18.0, rect.top() + 30.0),
@@ -256,7 +340,7 @@ impl Previews {
                 FontId::proportional(12.0),
                 colors.text_secondary,
             );
-            return None;
+            return;
         };
         let label = format!(
             "{} · {}{} items",
@@ -279,19 +363,30 @@ impl Previews {
             body.left_top() + vec2(6.0, 17.0),
             body.right_bottom() - vec2(4.0, 2.0),
         );
-        let mut open = None;
         ui.allocate_ui_at_rect(cards, |ui| {
             egui::ScrollArea::horizontal()
                 .id_source(("container-cards", &entry.path))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    open = inventory_cards(ui, ready, files, keep, hidden, colors);
+                    inventory_cards(
+                        ui,
+                        ready,
+                        files,
+                        keep,
+                        hidden,
+                        colors,
+                        selected,
+                        &mut interact,
+                    );
                 });
         });
-        open
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Explicit contained-card rendering and host interaction boundary"
+)]
 fn inventory_cards(
     ui: &mut Ui,
     ready: &Inventory,
@@ -299,15 +394,18 @@ fn inventory_cards(
     keep: &mut BTreeSet<PathBuf>,
     hidden: bool,
     colors: WorkbenchColors,
-) -> Option<(PathBuf, bool)> {
-    let mut open = None;
+    selected: Option<&BTreeSet<PathBuf>>,
+    interact: &mut impl FnMut(&mut Ui, &egui::Response, &Entry),
+) {
     ui.horizontal(|ui| {
         for child in &ready.children {
             if !hidden && matches!(child,Child::File(e) if e.hidden) {
                 continue;
             }
-            if let Some(path) = card(ui, child, files, keep, colors) {
-                open = Some(path);
+            let marked = matches!(child, Child::File(entry) if selected.is_some_and(|paths| paths.contains(&entry.path)));
+            let response = card(ui, child, files, keep, colors, marked);
+            if let Child::File(entry) = child {
+                interact(ui, &response, entry);
             }
         }
         if ready.children.is_empty() {
@@ -327,7 +425,6 @@ fn inventory_cards(
             ui.label("More contents · open to browse");
         }
     });
-    open
 }
 
 fn card(
@@ -336,13 +433,16 @@ fn card(
     files: &mut EntryPreviews,
     keep: &mut BTreeSet<PathBuf>,
     colors: WorkbenchColors,
-) -> Option<(PathBuf, bool)> {
-    let (rect, response) = ui.allocate_exact_size(vec2(154.0, 48.0), Sense::click());
+    marked: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(154.0, 48.0), Sense::click_and_drag());
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
     painter.rect_filled(
         rect,
         3.0,
-        if response.hovered() {
+        if marked {
+            colors.accent.gamma_multiply(0.2)
+        } else if response.hovered() {
             colors.panel
         } else {
             colors.canvas
@@ -387,7 +487,7 @@ fn card(
             .next()
             .unwrap_or(child.name())
             .to_owned(),
-        FontId::proportional(11.0),
+        FontId::proportional(13.0),
         colors.text_primary,
         108.0,
     );
@@ -403,11 +503,5 @@ fn card(
             super::filesystem::format_size(*size)
         ),
     };
-    let response = response.on_hover_text(hover);
-    if response.double_clicked()
-        && let Child::File(entry) = child
-    {
-        return Some((entry.path.clone(), entry.directory));
-    }
-    None
+    response.on_hover_text(hover)
 }
