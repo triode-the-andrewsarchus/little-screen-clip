@@ -246,7 +246,11 @@ report explicit compatibility failures. Xournal and reMarkable remain required.
 - [x] Obtain the official Xournal++ 1.3.8 x86_64 AppImage for development-only
   reference exports. Its extracted CLI renders PNG without a display; it is not
   shipped or invoked by the application. Initial canonical stroke export succeeds.
-- [ ] Implement bounded gzipped XML/plain XML/ZIP container reads and page index.
+- [x] Implement bounded gzipped XML/plain XML/ZIP container reads and page index.
+  Three targeted tests qualify original 0.4.5, modern gzip and packaged inputs,
+  authored page fragments/order, malformed roots/versions/dimensions/entities,
+  nesting, cancellation, truncated gzip, expansion and ZIP member path/size
+  budgets. Strict core Clippy passes. Rendering and UI dispatch remain pending.
 - [ ] Render actual geometry, text/images and guarded backgrounds; compare with
   canonical exports before enabling the three presentation routes.
 
