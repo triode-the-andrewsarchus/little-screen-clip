@@ -285,26 +285,49 @@ impl Previews {
                 .id_source(("container-cards", &entry.path))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for child in &ready.children {
-                            if !hidden && matches!(child,Child::File(e) if e.hidden) {
-                                continue;
-                            }
-                            if let Some(path) = card(ui, child, files, keep, colors) {
-                                open = Some(path);
-                            }
-                        }
-                        if ready.children.is_empty() {
-                            ui.label("Empty");
-                        }
-                        if !ready.complete {
-                            ui.label("More contents · open to browse");
-                        }
-                    });
+                    open = inventory_cards(ui, ready, files, keep, hidden, colors);
                 });
         });
         open
     }
+}
+
+fn inventory_cards(
+    ui: &mut Ui,
+    ready: &Inventory,
+    files: &mut EntryPreviews,
+    keep: &mut BTreeSet<PathBuf>,
+    hidden: bool,
+    colors: WorkbenchColors,
+) -> Option<(PathBuf, bool)> {
+    let mut open = None;
+    ui.horizontal(|ui| {
+        for child in &ready.children {
+            if !hidden && matches!(child,Child::File(e) if e.hidden) {
+                continue;
+            }
+            if let Some(path) = card(ui, child, files, keep, colors) {
+                open = Some(path);
+            }
+        }
+        if ready.children.is_empty() {
+            ui.label(if ready.complete {
+                "Empty"
+            } else {
+                "No previewable entries"
+            });
+        }
+        if ready.omitted > 0 {
+            ui.label(format!("{} entries omitted", ready.omitted))
+                .on_hover_text(
+                    "Links, special members or unavailable directory entries are not previewed.",
+                );
+        }
+        if !ready.complete {
+            ui.label("More contents · open to browse");
+        }
+    });
+    open
 }
 
 fn card(

@@ -44,6 +44,8 @@ pub(super) struct Inventory {
     /// Exact when complete; otherwise only the observed lower bound.
     pub observed: usize,
     pub complete: bool,
+    /// Entries observed but deliberately excluded from actionable cards.
+    pub omitted: usize,
     pub archive: bool,
 }
 
@@ -114,6 +116,7 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
             .collect(),
         observed,
         complete,
+        omitted: directory.skipped,
         archive: false,
     })
 }
@@ -139,7 +142,10 @@ fn zip(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
         checkpoint(cancel)?;
         // Raw access reads central-directory metadata without decompressing payloads.
         let member = archive.by_index_raw(index).map_err(|e| e.to_string())?;
-        if member.is_symlink() {
+        let kind = member.unix_mode().unwrap_or(0) & 0o170000;
+        if member.is_symlink() || !matches!(kind, 0 | 0o100000 | 0o040000) {
+            members.omitted += 1;
+            members.observed += 1;
             continue;
         }
         members.add(member.name(), member.is_dir(), member.size())?;
@@ -170,6 +176,8 @@ fn tar(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
         }
         let kind = member.header().entry_type();
         if !kind.is_file() && !kind.is_dir() {
+            members.omitted += 1;
+            members.observed += 1;
             continue;
         }
         let path = member.path().map_err(|e| e.to_string())?;
@@ -184,6 +192,7 @@ struct Members {
     names: BTreeSet<String>,
     children: Vec<Child>,
     observed: usize,
+    omitted: usize,
 }
 impl Members {
     fn add(&mut self, name: &str, directory: bool, size: u64) -> Result<(), String> {
@@ -210,8 +219,11 @@ impl Members {
             })
             .collect::<Vec<_>>()
             .join("/");
-        if canonical.is_empty() || !self.names.insert(canonical.clone()) {
+        if canonical.is_empty() {
             return Ok(());
+        }
+        if !self.names.insert(canonical.clone()) {
+            return Err("Duplicate archive member path".into());
         }
         self.observed += 1;
         if self.children.len() < LIMIT {
@@ -230,7 +242,8 @@ impl Members {
                 .then_with(|| a.name().cmp(b.name()))
         });
         Inventory {
-            complete: scanned_all && self.observed <= LIMIT,
+            complete: scanned_all && self.omitted == 0 && self.observed <= LIMIT,
+            omitted: self.omitted,
             children: self.children,
             observed: self.observed,
             archive: true,

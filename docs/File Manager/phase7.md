@@ -213,3 +213,31 @@ reported as an unqualified clean whole-tree architecture result.
   `/tmp/phase7-choices-dark-01/report.json`, verifying a collapsed folder stays
   collapsed after navigating away and back, and still re-expands/opens children.
   This does not complete nested inline expansion or child selection/search.
+
+### Honest archive coverage
+
+- [x] Count deliberately omitted ZIP/TAR links and special members and keep the
+  inventory incomplete. A link-only archive now shows “No previewable entries”
+  and its omission count instead of “Empty”. Ordinary directory omissions are
+  disclosed too. Preview cards never activate archive links or special entries.
+- [x] Refuse duplicate normalized member paths rather than silently hiding the
+  ambiguity. Empty ZIP inventory, link/special-member coverage and duplicate TAR
+  tests bring the container suite to twelve passing tests.
+- [x] Native dark/light reports pass in
+  `/tmp/phase7-archive-coverage-dark-02/report.json` and
+  `/tmp/phase7-archive-coverage-light-01/report.json`, with exact source hashes
+  unchanged and no extraction. Tracked runner:
+  `scripts/file_manager_archive_inventory_acceptance.py`.
+- [x] Strict file-manager library/test Clippy passes
+  (`/tmp/phase7-archive-coverage-clippy.log`); the current native binary builds
+  without warnings (`/tmp/phase7-archive-coverage-build.log`). Card composition
+  has its own rendering responsibility, avoiding the new complexity threshold
+  violation found during architecture review. The latest comparison introduces
+  no excessive-CCN function; whole-tree maximum/duplication remain unchanged or
+  lower, with the previously documented broad-file clone/cycle flags retained.
+
+The expansion-choice native light check also passes at
+`/tmp/phase7-choices-light-01/report.json`. These completed slices leave the main
+Phase 7 requirements open: nested selectable/searchable contents, richer archive
+member previews/opening and compressed formats, metadata groups/sorts and Miller
+columns, followed by the full milestone acceptance audit.

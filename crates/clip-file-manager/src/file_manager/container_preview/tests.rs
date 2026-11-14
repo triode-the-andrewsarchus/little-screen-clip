@@ -131,6 +131,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         children: Vec::new(),
         observed: 9,
         complete: true,
+        omitted: 0,
         archive: false,
     }));
     assert!(
@@ -143,6 +144,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         children: Vec::new(),
         observed: 2,
         complete: true,
+        omitted: 0,
         archive: false,
     }));
     node.expanded = Some(false);
@@ -239,4 +241,75 @@ fn explicit_choices_survive_scrolling_view_changes_and_folder_history() {
     assert_eq!(previews.height(&source), 108.0);
     previews.request(&source);
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
+}
+
+#[test]
+fn empty_zip_inventory_is_complete_without_extracting_anything() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("empty.zip");
+    zip::ZipWriter::new(std::fs::File::create(&path).unwrap())
+        .finish()
+        .unwrap();
+    let result =
+        inventory::load(&entry(root.path(), "empty.zip"), &AtomicBool::new(false)).unwrap();
+    assert!(result.archive && result.complete);
+    assert!(result.children.is_empty());
+    assert_eq!((result.observed, result.omitted), (0, 0));
+}
+
+#[test]
+fn archive_links_are_disclosed_as_omitted_instead_of_an_empty_inventory() {
+    let root = tempfile::tempdir().unwrap();
+    let mut zip =
+        zip::ZipWriter::new(std::fs::File::create(root.path().join("links.zip")).unwrap());
+    zip.add_symlink(
+        "alias",
+        "../outside",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.finish().unwrap();
+    let mut tar = tar::Builder::new(std::fs::File::create(root.path().join("links.tar")).unwrap());
+    for kind in [tar::EntryType::Symlink, tar::EntryType::Fifo] {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        header.set_size(0);
+        header.set_mode(0o644);
+        header.set_link_name("../outside").unwrap();
+        header.set_cksum();
+        tar.append_data(&mut header, format!("kind-{}", kind.as_byte()), &[][..])
+            .unwrap();
+    }
+    tar.finish().unwrap();
+    drop(tar);
+    for (name, count) in [("links.zip", 1), ("links.tar", 2)] {
+        let result = inventory::load(&entry(root.path(), name), &AtomicBool::new(false)).unwrap();
+        assert!(!result.complete);
+        assert!(result.children.is_empty());
+        assert_eq!((result.observed, result.omitted), (count, count));
+    }
+    assert!(!root.path().join("alias").exists());
+}
+
+#[test]
+fn duplicate_tar_members_do_not_publish_an_ambiguous_inventory() {
+    let root = tempfile::tempdir().unwrap();
+    let mut tar =
+        tar::Builder::new(std::fs::File::create(root.path().join("duplicate.tar")).unwrap());
+    for value in [b"old", b"new"] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(3);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "same.txt", &value[..])
+            .unwrap();
+    }
+    tar.finish().unwrap();
+    drop(tar);
+    let error = inventory::load(
+        &entry(root.path(), "duplicate.tar"),
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert!(error.contains("Duplicate archive member path"), "{error}");
 }
