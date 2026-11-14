@@ -253,3 +253,8 @@ report explicit compatibility failures. Xournal and reMarkable remain required.
 References inspected directly: [upstream XML loader](https://github.com/xournalpp/xournalpp/blob/4d6810b3760c7b3f90c6a3271d6a5623cfb5481f/src/core/control/xojfile/XmlParser.cpp),
 [stroke renderer](https://github.com/xournalpp/xournalpp/blob/4d6810b3760c7b3f90c6a3271d6a5623cfb5481f/src/core/view/StrokeView.cpp),
 [Rnote importer](https://github.com/flxzt/rnote/blob/83a76367dbd3d6c461c10553c45231799a25ea4b/crates/rnote-engine/src/fileformats/xoppformat.rs).
+
+- [x] Export ten independent reference images using the official 2026-11-11
+  nightly CLI. Stable 1.3.8 rejects current transformed text/image layouts, so
+  those comparisons use the nightly instead; binary hash and diagnostics are
+  recorded with the corpus. No runtime editor dependency is added.

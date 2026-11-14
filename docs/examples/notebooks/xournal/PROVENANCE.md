@@ -17,3 +17,19 @@ commit `4d6810b3760c7b3f90c6a3271d6a5623cfb5481f`. The upstream license is retai
 | `legacy-stroke.xoj` | `test/files/load/compatibility/stroke_line_return.xoj` | `5bdd58efe079b70302b02ab86dad45f413f5fa079852b32848edc9afd0ddca59` |
 | `packaged/stroke.xopp` | `test/files/packaged_xopp/stroke/new.xopp` | `e220331868b125920bc307021b5080f6990296420b484e910932cb916aa1c0dd` |
 | `packaged/pdf-background.xopp` | `test/files/packaged_xopp/pdfBackground/new.xopp` | `8237a4a44fbf7477c570bbbd4df11a5bc92468a36f575329eb9b917c97caaf5d` |
+
+## Independent render references
+
+The PNGs in `reference/` are canonical Xournal++ CLI exports at 800 pixels
+height, produced by the official 2026-11-11 nightly AppImage
+`xournalpp-1.3.8+dev-nightly-20261111-x86_64.AppImage` (SHA-256
+`bade9f31044835f2d84d41246b19e3a74e0384ffdf5a8b60a721919d13e60b7f`). They are not renders from
+the Rust implementation. `reference-exports.json` records each original source,
+page number, image hash and renderer diagnostic. Reproduce with
+`scripts/notebook_xournal_reference.py --binary PATH_TO_XOURNALPP --output-dir DIR`.
+The CLI is a developer oracle only, not a runtime dependency.
+
+Stable 1.3.8 cannot load the current transformed text/image fixture layout;
+the nightly can. Its legacy packaged PDF fixture contains `pageno="1ll"` and
+`"2ll"`; upstream warns about trailing characters but renders pages 1 and 2.
+Keep that compatibility evidence distinct from a clean modern integer field.
