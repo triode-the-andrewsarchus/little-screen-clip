@@ -384,7 +384,7 @@ Make folder structure and useful file attributes easier to see.
 
 ### Completion gate
 
-The authorized scope is implemented and ready for review; [phase7.md](phase7.md) records the tests, native evidence and practical bounds. Mixed folders remain fully navigable. Per-folder views have explicit inheritance, inline previews have bounded space-driven nesting, and metadata loading preserves active selection. ZIP/TAR and compressed-TAR archives use distinct zipped-folder icons and explicitly opened temporary snapshots in List/Columns, with a persistent bottom-bar warning. Archive edits do not update the original; save or copy content to an ordinary folder to retain it. New automatic view selection and audio sample similarity remain excluded.
+The authorized scope is implemented and its six-task closeout and technical review pass; [phase7.md](phase7.md) records the tests, native evidence and practical bounds. Mixed folders remain fully navigable. Per-folder views have explicit inheritance, inline previews have bounded space-driven nesting, and metadata loading preserves active selection. ZIP/TAR and compressed-TAR archives use distinct zipped-folder icons and explicitly opened temporary snapshots in List/Columns, with a persistent bottom-bar warning. Archive edits do not update the original; save or copy content to an ordinary folder to retain it. New automatic view selection and audio sample similarity remain excluded.
 
 ## Phase 8 — Organization and a real Home
 
