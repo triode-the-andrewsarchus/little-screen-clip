@@ -199,6 +199,12 @@ impl<'a> ListPreviews<'a> {
                         return;
                     }
                     super::super::container_preview::Target::Enter(response) => {
+                        if child.directory && ui.is_enabled() {
+                            self.child_targets.push((
+                                response.rect.intersect(ui.clip_rect()),
+                                child.path.clone(),
+                            ));
+                        }
                         actions.row(
                             ui,
                             response,

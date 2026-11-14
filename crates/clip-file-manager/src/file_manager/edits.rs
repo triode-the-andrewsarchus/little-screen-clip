@@ -73,7 +73,9 @@ impl FileManager {
     }
 
     pub(super) fn can_edit(&self) -> bool {
-        !self.search.has_offline_results()
+        self.archive_context().is_none()
+            && !self.archives.busy()
+            && !self.search.has_offline_results()
             && self
                 .directory
                 .as_ref()

@@ -496,6 +496,18 @@ impl FileManagerApp {
                 if let Some(path) = self.browser.take_available_open_file() {
                     self.browser.containers.retire();
                     self.viewers.source_guard = self.browser.search_source_guard(&path);
+                    self.viewers.archive_location =
+                        self.browser.archives.context(&path).map(|snapshot| {
+                            (
+                                snapshot.root.clone(),
+                                self.browser
+                                    .archives
+                                    .label(&snapshot.root)
+                                    .unwrap_or_else(|| snapshot.source.path().to_path_buf()),
+                            )
+                        });
+                    self.viewers.archive_export_directory =
+                        self.browser.archives.export_directory(&path);
                     let document_start = self
                         .browser
                         .document_start
@@ -747,6 +759,10 @@ impl eframe::App for FileManagerApp {
                             ui.add(
                                 egui::Label::new(self.browser.selection_summary()).truncate(true),
                             );
+                            if let Some(status) = self.browser.archives.status(self.browser.path()) {
+                                ui.separator();
+                                ui.add(egui::Label::new(egui::RichText::new(status).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate(true)).on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
+                            }
                             if let Some(hint) = self
                                 .browser
                                 .type_navigation

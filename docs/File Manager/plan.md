@@ -372,11 +372,11 @@ Make folder structure and useful file attributes easier to see.
 
 ### Scope
 
-- Add Miller columns with an adjacent file preview, retaining the conventional tree/list view.
-- Add configurable inline expansion for small folders, with a clear background treatment and visible provenance.
+- Add Columns with a compact complete-path rail and the shared rich List as its final column, retaining the conventional tree/list view.
+- Add configurable inline previews for small folders, prioritizing direct children and using spare capacity for at most three progressively smaller inline layers. Folders open through square entry targets.
 - Bound automatic expansion depth, concurrent reads, and total visible items; never recursively expand without limits.
 - Extend search scope to the inline-expanded contents through the same location model.
-- Select media-oriented views using a configurable dominant-type threshold, based on content categories rather than extensions.
+- Preserve existing media-oriented view selection. New automatic view-selection behavior is excluded from this authorized phase.
 - Add per-folder view overrides and explicit inheritance from parent folders.
 - Sort audio by artist/album/genre and other types by meaningful metadata, with clear placement of missing values and unrelated files.
 - Implement image dHash/reference sorting through the shared Phase 6 query/sort representation; additional audio similarity metrics require the evaluation described there.
@@ -384,7 +384,7 @@ Make folder structure and useful file attributes easier to see.
 
 ### Completion gate
 
-Mixed folders remain fully navigable. Automatic views and expansion have understandable overrides, and metadata loading does not continually reshuffle a user's active selection.
+The authorized scope is implemented and ready for review; [phase7.md](phase7.md) records the tests, native evidence and practical bounds. Mixed folders remain fully navigable. Per-folder views have explicit inheritance, inline previews have bounded space-driven nesting, and metadata loading preserves active selection. ZIP/TAR and compressed-TAR archives use distinct zipped-folder icons and explicitly opened temporary snapshots in List/Columns, with a persistent bottom-bar warning. Archive edits do not update the original; save or copy content to an ordinary folder to retain it. New automatic view selection and audio sample similarity remain excluded.
 
 ## Phase 8 — Organization and a real Home
 

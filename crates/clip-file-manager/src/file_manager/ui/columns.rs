@@ -1,23 +1,19 @@
 //! Column navigation shares the browser's listings, history and preview cache.
 use super::super::filesystem::Entry;
 use super::*;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 const WIDTH: f32 = 230.0;
-const PREVIEW: f32 = 300.0;
+const RAIL: f32 = 116.0;
 
-// Nearby parents reuse the sidebar's bounded directory jobs. Never enumerate
-// siblings recursively or retain a second set of directory snapshots.
+// Every ancestor remains in the compact path rail. The nearest folder also
+// exposes siblings when the viewport can afford a full navigation column.
 fn parents(path: &Path, width: f32) -> Vec<&Path> {
-    let count = if width >= WIDTH * 3.0 + PREVIEW + 64.0 {
-        2
+    if width >= 760.0 {
+        path.parent().into_iter().collect()
     } else {
-        1
-    };
-    let mut result: Vec<_> = path.ancestors().skip(1).take(count).collect();
-    result.reverse();
-    result
+        Vec::new()
+    }
 }
 
 fn heading(ui: &mut Ui, path: &Path) {
@@ -86,7 +82,13 @@ impl FileManager {
     pub(super) fn column_shortcuts(&mut self, ctx: &egui::Context) {
         if self.view == super::super::BrowserView::Columns {
             if key(ctx, Modifiers::NONE, Key::ArrowLeft) {
-                let child = self.path().to_path_buf();
+                let child = self
+                    .archive_context()
+                    .filter(|snapshot| snapshot.root == self.path())
+                    .map_or_else(
+                        || self.path().to_path_buf(),
+                        |snapshot| snapshot.source.path().to_path_buf(),
+                    );
                 self.parent();
                 if self.pending.is_some() {
                     self.reveal_target = Some(child);
@@ -98,10 +100,13 @@ impl FileManager {
                     .and_then(|location| location.selected.as_ref())
                     .is_some_and(|path| {
                         self.directory.as_ref().is_some_and(|directory| {
-                            directory
-                                .entries
-                                .iter()
-                                .any(|entry| &entry.path == path && entry.directory)
+                            directory.entries.iter().any(|entry| {
+                                &entry.path == path
+                                    && (entry.directory
+                                        || super::super::container_preview::inventory::archive(
+                                            &entry.path,
+                                        ))
+                            })
                         })
                     });
                 if folder {
@@ -117,11 +122,7 @@ impl FileManager {
         colors: WorkbenchColors,
         palette: &AppPalette,
     ) {
-        self.previews.poll(ui.ctx());
         let current = self.path().to_path_buf();
-        let mut actions = ListActions::for_browser(self);
-        let mut ancestor_navigation = None;
-        let mut scroll = self.location().map_or(0.0, |location| location.scroll);
         let viewport = ui.available_size();
         let viewport_id = ui.id().with("miller-viewport");
         let resized = ui.ctx().data_mut(|data| {
@@ -131,65 +132,91 @@ impl FileManager {
             data.insert_temp(viewport_id, viewport);
             changed
         });
-        let restore = std::mem::take(&mut self.restore_scroll);
-        let reveal = std::mem::take(&mut self.reveal_selection) || resized;
-        let height = viewport.y.max(0.0);
-        let route = parents(&current, ui.available_width());
-        egui::ScrollArea::horizontal()
-            .id_source("miller-columns")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    for parent in route {
-                        ui.push_id(parent, |ui| {
-                            let column = panel(ui, WIDTH, height, |ui| {
-                                if let Some(target) =
-                                    self.column_ancestor(ui, parent, &current, restore, colors)
-                                {
-                                    ancestor_navigation = Some(target);
-                                }
-                            });
-                            if ui.is_enabled() {
-                                self.drop_targets.push((
-                                    column.response.rect.intersect(ui.clip_rect()),
-                                    parent.to_path_buf(),
-                                ));
+        self.reveal_selection |= resized;
+        let mut navigation = None;
+        let logical = self
+            .archives
+            .label(&current)
+            .unwrap_or_else(|| current.clone());
+        let branch = self
+            .archive_context()
+            .filter(|snapshot| snapshot.root == current)
+            .map_or_else(
+                || current.clone(),
+                |snapshot| snapshot.source.path().to_path_buf(),
+            );
+        let route = parents(&branch, viewport.x);
+        for parent in &route {
+            self.tree
+                .branches
+                .entry(parent.to_path_buf())
+                .or_default()
+                .expanded = true;
+        }
+        let restore = self.restore_scroll;
+        ui.horizontal_top(|ui| {
+            panel(ui, RAIL, viewport.y, |ui| {
+                ui.strong("Path");
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_source("column-path")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut ancestors: Vec<_> = logical.ancestors().collect();
+                        ancestors.reverse();
+                        for path in ancestors {
+                            let selected = path == logical;
+                            let label = path
+                                .file_name()
+                                .unwrap_or(path.as_os_str())
+                                .to_string_lossy();
+                            let response = ui
+                                .add_sized(
+                                    [ui.available_width(), 32.0],
+                                    egui::SelectableLabel::new(
+                                        selected,
+                                        egui::RichText::new(label).size(12.0),
+                                    ),
+                                )
+                                .on_hover_text(display_path(path));
+                            if response.clicked() && !selected {
+                                navigation = Some((path.to_path_buf(), true));
                             }
-                        });
-                        ui.separator();
-                    }
-                    let current_panel = ui
-                        .push_id("miller-current-column", |ui| {
-                            panel(ui, WIDTH, height, |ui| {
-                                scroll =
-                                    self.column_current(ui, &mut actions, restore, reveal, colors);
-                            })
-                        })
-                        .inner;
+                        }
+                    });
+            });
+            ui.separator();
+            for parent in route {
+                ui.push_id(parent, |ui| {
+                    let column = panel(ui, WIDTH, viewport.y, |ui| {
+                        if let Some(target) =
+                            self.column_ancestor(ui, parent, &branch, restore, colors)
+                        {
+                            navigation = Some(target);
+                        }
+                    });
                     if ui.is_enabled() {
                         self.drop_targets.push((
-                            current_panel.response.rect.intersect(ui.clip_rect()),
-                            current.clone(),
+                            column.response.rect.intersect(ui.clip_rect()),
+                            parent.to_path_buf(),
                         ));
                     }
-                    if restore || resized {
-                        current_panel
-                            .response
-                            .scroll_to_me(Some(egui::Align::Center));
-                    }
-                    ui.separator();
-                    ui.push_id("miller-preview", |ui| {
-                        panel(ui, PREVIEW, height, |ui| {
-                            self.column_preview(ui, &mut actions, palette)
-                        })
-                    });
+                });
+                ui.separator();
+            }
+            // The final column is the ordinary rich List, including its bounded
+            // preview jobs, selection, scrolling, context actions and exports.
+            ui.push_id("miller-current-column", |ui| {
+                panel(ui, ui.available_width().max(0.0), viewport.y, |ui| {
+                    self.list_ui(ui, colors, palette);
                 });
             });
-        if let Some(location) = self.location_mut() {
-            location.scroll = scroll;
-        }
-        self.apply_list_actions(actions);
-        if let Some((path, directory)) = ancestor_navigation {
+        });
+        if let Some((path, directory)) = navigation {
+            if !directory && super::super::container_preview::inventory::archive(&path) {
+                self.open_archive(path);
+                return;
+            }
             let target = if directory {
                 path.clone()
             } else {
@@ -257,135 +284,19 @@ impl FileManager {
         });
         target
     }
-
-    fn column_current(
-        &mut self,
-        ui: &mut Ui,
-        actions: &mut ListActions,
-        restore: bool,
-        reveal: bool,
-        colors: WorkbenchColors,
-    ) -> f32 {
-        heading(ui, self.path());
-        let can_edit = self.can_edit();
-        let count = self.selection_count();
-        let background = actions.background(ui, can_edit, count > 0);
-        let selected = self.location().map(|location| &location.selection);
-        let active = self
-            .location()
-            .and_then(|location| location.selected.as_ref());
-        let mut area = egui::ScrollArea::vertical()
-            .id_source(("miller-current", self.path()))
-            .auto_shrink([false, false]);
-        if restore {
-            area = area
-                .vertical_scroll_offset(self.location().map_or(0.0, |location| location.scroll));
-        }
-        if reveal
-            && let Some(index) = self.visible.iter().position(|index| {
-                self.directory
-                    .as_ref()
-                    .is_some_and(|directory| Some(&directory.entries[*index].path) == active)
-            })
-        {
-            area = area
-                .vertical_scroll_offset(index as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y));
-        }
-        let output = area.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
-            let Some(directory) = self.directory.as_ref() else {
-                return;
-            };
-            for index in range {
-                let entry = &directory.entries[self.visible[index]];
-                let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-                let response = row(ui, entry, marked, colors);
-                actions.row(ui, &response, entry, selected, can_edit, count);
-                if reveal && Some(&entry.path) == active {
-                    response.scroll_to_me(None);
-                }
-                if response.clicked() && entry.directory && !ui.input(|input| input.modifiers.any())
-                {
-                    actions.open = Some(entry.path.clone());
-                }
-            }
-        });
-        if self.visible.is_empty() {
-            ui.label("No visible files.");
-        }
-        if actions.transfer.is_none() {
-            actions.transfer = drop_files(ui, &background, self.path());
-        }
-        output.state.offset.y
-    }
-
-    fn column_preview(&mut self, ui: &mut Ui, actions: &mut ListActions, palette: &AppPalette) {
-        ui.label("Preview");
-        ui.separator();
-        let active = self
-            .location()
-            .and_then(|location| location.selected.as_ref());
-        let preview = self
-            .directory
-            .as_ref()
-            .and_then(|directory| {
-                directory
-                    .entries
-                    .iter()
-                    .find(|entry| Some(&entry.path) == active)
-            })
-            .cloned();
-        let mut keep = BTreeSet::new();
-        if let Some(entry) = preview {
-            ui.add(egui::Label::new(&entry.name).truncate(true));
-            ui.small(&entry.size);
-            if ui.button("Open").clicked() {
-                actions.open = Some(entry.path.clone());
-            }
-            if entry.directory {
-                ui.label("Open this folder to browse its contents.");
-            } else {
-                keep.insert(entry.path.clone());
-                self.column_content(ui, &entry, palette);
-            }
-        } else {
-            ui.label("Select a file to preview.");
-        }
-        self.previews.retain(&keep);
-    }
-
-    fn column_content(&mut self, ui: &mut Ui, entry: &Entry, palette: &AppPalette) {
-        let Some(ready) = self.previews.listing(entry) else {
-            ui.spinner();
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
-            return;
-        };
-        if let Some(document) = &ready.data.document {
-            egui::ScrollArea::vertical()
-                .id_source("column-text-preview")
-                .show(ui, |ui| document.pane_ui(ui, palette));
-        } else if ready.texture.is_some() {
-            let rect = ui.available_rect_before_wrap();
-            self.previews.show(ui, rect, entry);
-        } else {
-            ui.label(&ready.data.detail);
-            ui.label(&ready.data.text);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn column_route_is_bounded_ordered_and_includes_immediate_parent() {
+    fn nearby_column_is_optional_but_path_rail_can_represent_every_ancestor() {
         assert_eq!(
             parents(Path::new("/a/b/c/d"), 1200.0),
-            [Path::new("/a/b"), Path::new("/a/b/c")]
+            [Path::new("/a/b/c")]
         );
-        assert_eq!(parents(Path::new("/a/b/c/d"), 800.0), [Path::new("/a/b/c")]);
-        assert_eq!(parents(Path::new("/a"), 800.0), [Path::new("/")]);
-        assert!(parents(Path::new("/"), 800.0).is_empty());
+        assert!(parents(Path::new("/a/b/c/d"), 700.0).is_empty());
+        assert!(parents(Path::new("/"), 1200.0).is_empty());
     }
 
     fn long_listing() -> (tempfile::TempDir, FileManager, PathBuf) {
@@ -417,9 +328,9 @@ mod tests {
 
     #[test]
     fn column_selection_and_parent_route_reveal_include_virtual_row_spacing() {
-        let (root, mut browser, target) = long_listing();
+        let (root, browser, target) = long_listing();
         for spacing in [0.0, 6.0, 12.0] {
-            for ancestor in [false, true] {
+            {
                 let ctx = egui::Context::default();
                 let output = ctx.run(
                     egui::RawInput {
@@ -430,21 +341,11 @@ mod tests {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             ui.spacing_mut().item_spacing.y = spacing;
                             let colors = WorkbenchColors::from_palette(&AppPalette::default());
-                            if ancestor {
-                                browser.column_ancestor(ui, root.path(), &target, true, colors);
-                            } else {
-                                browser.column_current(
-                                    ui,
-                                    &mut ListActions::default(),
-                                    false,
-                                    true,
-                                    colors,
-                                );
-                            }
+                            browser.column_ancestor(ui, root.path(), &target, true, colors);
                         });
                     },
                 );
-                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099")), "Selected row was outside the painted virtual range: spacing={spacing}, ancestor={ancestor}");
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099")), "Selected row was outside the painted virtual range: spacing={spacing}");
             }
         }
     }
@@ -476,8 +377,7 @@ mod tests {
                     });
                 },
             );
-            let (current, _) = browser.drop_targets.last().unwrap();
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099" && current.x_range().contains(text.pos.x) && shape.clip_rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size())))), "Selected current-column row disappeared at {width}x{height}");
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099" && shape.clip_rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size())))), "Selected current-column row disappeared at {width}x{height}");
         }
     }
 }

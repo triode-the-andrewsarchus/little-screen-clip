@@ -4,14 +4,17 @@ use crate::shell::file_editor::FileEditor;
 use clip_ui::buttons::ButtonRole;
 
 impl Viewers {
-    pub(in crate::file_manager) fn menu_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        let ready = !self.confirm_close
-            && !self.audio_return_saving
+    // Naming and navigation share the same accepted-write/dialog exclusion.
+    fn file_controls_ready(&mut self) -> bool {
+        !self.confirm_close
             && !self.collection_pending()
             && !self.collection_modal()
             && !self.rename.open
             && !self.rename.busy()
-            && !self.writes_pending();
+            && !self.writes_pending()
+    }
+    pub(in crate::file_manager) fn menu_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let ready = self.file_controls_ready() && !self.audio_return_saving;
         // The menu is laid out from the right edge inward.
         if let Some(collection) = &mut self.gallery {
             let active = match &self.session {
@@ -128,15 +131,22 @@ impl Viewers {
         close: &mut bool,
     ) {
         let source = self.editor_source().or_else(|| self.source.clone());
-        let can_rename = source.is_some()
-            && !self.session_busy()
-            && !self.rename.open
-            && !self.rename.busy()
-            && !self.confirm_close
-            && !self.collection_modal()
-            && !self.collection_pending();
+        let archive_label = self.archive_location.as_ref().and_then(|(root, label)| {
+            self.path
+                .as_ref()?
+                .strip_prefix(root)
+                .ok()
+                .map(|suffix| label.join(suffix))
+        });
+        let can_rename = self.file_controls_ready()
+            && archive_label.is_none()
+            && source.is_some()
+            && !self.session_busy();
         let chrome = FileEditor {
-            path: self.path.clone().unwrap_or_default(),
+            path: archive_label
+                .clone()
+                .or_else(|| self.path.clone())
+                .unwrap_or_default(),
             rename_enabled: can_rename,
             rename_clicked: false,
             suspend_keyboard: !ui.is_enabled(),
@@ -145,6 +155,9 @@ impl Viewers {
                 .as_ref()
                 .map(|collection| collection.footer(can_rename)),
         };
+        if archive_label.is_some() {
+            ui.label("Archive snapshot · Save As outside the archive to keep edits");
+        }
         let ctx = ui.ctx().clone();
         let (_, chrome) = chrome.scope(&ctx, || self.render_session(ui, palette, close));
         if let Some(photo) = chrome.photo.filter(|photo| photo.changed)

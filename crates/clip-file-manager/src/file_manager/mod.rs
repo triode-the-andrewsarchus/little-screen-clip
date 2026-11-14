@@ -1,6 +1,7 @@
 //! Folder browsing and file management on the shared bounded executor.
 
 mod app;
+mod archive_browse;
 mod binary_strip;
 mod blend_preview;
 mod bookmarks;
@@ -230,6 +231,7 @@ pub(crate) struct FileManager {
     show_hidden: bool,
     tree: FolderTree,
     containers: container_preview::Previews,
+    archives: archive_browse::Archives,
     bookmarks: bookmarks::Bookmarks,
     bookmark_drop_rect: Option<egui::Rect>,
     native_drag_point: Option<egui::Pos2>,
@@ -306,6 +308,7 @@ impl FileManager {
         Self {
             tree: FolderTree::new(home.clone()),
             containers: Default::default(),
+            archives: Default::default(),
             bookmarks: bookmarks::Bookmarks::new(home.join(".config/gtk-3.0/bookmarks")),
             bookmark_drop_rect: None,
             native_drag_point: None,
@@ -429,6 +432,8 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.archives.cancel();
+        let path = self.archives.resolve(&path);
         self.containers.retire();
         if matches!(navigation, Navigation::Refresh) {
             self.similarity_canvas.invalidate();
@@ -454,7 +459,7 @@ impl FileManager {
             self.pending = None;
             self.error = None;
             self.failed = None;
-            self.address = display_path(self.path());
+            self.address = self.location_label();
             return;
         }
         self.pending = Some(Request {
@@ -486,6 +491,14 @@ impl FileManager {
     }
 
     fn parent(&mut self) {
+        if let Some(snapshot) = self.archive_context()
+            && self.path() == snapshot.root
+        {
+            if let Some(parent) = snapshot.source.path().parent() {
+                self.navigate(parent.to_path_buf(), Navigation::New);
+            }
+            return;
+        }
         if let Some(parent) = self.path().parent() {
             self.navigate(parent.into(), Navigation::New);
         }
@@ -520,6 +533,7 @@ impl FileManager {
     }
 
     fn tick(&mut self, jobs: &BackgroundJobs) {
+        self.tick_archives();
         if self
             .last_status
             .as_ref()
@@ -588,7 +602,7 @@ impl FileManager {
                 }
             }
             if !self.address_editing {
-                self.address = display_path(self.path());
+                self.address = self.location_label();
             }
         }
         self.tick_edits(jobs);
@@ -735,7 +749,11 @@ impl FileManager {
             self.containers.clear();
         }
         self.view_preferences.reload();
-        self.tree.reveal(&directory.path);
+        let tree_path = self
+            .archives
+            .export_directory(&directory.path)
+            .unwrap_or_else(|| directory.path.clone());
+        self.tree.reveal(&tree_path);
         self.directory = Some(directory);
         self.rebuild_visible();
         if let Some(path) = self.reveal_target.take() {
@@ -926,6 +944,16 @@ impl FileManager {
 
     fn open_path(&mut self, path: PathBuf) {
         self.type_navigation.clear();
+        if container_preview::inventory::archive(&path)
+            && self
+                .displayed_entries()
+                .iter()
+                .any(|entry| entry.path == path && entry.regular_file)
+        {
+            self.open_archive(path);
+            return;
+        }
+        self.archives.cancel();
         if self
             .displayed_entries()
             .iter()

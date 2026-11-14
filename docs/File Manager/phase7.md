@@ -1,27 +1,28 @@
 # Phase 7 — views, container previews and meaningful sorting
 
-Status: in progress on `feat/file-manager-phase7`, starting at `d0298ebd`.
+Status: implemented on `feat/file-manager-phase7`; ready for user review.
+The branch started at `d0298ebd`.
 Architecture baseline: `before-phase7-views`. Automatic view selection is
 explicitly excluded by the user; existing automatic behavior is preserved.
 
 ## Review changes — current requirements
 
 The user's review supersedes the older disclosure-button and separate-preview
-checkpoints below. These changes must be completed before final acceptance:
+checkpoints below. Current implementation and acceptance cover:
 
-- [ ] Remove folder/archive +/− controls. Use a full square folder entry target,
+- [x] Remove folder/archive +/− controls. Use a full square folder entry target,
   matching other preview icons, and navigate into folders normally from List.
-- [ ] Reserve strip space for every direct child first. Use only spare space for
+- [x] Reserve strip space for every direct child first. Use only spare space for
   in-line subfolder contents, progressively smaller, at most three preview layers.
   Keep reads/cache/entries bounded and expanded-search/selection provenance valid.
-- [ ] Keep the complete navigation path reachable in Columns without retaining
+- [x] Keep the complete navigation path reachable in Columns without retaining
   unlimited full-width columns. Reuse the shared List renderer in the rightmost
   column; remove the bespoke adjacent preview pane.
-- [ ] Give archives a distinct zipped-folder icon and navigate decompressed
+- [x] Give archives a distinct zipped-folder icon and navigate decompressed
   contents through ordinary List/Columns presentation. Keep archive origin and
   lifecycle explicit, with a persistent bottom-bar compressed-archive warning.
 
-### Review verification in progress
+### Review verification
 
 - [x] Keep filenames legible in narrow List/Columns rows: optional line/page
   counts yield their horizontal reservation when the name column is narrow.
@@ -41,28 +42,55 @@ checkpoints below. These changes must be completed before final acceptance:
   space when the name column is narrow.
 - Archive browsing uses managed temporary workspaces and the existing validated
   ZIP/TAR/compressed-TAR readers. Bounds: 4,096 members, 32 path levels, 512 MiB
-  encoded source, 64 MiB expanded per snapshot and 256 MiB retained history cache.
+  encoded source, 64 MiB per snapshot and 256 MiB retained history allowance.
+  The allowance includes conservative workspace, member and directory overhead.
   Links/special members, unsafe/duplicate paths, prefix collisions, truncation,
   failed checksums and incomplete scans fail without publishing a partial folder.
   The original archive stays unchanged. Browser mutations into snapshots are
   disabled; outgoing drags are Copy-only; text editing requires Save As.
-- Final native dark/light runs and final strict checks remain pending.
+- [x] Native dark/light and narrow/wide review passes. Evidence:
+  `/tmp/phase7-container-navigation-dark-04/report.json` and
+  `/tmp/phase7-container-navigation-light-01/report.json`. The current driver
+  replaces the superseded disclosure tests in
+  `scripts/file_manager_phase7_acceptance.py`; it checks square activation,
+  member navigation/reveal, archive parent return, complete path access and
+  ordinary List content in Columns.
+- [x] Workspace tests: 3,283 passed, zero failed, 36 ignored across 47 suites;
+  no compiler warnings (`/tmp/phase7-review-workspace-tests.log`). Final affected
+  file-manager tests: 942 passed, six ignored
+  (`/tmp/phase7-review-fm-final-tests.log`). Shared studios: 841 passed, 12 ignored;
+  shared UI: 39 passed (`/tmp/phase7-review-final-tests.log`).
+- [x] Strict workspace/all-target Clippy passes
+  (`/tmp/phase7-review-workspace-clippy.log`), with final file-manager all-target
+  recheck (`/tmp/phase7-review-clippy.log`). Final native build has no warnings
+  (`/tmp/phase7-review-build.log`). Changed Rust sources pass `rustfmt --check`;
+  the diff passes whitespace checks. Vendor formatting is preserved.
+- [x] Architecture reviewed against `before-phase7-container-review-redesign`:
+  duplication 7.31% → 7.30%, clone groups unchanged at 4,280, maximum complexity
+  unchanged at 274, dependency-cycle count unchanged at 143. The tool still
+  labels the comparison a regression for one additional repaint condition and
+  one additional archive-context binding in the existing host dispatcher. These
+  are required lifecycle/context paths; no new hotspot remains. Shared payload
+  copying, shared List rendering and shared file-control exclusion remove
+  duplicate mechanisms rather than moving them between files.
 
 ## Required delivery and acceptance
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;
   fix actual gaps and replace its stale capability/architecture descriptions.
 - [x] Preview small folders directly in List, with distinct containment styling,
-  names, useful existing file previews and obvious child activation. Disclosure
-  and opening a folder remain separate actions.
+  names, useful existing file previews and square single-click folder entry.
+  Direct children take priority; nested groups only use spare inline capacity.
 - [x] Preview archive contents in the same interaction model. Retain archive
-  provenance; never treat member names as host paths or extract implicitly.
-- [x] Configurable automatic expansion of small folders, explicit expand/collapse,
+  provenance. Passive strips do not extract; explicit archive entry creates a
+  validated temporary snapshot with a persistent bottom-bar warning.
+- [x] Configurable automatic previews of small folders and space-driven nesting,
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
-- [x] Search `here` includes explicitly expanded ordinary descendants through the
+- [x] Search `here` includes displayed ordinary descendants through the
   existing scope model, with accurate provenance, coverage and file actions.
-- [x] Miller columns with an adjacent preview, familiar navigation/history and
-  the conventional List retained. Mixed/unsupported files remain accessible.
+- [x] Columns retains the complete path in a compact rail, nearby siblings and
+  a shared rich List in the final column. Navigation/history and mixed files
+  retain their ordinary browser owners; no separate preview pane remains.
 - [x] Persist per-folder view overrides with explicit parent inheritance and a
   way to clear overrides. Browsing creates no sidecars in user folders.
 - [x] Sort/group by broad content family (all images together). Each group gets
@@ -71,7 +99,7 @@ checkpoints below. These changes must be completed before final acceptance:
   selected-file identity while background metadata arrives.
 - [x] Retain Phase 6 image hash/reference sorting. Warm/cool sorting is optional
   exploration in the roadmap, not a prerequisite for the requested delivery.
-- [ ] Native review in both appearances and narrow/wide windows; targeted safety,
+- [x] Native review in both appearances and narrow/wide windows; targeted safety,
   lifecycle, navigation and ordering tests; full workspace tests with bounded
   test concurrency, strict Clippy, formatting and architecture review.
 
@@ -81,7 +109,9 @@ Extend browser location/selection and existing bounded preview owners instead of
 creating per-child studios. Visible expansion requests are bounded and retired
 when hidden. Ordinary folders use pinned directory observations, skip automatic
 symlink traversal and preserve incomplete reads. Archive inventories are read-only
-and do not authorize extraction, external resource resolution or mutations.
+and do not authorize extraction. Explicit archive navigation uses a bounded,
+validated private snapshot and the same ordinary readers; it never installs
+links or special members and never modifies the original archive.
 Persistent preferences belong to local application state, using lossless paths;
 portable project/visibility/session schemas remain Phase 8.
 

@@ -90,7 +90,10 @@ impl FileManager {
         {
             return self.similarity_canvas.entries.iter().collect();
         }
-        let expanded = self.view == super::BrowserView::List && !self.search.has_result_sources();
+        let expanded = matches!(
+            self.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        ) && !self.search.has_result_sources();
         self.directory
             .iter()
             .flat_map(|directory| {
@@ -187,7 +190,10 @@ impl FileManager {
             .iter()
             .filter(|entry| {
                 selected_parents.contains(&entry.path)
-                    && self.view == super::BrowserView::List
+                    && matches!(
+                        self.view,
+                        super::BrowserView::List | super::BrowserView::Columns
+                    )
                     && !self.search.has_result_sources()
                     && entry.directory
                     && super::container_preview::candidate(entry)

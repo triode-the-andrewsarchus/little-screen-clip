@@ -245,10 +245,6 @@ fn enqueue(
         }
     }
 }
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Explicit preview cache and card geometry boundary"
-)]
 fn card(
     ui: &mut Ui,
     tile: &Tile,

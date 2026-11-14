@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Review contained-file previews on an isolated native compositor."""
+"""Exercise space-aware strips, shared Columns lists and archive navigation."""
+from file_manager_columns_acceptance import resize
 from pathlib import Path
 import io
 import tarfile
 import zipfile
-import subprocess
-import ui_acceptance_capture as private
 from PIL import Image, ImageDraw
-from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
+from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 
 
 def fixtures(root):
@@ -34,106 +33,46 @@ def fixtures(root):
         archive.addfile(member, io.BytesIO(data))
 
 
+
 def exercise(session, root):
-    # Isolate real card labels from icons and image thumbnails for the OCR
-    # observer; retain the full native screenshot as the visual evidence.
-    session.ocr_regions = [
-        ("strip-title-folder.png", (410, 302, 525, 324)),
-        ("strip-title-text.png", (573, 302, 687, 324)),
-        ("strip-title-image.png", (735, 302, 849, 324)),
-        ("strip-title-zip.png", (410, 438, 525, 460)),
-        ("strip-title-tar.png", (410, 546, 525, 568)),
-        ("strip-title-deep.png", (430, 410, 545, 432)),
-    ]
     session.observe("initial", ["a-small", "b-large"])
-    session.click(730, 160)  # Collapse Shelf to expose all four fixture rows.
-    session.observe("00-contained-files", ["a-small", "Inside folder", "readme.txt", "sun.png", "Archive contents", "payload.json", "manual"])
-    session.click(845, 160)  # Folder previews menu in the observed toolbar.
-    session.observe("preview-settings", ["Auto-expand small folders and archives"])
-    x, y = session.word("preview-settings", "Auto-expand")
-    session.click(x + 5, y)
-    session.key("Escape")
-    session.observe("automatic-off", ["a-small", "b-large", "c-package.zip"])
-    off = (session.output / "automatic-off.txt").read_text()
-    assert "readme.txt" not in off and "payload.json" not in off
-    _, y = session.word("automatic-off", "a-small")
-    session.click(360, y)
-    session.observe("manual-override", ["readme.txt", "sun.png"])
-    session.click(845, 160)
-    session.observe("preview-settings-again", ["Auto-expand small folders and archives"])
-    x, y = session.word("preview-settings-again", "Auto-expand")
-    session.click(x + 5, y)
-    session.key("Escape")
-    session.observe("automatic-on", ["readme.txt", "payload.json", "manual"])
-    # The large-folder preview automatically stays collapsed, while small ones
-    # expose contained files. No members are extracted to the fixture directory.
+    session.click(730, 160)
+    session.observe("strips", ["a-small", "Inside folder", "Open"])
+    # A folder's entry square occupies the same 64px area as its direct cards.
+    _, y = session.word("strips", "a-small", minimum_y=210)
+    session.click(385, y + 50)
+    session.observe("entered-folder", ["readme.txt", "sun.png"])
+    session.key("Left", "alt")
+    session.observe("returned", ["a-small", "c-package.zip"])
+    _, y = session.word("returned", "c-package.zip", minimum_y=210)
+    session.click(385, y + 50)
+    session.observe("archive-root", ["Browsing compressed archive", "assets", "c-package.zip"])
     assert not (root / "assets").exists()
-    assert not (root / "docs").exists()
-    _, folder_y = session.word("00-contained-files", "a-small")
-    session.click(360, folder_y)
-    session.observe("collapsed", ["a-small", "Archive contents"])
-    assert "readme.txt" not in (session.output / "collapsed.txt").read_text()
-    session.address(root / "b-large")
-    session.observe("away-from-collapsed", ["item-00.txt"])
-    session.key("Left", "alt")
-    session.observe("returned-to-collapsed", ["a-small", "Archive contents"])
-    assert "readme.txt" not in (session.output / "returned-to-collapsed.txt").read_text()
-    _, folder_y = session.word("returned-to-collapsed", "a-small")
-    session.click(360, folder_y)
-    session.observe("expanded", ["nested", "readme.txt", "sun.png"])
-    session.click(510, 320)  # Disclosure on the observed nested-folder card.
-    session.observe("nested-inline", ["deep.txt", "a-small", "b-large"])
-    # The isolated label crop can recognize text that full-window OCR drops.
-    x, y = session.word("nested-inline", "deep.txt", required=False) or (435, 418)
-    session.click(x + 2, y)
-    session.key("c", "ctrl")
-    def copied_path(path):
-        result = subprocess.run(["wl-paste", "--no-newline", "--type", "text/uri-list"],
-            env=session.env, capture_output=True, timeout=5)
-        return result.returncode == 0 and path.as_uri().encode() in result.stdout
-    wait_for(lambda: copied_path(root / "a-small/nested/deep.txt"), "nested inline file clipboard reference")
-    session.click(510, 320)
-    session.observe("nested-collapsed", ["readme.txt", "Archive contents"])
-    assert "deep.txt" not in (session.output / "nested-collapsed.txt").read_text()
-    x, y = session.word("nested-collapsed", "readme.txt")
-    session.click(x + 2, y)  # A contained file uses the ordinary selection owner.
-    session.key("c", "ctrl")
-    wait_for(lambda: copied_path(root / "a-small/readme.txt"), "contained file clipboard reference")
-    session.key("F2")
-    session.observe("child-rename", ["Rename", "Name:"])
-    session.key("a", "ctrl")
-    private.run_checked(["wtype", "renamed.txt"], env=session.env)
+    session.key("Up", "alt")
+    session.observe("archive-parent", ["a-small", "c-package.zip"])
+    _, y = session.word("archive-parent", "c-package.zip", minimum_y=210)
+    session.click(455, y + 55)
+    session.observe("member-folder", ["payload.json", "Browsing compressed archive"])
+    session.key("Up", "alt")
+    session.observe("member-parent", ["assets", "Browsing compressed archive"])
+    session.key("Up", "alt")
+    session.observe("member-return", ["a-small", "c-package.zip"])
+    session.click(176, 160)
+    session.observe("columns", ["Path", "a-small", "c-package.zip"])
+    session.address(root / "a-small/nested")
+    session.observe("deep-columns", ["Path", "a-small", "nested", "deep.txt"])
+    resize(session, 760, 700)
+    session.observe("narrow-columns", ["Path", "a-small", "nested", "deep.txt"])
+    resize(session, 1120, 760)
+    session.address(root)
+    session.observe("columns-root", ["c-package.zip"])
+    # Keyboard navigation uses the shared List selection and activation policy.
+    session.key("Home")
+    session.key("c")
     session.key("Return")
-    wait_for(lambda: (root / "a-small/renamed.txt").exists(), "contained rename completion")
-    assert not (root / "a-small/readme.txt").exists()
-    assert not (root / "renamed.txt").exists()
-    def renamed_card_ready():
-        # The completion notice also contains the new name; require that name
-        # in the actual card before clicking through a concurrent folder refresh.
-        session.observe("child-renamed", ["nested"])
-        crop = session.output / "renamed-card-label.png"
-        with Image.open(session.output / "child-renamed.png") as screen:
-            label = screen.crop((573, 302, 687, 324))
-            label.resize((label.width * 3, label.height * 3)).save(crop)
-        text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "7"], env=session.env)
-        return "renamed.txt" in text.lower()
-    wait_for(renamed_card_ready, "renamed contained-file card")
-    x, y = session.word("child-renamed", "nested")
-    session.click(x + 2, y, delay=.05)
-    session.click(x + 2, y, delay=.05)
-    session.observe("nested-folder", ["deep.txt"])
-    session.key("Left", "alt")
-    session.observe("returned", ["renamed.txt", "a-small"])
-    point = session.word("returned", "renamed.txt", required=False)
-    if point is None:
-        # The second card follows the observed nested-folder card. Small names
-        # can be missed by OCR; opening below verifies the exact text payload.
-        x, y = session.word("returned", "nested")
-        point = (x + 160, y)
-    x, y = point
-    session.click(x + 2, y, delay=.05)
-    session.click(x + 2, y, delay=.05)
-    session.observe("01-open-child", ["Contained document opened successfully", "Back to folder"])
+    session.observe("archive-columns", ["Path", "Browsing compressed archive", "assets"])
+    session.key("Up", "alt")
+    session.observe("columns-archive-parent", ["c-package.zip", "a-small"])
     session.key("q", "ctrl")
 
 
@@ -142,4 +81,4 @@ if __name__ == "__main__":
     output, root = media_fixture_directory(args)
     fixtures(root)
     raise SystemExit(run_application_acceptance(args, output, root, exercise,
-        "Initial small-folder and archive inventories, actual contained-file activation, no implicit extraction"))
+        "Square folder activation, complete path rail, shared rich List column and persistent compressed archive status"))

@@ -1,9 +1,10 @@
 //! Bounded, read-only inventories. Archive member names never become host paths.
 mod compressed;
+pub(in crate::file_manager) mod extract;
 use std::{
     collections::BTreeSet,
     fs::File,
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -247,6 +248,7 @@ struct Members {
     display_limit: Option<usize>,
     target: Option<usize>,
     payload: Option<Vec<u8>>,
+    output: Option<extract::Output>,
 }
 impl Members {
     // Header admission selects a regular payload by its stable observed ordinal.
@@ -256,6 +258,11 @@ impl Members {
     ) -> Result<Option<u64>, String> {
         let kind = member.unix_mode().unwrap_or(0) & 0o170000;
         if member.is_symlink() || !matches!(kind, 0 | 0o100000 | 0o040000) {
+            if self.output.is_some() {
+                return Err(
+                    "Archive contains links or special files; browsing was not opened".into(),
+                );
+            }
             self.omitted += 1;
             self.observed += 1;
             return Ok(None);
@@ -263,10 +270,10 @@ impl Members {
         let ordinal = self.observed;
         let directory = member.is_dir() || kind == 0o040000;
         self.add(member.name(), directory, member.size())?;
-        Ok(
-            (self.target == Some(ordinal) && self.observed > ordinal && !directory)
-                .then_some(member.size()),
-        )
+        Ok(((self.output.is_some() || self.target == Some(ordinal))
+            && self.observed > ordinal
+            && !directory)
+            .then_some(member.size()))
     }
 
     fn add_tar<R: std::io::Read>(
@@ -276,6 +283,11 @@ impl Members {
     ) -> Result<(), String> {
         let kind = member.header().entry_type();
         if !kind.is_file() && !kind.is_dir() {
+            if self.output.is_some() {
+                return Err(
+                    "Archive contains links or special files; browsing was not opened".into(),
+                );
+            }
             self.omitted += 1;
             self.observed += 1;
             return Ok(());
@@ -284,7 +296,10 @@ impl Members {
         let name = path.to_str().ok_or("Archive member name is not UTF-8")?;
         let ordinal = self.observed;
         self.add(name, kind.is_dir(), member.size())?;
-        if self.target == Some(ordinal) && self.observed > ordinal && kind.is_file() {
+        if (self.output.is_some() || self.target == Some(ordinal))
+            && self.observed > ordinal
+            && kind.is_file()
+        {
             let size = member.size();
             self.read_payload(&mut member, size, cancel)?;
         }
@@ -297,26 +312,15 @@ impl Members {
         size: u64,
         cancel: &AtomicBool,
     ) -> Result<(), String> {
+        if let Some(output) = &mut self.output {
+            return output.copy(input, size, cancel);
+        }
         const BYTES: usize = 8 * 1024 * 1024;
         if size > BYTES as u64 {
             return Err("Member exceeds the 8 MiB preview limit".into());
         }
         let mut bytes = Vec::with_capacity(size as usize);
-        let mut buffer = [0; 64 * 1024];
-        loop {
-            checkpoint(cancel)?;
-            let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            if bytes.len() + count > BYTES {
-                return Err("Expanded member exceeds the 8 MiB preview limit".into());
-            }
-            bytes.extend_from_slice(&buffer[..count]);
-        }
-        if bytes.len() as u64 != size {
-            return Err("Truncated archive member".into());
-        }
+        copy_payload(input, &mut bytes, size, cancel)?;
         self.payload = Some(bytes);
         Ok(())
     }
@@ -351,6 +355,9 @@ impl Members {
         if !self.names.insert(canonical.clone()) {
             return Err("Duplicate archive member path".into());
         }
+        if let Some(output) = &mut self.output {
+            output.admit(&canonical, directory, size)?;
+        }
         self.observed += 1;
         if self.children.len() < self.display_limit.unwrap_or(LIMIT) {
             self.children.push(Child::Member {
@@ -381,4 +388,33 @@ impl Members {
             payload: self.payload,
         }
     }
+}
+
+// Preview memory and browsing files use the same exact-length, cancellable read.
+fn copy_payload(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    size: u64,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut copied = 0_u64;
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        checkpoint(cancel)?;
+        let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(count as u64)
+            .filter(|count| *count <= size)
+            .ok_or("Archive member exceeded its declared size")?;
+        output
+            .write_all(&buffer[..count])
+            .map_err(|e| e.to_string())?;
+    }
+    if copied != size {
+        return Err("Truncated archive member".into());
+    }
+    Ok(())
 }

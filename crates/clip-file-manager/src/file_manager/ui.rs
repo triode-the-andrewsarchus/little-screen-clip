@@ -40,7 +40,7 @@ impl FileManager {
             && self.address_editing
             && key(ctx, Modifiers::NONE, Key::Escape)
         {
-            self.address = display_path(self.path());
+            self.address = self.location_label();
             ctx.memory_mut(|memory| memory.request_focus(list_id()));
         }
     }
@@ -134,6 +134,7 @@ impl FileManager {
             || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
+            || self.archives.busy()
             || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
                 branch.expanded && branch.directory.is_none() && branch.error.is_none()
@@ -480,7 +481,7 @@ impl FileManager {
                 self.submit_address();
                 ui.memory_mut(|memory| memory.request_focus(list_id()));
             } else if output.response.lost_focus() {
-                self.address = display_path(self.path());
+                self.address = self.location_label();
             }
             self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
             self.index_ui(ui);
@@ -571,7 +572,7 @@ impl FileManager {
                     .clicked()
                 {
                     self.pending = None;
-                    self.address = display_path(self.path());
+                    self.address = self.location_label();
                     if self.directory.is_none() {
                         self.set_error("Opening cancelled. Enter another path or retry.");
                     }
@@ -1519,6 +1520,7 @@ struct ListActions {
     search_results: bool,
     context: super::search::PreviewContext,
     metadata_only: bool,
+    copy_only: bool,
     inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
@@ -1537,6 +1539,7 @@ impl ListActions {
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
+            copy_only: browser.archive_context().is_some(),
             ..Self::default()
         }
     }
@@ -1580,7 +1583,7 @@ impl ListActions {
         };
         response.dnd_set_drag_payload(super::transfers::FileDrag {
             paths,
-            copy_only: false,
+            copy_only: self.copy_only,
             context: self.context.clone(),
         });
         if !marked {

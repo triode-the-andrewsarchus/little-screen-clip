@@ -110,23 +110,6 @@ impl Document {
         width: usize,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        self.excerpt(ui, fraction, width, palette, true);
-    }
-    pub(super) fn pane_ui(
-        &self,
-        ui: &mut egui::Ui,
-        palette: &little_clip_core::palette::AppPalette,
-    ) {
-        self.excerpt(ui, 0.0, 1, palette, false);
-    }
-    fn excerpt(
-        &self,
-        ui: &mut egui::Ui,
-        fraction: f32,
-        width: usize,
-        palette: &little_clip_core::palette::AppPalette,
-        hover: bool,
-    ) {
         let short_file = self.lines <= SHORT_FILE_LINES;
         let range = if short_file {
             0..self.bins.len()
@@ -147,16 +130,10 @@ impl Document {
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
-        let width = if hover {
-            (ui.ctx().screen_rect().width() - 40.0).clamp(160.0, 760.0)
-        } else {
-            ui.available_width().max(1.0)
-        };
+        let width = (ui.ctx().screen_rect().width() - 40.0).clamp(160.0, 760.0);
         ui.set_width(width);
         let font_id = egui::FontId::monospace(14.0);
-        let mut remaining = if short_file && !hover {
-            self.lines as usize
-        } else if short_file {
+        let mut remaining = if short_file {
             let screen = ui.ctx().screen_rect();
             let pointer_y = ui.ctx().pointer_hover_pos().map_or(screen.top(), |p| p.y);
             let content_top = ui.cursor().top().max(pointer_y + 16.0);

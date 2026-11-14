@@ -103,6 +103,8 @@ pub(super) struct Viewers {
     office_preview: bool,
     loading: Option<Loading>,
     pub(super) source_guard: Option<super::search::SourceGuard>,
+    pub(super) archive_location: Option<(PathBuf, PathBuf)>,
+    pub(super) archive_export_directory: Option<PathBuf>,
     session: Option<ViewerSession>,
     path: Option<PathBuf>,
     error: Option<String>,
@@ -276,6 +278,15 @@ impl Viewers {
                     && let ViewerSession::Image(state) = &mut opened
                 {
                     state.keep_source_on_save_as();
+                }
+                if let Some(directory) = &self.archive_export_directory {
+                    match &mut opened {
+                        ViewerSession::Text(state) => state.require_save_as(directory),
+                        ViewerSession::Audio(state) => {
+                            state.save_destination_dir = directory.to_string_lossy().into_owned()
+                        }
+                        _ => {}
+                    }
                 }
                 self.session = Some(opened);
             }
@@ -504,6 +515,8 @@ impl Viewers {
         self.source_request = None;
         self.office_preview = false;
         self.source_guard = None;
+        self.archive_location = None;
+        self.archive_export_directory = None;
         self.loading = None;
         self.path = None;
         self.error = None;

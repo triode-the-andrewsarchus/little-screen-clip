@@ -199,6 +199,23 @@ impl TextSession {
             .as_ref()
             .and_then(|editor| editor.source.clone())
     }
+    /// Requires an explicit destination when editing a temporary source snapshot.
+    ///
+    /// Keeps the loaded preview and draft, but routes the next Save through
+    /// Save As with `directory` as its initial destination. The source snapshot
+    /// is not overwritten; after a successful Save As, ordinary saves resume.
+    pub fn require_save_as(&mut self, directory: &Path) {
+        if let Some(editor) = &mut self.editor {
+            editor.source = None;
+            editor.directory = directory.to_string_lossy().into_owned();
+            editor.name = editor
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
     pub fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
         self.preview.title = path
             .file_name()
@@ -1780,5 +1797,25 @@ mod tests {
                 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod temporary_source_tests {
+    use super::*;
+    #[test]
+    fn temporary_text_edits_require_an_explicit_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut session =
+            TextSession::load(&path, &little_clip_core::AppConfig::default()).unwrap();
+        session.require_save_as(root.path());
+        let editor = session.editor.as_mut().unwrap();
+        editor.text = "edited".into();
+        editor.request_save();
+        assert!(editor.save_as);
+        assert!(editor.pending.is_none());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
     }
 }
