@@ -2,7 +2,9 @@
 
 Active goal: add read-only Supernote `.note`, Xournal++ `.xopp` / legacy Xournal
 `.xoj`, and reMarkable notebook previews, in that priority order, on the branch
-`feat/handwritten-notebook-previews`. Work is committed in bounded steps.
+`feat/handwritten-notebook-previews`, merged at the requested checkpoint.
+Integration continues on `feat/notebook-preview-integration`. Work is committed
+in bounded steps.
 
 Completion requires all three presentation routes for every family: rendered
 file-manager list strips (with real page selection), a rendered little-screen
@@ -175,7 +177,10 @@ acceptance items above remain required. The goal remains active.
   association, page-count labels, exact PNG regeneration after serialization
   omits payload bytes, and ordinary-text fallback for a misleading `.note`.
   PDF, Office and notebook artwork share first-page item construction.
-- [ ] Connect list strips and selected-page handoff.
+- [x] Connect list strips and selected-page handoff. Real native acceptance
+  checks in dark and light themes verify all ten page thumbnails, enlarged
+  hover, page-10 handoff, visible large-page ink, landscape and custom PNG
+  template artwork, read-only shortcuts, return navigation and unchanged files.
 - [x] Extend the shared paged viewer in read-only mode, disabling PDF-only
   editing, OCR, text indexing, layout extraction and application handoff controls.
   Reuse the existing page cache, zoom and thumbnail navigation; selected-page
@@ -205,3 +210,19 @@ in the shared renderer. The remaining `load` dispatch complexity increase
 formats share that branch. Header reads reuse core's guarded opening and source
 revalidation in both the browser loader and metadata previews. No second page
 cache or notebook editing subsystem is introduced.
+
+Native acceptance artifacts: `/tmp/notebook-gui-dark-06/report.json` and
+`/tmp/notebook-gui-light-02/report.json`. The runner checks actual page paper
+and ink in addition to UI labels, so loading spinners cannot satisfy the large
+preview assertions. Run `scripts/notebook_preview_acceptance.py` with the
+built file-manager binary and separate output directories for each appearance.
+Final targeted checks: seven native Supernote tests, the real notebook worker/
+clipboard harness, 63 paged-viewer tests, nine existing item regression tests,
+strict Clippy for core/studios/file-manager/workbench, and a warning-free native
+file-manager build. Full-workspace validation remains part of the final goal
+audit after Xournal and reMarkable are integrated.
+
+Supernote presentation now works in all three requested routes for qualified
+X/X2 fixtures. Original ASA sources still need a real licensed fixture to
+qualify their existing decoder; unknown versions and missing layer visibility
+report explicit compatibility failures. Xournal and reMarkable remain required.

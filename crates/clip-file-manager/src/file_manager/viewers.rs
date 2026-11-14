@@ -40,6 +40,7 @@ enum Loaded {
     Text(Box<super::text_editor::TextSession>),
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
+    Handwritten,
     OfficePdf {
         pdf_path: PathBuf,
         workspace: little_clip_core::staging::TemporaryWorkspace,
@@ -608,6 +609,12 @@ fn load(
             super::multisample::Viewer::from_identified(path, document),
         )));
     }
+    if little_clip_core::notebook::is_candidate_path(path)
+        && little_clip_core::notebook::has_header(path, cancelled)?
+    {
+        little_clip_core::notebook::inspect(path, cancelled)?;
+        return Ok(Loaded::Handwritten);
+    }
     let kind = kind(path);
     let limit = match kind {
         Kind::Image => 64 * 1024 * 1024,
@@ -692,6 +699,9 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Handwritten => {
+            ViewerSession::Pdf(PdfEditorState::new_notebook_checked(path, check))
+        }
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),

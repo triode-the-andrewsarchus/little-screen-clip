@@ -697,7 +697,9 @@
     - [ ] .scala
 - [ ] Radio, RF, and embedded-device captures
   - [ ] E-ink and pen-tablet note devices
-    - [ ] `.note` — Supernote notebook (vector strokes, page templates, page thumbnails, handwritten notes, and text recognizer metadata)
+    - [x] `.note` — Supernote X/X2; native stored-layer ink and PNG templates, bounded page strips and hover, little-screen artwork, and a read-only paged viewer. Real fixtures qualify 20220011/20230015/20260016, landscape orientation and current N5 ink; unsupported structure/version errors remain explicit.
+      - [ ] Original ASA decoder qualification with a real licensed fixture
+      - [ ] Native TOTALPATH vector strokes and text recognizer metadata
     - [ ] `.xopp`, `.xoj` — Xournal++ handwritten notebook (gzipped XML vector strokes, pen pressure/colors, page layers, text annotations, and embedded/referenced PDF backgrounds)
     - [ ] `.mark`
     - [ ] `.rm`

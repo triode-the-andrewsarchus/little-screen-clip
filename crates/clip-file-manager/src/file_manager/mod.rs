@@ -814,6 +814,8 @@ impl FileManager {
                     || self.previews.is_text(entry)
                     || entry.has_content_strip()
                     || entry.is_paged_document()
+                    || (entry.regular_file
+                        && little_clip_core::notebook::is_candidate_path(&entry.path))
                 {
                     VIDEO_ROW_HEIGHT
                 } else {

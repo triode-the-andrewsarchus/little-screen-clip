@@ -12,6 +12,7 @@ fn main() {
     let path = directory.path().join("arbitrary-extension.bin");
     std::fs::copy(source, &path).unwrap();
     let cancel = AtomicBool::new(false);
+    assert!(notebook::has_header(&path, &cancel).unwrap());
     let info = notebook::inspect(&path, &cancel).unwrap();
     assert_eq!(info.format, "Supernote");
     assert_eq!(info.pages.len(), 10);
@@ -63,6 +64,7 @@ fn main() {
     assert_eq!(restored, *bytes);
     assert_eq!(restored_path.as_deref(), Some(note.as_path()));
     std::fs::write(&note, b"A normal note, not a handwritten notebook.").unwrap();
+    assert!(!notebook::has_header(&note, &cancel).unwrap());
     let plain = little_clip_core::ClipItem::from_text(note.to_string_lossy());
     assert!(!matches!(
         plain.payload,

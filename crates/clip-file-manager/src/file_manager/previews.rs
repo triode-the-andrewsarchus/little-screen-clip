@@ -280,6 +280,8 @@ impl EntryPreviews {
                     Source::Music(entry.path.clone(), self.audio_spectrum)
                 } else if super::binary_strip::known(&entry.path) && entry.regular_file {
                     Source::Binary(entry.path.clone())
+                } else if little_clip_core::notebook::is_candidate_path(&entry.path) {
+                    Source::Handwritten(entry.path.clone())
                 } else if text_candidate(entry) {
                     Source::Text(entry.path.clone())
                 } else {
@@ -349,7 +351,11 @@ impl EntryPreviews {
         } else if entry.is_notebook() {
             super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::NotebookCell)
-        } else if entry.is_paged_document() {
+        } else if entry.is_paged_document()
+            || self
+                .listing(entry)
+                .is_some_and(|ready| ready.data.handwritten_info.is_some())
+        {
             Some(super::DocumentPosition::PdfPage(
                 self.show_pdf(ui, row, entry, colors).unwrap_or(1),
             ))
@@ -484,11 +490,21 @@ impl EntryPreviews {
         colors: crate::ui_appearance::WorkbenchColors,
     ) -> Option<usize> {
         let id = self.identity(entry);
-        let info = self
-            .listing(entry)
-            .and_then(|ready| ready.data.pdf_info.clone());
-        self.pdf_pages
-            .show(ui, row, entry, id, info.as_deref(), colors)
+        let info = self.listing(entry).and_then(|ready| {
+            ready
+                .data
+                .pdf_info
+                .as_ref()
+                .map(|info| info.page_count)
+                .or_else(|| {
+                    ready
+                        .data
+                        .handwritten_info
+                        .as_ref()
+                        .map(|info| info.pages.len())
+                })
+        });
+        self.pdf_pages.show(ui, row, entry, id, info, colors)
     }
     pub fn show_listing(
         &mut self,
