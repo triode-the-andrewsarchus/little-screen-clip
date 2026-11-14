@@ -39,9 +39,17 @@ impl ScreenRenderer {
     ) {
         let c1 = self.color_from_hex(&self.palette.colors.surface_recessed);
         let c2 = self.color_from_hex(&self.palette.colors.surface_panel);
-        let mut p1 = Paint::default();
+        // Adjacent checker tiles need hard edges. AA also enters tiny-skia's
+        // zero-interior hairline path for a one-pixel remainder at x + 0.5.
+        let mut p1 = Paint {
+            anti_alias: false,
+            ..Default::default()
+        };
         p1.set_color(c1);
-        let mut p2 = Paint::default();
+        let mut p2 = Paint {
+            anti_alias: false,
+            ..Default::default()
+        };
         p2.set_color(c2);
 
         let cols = (w / cell_size).ceil() as usize;
@@ -480,5 +488,26 @@ impl ScreenRenderer {
     ) {
         let max_w = pixmap.width() as f32;
         self.draw_text_clipped(pixmap, text, x, y, size, color, bold, max_w);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn half_pixel_checkerboard_origin_keeps_one_pixel_remainder_opaque() {
+        let renderer = ScreenRenderer::new(little_clip_core::config::AppConfig::default()).unwrap();
+        let mut pixmap = Pixmap::new(640, 462).unwrap();
+        // Actual odd-width notebook card geometry, including its final 1px tile.
+        renderer.draw_checkerboard_pattern(&mut pixmap, 335.5, 128.0, 169.0, 224.0, 8.0);
+        assert_ne!(pixmap.pixel(336, 132), pixmap.pixel(344, 132));
+        assert!(
+            pixmap
+                .pixels()
+                .iter()
+                .all(|pixel| matches!(pixel.alpha(), 0 | 255)),
+            "Checker tiles must not introduce translucent seams"
+        );
+        assert_eq!(pixmap.pixel(505, 132).unwrap().alpha(), 0);
     }
 }

@@ -2,10 +2,11 @@
 //!
 //! The XML vocabulary is qualified against the original Xournal format and
 //! current Xournal++ fixtures; their provenance is retained with the test data.
+use super::check_cancel;
 use std::{
     io::{Read, Seek},
     ops::Range,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
 };
 
 mod container;
@@ -129,14 +130,6 @@ fn dimension(node: roxmltree::Node<'_, '_>, key: &str) -> Result<f64, String> {
         return Err(format!("Xournal page {key} exceeds the dimension limit"));
     }
     Ok(value)
-}
-
-fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Acquire) {
-        Err("Notebook preview cancelled".into())
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

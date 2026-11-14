@@ -92,7 +92,7 @@ pub fn render_pdf_page_thumbnail(
     render_pdf_page_png(path, page, max_dim.clamp(1, 1024), true)
 }
 
-fn render_pdf_page_png(
+pub(crate) fn render_pdf_page_png(
     path: &Path,
     page: usize,
     max_dim: u32,

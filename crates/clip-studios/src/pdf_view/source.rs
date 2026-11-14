@@ -8,17 +8,30 @@ pub(super) enum PageSource {
     Notebook,
 }
 
+pub(super) struct SourceInfo {
+    pub pdf: PdfInfo,
+    pub warnings: Vec<String>,
+}
+impl From<PdfInfo> for SourceInfo {
+    fn from(pdf: PdfInfo) -> Self {
+        Self {
+            pdf,
+            warnings: Vec::new(),
+        }
+    }
+}
+
 impl PageSource {
     pub fn read_only(self) -> bool {
         self == Self::Notebook
     }
 
-    pub fn info(self, path: &Path, cancel: &AtomicBool) -> Result<PdfInfo, String> {
+    pub fn info(self, path: &Path, cancel: &AtomicBool) -> Result<SourceInfo, String> {
         match self {
-            Self::Pdf => get_pdf_info(path),
+            Self::Pdf => get_pdf_info(path).map(SourceInfo::from),
             Self::Notebook => {
                 let info = little_clip_core::notebook::inspect(path, cancel)?;
-                Ok(PdfInfo {
+                let pdf = PdfInfo {
                     page_count: info.pages.len(),
                     title: None,
                     author: None,
@@ -26,6 +39,10 @@ impl PageSource {
                         .pages
                         .first()
                         .map(|page| format!("{} × {}", page.width, page.height)),
+                };
+                Ok(SourceInfo {
+                    pdf,
+                    warnings: info.warnings,
                 })
             }
         }

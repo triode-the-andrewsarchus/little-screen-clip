@@ -3,8 +3,8 @@
 Active goal: add read-only Supernote `.note`, Xournal++ `.xopp` / legacy Xournal
 `.xoj`, and reMarkable notebook previews, in that priority order, on the branch
 `feat/handwritten-notebook-previews`, merged at the requested checkpoint.
-Integration continues on `feat/notebook-preview-integration`. Work is committed
-in bounded steps.
+Supernote/Xournal integration was merged at `be539806`; remaining reMarkable
+work continues on `feat/remarkable-notebook-previews`, committed in bounded steps.
 
 Completion requires all three presentation routes for every family: rendered
 file-manager list strips (with real page selection), a rendered little-screen
@@ -105,27 +105,27 @@ external resource URLs.
 
 Acceptance checklist (each family must satisfy every applicable row):
 
-- [ ] Header-qualified dispatch, including malformed/unsupported inputs and
+- [x] Header-qualified dispatch, including malformed/unsupported inputs and
   extension collisions; no generic XML/JSON or RealMedia misclassification.
-- [ ] Real source fixtures and independent exported/reference images establish
+- [x] Real source fixtures and independent exported/reference images establish
   visible ink, correct page order, dimensions, layers, orientation and templates.
-- [ ] Supernote current X/X2 and older variants are qualified or have precise,
+- [x] Supernote current X/X2 and older variants are qualified or have precise,
   evidence-based compatibility diagnostics.
-- [ ] Xournal++ and legacy Xournal pages, images/text/pressure/ruling and ordinary
+- [x] Xournal++ and legacy Xournal pages, images/text/pressure/ruling and ordinary
   PDF backgrounds render; incomplete inputs do not become blank-success pages.
-- [ ] reMarkable raw page versions and practical multi-page containers preserve
+- [x] reMarkable raw page versions and practical multi-page containers preserve
   ordering and ordinary backgrounds; current pens, highlights, text and erasers
   have meaningful reference comparisons.
-- [ ] List strips render bounded visible first/last page groups; clicked pages
+- [x] List strips render bounded visible first/last page groups; clicked pages
   remain selected when the large viewer finishes loading.
-- [ ] Little-screen ingestion produces actual notebook page artwork.
-- [ ] Large viewer provides thumbnails, page navigation and useful zoom without
+- [x] Little-screen ingestion produces actual notebook page artwork.
+- [x] Large viewer provides thumbnails, page navigation and useful zoom without
   notebook editing or a browser engine.
-- [ ] Source replacement, cancellation and protected inputs retain existing
+- [x] Source replacement, cancellation and protected inputs retain existing
   guard/lifecycle behavior; malformed data cannot cause unbounded allocation.
-- [ ] Native GUI checks in both themes, appropriate backend/integration tests,
+- [x] Native GUI checks in both themes, appropriate backend/integration tests,
   strict Clippy, formatting and architecture comparison complete.
-- [ ] Accurate catalog/compatibility documentation and review examples complete.
+- [x] Accurate catalog/compatibility documentation and review examples complete.
 
 Personal `.cargo/config.toml` and `config.toml` edits are outside the commits.
 Check disk space before large builds; serialize Cargo and cleanup. Reuse the
@@ -310,3 +310,275 @@ rather than introducing another cache, viewer or renderer dispatch.
 
 This is a merge checkpoint for Supernote and Xournal. reMarkable support and the
 final whole-goal audit remain pending.
+
+## reMarkable investigation checkpoint
+
+Integration was merged at `be539806`; remaining work continues on
+`feat/remarkable-notebook-previews`, with baseline `before-remarkable-previews`.
+
+- [x] Compare actual implementation source, not only registry descriptions.
+  `remarkable-rm` 0.1.1's published page parser matches upstream revision
+  `544968f002f230ff55c5d438e843aab5a5e9c552`. It supports v6 only, despite a
+  broader introductory sentence: the actual header reader rejects other versions.
+  It provides scene-item topological ordering, nested groups, root-text layout
+  with anchored ink, layers/visibility, glyph highlights, current color/pen
+  fields, page-size metadata and a native tiny-skia renderer. The renderer
+  approximates tablet pen simulation and skips eraser records, so erased-content
+  semantics require real-fixture checks, not an assumption of perfect fidelity.
+  Its dual MIT/Apache license and independent tablet-thumbnail comparisons make
+  it the first candidate to qualify as a normal crate dependency.
+- [x] Compare alternatives: `remarkable_lines` 0.1.3 (MIT), revision
+  `5b43636f12d1509f462d45ff41687e13321c34b2`, parses v3–v6 but supplies no renderer
+  and warns that versions are lightly tested. `rmconvert`, revision
+  `24c679f8029dbd7a8e1fe7a0d41cfa2b8fa72b57`, assumes a fixed 163-byte front
+  matter and recognizes only a handful of block flags; it is less suitable than
+  the dedicated v6 parser. `rmscene` and `rmc` are useful MIT Python references,
+  but rmc documents multiline text/ink-anchor problems. Scratchydisk's MIT
+  TypeScript renderer also provides legacy synthetic fixtures. C++
+  `librm_lines` is GPL-3.0 and would introduce another native build/FFI boundary;
+  do not import it as the application's first choice while a practical Rust
+  parser/renderer exists.
+- [x] Retain a small independent licensed corpus with immutable hashes, including
+  real v6 text/ink/layer/color/eraser pages, a two-page `.rmdoc`, generated legacy
+  cases and two paired actual tablet thumbnails. Preserve fixtures separately
+  from implementation changes. Total original inputs are under 1 MB.
+- [x] Qualify the Rust renderer against those inputs and immutable thumbnails;
+  reject malformed/oversized geometry before raster allocation. Resolve gaps in
+  legacy versions, archive page order, templates/PDF backgrounds and deletion
+  semantics explicitly before calling the family supported.
+- [x] Integrate guarded worker and all three presentation routes, including
+  RealMedia `.rm` collision tests and multi-page selected-page handoff.
+
+### Native v6 page checkpoint
+
+- [x] Add `remarkable-rm = 0.1.1` as a normal registry dependency, without
+  vendoring or rewriting its implementation. Its newer resvg dependency adds a
+  second renderer version; preserve existing 0.37 callers instead of coupling
+  this feature to a workspace-wide SVG upgrade. Only five packages are added.
+- [x] Bound raw pages to 16 MiB, 65,536 blocks, one million points, one MiB of
+  text, finite coordinate ranges and bounded source/output dimensions. The
+  backend is documented for disposable workers; synchronous upstream scene
+  assembly/rasterization still needs the existing process timeout/memory limit.
+  No file dispatch is enabled at this checkpoint.
+- [x] Qualify all seventeen retained real raw v6 fixtures, including text, layers,
+  newer colors and eraser pages. Empty deletion envelopes are common and do
+  not themselves mean unsupported visible content. Preflight preserves that
+  case but rejects deletion intervals overlapping retained live IDs and
+  unsupported text/tombstone payloads, rather than displaying erased ink.
+- [x] Compare actual native tablet thumbnails at 384 × 512: heavy pencil mean
+  grayscale error 11.146 (limit 20), ink recall .972, precision 1.000; mixed
+  pressure error 3.154 (limit 10), recall .979, precision 1.000. These are direct
+  grayscale MAEs, not upstream's blended block score. A blank output control
+  fails ink matching. This establishes approximate pen appearance/geometry,
+  not exact tablet texture or full complex-page fidelity.
+- [x] Run sixteen combined notebook tests and strict all-target core Clippy.
+  Scoped native adapter metrics have no clone groups and maximum complexity 15.
+  Whole-repository comparison reports only reordered cycle descriptions in
+  untouched Python/vendor files; maximum workspace complexity is unchanged.
+- [x] Complete legacy pages, notebook containers/backgrounds, worker dispatch,
+  list/little-screen/large-view acceptance and the final goal audit.
+
+Developer image artifacts for this checkpoint: `/tmp/remarkable-native-review/`.
+The corpus remains immutable; runtime output must never replace its references.
+
+### Notebook ZIP index checkpoint
+
+- [x] Index an actual `.rmdoc` through its unique document `.metadata` and
+  `.content`, preserving the explicit live page array rather than sorting ZIP
+  names or trusting `pageCount` over modern `cPages`. Keep per-page template and
+  source-PDF redirection, inserted pages, legacy numeric fallback and deletion
+  flags. Reject ambiguous roots, non-document metadata, unsafe/duplicate IDs,
+  malformed arrays/register values and source/member/page budgets.
+- [x] Reuse Xournal's bounded ZIP member reader in a shared notebook container
+  module. Both formats keep entries in memory instead of extracting by name;
+  cancellation, expanded-size checks and path validation have one owner. The
+  existing Xournal expansion/traversal/truncation tests remain in place.
+- [x] Check modern/legacy metadata policy against remarquee's MIT `pkg/rmdoc`
+  implementation at `0694a8163ca1ca5f446ff610a961a80491451f84`. The separate
+  `remarkable-metadata` Rust crate was also inspected: its narrow public content
+  projection omits PDF redirection, so it does not replace the required page
+  plan. This adapter reads only bounded JSON and does not import an inventory,
+  device connection or CLI subsystem.
+- [x] Run nineteen combined notebook tests and strict all-target core Clippy.
+  The real archive's two raw annotation members also pass v6 qualification.
+  Archive indexing still does not claim rendering of absent template artwork,
+  PDF backgrounds or legacy raw ink; those remain explicit next steps.
+
+
+### Legacy page adapter checkpoint
+
+- [x] Use the normal `remarkable_lines = 0.1.3` MIT registry crate for v3–v5
+  decoding. It has no dependencies. Adapt its stroke model into the selected
+  native renderer instead of copying a binary parser or adding a second
+  rasterizer. Preserve layer/point order and colors, normalize the top-left
+  legacy origin to the renderer's top-center origin, and round packed pressure,
+  direction, speed and width units once. Reject invalid float geometry and
+  unsupported selection/erase-all tools explicitly.
+- [x] Qualify the two actual v5 handwriting pages and both generated v5 cases;
+  the Advent of Code page retains its independently specified 139 strokes.
+  Assert exact coordinates and normalized point units from the generated source.
+  v3/v4 are covered by explicitly synthetic older-header/layout probes; real
+  v3/v4 captures remain unavailable, so do not describe them as tablet-qualified.
+  Truncated legacy sources and v2 have explicit errors.
+- [x] Visually inspect a real math-page raster; real legacy files render at strip
+  resolution, while tiny generated strokes are checked at native resolution.
+  This is meaningful visible-ink/geometry coverage, not an independent tablet
+  pixel-fidelity claim for legacy pens. The two independent v6 tablet comparisons
+  remain unchanged and pass.
+- [x] Twenty combined notebook backend tests and strict all-target core Clippy
+  pass. Separate modern-page register policy from collection traversal to keep
+  archive parsing comprehensible; final architecture comparison reports no new
+  notebook complexity/duplication/cycle findings. Unchanged Python cycle-order
+  reporting still labels the global report a regression.
+- [x] Render complete archive pages with background policy, add practical RMN
+  handling, connect the existing worker and all three UI routes, and verify the
+  final goal. No new file-manager dispatch is enabled at this checkpoint.
+
+### Shared background preparation
+
+- [x] Reuse the existing Xournal native SVG/font owner and retained temporary PDF
+  holder as notebook-level helpers for the next archive renderer. No second
+  font database, external SVG path resolver or temporary PDF lifecycle is added.
+- [x] Add an explicitly square-bounded detail PDF render path up to 4096 pixels.
+  Compact thumbnails keep their 1024 ceiling; notebook background detail no
+  longer silently inherits that thumbnail ceiling. A real PDF regression test
+  verifies a requested 2048-pixel background stays at 2048, and the canonical
+  Xournal/Supernote comparisons still pass.
+
+### Complete archive-page backend checkpoint
+
+- [x] Index plain RMN TAR exports through the same authored document plan as
+  RMDOC ZIPs. Keep bounded entry tables and seek only retained payload offsets;
+  reject traversal, duplicate canonical names, TAR links/special entries,
+  truncation and source/member/count limits. Never extract by archive paths.
+- [x] Resolve nested RMT templates through their actual `template.json` identity,
+  including an archive filename that differs from `fileName`. Decode only the
+  selected SVG/PNG artwork, with bounded XML/image budgets, bundled fonts and
+  no external resource resolver. SVG image/foreign/script payloads and external
+  hrefs fail explicitly; ordinary vector templates and PNG artwork are supported.
+- [x] Apply legacy `.pagedata`, preserve modern template references, composite
+  selected annotation ink over template/PDF backgrounds, honor source-PDF page
+  redirection and render intentionally empty inserted pages. Present corrupt ink
+  and missing source PDFs remain errors. Missing factory paper artwork instead
+  produces a structured metadata warning while retaining usable real ink.
+- [x] Retain explicitly derived RMN/RMT and PDF-redirection fixtures with our own
+  paper/PDF artwork and the already licensed real v5/v6 ink. These exercise the
+  documented archive layouts without pretending to be untouched tablet exports.
+  See RCU's [RMN/RMT appendices](https://www.davisr.me/projects/rcu/manual.pdf),
+  pages 53–56 (printed numbering). No RCU implementation is imported.
+- [x] Twenty-six combined notebook backend tests and strict all-target core
+  Clippy pass, including independent tablet comparisons, known background colors,
+  source-page order, actual ink, empty insertion, missing PDF/corrupt ink errors,
+  TAR limits and resource rejection. Scoped archive modules have no clone groups,
+  dependency cycles or complexity findings (maximum function complexity 14).
+  Whole-repository findings are unchanged Python ordering noise and an existing
+  PDF edit fallback clone outside these changes; its source is unchanged.
+- [x] Consolidate identical decoder cancellation checks under the notebook owner,
+  retaining Acquire observation. Shared page metadata now owns optional warnings;
+  existing worker JSON omits empty warnings for compatibility.
+- [x] Wire the new backend through guarded worker selection, preserve RealMedia
+  routing, display warnings and qualify list/little-screen/large-view interaction.
+
+### Guarded worker and presentation integration checkpoint
+
+- [x] Select Supernote, Xournal or reMarkable through qualified source headers.
+  ReMarkable raw headers take precedence over the ambiguous `.rm` suffix;
+  RMDOC ZIP and RMN TAR use actual document metadata, and ordinary unrelated ZIP/
+  RealMedia-looking files are not claimed as notebooks. Reuse the same inherited
+  ordinary-file descriptor, process-group cancellation, CPU/address-space/output
+  limits and parent source revalidation.
+- [x] Connect raw and archived reMarkable sources through the existing list-page
+  strip, little-screen image ingestion/rehydration and read-only studio owner.
+  Move handwritten ingestion before suffix-based multimedia fallbacks so `.rm`
+  can qualify correctly. Missing-paper notices remain explicit in the clipboard
+  subtitle, the existing row header and the studio header/hover explanation.
+  Notices do not add a new dock or grow the normal strip height.
+- [x] Preserve warnings in asynchronous studio metadata, clear them on reload,
+  retain PDF mutation guards and preserve existing selected-page behavior.
+  Archive type qualification reuses the same root metadata reader as indexing.
+- [x] Pass twenty-six notebook backend tests, the real worker/clipboard harness
+  across six v5/v6/RMDOC/RMN cases, sixty-three shared paged-viewer tests, strict
+  all-target Clippy for core/studios/file-manager/workbench, and a warning-free
+  native file-manager build. The harness also verifies original file bytes,
+  invalid pages, notices and clipboard payload rehydration.
+- [x] Split nested RMT identity parsing and TAR member validation into their
+  actual responsibilities; the complete architecture comparison has no new
+  complexity findings, and overall duplication is reduced. Existing clones
+  elsewhere in touched large files are not new implementation copies.
+- [x] Run `scripts/notebook_remarkable_acceptance.py` on the isolated compositor
+  in both appearances. Verify real row artwork, second-page hover/open handoff,
+  original/missing-template notices, legacy/current ink, nested paper/PDFs and
+  unchanged sources before marking the family supported.
+
+Native review found one concrete layout defect: the paper-availability pill
+covered the Modified timestamp in list rows. Reserve space inside the preview
+strip and place the pill below file metadata, without changing row height.
+The native acceptance runner now asserts that the notice is below the filename
+line. Strict file-manager Clippy and its warning-free rebuild pass for the fix;
+both-appearance acceptance passes on the frozen rebuilt binary.
+
+Local review fixtures are now also available under
+`/home/vega/Documents/type_testing/notebooks/xournal/` and `remarkable/`, alongside
+existing Supernote examples. Copies include source licenses/provenance and the
+needed relative companions; existing user files are preserved.
+
+### Frame-level image checkerboard regression
+
+- [x] A real notebook-to-display test exposed a pre-existing tiny-skia debug
+  assertion before the card could finish. The debugger confirmed a one-pixel
+  final checker tile at x=503.5 (169-pixel checker width), entering the AA
+  zero-interior rectangle path. This affects ordinary odd-width image previews
+  too, rather than notebook decoding alone.
+- [x] Draw adjacent checkerboard tiles without anti-aliasing: they need hard
+  edges and must not create translucent seams. The exact half-pixel/one-pixel
+  geometry has a regression test; all four real notebook display cases now
+  render complete 1920×462 frames with actual ink surviving IPC thumbnails.
+
+Native Xournal light review showed correct page eleven artwork and selection,
+but OCR intermittently read the separate `11 pages` badge as `1 pages`. Its
+acceptance runner now checks the already-present canonical `Page 11 of 11`
+readout instead of redundantly requiring both copies of the total. Actual
+painted artwork, thumbnail count and page selection checks remain unchanged;
+the repeated light run passes.
+
+### Final workspace test isolation
+
+- [x] Serialize system-helper fixtures that assert process-global admission
+  budgets, and reap their killed local test children before releasing the fixture
+  lock. All nine worker tests pass together; production lifecycle is unchanged.
+
+### Final acceptance evidence
+
+All three families pass native list-strip, page-hover/open handoff and read-only
+paged-viewer acceptance in both dark and light appearances. Reports are retained
+in `/tmp/notebook-supernote-final-{dark,light}/`,
+`/tmp/notebook-xournal-final-dark/`, `/tmp/notebook-xournal-final-light-02/`,
+`/tmp/remarkable-gui-dark-02/` and `/tmp/remarkable-gui-light-01/`.
+The real worker harness checks header collisions, invalid pages, source integrity
+and IPC rehydration. The display harness compares four complete 1920×462 frames
+against blank-thumbnail controls, proving actual ink survives the IPC path.
+PNG-only RMT paper has a deterministic color regression alongside SVG and PDF.
+
+Compatibility remains intentionally bounded: original Supernote ASA needs a real
+licensed fixture; TOTALPATH and recognition metadata are not implemented.
+reMarkable v5/v6 have real fixtures; v3/v4 have synthetic layout tests only.
+Unsupported retained scene operations fail explicitly. Missing factory paper
+retains ink with a notice, while missing source PDFs and corrupt ink fail.
+Tablet pen textures/text shaping and Xournal Pango layout are approximations.
+
+The final architecture comparison keeps maximum complexity at 274 and reduces
+overall duplication from 7.38% to 7.36%. Its aggregate regression classification
+includes license-text copies, existing clones in touched owners and reordered
+unchanged Python cycle reports; it is not a clean aggregate pass. Notebook
+archive modules were separately measured without clones/cycles or complexity
+findings.
+
+The default highly parallel workspace test run exhausted shared bounded studio
+job queues (19 failures, including explicit QueueFull diagnostics). Validation
+therefore also runs with `RUST_TEST_THREADS=4`; this does not raise application
+queue limits or change production scheduling.
+
+Final merge validation: `RUST_TEST_THREADS=4 cargo test --workspace -j4` passes,
+as does `cargo clippy --workspace --all-targets -j4 -- -D warnings`.
+All Rust files changed from main pass leaf rustfmt checks; generated fixture
+hashes and `git diff --check` pass.

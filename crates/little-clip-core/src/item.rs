@@ -576,6 +576,10 @@ impl ClipItem {
         }
         type MediaLoader = fn(&Path) -> Option<ClipItem>;
         let media: [(bool, MediaLoader); 8] = [
+            (
+                crate::notebook::is_candidate_path(path),
+                Self::from_notebook_file,
+            ),
             (crate::animation::is_video_path(path), |p| {
                 Self::from_video(p.to_path_buf())
             }),
@@ -588,10 +592,6 @@ impl ClipItem {
                 Self::from_raw_image_file,
             ),
             (crate::pdf::is_pdf_path(path), Self::from_pdf_file),
-            (
-                crate::notebook::is_candidate_path(path),
-                Self::from_notebook_file,
-            ),
             (
                 crate::document::is_office_document(path),
                 Self::from_office_document_file,
@@ -735,13 +735,17 @@ impl ClipItem {
         let info = crate::notebook::inspect(path, &cancel).ok()?;
         let page = crate::notebook::render_page(path, 1, 800, &cancel).ok()?;
         source.check().ok()?;
-        Some(Self::from_document_page(
+        let mut item = Self::from_document_page(
             path,
             page,
             info.pages.len(),
             &info.format,
             "application/x-handwritten-notebook",
-        ))
+        );
+        if !info.warnings.is_empty() {
+            item.subtitle.push_str(" · paper template unavailable");
+        }
+        Some(item)
     }
 
     fn from_document_page(

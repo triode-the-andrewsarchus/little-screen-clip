@@ -593,6 +593,9 @@ pub(super) fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These fixtures assert process-global admission limits. Each fixture must
+    // finish owning/reaping its children before another budget test starts.
+    static HELPER_FIXTURES: Mutex<()> = Mutex::new(());
 
     #[test]
     fn device_namespace_directories_do_not_inherit_sysfs_schemas_from_their_names() {
@@ -692,6 +695,10 @@ mod tests {
             {
                 entry.retired = true;
                 let _ = entry.child.kill();
+                // Test children only run ordinary local Python scripts (or the
+                // isolated shutdown test executable), so joining after SIGKILL
+                // is safe and prevents a retired slot leaking into the next test.
+                let _ = entry.child.wait();
             }
             reap(&mut children);
         }
@@ -708,6 +715,9 @@ mod tests {
 
     #[test]
     fn failed_helper_without_checkpoint_reports_unavailable_and_releases_its_exited_slot() {
+        let _fixture = HELPER_FIXTURES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut owned = OwnedChildren(Budget::Passive, Vec::new());
         let started = Instant::now();
         let result = collect_with(Path::new("/proc/uptime"), &AtomicBool::new(false), |_| {
@@ -731,6 +741,9 @@ mod tests {
 
     #[test]
     fn stalled_helper_returns_partial_facts_and_live_helper_admission_is_bounded() {
+        let _fixture = HELPER_FIXTURES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let source = Path::new("/proc/uptime");
         let baseline = interface(source).unwrap();
         let mut owned = OwnedChildren(Budget::Passive, Vec::new());
@@ -774,6 +787,9 @@ mod tests {
 
     #[test]
     fn shutdown_closes_admission_for_both_helper_budgets() {
+        let _fixture = HELPER_FIXTURES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         // Run irreversible global shutdown in a separate test executable.
         if std::env::var_os("VEYLAR_SYSTEM_SHUTDOWN_FIXTURE").is_none() {
             let mut command = Command::new("/proc/self/exe");
@@ -821,6 +837,9 @@ mod tests {
 
     #[test]
     fn optional_helper_pipe_is_bounded_and_retired_live_children_keep_their_slot() {
+        let _fixture = HELPER_FIXTURES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut owned = OwnedChildren(Budget::Optional, Vec::new());
         let command = |script: &str| {
             let mut command = Command::new("python3");

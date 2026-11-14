@@ -1,5 +1,7 @@
 use super::*;
-use std::{fs::File, io::Write, path::PathBuf};
+use crate::notebook::container as archives;
+use crate::notebook::embedded_pdf::EmbeddedPdf as Pdf;
+use std::{fs::File, path::PathBuf};
 
 pub(super) struct Guard {
     file: File,
@@ -103,14 +105,13 @@ fn load_reference(
         .ok_or("Missing Xournal background filename")?;
     let attached = reference.attribute("domain") == Some("attach");
     if packaged && attached {
-        return container::member(input, name, 128 * 1024 * 1024, cancel)
-            .map(|bytes| (bytes, None));
+        return archives::member(input, name, 128 * 1024 * 1024, cancel).map(|bytes| (bytes, None));
     }
     let path = companion(source, name, attached)?;
     let (mut file, identity) = crate::file_source::ReadCheck::default()
         .open(&path, None, cancel)
         .map_err(|error| format!("Xournal background unavailable: {error}"))?;
-    let bytes = container::bounded(&mut file, 128 * 1024 * 1024, cancel)?;
+    let bytes = archives::bounded(&mut file, 128 * 1024 * 1024, cancel)?;
     identity.check_file(&file)?;
     Ok((
         bytes,
@@ -127,43 +128,6 @@ fn pdf_page(bytes: &[u8], page: &str, edge: u32) -> Result<Vec<u8>, String> {
         return Err("Invalid Xournal PDF page number".into());
     }
     Pdf::new(bytes)?.page(page, edge)
-}
-
-pub(super) struct Pdf {
-    file: tempfile::NamedTempFile,
-    source: crate::file_source::FileSource,
-}
-impl Pdf {
-    pub fn new(bytes: &[u8]) -> Result<Self, String> {
-        if !bytes.starts_with(b"%PDF-") {
-            return Err("Xournal background is not a PDF".into());
-        }
-        let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
-        file.write_all(bytes).map_err(|error| error.to_string())?;
-        let source = crate::file_source::FileSource::capture_file(file.as_file())?;
-        Ok(Self { file, source })
-    }
-    pub fn page(&self, page: usize, edge: u32) -> Result<Vec<u8>, String> {
-        let result = crate::pdf::render_pdf_page_thumbnail(self.file.path(), page, edge)?.0;
-        self.source.check_file(self.file.as_file())?;
-        Ok(result)
-    }
-    pub fn dimensions(&self) -> Result<(f64, f64), String> {
-        let info = crate::pdf::get_pdf_info(self.file.path())?;
-        self.source.check_file(self.file.as_file())?;
-        let size = info
-            .page_size
-            .ok_or("Embedded Xournal PDF has no page size")?;
-        let fields = size.split_whitespace().collect::<Vec<_>>();
-        if fields.len() < 3 || fields[1] != "x" {
-            return Err("Invalid embedded PDF page size".into());
-        }
-        let (width, height) = (number(fields[0])?, number(fields[2])?);
-        if width <= 0.0 || height <= 0.0 {
-            return Err("Invalid embedded PDF dimensions".into());
-        }
-        Ok((width, height))
-    }
 }
 
 fn integer(value: &str) -> Result<usize, String> {

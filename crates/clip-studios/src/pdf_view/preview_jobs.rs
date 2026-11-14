@@ -18,6 +18,7 @@ impl PdfEditorState {
         self.viewport = PdfPageViewport::default();
         self.pages.clear();
         self.page_count = 0;
+        self.source_warnings.clear();
         let path = self.path.clone();
         let check = self.read_check.clone();
         let source = self.source;
@@ -60,8 +61,11 @@ impl PdfEditorState {
                     author: None,
                     page_size: None,
                 }
+                .into()
             }
         };
+        self.source_warnings = info.warnings;
+        let info = info.pdf;
         self.page_count = info.page_count;
         self.pages = (1..=self.page_count)
             .map(|page_num| PdfPageItem {

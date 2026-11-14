@@ -702,7 +702,7 @@
       - [ ] Native TOTALPATH vector strokes and text recognizer metadata
     - [x] `.xopp`, `.xoj` — Read-only Xournal/Xournal++ notebooks: bounded plain/gzipped XML and ZIP packages, pressure/color strokes, layers, transformed text/images, paper styles, and guarded local/embedded PDF backgrounds. Rendered list strips, little-screen previews and paged viewing; text layout approximates Pango and missing backgrounds report errors.
     - [ ] `.mark`
-    - [ ] `.rm`
+    - [x] `.rm`, `.rmdoc`, `.rmn` — Read-only reMarkable pages and ZIP/plain-TAR notebooks: native v5/v6 ink, authored page order, embedded SVG/PNG paper and redirected PDF backgrounds; list strips, little-screen artwork and a paged viewer. Missing factory paper is disclosed. v3/v4 layouts have synthetic coverage only; unsupported scene operations report compatibility errors, and tablet text/pen rendering is approximate.
     - [ ] `.lines`
   - [ ] NanoVNA
     - [ ] `.s1p`, `.s2p`, `.sNp` — Touchstone N-port network parameter data (S-parameters, RF frequency response plots, and interactive Smith chart rendering)

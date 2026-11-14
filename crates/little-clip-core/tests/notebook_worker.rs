@@ -78,6 +78,7 @@ fn main() {
     );
     assert!(notebook::inspect(Path::new("/dev/zero"), &cancel).is_err());
     xournal_sources();
+    remarkable_sources();
     println!(
         "Notebook worker acceptance passed: header qualification, metadata, late page ink, dimensions, invalid pages, cancellation and protected inputs"
     );
@@ -177,5 +178,67 @@ fn xournal_sources() {
     );
     println!(
         "Xournal worker/clipboard acceptance passed for legacy, gzip, LaTeX and ZIP assets, including rehydration and rejected impostors/protected backgrounds"
+    );
+}
+
+fn remarkable_sources() {
+    use little_clip_core::{ClipItem, ClipPayload};
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/notebooks/remarkable");
+    let cancel = AtomicBool::new(false);
+    for (file, page, count, warned) in [
+        ("legacy-real/test_v5_math.rm", 1, 1, false),
+        ("rmscene/With_SceneInfo_Block.rm", 1, 1, false),
+        ("archives/Test.rmdoc", 2, 2, true),
+        ("generated/layered-template.rmn", 2, 2, false),
+        ("generated/legacy-paper.rmn", 2, 2, false),
+        ("generated/redirected-pdf.rmdoc", 3, 3, false),
+    ] {
+        let path = root.join(file);
+        let before = std::fs::read(&path).unwrap();
+        assert!(notebook::is_candidate_path(&path));
+        assert!(notebook::has_header(&path, &cancel).unwrap(), "{file}");
+        let info = notebook::inspect(&path, &cancel).unwrap();
+        assert_eq!(info.format, "reMarkable");
+        assert_eq!(info.pages.len(), count);
+        assert_eq!(!info.warnings.is_empty(), warned);
+        let (png, width, height) = notebook::render_page(&path, page, 512, &cancel).unwrap();
+        assert!(width <= 512 && height <= 512);
+        assert_eq!(image::load_from_memory(&png).unwrap().width(), width);
+        let item = ClipItem::from_text(path.to_string_lossy());
+        assert!(
+            matches!(&item.payload,ClipPayload::Image { path:Some(original), thumbnail:Some(_), .. } if original == &path),
+            "{file}"
+        );
+        assert_eq!(item.subtitle.contains("paper template unavailable"), warned);
+        let transferred: ClipItem =
+            serde_json::from_slice(&serde_json::to_vec(&item).unwrap()).unwrap();
+        let (restored, _, original) = transferred.resolve_image_data().unwrap();
+        assert!(restored.starts_with(b"\x89PNG"));
+        assert_eq!(original.as_deref(), Some(path.as_path()));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(notebook::render_page(&path, count + 1, 128, &cancel).is_err());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("realmedia.rm");
+    std::fs::write(&path, b".RMF\0\0\0\x12\0\0 ordinary non-notebook content").unwrap();
+    assert!(
+        !notebook::has_header(&path, &cancel).unwrap(),
+        "An .rm suffix must not claim RealMedia"
+    );
+    assert!(notebook::inspect(&path, &cancel).is_err());
+    assert!(!matches!(
+        ClipItem::from_text(path.to_string_lossy()).payload,
+        ClipPayload::Image { .. }
+    ));
+    let ordinary = directory.path().join("ordinary.rmdoc");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&ordinary).unwrap());
+    zip.start_file("ordinary.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut zip, b"not a notebook").unwrap();
+    drop(zip.finish().unwrap());
+    assert!(!notebook::has_header(&ordinary, &cancel).unwrap());
+    println!(
+        "reMarkable worker/clipboard acceptance passed: real v5/v6, RMDOC/RMN templates and PDF pages, notices, rehydration, unchanged sources and rejected extension collisions"
     );
 }

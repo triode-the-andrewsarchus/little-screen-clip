@@ -1,4 +1,5 @@
 use super::*;
+use crate::notebook::container as archives;
 
 pub(super) fn draw(
     svg: &mut String,
@@ -466,7 +467,7 @@ fn image_bytes(
                     .and_then(|n| n.attribute("path").or_else(|| n.attribute("filename")))
             })
             .ok_or("Missing Xournal image attachment")?;
-        container::member(input, reference, 32 * 1024 * 1024, cancel)?
+        archives::member(input, reference, 32 * 1024 * 1024, cancel)?
     } else {
         return Err("Missing Xournal image data".into());
     };
@@ -474,7 +475,7 @@ fn image_bytes(
 }
 
 fn embedded_pdf(bytes: &[u8], node: Node<'_>, scale: f64) -> Result<(String, f64, f64), String> {
-    let pdf = background::Pdf::new(bytes)?;
+    let pdf = crate::notebook::embedded_pdf::EmbeddedPdf::new(bytes)?;
     let (width, height) = pdf.dimensions()?;
     let transform = if let Some(matrix) = node.attribute("matrix") {
         let matrix = numbers(matrix)?;
