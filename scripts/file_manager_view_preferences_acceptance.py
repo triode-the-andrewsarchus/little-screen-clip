@@ -29,7 +29,7 @@ def action(session, shot, word, offset):
 
 
 def exercise(session, root, binary, chosen_view="photos"):
-    expected_view = ["Preview"] if chosen_view == "columns" else ["Thumbnail size"]
+    expected_view = ["a-photo.png", "Columns"] if chosen_view == "columns" else ["Thumbnail size"]
     original = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in root.rglob("*") if p.is_file()}
     state = Path(session.env["XDG_STATE_HOME"]) / "little-screen-clip/folder-views.json"
@@ -42,7 +42,7 @@ def exercise(session, root, binary, chosen_view="photos"):
 
     session.observe("00-list", ["child", "a-photo.png"])
     assert not state.exists(), "Browsing alone must not create folder preferences"
-    session.click(730, 160)  # Collapse Shelf while the initial List toolbar is observed.
+    session.click(600, 160)  # Collapse Shelf while the initial List toolbar is observed.
     session.click(176 if chosen_view == "columns" else 265, 160)  # Observed shared view tabs.
     session.observe("01-photos", expected_view)
     menu(session, "01-photos", "02-remember-menu")

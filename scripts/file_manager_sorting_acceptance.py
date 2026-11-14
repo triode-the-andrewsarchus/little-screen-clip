@@ -8,7 +8,7 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 
 
 def ordered(session, shot, names):
-    session.observe(shot, ["Type", "Name", "Size", "Modified", *names])
+    session.observe(shot, ["Name", "Size", "Modified", *names])
     positions = [session.word(shot, name, minimum_y=240)[1] for name in names]
     assert positions == sorted(positions), f"{shot}: wrong filename order: {positions}"
 
@@ -41,7 +41,7 @@ def exercise(session, root):
     private.run_checked(["wtype", "Beta"], env=session.env)
     session.observe("type-after-sort", ["Find: Beta", "Selection: 1 file"])
 
-    session.click(645, 160)  # Collapse Shelf so both family sections fit the private output.
+    session.click(600, 160)  # Collapse Shelf so both family sections fit the private output.
     session.address(root.parent / "types")
     session.observe("types-start", ["Type", "Name", "Size", "Modified"])
     sort_header(session, "types-start", "Type")

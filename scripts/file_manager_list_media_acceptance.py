@@ -29,8 +29,15 @@ def exercise(session, root):
     session.key("Escape")
     wait_for(lambda: not any(abs(sample) > 100 for sample in audio_tail(session)[0][-1600:]), "Escape stops List playback")
     private.run_checked([str(session.pointer), "drag", "1280", "800", "600", str(wave_y), "850", str(wave_y)], env=session.env)
+    capture_mark = audio_tail(session)[1]
     session.key("space")
-    wait_for(lambda: any(abs(sample) > 500 for sample in audio_tail(session)[0][-1600:]), "Space auditions the focused List range")
+    def range_audible():
+        samples, size = audio_tail(session)
+        count = min(len(samples), max(0, size - capture_mark) // 2)
+        return count > 0 and any(abs(sample) > 500 for sample in samples[-count:])
+    # A short range can finish before parec flushes its recording block. Check
+    # newly captured PCM, rather than only its last 200ms of trailing silence.
+    wait_for(range_audible, "Space auditions the focused List range")
     session.key("Escape")
     session.address(root / "movies")
     text = session.observe("video-list", ["clip.mp4", "List", "Columns", "Photos", "Constellation"])

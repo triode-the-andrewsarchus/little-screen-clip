@@ -3,36 +3,28 @@
 import subprocess
 import time
 from pathlib import Path
-from PIL import Image, ImageOps
 
 import ui_acceptance_capture as private
 from file_manager_acceptance import Session, application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_phase4_acceptance import click_word
+from file_manager_columns_acceptance import resize
 
 
 def open_edit(session, shot, expected):
     click_word(session, shot, "Edit", minimum_y=40, maximum_y=90)
     name = shot + "-edit"
-    def visible():
-        session.capture_text(name, session.output / f"{name}.png", [])
-        crop = session.output / f"{name}-menu.png"
-        with Image.open(session.output / f"{name}.png") as screen:
-            ImageOps.autocontrast(screen.crop((132, 96, 291, 122)).convert("L")).resize((954, 156)).save(crop)
-        text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "7"], env=session.env)
-        return "".join(expected.lower().split()) in "".join(text.lower().split())
-    wait_for(visible, expected)
-    session.observations.append({"name": name, "screenshot": str(session.output / f"{name}.png"), "expected_visible_text": [expected]})
+    session.observe(name, [expected])
     return name
 
 
 def add_selected(session, shot, plural=False):
     menu = open_edit(session, shot, "Add bookmarks" if plural else "Add bookmark")
-    click_word(session, menu, "Add", minimum_y=90, maximum_y=145)
+    click_word(session, menu, "Add", minimum_y=90, maximum_y=200)
 
 
 def drag(session, source, target):
     session.click(*source)
-    private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *target))], env=session.env)
+    private.run_checked([str(session.pointer), "drag", *map(str, session.logical_size), *map(str, (*source, *target))], env=session.env)
 
 
 def exercise(session, root):
@@ -40,6 +32,10 @@ def exercise(session, root):
     shared = session.output / "config/gtk-3.0/bookmarks"
     text = lambda: shared.read_text() if shared.exists() else ""
     uri = lambda name: (root / name).as_uri()
+    # Folder rows now include square entry targets. Give this sidebar-growth
+    # scenario enough height for all fixture rows and the open Shelf.
+    resize(session, 1104, 1030)
+    time.sleep(1)  # Let compositor resize/move animation settle before OCR hit targets.
     session.observe("empty", ["ALPHA", "BETA", "GAMMA", "DELTA", "note.txt"])
     assert session.word("empty", "Bookmarks", tree=True, minimum_y=190, required=False) is None
     session.click(*session.word("empty", "ALPHA", minimum_y=240))
@@ -67,7 +63,8 @@ def exercise(session, root):
     assert three_title_y < one_title_y - 40, "bookmarks must grow upward from the Shelf"
     session.click(*session.word("three-bookmarks", "note.txt", minimum_y=240))
     session.key("a", "ctrl")
-    session.observe("mixed-selection", ["4 folders", "1 file"])
+    # Select All includes the visible unreadable descendant in DELTA's strip.
+    session.observe("mixed-selection", ["5 folders", "1 file"])
     menu = open_edit(session, "mixed-selection", "No actions available")
     session.key("Escape")
     session.key("Escape")
@@ -80,7 +77,7 @@ def exercise(session, root):
     session.observe("four-bookmarks", ["Bookmarks", "DELTA"])
     # Only the shortcut is removed, not its payload folder or other bookmarks.
     x, y = session.word("four-bookmarks", "BETA", tree=True, minimum_y=title_y + 20, last=True)
-    private.run_checked([str(session.pointer), "right-click", "1280", "800", str(x + 10), str(y)], env=session.env)
+    private.run_checked([str(session.pointer), "right-click", *map(str, session.logical_size), str(x + 10), str(y)], env=session.env)
     session.observe("remove-menu", ["Remove shortcut"])
     click_word(session, "remove-menu", "Remove")
     wait_for(lambda: uri("BETA") not in text(), "shortcut removed from GTK file")
@@ -111,6 +108,7 @@ def exercise(session, root):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager")
+    args.output_size = (1280, 1100)
     output, root = media_fixture_directory(args)
     for name in ["ALPHA", "BETA", "GAMMA", "DELTA"]:
         (root / name).mkdir()

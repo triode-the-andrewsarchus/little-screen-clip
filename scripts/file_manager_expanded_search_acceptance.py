@@ -28,10 +28,11 @@ def fixtures(root):
 def exercise(session, root):
     session.ocr_regions = [("strip-title-deep.png", (430, 410, 545, 432))]
     session.observe("initial", ["a-open", "b-closed"])
-    session.click(730, 160)  # Collapse Shelf in the observed initial List toolbar.
+    session.click(600, 160)  # Collapse Shelf in the observed initial List toolbar.
     session.observe("loaded-folder", ["direct.txt", "nested"])
-    session.click(510, 320)  # Separate disclosure on the nested-folder card.
-    session.observe("expanded-tree", ["deep.txt", "a-open"])
+    # Spare strip space previews the nested folder automatically; disclosures
+    # were removed in favor of ordinary folder navigation.
+    session.observe("expanded-tree", ["nested", "a-open"])
     submit(session, ':file;regex:"(direct|deep|closed|outside|member)";scope:here')
     session.observe("name-results", ["Folder + expanded", "2 matching entries", "deep.txt", "direct.txt"])
     submit(session, ':content:"orchid sentinel";scope:here')

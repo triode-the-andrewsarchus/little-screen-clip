@@ -13,7 +13,7 @@ from file_manager_search_acceptance import submit
 def exercise(session, root):
     if (root / "album").exists():
         session.observe("initial-folder", ["List", "album"])
-        session.click(730, 160)
+        session.click(600, 160)
     reference = (root / "album" if (root / "album").exists() else root) / "Alpha.png"
     session.observe("initial", ["Alpha.png", "Copy.png"])
     session.click(*session.word("initial", "Alpha.png", minimum_y=200))

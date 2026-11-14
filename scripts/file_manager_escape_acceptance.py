@@ -35,12 +35,12 @@ def exercise(session, root):
     for folder, name in CASES:
         session.address(root / folder)
         shot = f"{folder}-browser"
-        session.observe(shot, [Path(name).stem, "Columns"])
+        session.observe(shot, [name, "Columns"])
         session.key("Down")
         session.key("Return")
         session.observe(f"{folder}-viewer", ["Back to folder", name])
         session.key("Escape")
-        text = session.observe(f"{folder}-returned", [Path(name).stem, "Columns", "Folder previews"])
+        text = session.observe(f"{folder}-returned", [name, "Columns", "Folder previews"])
         assert "Back to folder" not in text, "Escape left the file viewer open"
 
 

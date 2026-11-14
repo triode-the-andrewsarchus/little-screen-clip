@@ -4,6 +4,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import re
+import ui_acceptance_capture as private
 from PIL import Image
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 from file_manager_columns_acceptance import resize
@@ -53,6 +55,19 @@ def exercise(session, root):
     x, y = session.word("single-family-scrolled", "Duration", minimum_y=190)
     session.click(x + 8, y)
     session.observe("single-family-sort", ["Audio", "Duration", "Size", "Modified"])
+    reset_names = None
+    for attempt in range(2):
+        private.run_checked([str(session.pointer), "right-click", *map(str, session.logical_size), str(x + 8), str(y)], env=session.env)
+        shot = f"filename-menu-{attempt}"
+        session.observe(shot, ["Filename order"])
+        mx, my = session.word(shot, "Filename", minimum_y=190)
+        session.click(mx + 8, my)
+        text = session.observe(f"filename-reset-{attempt}", ["Audio", "Name", "Duration", "Size", "Modified"])
+        names = re.findall(r"track-\d+\.wav", text.lower())
+        assert names, "Filename reset must retain visible file rows"
+        if reset_names is not None:
+            assert names == reset_names, "Repeating Filename order reversed or displaced the rows"
+        reset_names = names
     resize(session, 1560, 900)
     session.observe("wide-list", ["Columns", "Audio", "Duration"])
     x, y = session.word("wide-list", "Columns", tree=True, minimum_y=100)

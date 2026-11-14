@@ -8,9 +8,6 @@ import io
 import lzma
 import subprocess
 import tarfile
-import re
-from PIL import Image
-import ui_acceptance_capture as private
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 
 
@@ -39,24 +36,27 @@ def fixtures(root):
 def exercise(session, root):
     before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir()}
     session.observe("initial", ["List", "Name"])
-    session.click(730, 160)  # Collapse Shelf on the fixed private output.
+    session.click(600, 160)
     session.observe("compressed-inventories", ["Archive contents", "hello.txt"])
-    normal = lambda text: re.sub(r"[^a-z0-9]", "", text.lower())
-    with Image.open(session.output / "compressed-inventories.png") as screen:
-        for name, top in [("bzip.tbz2", 250), ("gzip.tgz", 358), ("limited.tgz", 466), ("xzdata.txz", 494), ("zstd.tzst", 602)]:
-            crop = session.output / f"title-{name}.png"
-            region = screen.crop((398, top, 750, top + 28))
-            region.resize((region.width * 4, region.height * 4)).save(crop)
-            text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "7"], env=session.env)
-            assert normal(name.split(".")[0]) in normal(text), (name, text)
-            if not name.startswith("limited"):
-                crop = session.output / f"members-{name}.png"
-                region = screen.crop((365, top + 28, 900, top + 82))
-                region.resize((region.width * 4, region.height * 4)).save(crop)
-                text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "6"], env=session.env)
-                assert "archivecontents" in normal(text) and "hellotxt" in normal(text), (name, text)
-    session.click(355, 480)  # Separate disclosure on the observed limited archive row.
-    session.observe("limited-preview", ["Preview limit", "Archive contents"])
+    for name in ["bzip.tbz2", "gzip.tgz", "xzdata.txz", "zstd.tzst"]:
+        session.address(root)
+        session.key(name[0])
+        session.key("Return")
+        session.observe(f"{name}-root", ["Browsing compressed archive", "docs", name])
+        session.key("Down")
+        session.key("Return")
+        session.observe(f"{name}-members", ["Browsing compressed archive", "hello.txt"])
+        if name == "gzip.tgz":
+            session.key("Down")
+            session.key("Return")
+            session.observe("compressed-text", ["Back to folder", "hello.txt", "hello"])
+            session.key("Escape")
+            session.observe("compressed-text-return", ["Browsing compressed archive", "hello.txt"])
+    session.address(root)
+    session.key("l")
+    session.key("Return")
+    text = session.observe("bounded-browse-rejected", ["limited.tgz"], expected_any=["budget", "limit"])
+    assert "Browsing compressed archive" not in text, "A partial large archive must not publish a browseable snapshot"
     assert not (root / "docs").exists()
     assert not (root / "payload.bin").exists()
     assert before == {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir()}
@@ -67,4 +67,4 @@ if __name__ == "__main__":
     output, root = media_fixture_directory(args)
     fixtures(root)
     raise SystemExit(run_application_acceptance(args, output, root, exercise,
-        "Gzip/bzip2/xz/zstd inline archive inventories, explicit bounded partial previews and source preservation"))
+        "Gzip/bzip2/xz/zstd inventories and snapshot navigation, member text, bounded large-archive rejection and unchanged sources"))

@@ -67,7 +67,6 @@ def exercise(session, root):
     session.address(root)
     session.observe("columns-root", ["c-package.zip"])
     # Keyboard navigation uses the shared List selection and activation policy.
-    session.key("Home")
     session.key("c")
     session.key("Return")
     session.observe("archive-columns", ["Browsing compressed archive", "assets"])

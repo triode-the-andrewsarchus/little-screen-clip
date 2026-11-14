@@ -20,17 +20,17 @@ def exercise(session, root):
     for _ in range(4):
         session.scroll(700, 420, 900, horizontal=True)
     session.observe("current-returned", ["melody.txt", "fourth"])
-    # The divider to the left of the rich List is 15px left of its Type header.
-    before, y = session.word("current-returned", "Type", minimum_y=200)
+    # The divider to the left of the rich List is 15px left of its Name header.
+    before, y = session.word("current-returned", "Name", minimum_y=200)
     private.run_checked([str(session.pointer), "drag", *map(str, session.logical_size),
                          str(before - 15), str(y + 90), str(before + 65), str(y + 90)], env=session.env)
     session.observe("resized-divider", ["melody.txt", "fourth"])
-    after, _ = session.word("resized-divider", "Type", minimum_y=200)
+    after, _ = session.word("resized-divider", "Name", minimum_y=200)
     assert after > before + 50, "Dragging the divider must resize its folder column"
     session.click(after - 15, y + 90, delay=0.06)
     session.click(after - 15, y + 90)
     session.observe("reset-divider", ["melody.txt", "fourth"])
-    reset, _ = session.word("reset-divider", "Type", minimum_y=200)
+    reset, _ = session.word("reset-divider", "Name", minimum_y=200)
     assert abs(reset - before) < 8, "Double-click must restore the default column width"
     resize(session, 760, 700)
     session.observe("narrow-current", ["melody.txt", "fourth"])
