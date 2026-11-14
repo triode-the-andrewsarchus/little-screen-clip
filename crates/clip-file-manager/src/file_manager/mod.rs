@@ -6,6 +6,7 @@ mod blend_preview;
 mod bookmarks;
 mod calendar;
 pub(super) mod constellation;
+mod container_preview;
 mod content;
 mod database;
 mod diagram_strip;
@@ -222,6 +223,7 @@ pub(crate) struct FileManager {
     address: String,
     show_hidden: bool,
     tree: FolderTree,
+    containers: container_preview::Previews,
     bookmarks: bookmarks::Bookmarks,
     bookmark_drop_rect: Option<egui::Rect>,
     native_drag_point: Option<egui::Pos2>,
@@ -295,6 +297,7 @@ impl FileManager {
     fn new(home: PathBuf) -> Self {
         Self {
             tree: FolderTree::new(home.clone()),
+            containers: Default::default(),
             bookmarks: bookmarks::Bookmarks::new(home.join(".config/gtk-3.0/bookmarks")),
             bookmark_drop_rect: None,
             native_drag_point: None,
@@ -414,6 +417,7 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.containers.clear();
         if matches!(navigation, Navigation::Refresh) {
             self.similarity_canvas.invalidate();
         }
@@ -709,6 +713,7 @@ impl FileManager {
             Navigation::History(index) => self.index = Some(index),
             _ => {}
         }
+        self.containers.clear();
         self.tree.reveal(&directory.path);
         self.directory = Some(directory);
         self.rebuild_visible();
@@ -810,6 +815,8 @@ impl FileManager {
                 let entry = &directory.entries[*index];
                 let height = if self.search.has_offline_results() {
                     28.0
+                } else if !self.search.has_result_sources() && container_preview::candidate(entry) {
+                    self.containers.height(entry)
                 } else if entry.system.is_some()
                     || self.previews.is_text(entry)
                     || entry.has_content_strip()

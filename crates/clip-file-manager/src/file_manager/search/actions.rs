@@ -157,6 +157,7 @@ impl FileManager {
     }
     pub(in crate::file_manager) fn sync_preview_context(&mut self) {
         if !self.search.preview_context.matches(&self.search.sources) {
+            self.containers.clear();
             let paths = self
                 .directory
                 .as_ref()

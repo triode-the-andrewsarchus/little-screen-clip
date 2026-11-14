@@ -4,6 +4,9 @@ use super::*;
 
 struct ListPreviews<'a> {
     columns: ListColumns,
+    containers: &'a mut super::super::container_preview::Previews,
+    container_paths: std::collections::BTreeSet<PathBuf>,
+    hidden: bool,
     metadata_only: bool,
     files: &'a mut EntryPreviews,
     music: &'a mut EntryPreviews,
@@ -76,6 +79,12 @@ impl<'a> ListPreviews<'a> {
                 false,
             );
         }
+        if !actions.context.active() && super::super::container_preview::candidate(entry) {
+            return (
+                self.container_row(ui, rect, entry, marked, colors, palette, actions),
+                false,
+            );
+        }
         if self.files.is_multisample(entry)
             && preview_hovered(ui, rect)
             && ui.input(|i| i.pointer.any_pressed())
@@ -139,6 +148,44 @@ impl<'a> ListPreviews<'a> {
             }
         }
         (response, engaged)
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Shared row painting boundary keeps selection and palette explicit"
+    )]
+    fn container_row(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        entry: &Entry,
+        marked: bool,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+        actions: &mut ListActions,
+    ) -> egui::Response {
+        self.container_paths.insert(entry.path.clone());
+        let header = Rect::from_min_max(
+            rect.min + vec2(26.0, 0.0),
+            pos2(rect.right(), rect.top() + 28.0),
+        );
+        let response = file_row(ui, header, entry, marked, self.columns, None, colors);
+        if let Some((path, directory)) = self.containers.show(
+            ui,
+            rect,
+            entry,
+            self.files,
+            &mut self.paths,
+            self.hidden,
+            colors,
+            palette,
+        ) {
+            if directory {
+                actions.navigate_folder = Some(path);
+            } else {
+                actions.open = Some(path);
+            }
+        }
+        response
     }
     fn passive_row(
         &mut self,
@@ -214,7 +261,7 @@ impl FileManager {
     }
     fn list_contents(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         let columns = self.list_header(ui, colors);
-        if self.previews.poll(ui.ctx()) {
+        if self.containers.poll(ui.ctx()) | self.previews.poll(ui.ctx()) {
             self.rebuild_list_offsets();
         }
         self.music_previews.poll(ui.ctx());
@@ -259,6 +306,9 @@ impl FileManager {
         let mut targets = Vec::new();
         let preview_paths = std::collections::BTreeSet::new();
         let mut previews = ListPreviews {
+            containers: &mut self.containers,
+            container_paths: Default::default(),
+            hidden: self.show_hidden,
             columns,
             midi: &mut self.midi,
             metadata_only: self.search.has_offline_results(),
@@ -324,6 +374,7 @@ impl FileManager {
         if !previews.hovered_video {
             previews.videos.clear_hover();
         }
+        previews.containers.retain(&previews.container_paths);
         let play = previews.play.take();
         drop(previews);
         self.drop_targets.extend(targets);

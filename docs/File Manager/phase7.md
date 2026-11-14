@@ -51,3 +51,38 @@ missing. Current owners include `viewers.rs`, `viewers/chrome.rs`,
 `viewers/rename.rs`, `ui/list.rs`, `previews.rs`, shared studio source/save owners
 and core `FileSource`/ordinary-directory pins. Final audit will tie each original
 scope item to current tests and observed UI before marking Phase 4 complete.
+
+## Initial container-preview checkpoint
+
+- [x] Add small-folder cards with contained-file names/shared thumbnails,
+  explicit collapse/expand and direct double-click opening of files/folders.
+- [x] Add native ZIP/plain-TAR member inventories with full member-path hover,
+  without extraction or treating members as ordinary host files.
+- [x] Pin ordinary folders/files, reject replaced sources before/after inventory,
+  preserve truncation, avoid automatic symlink traversal, and reuse core's
+  allocation-bounded ZIP central-directory reader. TAR verifies member ranges.
+- [x] Limit caches to 32 visible containers, two actual executing inventory reads
+  on a separate existing BackgroundJobs pool, 32 displayed children, 4,096
+  archive members and 512 MiB archive input. Retire work on collapse, hidden rows,
+  navigation, source-context changes, view switches and studio entry.
+- [x] Six focused tests and the full file-manager library pass (878 passed,
+  six ignored); strict library/test Clippy and warning-free native build pass.
+- [x] Native dark/light interaction reports pass at
+  `/tmp/phase7-containers-dark-03/report.json` and
+  `/tmp/phase7-containers-light-01/report.json`, including a real thumbnail,
+  collapse/re-expand, nested folder navigation, history return and child studio
+  opening. Tracked driver: `scripts/file_manager_phase7_acceptance.py`.
+
+This is an initial slice, not completion of the container requirements above:
+small-folder threshold is initially eight; configuration, nested inline levels,
+child selection/search integration, archive member artwork/opening and broader
+compressed archive families remain to implement. Search-result inventories are
+not expanded yet, preserving published-result source guards until descendant
+observations are integrated. No phase completion is claimed by these tests.
+
+Architecture review against `before-phase7-views` has no new complexity threshold
+violations, unchanged maximum complexity and duplication percentage, and no new
+clones in the container modules. The aggregate tool still reports REGRESSION for
+existing clones in touched large files/manifests and reordered untouched Python
+cycles. The initial increase of ListPreviews::row above 15 was removed by moving
+contained-row composition into its own rendering responsibility.
