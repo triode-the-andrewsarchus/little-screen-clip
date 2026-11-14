@@ -99,3 +99,13 @@ contained-row composition into its own rendering responsibility.
 - [x] Seven container tests and fourteen selected core configuration tests pass;
   strict file-manager library/test Clippy passes. Disabling automatic previews
   starts no inventory reads; explicit expansion and clamped limits are tested.
+
+### Explicit expansion choices
+
+- [x] Preserve explicit +/− choices when automatic-preview settings change or a
+  child changes its folder's revision. Changing an automatic default must not
+  silently replace an explicit user choice. Automatically collapsed reads are
+  cancelled immediately; explicit expanded containers remain available.
+- [x] Eight container tests and strict file-manager library/test Clippy pass;
+  the rebuilt desktop binary is warning-free. New cases verify cancellation of
+  automatic reads and preservation of explicit choices across settings/revisions.

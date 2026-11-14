@@ -84,7 +84,11 @@ impl Previews {
         };
         if self.options != options {
             self.options = options;
-            self.clear();
+            for node in self.nodes.values_mut() {
+                if !node.expanded(options) {
+                    node.task = None;
+                }
+            }
             self.layout_changed = true;
         }
     }
@@ -160,7 +164,9 @@ impl Previews {
             .entry(entry.path.clone())
             .or_insert_with(|| Node::new(entry.revision));
         if node.revision != entry.revision {
+            let expanded = node.expanded;
             *node = Node::new(entry.revision);
+            node.expanded = expanded;
         }
         if !node.expanded(self.options) || active >= READS || node.task.is_some() {
             return;

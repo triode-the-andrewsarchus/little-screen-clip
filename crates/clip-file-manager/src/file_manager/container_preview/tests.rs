@@ -171,5 +171,31 @@ fn disabling_automatic_previews_starts_no_reads_but_explicit_expansion_still_wor
     assert_eq!(previews.height(&source), 108.0);
     previews.configure(true, usize::MAX);
     assert_eq!(previews.options.small_items, inventory::LIMIT);
-    assert!(previews.nodes.is_empty());
+    assert_eq!(previews.nodes[&source.path].expanded, Some(true));
+}
+
+#[test]
+fn disabling_automatic_previews_retires_automatic_reads_and_preserves_manual_choices() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("folder")).unwrap();
+    let source = entry(root.path(), "folder");
+    let mut previews = Previews::default();
+    previews.request(&source);
+    let token = previews.nodes[&source.path]
+        .task
+        .as_ref()
+        .unwrap()
+        .token
+        .clone();
+    previews.configure(false, 8);
+    assert!(token.load(std::sync::atomic::Ordering::Acquire));
+    assert!(previews.nodes[&source.path].task.is_none());
+    previews.nodes.get_mut(&source.path).unwrap().expanded = Some(true);
+    previews.request(&source);
+    previews.configure(false, 2);
+    assert_eq!(previews.nodes[&source.path].expanded, Some(true));
+    assert_eq!(previews.height(&source), 108.0);
+    std::fs::write(source.path.join("changed.txt"), "new child").unwrap();
+    previews.request(&entry(root.path(), "folder"));
+    assert_eq!(previews.nodes[&source.path].expanded, Some(true));
 }
