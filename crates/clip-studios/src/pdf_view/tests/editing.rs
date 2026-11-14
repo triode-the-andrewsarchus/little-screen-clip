@@ -41,7 +41,8 @@ fn pdf_delete_and_rotate_wait_for_metadata_before_dispatch() {
             title: Some("fixture".into()),
             author: None,
             page_size: None,
-        })
+        }
+        .into())
     });
     state.info_job = Some((ticket, receiver));
 

@@ -357,7 +357,7 @@ impl EntryPreviews {
                 .is_some_and(|ready| ready.data.handwritten_info.is_some())
         {
             Some(super::DocumentPosition::PdfPage(
-                self.show_pdf(ui, row, entry, colors).unwrap_or(1),
+                self.show_pdf(ui, row, entry, colors, palette).unwrap_or(1),
             ))
         } else {
             self.show_listing(ui, row, entry, Some(columns), colors, palette)
@@ -488,23 +488,33 @@ impl EntryPreviews {
         row: egui::Rect,
         entry: &Entry,
         colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
     ) -> Option<usize> {
         let id = self.identity(entry);
-        let info = self.listing(entry).and_then(|ready| {
-            ready
-                .data
-                .pdf_info
-                .as_ref()
-                .map(|info| info.page_count)
-                .or_else(|| {
-                    ready
-                        .data
-                        .handwritten_info
-                        .as_ref()
-                        .map(|info| info.pages.len())
-                })
-        });
-        self.pdf_pages.show(ui, row, entry, id, info, colors)
+        let (pdf_count, notebook) = self
+            .listing(entry)
+            .map(|ready| {
+                (
+                    ready.data.pdf_info.as_ref().map(|info| info.page_count),
+                    ready.data.handwritten_info.clone(),
+                )
+            })
+            .unwrap_or_default();
+        let count = pdf_count.or_else(|| notebook.as_ref().map(|info| info.pages.len()));
+        let selected = self.pdf_pages.show(ui, row, entry, id, count, colors);
+        if let Some(info) = notebook.filter(|info| !info.warnings.is_empty()) {
+            let rect = egui::Rect::from_min_size(
+                row.right_top() + egui::vec2(-148.0, 1.0),
+                egui::vec2(146.0, 20.0),
+            );
+            let accent = ui.visuals().warn_fg_color;
+            ui.allocate_ui_at_rect(rect, |ui| {
+                crate::ui_ext::badge_pill(ui, "Paper unavailable", Some(accent), palette)
+            })
+            .response
+            .on_hover_text(info.warnings.join("\n"));
+        }
+        selected
     }
     pub fn show_listing(
         &mut self,

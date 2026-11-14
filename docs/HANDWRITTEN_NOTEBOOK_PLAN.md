@@ -478,3 +478,34 @@ The corpus remains immutable; runtime output must never replace its references.
   existing worker JSON omits empty warnings for compatibility.
 - [ ] Wire the new backend through guarded worker selection, preserve RealMedia
   routing, display warnings and qualify list/little-screen/large-view interaction.
+
+### Guarded worker and presentation integration checkpoint
+
+- [x] Select Supernote, Xournal or reMarkable through qualified source headers.
+  ReMarkable raw headers take precedence over the ambiguous `.rm` suffix;
+  RMDOC ZIP and RMN TAR use actual document metadata, and ordinary unrelated ZIP/
+  RealMedia-looking files are not claimed as notebooks. Reuse the same inherited
+  ordinary-file descriptor, process-group cancellation, CPU/address-space/output
+  limits and parent source revalidation.
+- [x] Connect raw and archived reMarkable sources through the existing list-page
+  strip, little-screen image ingestion/rehydration and read-only studio owner.
+  Move handwritten ingestion before suffix-based multimedia fallbacks so `.rm`
+  can qualify correctly. Missing-paper notices remain explicit in the clipboard
+  subtitle, the existing row header and the studio header/hover explanation.
+  Notices do not add a new dock or grow the normal strip height.
+- [x] Preserve warnings in asynchronous studio metadata, clear them on reload,
+  retain PDF mutation guards and preserve existing selected-page behavior.
+  Archive type qualification reuses the same root metadata reader as indexing.
+- [x] Pass twenty-six notebook backend tests, the real worker/clipboard harness
+  across six v5/v6/RMDOC/RMN cases, sixty-three shared paged-viewer tests, strict
+  all-target Clippy for core/studios/file-manager/workbench, and a warning-free
+  native file-manager build. The harness also verifies original file bytes,
+  invalid pages, notices and clipboard payload rehydration.
+- [x] Split nested RMT identity parsing and TAR member validation into their
+  actual responsibilities; the complete architecture comparison has no new
+  complexity findings, and overall duplication is reduced. Existing clones
+  elsewhere in touched large files are not new implementation copies.
+- [ ] Run `scripts/notebook_remarkable_acceptance.py` on the isolated compositor
+  in both appearances. Verify real row artwork, second-page hover/open handoff,
+  original/missing-template notices, legacy/current ink, nested paper/PDFs and
+  unchanged sources before marking the family supported.

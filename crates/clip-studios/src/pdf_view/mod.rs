@@ -22,7 +22,7 @@ use little_clip_core::pdf::{
     PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use source::PageSource;
+use source::{PageSource, SourceInfo};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -542,6 +542,7 @@ pub struct PdfPageItem {
 /// Interactive state for the multi-page PDF thumbnail grid editor.
 pub struct PdfEditorState {
     source: PageSource,
+    source_warnings: Vec<String>,
     info_cancel: Option<Arc<AtomicBool>>,
     read_check: crate::file_source::ReadCheck,
     pub path: PathBuf,
@@ -554,7 +555,7 @@ pub struct PdfEditorState {
     protect_outputs: bool,
     info_job: Option<(
         JobTicket,
-        little_clip_core::jobs::JobReceiver<Result<PdfInfo, String>>,
+        little_clip_core::jobs::JobReceiver<Result<SourceInfo, String>>,
     )>,
     preview_rx: Option<Receiver<PdfPreviewMsg>>,
     preview_job: Option<(JobTicket, little_clip_core::jobs::JobReceiver<()>)>,
@@ -585,6 +586,7 @@ impl PdfEditorState {
 
         Self {
             source: PageSource::Pdf,
+            source_warnings: Vec::new(),
             info_cancel: None,
             read_check: Default::default(),
             path,

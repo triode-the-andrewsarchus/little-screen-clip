@@ -28,22 +28,10 @@ impl Templates {
             let bytes = package
                 .read(&member, MAX_TEMPLATE, cancel)?
                 .ok_or("Missing template archive")?;
-            let mut template = Package::open(Cursor::new(bytes), cancel)?;
-            let json = template
-                .read("template.json", 64 * 1024, cancel)?
-                .ok_or("Missing template metadata")?;
-            let metadata: serde_json::Value =
-                serde_json::from_slice(&json).map_err(|error| error.to_string())?;
-            for identity in [metadata.get("fileName"), metadata.get("name")]
-                .into_iter()
-                .flatten()
-            {
-                let identity = identity
-                    .as_str()
-                    .filter(|name| !name.is_empty() && name.len() <= 512)
-                    .ok_or("Invalid template identity")?;
+
+            for identity in template_identities(bytes, cancel)? {
                 if identities
-                    .insert(identity.to_owned(), member.clone())
+                    .insert(identity, member.clone())
                     .is_some_and(|old| old != member)
                 {
                     return Err("Ambiguous reMarkable template identity".into());
@@ -96,6 +84,26 @@ impl Templates {
         };
         raster(&image, options).map(Some)
     }
+}
+
+fn template_identities(bytes: Vec<u8>, cancel: &AtomicBool) -> Result<Vec<String>, String> {
+    let mut template = Package::open(Cursor::new(bytes), cancel)?;
+    let json = template
+        .read("template.json", 64 * 1024, cancel)?
+        .ok_or("Missing template metadata")?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&json).map_err(|error| error.to_string())?;
+    [metadata.get("fileName"), metadata.get("name")]
+        .into_iter()
+        .flatten()
+        .map(|identity| {
+            identity
+                .as_str()
+                .filter(|name| !name.is_empty() && name.len() <= 512)
+                .map(str::to_owned)
+                .ok_or_else(|| "Invalid template identity".into())
+        })
+        .collect()
 }
 
 fn svg_png(bytes: &[u8], edge: u32, cancel: &AtomicBool) -> Result<Vec<u8>, String> {

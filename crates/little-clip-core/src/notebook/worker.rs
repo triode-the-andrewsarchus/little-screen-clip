@@ -22,7 +22,7 @@ pub fn inspect(path: &Path, cancel: &AtomicBool) -> Result<Info, String> {
     if info.pages.is_empty()
         || info.pages.len() > 4096
         || info.pages.iter().any(|page| {
-            page.width == 0 || page.height == 0 || page.width > 16384 || page.height > 16384
+            page.width == 0 || page.height == 0 || page.width > 65536 || page.height > 65536
         })
     {
         return Err("Invalid notebook page dimensions or count".into());
@@ -167,70 +167,115 @@ fn prepare(input: &mut File, mode: &str, page: usize, edge: u32) -> Result<Vec<u
         .read_to_end(&mut header)
         .map_err(|error| error.to_string())?;
     input.rewind().map_err(|error| error.to_string())?;
-    let supernote = super::supernote::has_signature(&header);
-    let candidate = super::xournal::has_container_prefix(&header);
-    match (mode, page, edge) {
-        ("identify", 0, 0) => {
-            let identified = supernote
-                || candidate && super::xournal::has_signature(input, &AtomicBool::new(false))?;
-            serde_json::to_vec(&identified).map_err(|error| error.to_string())
+    let kind = source_kind(input, &header)?;
+    match (mode, page, edge, kind) {
+        ("identify", 0, 0, kind) => {
+            serde_json::to_vec(&kind.is_some()).map_err(|error| error.to_string())
         }
-        _ if !supernote && !candidate => Err("Unrecognized notebook header".into()),
-        ("info", 0, 0) => {
-            serde_json::to_vec(&prepare_info(input, supernote)?).map_err(|error| error.to_string())
+        (_, _, _, None) => Err("Unrecognized notebook header".into()),
+        ("info", 0, 0, Some(kind)) => {
+            serde_json::to_vec(&prepare_info(input, kind)?).map_err(|error| error.to_string())
         }
-        ("page", 1..=4096, 1..=4096) => {
-            prepare_page(input, supernote, page, edge).map(|result| result.0)
+        ("page", 1..=4096, 1..=4096, Some(kind)) => {
+            prepare_page(input, kind, page, edge).map(|result| result.0)
         }
         _ => Err("Invalid notebook helper operation".into()),
     }
 }
 
-fn prepare_info(input: &mut File, supernote: bool) -> Result<Info, String> {
-    if supernote {
-        let document = super::supernote::inspect(input)?;
-        Ok(Info {
-            format: "Supernote".into(),
-            warnings: Vec::new(),
-            pages: document
-                .pages
-                .into_iter()
-                .map(|page| PageSize {
-                    width: page.width,
-                    height: page.height,
-                })
-                .collect(),
-        })
+#[derive(Clone, Copy)]
+enum SourceKind {
+    Supernote,
+    Xournal,
+    Remarkable,
+}
+
+fn source_kind(input: &mut File, header: &[u8]) -> Result<Option<SourceKind>, String> {
+    if super::supernote::has_signature(header) {
+        return Ok(Some(SourceKind::Supernote));
+    }
+    if super::remarkable::has_signature(header) {
+        return Ok(Some(SourceKind::Remarkable));
+    }
+    if header.starts_with(b"PK\x03\x04") {
+        let has_xournal = {
+            let archive = zip::ZipArchive::new(&mut *input).map_err(|error| error.to_string())?;
+            archive.file_names().any(|name| name == "content.xml")
+        };
+        input.rewind().map_err(|error| error.to_string())?;
+        if !has_xournal {
+            return remarkable_package(input);
+        }
+    } else if header.get(257..262) == Some(b"ustar") {
+        return remarkable_package(input);
+    }
+    if super::xournal::has_container_prefix(header)
+        && super::xournal::has_signature(input, &AtomicBool::new(false))?
+    {
+        Ok(Some(SourceKind::Xournal))
     } else {
-        let document = super::xournal::inspect(input, &AtomicBool::new(false))?;
-        Ok(Info {
-            format: "Xournal".into(),
-            warnings: Vec::new(),
-            pages: document
-                .pages
-                .into_iter()
-                .map(|page| PageSize {
-                    width: page.width.ceil() as u32,
-                    height: page.height.ceil() as u32,
-                })
-                .collect(),
-        })
+        Ok(None)
+    }
+}
+
+fn remarkable_package(input: &mut File) -> Result<Option<SourceKind>, String> {
+    super::remarkable::archive::has_signature(input, &AtomicBool::new(false))
+        .map(|recognized| recognized.then_some(SourceKind::Remarkable))
+}
+
+fn prepare_info(input: &mut File, kind: SourceKind) -> Result<Info, String> {
+    match kind {
+        SourceKind::Supernote => {
+            let document = super::supernote::inspect(input)?;
+            Ok(Info {
+                format: "Supernote".into(),
+                warnings: Vec::new(),
+                pages: document
+                    .pages
+                    .into_iter()
+                    .map(|page| PageSize {
+                        width: page.width,
+                        height: page.height,
+                    })
+                    .collect(),
+            })
+        }
+        SourceKind::Xournal => {
+            let document = super::xournal::inspect(input, &AtomicBool::new(false))?;
+            Ok(Info {
+                format: "Xournal".into(),
+                warnings: Vec::new(),
+                pages: document
+                    .pages
+                    .into_iter()
+                    .map(|page| PageSize {
+                        width: page.width.ceil() as u32,
+                        height: page.height.ceil() as u32,
+                    })
+                    .collect(),
+            })
+        }
+        SourceKind::Remarkable => {
+            super::remarkable::preview::inspect(input, &AtomicBool::new(false))
+        }
     }
 }
 
 fn prepare_page(
     input: &mut File,
-    supernote: bool,
+    kind: SourceKind,
     page: usize,
     edge: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
     let cancel = AtomicBool::new(false);
-    if supernote {
-        super::supernote::render(input, page, edge, &cancel)
-    } else {
-        let source = crate::file_source::FileSource::capture_file(input)?;
-        let result = super::xournal::render(input, source.path(), page, edge, &cancel)?;
-        source.check_file(input)?;
-        Ok(result)
+    match kind {
+        SourceKind::Supernote => super::supernote::render(input, page, edge, &cancel),
+        SourceKind::Remarkable => super::remarkable::preview::render(input, page, edge, &cancel),
+        SourceKind::Xournal => {
+            let source = crate::file_source::FileSource::capture_file(input)?;
+            let result = super::xournal::render(input, source.path(), page, edge, &cancel)?;
+            source.check_file(input)?;
+            Ok(result)
+        }
     }
 }

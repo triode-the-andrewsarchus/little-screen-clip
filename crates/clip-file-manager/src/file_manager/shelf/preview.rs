@@ -203,6 +203,10 @@ impl Source {
                     match little_clip_core::notebook::inspect(&path, token) {
                         Ok(info) => {
                             data.detail = format!("{} · {} pages", info.format, info.pages.len());
+                            if !info.warnings.is_empty() {
+                                data.detail.push_str(" · paper artwork unavailable");
+                                data.text = info.warnings.join("\n");
+                            }
                             data.handwritten_info = Some(Arc::new(info));
                         }
                         Err(error) => data.text = error,

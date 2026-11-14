@@ -41,24 +41,7 @@ pub(super) fn from_package<R: Read + Seek>(
     package: &mut Package<R>,
     cancel: &AtomicBool,
 ) -> Result<Index, String> {
-    let roots: Vec<_> = package
-        .names()
-        .filter_map(|name| name.strip_suffix(".metadata"))
-        .filter(|name| component(name))
-        .map(str::to_owned)
-        .collect();
-    let [root] = roots.as_slice() else {
-        return Err("Expected one reMarkable document root".into());
-    };
-    let metadata: Value = serde_json::from_slice(
-        &package
-            .read(&format!("{root}.metadata"), MAX_METADATA, cancel)?
-            .ok_or("Missing reMarkable document metadata")?,
-    )
-    .map_err(|error| format!("Invalid reMarkable metadata: {error}"))?;
-    if metadata.get("type").and_then(Value::as_str) != Some("DocumentType") {
-        return Err("Not a reMarkable document archive".into());
-    }
+    let (root, metadata) = header(package, cancel)?.ok_or("Not a reMarkable document archive")?;
     let content: Value = serde_json::from_slice(
         &package
             .read(&format!("{root}.content"), MAX_METADATA, cancel)?
@@ -74,7 +57,7 @@ pub(super) fn from_package<R: Read + Seek>(
     }
     let mut pages = page_plan(&content, matches!(file_type, "pdf" | "epub"))?;
     if content.get("cPages").is_none() {
-        legacy_templates(package, root, &mut pages, cancel)?;
+        legacy_templates(package, &root, &mut pages, cancel)?;
     }
 
     Ok(Index {
@@ -82,11 +65,50 @@ pub(super) fn from_package<R: Read + Seek>(
         title: metadata
             .get("visibleName")
             .and_then(Value::as_str)
-            .unwrap_or(root)
+            .unwrap_or(&root)
             .to_owned(),
         file_type: file_type.to_owned(),
         pages,
     })
+}
+
+/// Qualifies the document metadata independently of container suffix and page validity.
+pub(crate) fn has_signature(
+    input: &mut (impl Read + Seek),
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
+    let mut package = Package::open(input, cancel)?;
+    Ok(header(&mut package, cancel)?.is_some())
+}
+
+fn header<R: Read + Seek>(
+    package: &mut Package<R>,
+    cancel: &AtomicBool,
+) -> Result<Option<(String, Value)>, String> {
+    let roots: Vec<_> = package
+        .names()
+        .filter_map(|name| name.strip_suffix(".metadata"))
+        .filter(|name| component(name))
+        .map(str::to_owned)
+        .collect();
+    let [root] = roots.as_slice() else {
+        return if roots.is_empty() {
+            Ok(None)
+        } else {
+            Err("Ambiguous reMarkable document root".into())
+        };
+    };
+    let metadata: Value = serde_json::from_slice(
+        &package
+            .read(&format!("{root}.metadata"), MAX_METADATA, cancel)?
+            .ok_or("Missing reMarkable document metadata")?,
+    )
+    .map_err(|error| format!("Invalid reMarkable metadata: {error}"))?;
+    if metadata.get("type").and_then(Value::as_str) != Some("DocumentType") {
+        return Ok(None);
+    }
+
+    Ok(Some((root.clone(), metadata)))
 }
 
 fn legacy_templates<R: Read + Seek>(

@@ -33,7 +33,7 @@ const HEADER_BYTES: usize = 4096;
 /// Cheap scheduling hint only; the worker must qualify the source header.
 pub fn is_candidate_path(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|ext| {
-        ["note", "xopp", "xoj"]
+        ["note", "xopp", "xoj", "rm", "rmdoc", "rmn"]
             .iter()
             .any(|candidate| ext.eq_ignore_ascii_case(candidate))
     })
@@ -57,9 +57,9 @@ pub fn has_header(
         .take(HEADER_BYTES as u64)
         .read_to_end(&mut header)
         .map_err(|error| error.to_string())?;
-    let recognized = if supernote::has_signature(&header) {
+    let recognized = if supernote::has_signature(&header) || remarkable::has_signature(&header) {
         true
-    } else if xournal::has_container_prefix(&header) {
+    } else if xournal::has_container_prefix(&header) || header.get(257..262) == Some(b"ustar") {
         worker::identify(path, cancel)?
     } else {
         false

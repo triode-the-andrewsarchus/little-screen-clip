@@ -80,22 +80,9 @@ impl<R: Read + Seek> Package<R> {
                     return Err("reMarkable archive exceeds the entry budget".into());
                 }
                 let entry = entry.map_err(|error| error.to_string())?;
-                if entry.header().entry_type().is_dir() {
-                    continue;
-                }
-                if !entry.header().entry_type().is_file() {
-                    return Err("reMarkable archive links/special members are unsupported".into());
-                }
-                let name = canonical(
-                    std::str::from_utf8(&entry.path_bytes())
-                        .map_err(|_| "Non-UTF8 archive name")?,
-                )?;
-                let offset = entry.raw_file_position();
-                let length = entry.size();
-                if offset.checked_add(length).is_none_or(|end| end > size) {
-                    return Err("Truncated reMarkable archive member".into());
-                }
-                if entries.insert(name, (offset, length)).is_some() {
+                if let Some((name, offset, length)) = tar_member(&entry, size)?
+                    && entries.insert(name, (offset, length)).is_some()
+                {
                     return Err("Duplicate reMarkable archive member".into());
                 }
             }
@@ -141,6 +128,26 @@ impl<R: Read + Seek> Package<R> {
             }
         }
     }
+}
+
+fn tar_member<R: Read>(
+    entry: &tar::Entry<'_, R>,
+    size: u64,
+) -> Result<Option<(String, u64, u64)>, String> {
+    if entry.header().entry_type().is_dir() {
+        return Ok(None);
+    }
+    if !entry.header().entry_type().is_file() {
+        return Err("reMarkable archive links/special members are unsupported".into());
+    }
+    let name =
+        canonical(std::str::from_utf8(&entry.path_bytes()).map_err(|_| "Non-UTF8 archive name")?)?;
+    let offset = entry.raw_file_position();
+    let length = entry.size();
+    if offset.checked_add(length).is_none_or(|end| end > size) {
+        return Err("Truncated reMarkable archive member".into());
+    }
+    Ok(Some((name, offset, length)))
 }
 
 fn canonical(name: &str) -> Result<String, String> {

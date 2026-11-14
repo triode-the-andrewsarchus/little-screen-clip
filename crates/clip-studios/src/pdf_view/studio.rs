@@ -59,7 +59,7 @@ impl PdfEditorState {
                     shell = shell.with_escape_hatch(EscapeHatch::primary("Okular", "okular", "Open PDF in Okular").with_icon(Icon::Pdf));
                 }
                 let hatch = shell.render_header(ui, |ui| {
-                    (rotate, delete) = self.render_pdf_actions(ui, palette);
+                    (rotate, delete) = self.render_document_actions(ui, palette);
                 });
                 if let Some(0) = hatch { EscapeHatchLauncher::launch("PDF Viewer", "okular", &self.path, &mut self.status_toast, now); }
                 if rotate { self.rotate_current_page(90, now); }
@@ -80,12 +80,16 @@ impl PdfEditorState {
         }
     }
 
-    fn render_pdf_actions(
+    fn render_document_actions(
         &mut self,
         ui: &mut egui::Ui,
         palette: &little_clip_core::palette::AppPalette,
     ) -> (bool, bool) {
         if self.source.read_only() {
+            if !self.source_warnings.is_empty() {
+                ui.colored_label(ui.visuals().warn_fg_color, "Paper artwork unavailable")
+                    .on_hover_text(self.source_warnings.join("\n"));
+            }
             return (false, false);
         }
         let enabled = self.info_job.is_none()
