@@ -106,6 +106,17 @@ checkpoints below. Current implementation and acceptance cover:
   folder return. The drawing guard excludes derived ghost/retained-pixel and
   dismissed-draft identity state rather than treating these as active gestures.
 
+## Media-view simplification review
+
+- [x] Keep waveform range focus through mouse release. The release is still an
+  audio gesture, so it must not fall through to file-row selection and steal
+  Space/Ctrl+C focus. A real pointer-frame regression verifies press, drag and
+  release ownership and range focus (`/tmp/list-range-focus-tests.log`). Native
+  private-sink PCM checks verify click playback, Escape stop and Space range
+  audition (`/tmp/list-media-native-dark-02/report.json`).
+- [ ] Remove redundant Music/Videos screens and default selection, retaining
+  their waveform/timeline functionality in List and migrating old view choices.
+
 ## Required delivery and acceptance
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;

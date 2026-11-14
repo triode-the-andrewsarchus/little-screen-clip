@@ -310,8 +310,12 @@ fn interact_waveform(
             range.snapped = false;
         }
     }
-    let engaged =
-        interaction.clicked() || interaction.dragged() || interaction.is_pointer_button_down_on();
+    // The release frame still belongs to the waveform. Otherwise the enclosing
+    // file row can take keyboard focus before Space/Ctrl+C use the new range.
+    let engaged = interaction.clicked()
+        || interaction.dragged()
+        || interaction.drag_stopped()
+        || interaction.is_pointer_button_down_on();
     if engaged {
         ui.memory_mut(|m| m.request_focus(waveform_id()));
     }
@@ -559,5 +563,79 @@ fn paint_range(
             0.0,
             colors.accent.gamma_multiply(0.25),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn waveform_release_owns_the_gesture_and_retains_range_keyboard_focus() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("tone.wav");
+        std::fs::write(&path, b"source identity fixture").unwrap();
+        let entry = super::super::super::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries
+        .remove(0);
+        let source = crate::file_source::FileSource::capture(&path).unwrap();
+        let ctx = egui::Context::default();
+        let mut selection = None;
+        let music = super::super::super::music::Music::default();
+        let start = pos2(150.0, 130.0);
+        let end = pos2(350.0, 130.0);
+        let press = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for (index, events) in [
+            vec![],
+            vec![egui::Event::PointerMoved(start), press(true, start)],
+            vec![egui::Event::PointerMoved(end)],
+            vec![press(false, end)],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 400.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(400.0, 80.0));
+                        ui.interact(rect, waveform_id(), Sense::focusable_noninteractive());
+                        let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
+                        let (engaged, _) = interact_waveform(
+                            ui,
+                            &entry,
+                            (rect, 4.0, &source),
+                            &mut response,
+                            &mut selection,
+                            &music,
+                            WorkbenchColors::from_palette(&AppPalette::default()),
+                        );
+                        if index > 0 {
+                            assert!(
+                                engaged,
+                                "Gesture frame {index} fell through to file-row actions"
+                            );
+                        }
+                    });
+                },
+            );
+            if index > 0 {
+                assert!(ctx.memory(|memory| memory.has_focus(waveform_id())));
+            }
+        }
+        let selection = selection.unwrap();
+        assert!(selection.start < selection.end);
     }
 }
