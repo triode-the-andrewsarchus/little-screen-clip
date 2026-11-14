@@ -4,6 +4,23 @@ Status: in progress on `feat/file-manager-phase7`, starting at `d0298ebd`.
 Architecture baseline: `before-phase7-views`. Automatic view selection is
 explicitly excluded by the user; existing automatic behavior is preserved.
 
+## Review changes — current requirements
+
+The user's review supersedes the older disclosure-button and separate-preview
+checkpoints below. These changes must be completed before final acceptance:
+
+- [ ] Remove folder/archive +/− controls. Use a full square folder entry target,
+  matching other preview icons, and navigate into folders normally from List.
+- [ ] Reserve strip space for every direct child first. Use only spare space for
+  in-line subfolder contents, progressively smaller, at most three preview layers.
+  Keep reads/cache/entries bounded and expanded-search/selection provenance valid.
+- [ ] Keep the complete navigation path reachable in Columns without retaining
+  unlimited full-width columns. Reuse the shared List renderer in the rightmost
+  column; remove the bespoke adjacent preview pane.
+- [ ] Give archives a distinct zipped-folder icon and navigate decompressed
+  contents through ordinary List/Columns presentation. Keep archive origin and
+  lifecycle explicit, with a persistent bottom-bar compressed-archive warning.
+
 ## Required delivery and acceptance
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;

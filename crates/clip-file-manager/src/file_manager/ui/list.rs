@@ -171,10 +171,7 @@ impl<'a> ListPreviews<'a> {
         if self.can_request {
             self.containers.request(entry);
         }
-        let header = Rect::from_min_max(
-            rect.min + vec2(26.0, 0.0),
-            pos2(rect.right(), rect.top() + 28.0),
-        );
+        let header = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 28.0));
         let response = file_row(ui, header, entry, marked, self.columns, None, colors);
         self.containers.show(
             ui,
@@ -201,11 +198,19 @@ impl<'a> ListPreviews<'a> {
                         }
                         return;
                     }
-                    super::super::container_preview::Target::Header(rect) => {
-                        let marked = self
-                            .selected
-                            .is_some_and(|paths| paths.contains(&child.path));
-                        file_row(ui, rect, child, marked, self.columns, None, colors)
+                    super::super::container_preview::Target::Enter(response) => {
+                        actions.row(
+                            ui,
+                            response,
+                            child,
+                            self.selected,
+                            self.can_edit,
+                            self.selection_count,
+                        );
+                        if response.clicked() {
+                            actions.open = Some(child.path.clone());
+                        }
+                        return;
                     }
                     super::super::container_preview::Target::Card(response) => response.clone(),
                 };

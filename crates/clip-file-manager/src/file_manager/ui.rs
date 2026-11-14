@@ -1030,9 +1030,11 @@ fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &A
     .clicked()
 }
 
-fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
+pub(super) fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
     if entry.directory {
         Icon::Folder
+    } else if super::container_preview::inventory::archive(&entry.path) {
+        Icon::FolderZip
     } else if little_clip_core::audio::is_audio_path(&entry.path) {
         Icon::Audio
     } else if entry.is_video() {

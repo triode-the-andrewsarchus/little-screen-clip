@@ -1,6 +1,7 @@
 //! Visible folder/archive cards share bounded, cancellable inventory ownership.
 pub(in crate::file_manager) mod archive;
 pub(in crate::file_manager) mod inventory;
+mod strip;
 #[cfg(test)]
 mod tests;
 
@@ -19,7 +20,7 @@ use std::{
 /// The host owns ordinary row painting/actions; contained cards retain their
 /// own geometry while nested section headers reuse the host's table columns.
 pub(super) enum Target<'a> {
-    Header(Rect),
+    Enter(&'a egui::Response),
     Card(&'a egui::Response),
     Member(&'a egui::Response, usize),
 }
@@ -27,7 +28,7 @@ pub(super) enum Target<'a> {
 const CACHE: usize = 32;
 const READS: usize = 2;
 const CHOICES: usize = 4096;
-pub(super) const DEPTH: usize = clip_search::here::MAX_DEPTH;
+pub(super) const DEPTH: usize = 3;
 const FRESHNESS: Duration = Duration::from_secs(5);
 // Directory metadata may stall on a remote mount. Keep its actual executing
 // reads at two, even after a UI delivery deadline, without starving navigation.
@@ -51,8 +52,7 @@ pub(super) struct Previews {
     options: Options,
     members: archive::Previews,
     nodes: BTreeMap<PathBuf, Node>,
-    // User intent outlives visible observations, navigation and studio entry.
-    // This is session state, keyed by path, not a payload or metadata cache.
+    // Bounded layout decisions describe which observed descendants fit inline.
     choices: BTreeMap<PathBuf, bool>,
     layout_changed: bool,
     protected: BTreeSet<PathBuf>,
@@ -131,8 +131,8 @@ impl Previews {
                 egui::Slider::new(&mut options.small_items, 1..=inventory::LIMIT)
                     .text("Maximum items"),
             );
-            ui.label("Use + or − beside a folder or archive to override.");
-            ui.small("Nested previews expand explicitly, up to four levels. At most 32 container observations are retained.");
+            ui.label("Open folders with the square folder icon.");
+            ui.small("Direct contents come first. Spare space can show smaller nested contents, up to three layers. At most 32 container observations are retained.");
         });
         self.configure(options.automatic, options.small_items);
     }
@@ -273,13 +273,8 @@ impl Previews {
             .flat_map(|(section, _)| self.direct_children(section, hidden))
             .collect()
     }
-    pub fn height(&self, entry: &Entry, hidden: bool) -> f32 {
-        let (sections, truncated) = self.sections(entry, hidden);
-        sections
-            .into_iter()
-            .map(|(entry, _)| self.base_height(entry))
-            .sum::<f32>()
-            + if truncated { 24.0 } else { 0.0 }
+    pub fn height(&self, _entry: &Entry, _hidden: bool) -> f32 {
+        108.0
     }
     pub fn search_scope(
         &self,
@@ -325,24 +320,18 @@ impl Previews {
         }
         Ok(expanded.then_some((scope, entries)))
     }
-    pub fn selection_offset(&self, entry: &Entry, selected: &std::path::Path, hidden: bool) -> f32 {
-        let mut offset = 0.0;
-        for (section, _) in self.sections(entry, hidden).0 {
-            if section.path == selected {
-                return offset;
-            }
-            if self
-                .direct_children(section, hidden)
-                .iter()
-                .any(|child| child.path == selected)
-            {
-                return offset + 30.0;
-            }
-            offset += self.base_height(section);
-        }
-        0.0
+    pub fn selection_offset(
+        &self,
+        entry: &Entry,
+        selected: &std::path::Path,
+        _hidden: bool,
+    ) -> f32 {
+        if selected == entry.path { 0.0 } else { 30.0 }
     }
     fn choose(&mut self, path: PathBuf, expanded: bool) {
+        if self.choices.get(&path) == Some(&expanded) {
+            return;
+        }
         if self.choices.len() >= CHOICES && !self.choices.contains_key(&path) {
             return;
         }
@@ -387,6 +376,9 @@ impl Previews {
         changed
     }
     pub(super) fn request(&mut self, entry: &Entry) {
+        self.request_for_layout(entry, false);
+    }
+    fn request_for_layout(&mut self, entry: &Entry, nested: bool) {
         self.frame_paths.insert(entry.path.clone());
         if !self.nodes.contains_key(&entry.path) && self.nodes.len() >= CACHE {
             let oldest = self
@@ -412,7 +404,7 @@ impl Previews {
         });
         node.revise(entry.revision);
         node.touched = self.sequence;
-        if !node.expanded(self.options) || active >= READS || node.task.is_some() {
+        if (!nested && !node.expanded(self.options)) || active >= READS || node.task.is_some() {
             return;
         }
         if (node.ready.is_some() || node.error.is_some()) && node.refreshed.elapsed() < FRESHNESS {
@@ -431,7 +423,7 @@ impl Previews {
     }
     #[expect(
         clippy::too_many_arguments,
-        reason = "Explicit shared preview and containment painting boundary"
+        reason = "Shared preview and host interaction boundary"
     )]
     pub fn show(
         &mut self,
@@ -447,375 +439,17 @@ impl Previews {
         can_request: bool,
         mut interact: impl FnMut(&mut Ui, &Entry, Target<'_>),
     ) {
-        // Only the bounded section descriptors are copied; sample/image payloads
-        // remain with their existing shared preview owners.
-        let (sections, truncated) = self.sections(entry, hidden);
-        let sections: Vec<_> = sections
-            .into_iter()
-            .map(|(entry, depth)| (entry.clone(), depth))
-            .collect();
-        let mut top = rect.top();
-        for (section, depth) in sections {
-            let height = self.base_height(&section);
-            let target = Rect::from_min_max(
-                pos2(rect.left() + depth as f32 * 18.0, top),
-                pos2(rect.right(), top + height),
-            );
-            if ui.clip_rect().intersects(target) {
-                if depth > 0 && can_request {
-                    self.request(&section);
-                }
-                self.show_section(
-                    ui,
-                    target,
-                    &section,
-                    depth,
-                    files,
-                    keep,
-                    hidden,
-                    colors,
-                    selected,
-                    &mut interact,
-                );
-            }
-            top += height;
-        }
-        if truncated {
-            ui.painter().text(
-                pos2(rect.left() + 18.0, top + 2.0),
-                Align2::LEFT_TOP,
-                "Inline preview limit reached · open folder to see more",
-                FontId::proportional(12.0),
-                colors.text_secondary,
-            );
-        }
-    }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Explicit section painting and host interaction boundary"
-    )]
-    fn show_section(
-        &mut self,
-        ui: &mut Ui,
-        rect: Rect,
-        entry: &Entry,
-        depth: usize,
-        files: &mut EntryPreviews,
-        keep: &mut BTreeSet<PathBuf>,
-        hidden: bool,
-        colors: WorkbenchColors,
-        selected: Option<&BTreeSet<PathBuf>>,
-        interact: &mut dyn FnMut(&mut Ui, &Entry, Target<'_>),
-    ) {
-        let can_choose = self.choices.len() < CHOICES || self.choices.contains_key(&entry.path);
-        let Some(node) = self.nodes.get_mut(&entry.path) else {
-            ui.painter().text(
-                rect.left_top() + vec2(18.0, 42.0),
-                Align2::LEFT_TOP,
-                "Preview limit reached · open folder to browse",
-                FontId::proportional(12.0),
-                colors.text_secondary,
-            );
-            return;
-        };
-        let expanded = node.expanded(self.options);
-        let ready = node.ready.clone();
-        let error = node.error.clone();
-        if depth > 0 {
-            let header = Rect::from_min_max(
-                rect.min + vec2(26.0, 0.0),
-                pos2(rect.right(), rect.top() + 28.0),
-            );
-            interact(ui, entry, Target::Header(header));
-        }
-        let toggle =
-            Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2(24.0, 24.0));
-        ui.allocate_ui_at_rect(toggle, |ui| {
-            if ui
-                .add_enabled(
-                    can_choose,
-                    egui::Button::new(if expanded { "−" } else { "+" }).small(),
-                )
-                .on_hover_text("Show or hide contained files")
-                .on_disabled_hover_text("This session has reached its 4,096 folder-preview choices")
-                .clicked()
-            {
-                self.choose(entry.path.clone(), !expanded);
-                ui.ctx().request_repaint();
-            }
-        });
-        if rect.height() <= 30.0 {
-            return;
-        }
-        let body = Rect::from_min_max(
-            pos2(rect.left() + 18.0, rect.top() + 30.0),
-            rect.right_bottom() - vec2(6.0, 4.0),
+        self.show_strip(
+            ui,
+            rect,
+            entry,
+            files,
+            keep,
+            hidden,
+            colors,
+            selected,
+            can_request,
+            &mut interact,
         );
-        ui.painter().rect_filled(body, 4.0, colors.recessed);
-        ui.painter().line_segment(
-            [body.left_top(), body.left_bottom()],
-            egui::Stroke::new(2.0_f32, colors.text_secondary.gamma_multiply(0.4)),
-        );
-        let Some(ready) = ready else {
-            ui.painter().text(
-                body.left_center() + vec2(10.0, 0.0),
-                Align2::LEFT_CENTER,
-                error.as_deref().unwrap_or("Reading contained files…"),
-                FontId::proportional(12.0),
-                colors.text_secondary,
-            );
-            return;
-        };
-        let label = format!(
-            "{} · {}{} items",
-            if ready.archive {
-                "Archive contents"
-            } else {
-                "Inside folder"
-            },
-            ready.observed,
-            if ready.complete { "" } else { "+" }
-        );
-        ui.painter().text(
-            body.left_top() + vec2(8.0, 2.0),
-            Align2::LEFT_TOP,
-            label,
-            FontId::proportional(10.0),
-            colors.text_secondary,
-        );
-        let cards = Rect::from_min_max(
-            body.left_top() + vec2(6.0, 17.0),
-            body.right_bottom() - vec2(4.0, 2.0),
-        );
-        let mut choice = None;
-        ui.allocate_ui_at_rect(cards, |ui| {
-            egui::ScrollArea::horizontal()
-                .id_source(("container-cards", &entry.path))
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    inventory_cards(
-                        ui,
-                        &ready,
-                        entry,
-                        &mut self.members,
-                        files,
-                        keep,
-                        hidden,
-                        colors,
-                        selected,
-                        interact,
-                        &self.choices,
-                        depth + 1 < DEPTH,
-                        &mut choice,
-                    );
-                });
-        });
-        if let Some((path, expanded)) = choice {
-            self.choose(path, expanded);
-            ui.ctx().request_repaint();
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Explicit contained-card rendering and host interaction boundary"
-)]
-fn inventory_cards(
-    ui: &mut Ui,
-    ready: &Inventory,
-    container: &Entry,
-    members: &mut archive::Previews,
-    files: &mut EntryPreviews,
-    keep: &mut BTreeSet<PathBuf>,
-    hidden: bool,
-    colors: WorkbenchColors,
-    selected: Option<&BTreeSet<PathBuf>>,
-    interact: &mut dyn FnMut(&mut Ui, &Entry, Target<'_>),
-    choices: &BTreeMap<PathBuf, bool>,
-    can_descend: bool,
-    choice: &mut Option<(PathBuf, bool)>,
-) {
-    ui.horizontal(|ui| {
-        for child in &ready.children {
-            if !hidden && matches!(child,Child::File(e) if e.hidden) {
-                continue;
-            }
-            let marked = matches!(child, Child::File(entry) if selected.is_some_and(|paths| paths.contains(&entry.path)));
-            let (response, disclosure) = card(ui, child, files, members, ready.archive_source.as_ref(), keep, colors, marked);
-            if let Child::Member { ordinal, .. } = child { interact(ui, container, Target::Member(&response, *ordinal)); }
-            if let Child::File(entry) = child {
-                interact(ui, entry, Target::Card(&response));
-                if let Some(disclosure) = disclosure
-                    && let Some(expanded) = nested_disclosure(ui, disclosure, entry, choices, can_descend)
-                {
-                    *choice = Some((entry.path.clone(), expanded));
-                }
-            }
-        }
-        if ready.children.is_empty() {
-            ui.label(if ready.complete {
-                "Empty"
-            } else {
-                "No previewable entries"
-            });
-        }
-        if ready.omitted > 0 {
-            ui.label(format!("{} entries omitted", ready.omitted))
-                .on_hover_text(
-                    "Links, special members or unavailable directory entries are not previewed.",
-                );
-        }
-        if !ready.complete {
-            ui.label(if ready.notice.is_some() { "Preview limit · open to browse" } else { "More contents · open to browse" })
-                .on_hover_text(ready.notice.as_deref().unwrap_or("The inventory is bounded; open the container to inspect more."));
-        }
-    });
-}
-
-fn nested_disclosure(
-    ui: &mut Ui,
-    rect: Rect,
-    entry: &Entry,
-    choices: &BTreeMap<PathBuf, bool>,
-    can_descend: bool,
-) -> Option<bool> {
-    let expanded = choices.get(&entry.path) == Some(&true);
-    let available = can_descend && (choices.len() < CHOICES || choices.contains_key(&entry.path));
-    ui.allocate_ui_at_rect(rect, |ui| {
-        ui.add_enabled(
-            available,
-            egui::Button::new(if expanded { "−" } else { "+" }).small(),
-        )
-        .on_hover_text("Expand or collapse contents here; double-click the name to open")
-        .on_disabled_hover_text(
-            "Inline previews have a four-level and 4,096-choice limit; open the folder to continue",
-        )
-        .clicked()
-        .then_some(!expanded)
-    })
-    .inner
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Explicit card content/cache and host geometry boundary"
-)]
-fn card(
-    ui: &mut Ui,
-    child: &Child,
-    files: &mut EntryPreviews,
-    members: &mut archive::Previews,
-    member: Option<&little_clip_core::file_source::FileSource>,
-    keep: &mut BTreeSet<PathBuf>,
-    colors: WorkbenchColors,
-    marked: bool,
-) -> (egui::Response, Option<Rect>) {
-    let (rect, allocated) = ui.allocate_exact_size(vec2(154.0, 48.0), Sense::hover());
-    let disclosure = matches!(child, Child::File(entry) if candidate(entry)).then(|| {
-        Rect::from_min_size(
-            pos2(rect.right() - 25.0, rect.top() + 13.0),
-            vec2(23.0, 23.0),
-        )
-    });
-    let mut target = rect;
-    if disclosure.is_some() {
-        target.max.x -= 26.0;
-    }
-    let response = ui.interact(
-        target,
-        allocated.id.with("card-body"),
-        Sense::click_and_drag(),
-    );
-    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
-    painter.rect_filled(
-        rect,
-        3.0,
-        if marked {
-            colors.accent.gamma_multiply(0.2)
-        } else if response.hovered() {
-            colors.panel
-        } else {
-            colors.canvas
-        },
-    );
-    let ready = match child {
-        Child::File(entry) if !entry.directory && !entry.symlink => {
-            keep.insert(entry.path.clone());
-            files.listing(entry)
-        }
-        Child::Member {
-            ordinal,
-            directory: false,
-            ..
-        } if ui.clip_rect().intersects(rect) => {
-            member.and_then(|source| members.request(source, *ordinal, Default::default()))
-        }
-        _ => None,
-    };
-    if let Some(texture) = ready.and_then(|ready| ready.texture.as_ref()) {
-        let target = Rect::from_center_size(
-            rect.left_center() + vec2(22.0, 0.0),
-            texture.size_vec2() * (36.0 / texture.size_vec2().max_elem()).min(1.0),
-        );
-        painter.image(
-            texture.id(),
-            target,
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    } else {
-        let icon = ready
-            .map(|ready| ready.data.icon)
-            .unwrap_or(if child.directory() {
-                Icon::Folder
-            } else {
-                Icon::Text
-            });
-        icon.paint(
-            &painter,
-            Rect::from_min_size(rect.left_top() + vec2(8.0, 14.0), vec2(20.0, 20.0)),
-            colors.text_secondary,
-        );
-    }
-    let label = painter.layout(
-        child
-            .name()
-            .rsplit('/')
-            .next()
-            .unwrap_or(child.name())
-            .to_owned(),
-        FontId::proportional(13.0),
-        colors.text_primary,
-        if disclosure.is_some() { 80.0 } else { 108.0 },
-    );
-    painter.galley(
-        rect.left_top() + vec2(43.0, 5.0),
-        label,
-        colors.text_primary,
-    );
-    (
-        response.on_hover_ui(|ui| card_details(ui, child, ready)),
-        disclosure,
-    )
-}
-
-fn card_details(ui: &mut Ui, child: &Child, ready: Option<&super::shelf::preview::Ready>) {
-    let hover = match child {
-        Child::File(e) => super::filesystem::display_path(&e.path),
-        Child::Member { name, size, .. } => format!(
-            "Archive member: {name}\n{} · read-only inventory",
-            super::filesystem::format_size(*size)
-        ),
-    };
-    ui.label(hover);
-    if let Some(ready) = ready {
-        ui.label(&ready.data.detail);
-        if let Some(texture) = &ready.texture {
-            ui.image((texture.id(), texture.size_vec2()));
-        }
-        if !ready.data.text.is_empty() {
-            ui.monospace(ready.data.text.chars().take(240).collect::<String>());
-        }
     }
 }

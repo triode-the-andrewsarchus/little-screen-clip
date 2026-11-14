@@ -93,6 +93,7 @@ define_icons! {
     Alert,
     Info,
     Folder,
+    FolderZip,
     Lock,
     Unlock,
     Wrap,
@@ -212,6 +213,7 @@ impl Icon {
             Self::Alert => "alert",
             Self::Info => "info",
             Self::Folder => "folder",
+            Self::FolderZip => "folder-zip",
             Self::Lock => "lock",
             Self::Unlock => "unlock",
             Self::Wrap => "wrap",
@@ -331,6 +333,7 @@ impl Icon {
             Self::Alert => "bytes://icons/alert.svg",
             Self::Info => "bytes://icons/info.svg",
             Self::Folder => "bytes://icons/folder.svg",
+            Self::FolderZip => "bytes://icons/folder-zip.svg",
             Self::Lock => "bytes://icons/lock.svg",
             Self::Unlock => "bytes://icons/unlock.svg",
             Self::Wrap => "bytes://icons/wrap.svg",
@@ -470,6 +473,9 @@ impl Icon {
             Self::Alert => include_bytes!("../../little-clip-render/assets/icons/alert.svg"),
             Self::Info => include_bytes!("../../little-clip-render/assets/icons/info.svg"),
             Self::Folder => include_bytes!("../../little-clip-render/assets/icons/folder.svg"),
+            Self::FolderZip => {
+                include_bytes!("../../little-clip-render/assets/icons/folder-zip.svg")
+            }
             Self::Lock => include_bytes!("../../little-clip-render/assets/icons/lock.svg"),
             Self::Unlock => include_bytes!("../../little-clip-render/assets/icons/unlock.svg"),
             Self::Wrap => include_bytes!("../../little-clip-render/assets/icons/wrap.svg"),

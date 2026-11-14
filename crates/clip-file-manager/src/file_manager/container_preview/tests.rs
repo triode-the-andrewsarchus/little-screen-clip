@@ -174,7 +174,7 @@ fn disabling_automatic_previews_starts_no_reads_but_explicit_expansion_still_wor
     let mut previews = Previews::default();
     previews.configure(false, 0);
     assert_eq!(previews.options.small_items, 1);
-    assert_eq!(previews.height(&source, false), 28.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     previews.request(&source);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.nodes.get_mut(&source.path).unwrap().expanded = Some(true);
@@ -221,17 +221,17 @@ fn explicit_choices_survive_scrolling_view_changes_and_folder_history() {
     // A click records intent separately from the visible observation cache.
     previews.choices.insert(source.path.clone(), false);
     previews.request(&source);
-    assert_eq!(previews.height(&source, false), 28.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.retain(&BTreeSet::new());
     assert!(previews.nodes.is_empty());
-    assert_eq!(previews.height(&source, false), 28.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     previews.request(&source);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.clear(); // Folder change, studio entry or view switch.
     previews.configure(true, 32);
     previews.request(&source);
-    assert_eq!(previews.height(&source, false), 28.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     assert!(previews.nodes[&source.path].task.is_none());
 
     previews.clear();
@@ -499,13 +499,13 @@ fn explicit_nested_sections_share_layout_selection_and_collapse() {
     assert_eq!(browser.containers.height(&source, false), 108.0);
     assert!(!browser.displayed_entries().iter().any(|e| e.path == child));
     browser.containers.choose(nested.clone(), true);
-    assert_eq!(browser.containers.height(&source, false), 216.0);
+    assert_eq!(browser.containers.height(&source, false), 108.0);
     observe_container(&mut browser.containers, &entry(&folder, "nested"));
     browser.select(child.clone());
     assert!(browser.selection_is_mutable());
     assert_eq!(
         browser.containers.selection_offset(&source, &child, false),
-        138.0
+        30.0
     );
     browser.commit(
         super::super::filesystem::read_directory(root.path(), &AtomicBool::new(false)).unwrap(),
@@ -551,20 +551,20 @@ fn nested_layout_and_entries_stop_at_the_documented_depth() {
     assert!(!truncated);
     assert_eq!(
         sections.iter().map(|(_, depth)| *depth).collect::<Vec<_>>(),
-        [0, 1, 2, 3]
+        [0, 1, 2]
     );
-    assert_eq!(previews.height(&source, false), DEPTH as f32 * 108.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     assert!(
         previews
             .children(&source, false)
             .iter()
-            .any(|e| e.name == "level4")
+            .any(|e| e.name == "level3")
     );
     assert!(
         !previews
             .children(&source, false)
             .iter()
-            .any(|e| e.name == "level5")
+            .any(|e| e.name == "level4")
     );
 }
 
@@ -585,7 +585,7 @@ fn wide_nested_layout_discloses_truncation_without_unbounded_rows() {
     let (sections, truncated) = previews.sections(&source, false);
     assert_eq!(sections.len(), CACHE);
     assert!(truncated);
-    assert_eq!(previews.height(&source, false), CACHE as f32 * 108.0 + 24.0);
+    assert_eq!(previews.height(&source, false), 108.0);
 }
 
 #[test]
@@ -626,7 +626,7 @@ fn hidden_nested_sections_do_not_reserve_space_or_expose_children_until_enabled(
     assert_eq!(browser.containers.height(&source, false), 108.0);
     assert!(!browser.displayed_entries().iter().any(|e| e.path == secret));
     browser.show_hidden = true;
-    assert_eq!(browser.containers.height(&source, true), 216.0);
+    assert_eq!(browser.containers.height(&source, true), 108.0);
     assert!(browser.displayed_entries().iter().any(|e| e.path == secret));
     browser.select(secret);
     browser.toggle_hidden();
@@ -701,5 +701,72 @@ fn here_scope_captures_expanded_parents_and_pending_nested_identity_without_arch
             .search_scope(browser.directory.as_ref().unwrap(), false)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn inline_layout_reserves_direct_children_before_complete_nested_groups() {
+    let (root, folder, nested, _) = nested_fixture("inside.txt");
+    std::fs::write(folder.join("direct.txt"), b"direct").unwrap();
+    let source = entry(root.path(), "folder");
+    let mut previews = Previews::default();
+    observe_container(&mut previews, &source);
+    observe_container(&mut previews, &entry(&folder, "nested"));
+    // Two direct cards consume 140px. The child requires a further 50px.
+    previews.plan_strip(&source, 189.0, false, false);
+    assert!(!previews.explicitly_expanded(&nested));
+    previews.plan_strip(&source, 190.0, false, false);
+    assert!(previews.explicitly_expanded(&nested));
+    let mut tiles = Vec::new();
+    previews.tiles(&source, false, 0, &mut tiles);
+    assert_eq!(
+        tiles
+            .iter()
+            .map(|tile| tile.child.name())
+            .collect::<Vec<_>>(),
+        ["nested", "inside.txt", "direct.txt"]
+    );
+    assert_eq!(
+        tiles.iter().map(|tile| tile.level).collect::<Vec<_>>(),
+        [0, 1, 0]
+    );
+    previews.plan_strip(&source, 140.0, false, false);
+    assert!(!previews.explicitly_expanded(&nested));
+    assert_eq!(previews.height(&source, false), 108.0);
+}
+#[test]
+fn inline_layout_stops_after_three_progressively_smaller_layers() {
+    let root = tempfile::tempdir().unwrap();
+    let mut parent = root.path().to_owned();
+    let mut previews = Previews::default();
+    for name in ["folder", "one", "two", "three", "four"] {
+        std::fs::create_dir(parent.join(name)).unwrap();
+        let source = entry(&parent, name);
+        // Observe after descendants exist below.
+        parent = source.path;
+    }
+    parent = root.path().to_owned();
+    for name in ["folder", "one", "two", "three", "four"] {
+        let source = entry(&parent, name);
+        observe_container(&mut previews, &source);
+        parent = source.path;
+    }
+    let source = entry(root.path(), "folder");
+    previews.plan_strip(&source, 2000.0, false, false);
+    let mut tiles = Vec::new();
+    previews.tiles(&source, false, 0, &mut tiles);
+    assert_eq!(
+        tiles
+            .iter()
+            .map(|tile| tile.child.name())
+            .collect::<Vec<_>>(),
+        ["one", "two", "three"]
+    );
+    assert_eq!(
+        tiles
+            .iter()
+            .map(|tile| strip::edge(tile.level))
+            .collect::<Vec<_>>(),
+        [64.0, 44.0, 32.0]
     );
 }
