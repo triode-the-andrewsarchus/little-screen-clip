@@ -23,6 +23,7 @@ mod gallery;
 mod gcode;
 mod geography;
 mod image_strip;
+mod local_state;
 mod mail;
 mod markdown_hover;
 mod material_strip;
@@ -538,7 +539,7 @@ impl FileManager {
             self.last_status = None;
             self.edits.report = None;
         }
-        self.tick_view_preferences(&view_preferences::IO);
+        self.tick_view_preferences(&local_state::IO);
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);

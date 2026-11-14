@@ -6,14 +6,10 @@ mod ui;
 
 use super::BrowserView;
 
-// State may live on a slow mount. A stalled read/write owns this one worker
-// through actual completion without consuming browser/navigation workers.
-pub(super) static IO: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
-    sync::LazyLock,
     time::Duration,
 };
 
