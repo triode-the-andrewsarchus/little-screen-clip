@@ -221,6 +221,8 @@ pub(crate) struct FileManager {
     index: Option<usize>,
     directory: Option<Directory>,
     visible: Vec<usize>,
+    single_family: Option<sorting::Category>,
+    list_groups: Vec<(usize, sorting::Category)>,
     sort: sorting::Sort,
     metadata: metadata::Metadata,
     pending: Option<Request>,
@@ -312,6 +314,8 @@ impl FileManager {
             index: None,
             directory: None,
             visible: Vec::new(),
+            single_family: None,
+            list_groups: Vec::new(),
             sort: sorting::Sort::default(),
             metadata: metadata::Metadata::default(),
             pending: None,
@@ -784,6 +788,7 @@ impl FileManager {
     }
 
     fn rebuild_visible(&mut self) {
+        self.single_family = None;
         self.visible = self
             .directory
             .as_ref()
@@ -800,13 +805,16 @@ impl FileManager {
         if let Some(directory) = &self.directory {
             self.sort.apply(directory, &mut self.visible);
             self.search.filter(directory, &mut self.visible);
+            self.single_family = self
+                .search
+                .applied
+                .is_none()
+                .then(|| sorting::single_family(directory, &self.visible))
+                .flatten();
             self.search.answers.reconcile(directory, &self.visible);
             self.search.answers.sort(directory, &mut self.visible);
             self.metadata.reconcile(directory, &self.visible);
-            if self
-                .list_sort()
-                .is_some_and(|sort| sort.column == sorting::Column::Type)
-            {
+            if self.single_family.is_some() || self.grouped_by_type() {
                 self.metadata.order(directory, &mut self.visible);
             }
             self.search.paginate(&mut self.visible);
@@ -829,14 +837,18 @@ impl FileManager {
 
     fn rebuild_list_offsets(&mut self) {
         self.list_offsets.clear();
+        self.list_groups.clear();
         self.list_offsets.push(0.0);
-        let sort = self.list_sort();
+        let sort = self.list_sort().filter(|_| self.single_family.is_none());
         if let Some(directory) = &self.directory {
             for (position, index) in self.visible.iter().enumerate() {
                 let entry = &directory.entries[*index];
-                let heading = sort
-                    .and_then(|sort| sort.group_at(directory, &self.visible, position))
-                    .map_or(0.0, |_| ui::GROUP_HEADER_HEIGHT);
+                let family =
+                    sort.and_then(|sort| sort.group_at(directory, &self.visible, position));
+                if let Some(family) = family {
+                    self.list_groups.push((position, family));
+                }
+                let heading = family.map_or(0.0, |_| ui::GROUP_HEADER_HEIGHT);
                 let height = if self.search.has_offline_results() {
                     28.0
                 } else if !self.search.has_result_sources() && container_preview::candidate(entry) {

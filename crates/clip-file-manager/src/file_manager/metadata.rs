@@ -350,9 +350,7 @@ impl Metadata {
 
 impl super::FileManager {
     pub(super) fn tick_metadata(&mut self, ctx: &egui::Context) {
-        if !self
-            .list_sort()
-            .is_some_and(|sort| sort.column == sorting::Column::Type)
+        if !(self.single_family.is_some() || self.grouped_by_type())
             || self.search.has_offline_results()
             || self.pending.is_some()
         {

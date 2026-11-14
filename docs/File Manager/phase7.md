@@ -68,6 +68,26 @@ by this review correction.
 
 ### Review verification
 
+- [x] Type-group headers pin to the top of the scrolling list and are pushed
+  out by the next family header. Both drawing and hit testing are clipped below
+  the pinned bar; header gestures cannot drag the surrounding scroll area.
+  Keyboard reveals account for the space occupied by the pinned bar.
+- [x] Ordinary folders with one visible family use a single family header in
+  place of the generic top bar, with no Type button or in-content duplicate.
+  Family metadata and sorting work without first sorting by Type. File-column
+  sorting clears the competing family sort; filename reset restores name order.
+  Mixed folders and search retain their global sorting controls.
+- [x] Cache family classification/group boundaries with the existing visible
+  inventory and offsets, reuse the existing metadata workers and row renderers,
+  and preserve viewport position during header sorting.
+  Verification: 956 file-manager tests pass, six ignored; strict all-target
+  Clippy and the final debug build are warning-free. Native evidence including
+  the actual Columns layout, scrolling and live duration sorting:
+  `/tmp/sticky-family-headers-dark-02/report.json` and
+  `/tmp/sticky-family-headers-light-01/report.json`.
+  Architecture comparison against `before-sticky-family-headers` reports no
+  affected-code complexity regression, added clone groups or dependency cycles.
+
 - [x] Reserve and paint Size and Modified for every typed metadata family,
   including audio, images, video and documents. Metadata fields stop before
   those common columns instead of suppressing their headers and values.

@@ -143,6 +143,16 @@ fn extension_category(extension: &str) -> Category {
     }
 }
 
+// Evaluated when the visible inventory changes, rather than scanning it on
+// every frame. Empty lists have no family header.
+pub(super) fn single_family(directory: &Directory, visible: &[usize]) -> Option<Category> {
+    let first = family(directory.entries.get(*visible.first()?)?);
+    visible
+        .iter()
+        .all(|&index| family(&directory.entries[index]) == first)
+        .then_some(first)
+}
+
 impl Category {
     pub fn label(self) -> &'static str {
         match self {
@@ -181,6 +191,12 @@ impl Sort {
 }
 
 impl FileManager {
+    pub(super) fn grouped_by_type(&self) -> bool {
+        self.single_family.is_none()
+            && self
+                .list_sort()
+                .is_some_and(|sort| sort.column == Column::Type)
+    }
     pub(super) fn list_sort(&self) -> Option<Sort> {
         (self
             .search
@@ -195,7 +211,14 @@ impl FileManager {
         .then_some(self.sort)
     }
     pub(super) fn sort_by(&mut self, column: Column) {
-        let active = self.list_sort().is_some();
+        let active = self.list_sort().is_some()
+            && self
+                .single_family
+                .is_none_or(|family| self.metadata.sort(family).is_none());
+        if let Some(family) = self.single_family {
+            self.metadata
+                .toggle_sort(family, super::metadata::Field::Filename);
+        }
         if let Some(folder) = self.search.answers.current_mut() {
             folder.sort = None;
         }

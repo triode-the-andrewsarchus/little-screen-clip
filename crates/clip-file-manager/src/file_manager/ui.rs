@@ -815,7 +815,12 @@ impl FileManager {
                         })
                         .map_or(0.0, |_| GROUP_HEADER_HEIGHT);
                     let top = base + heading + nested;
-                    let height = ui.available_height().max(1.0);
+                    let pinned = if self.grouped_by_type() {
+                        GROUP_HEADER_HEIGHT
+                    } else {
+                        0.0
+                    };
+                    let height = (ui.available_height() - pinned).max(1.0);
                     let bottom = self
                         .list_offsets
                         .get(index + 1)
@@ -824,10 +829,10 @@ impl FileManager {
                     // Reveal only the part outside the viewport. A selection
                     // change inside it must not evict and reload visible strips.
                     // Oversized rows align their top instead of oscillating.
-                    let lower = (bottom.min(top + height) - height).max(0.0);
+                    let lower = (bottom.min(top + height) - height - pinned).max(0.0);
                     self.location()
                         .map_or(0.0, |location| location.scroll)
-                        .clamp(lower, top.max(lower))
+                        .clamp(lower, (top - pinned).max(lower))
                 });
             }
             self.reveal_selection = false;
@@ -1209,14 +1214,10 @@ impl ListColumns {
         self.extra_count = count;
         self
     }
-    pub(super) fn for_entry(
-        mut self,
-        sort: Option<super::sorting::Sort>,
-        entry: &super::filesystem::Entry,
-    ) -> Self {
-        let family = super::sorting::family(entry);
-        if sort.is_some_and(|sort| sort.column == super::sorting::Column::Type)
-            && !super::metadata::Field::for_family(family).is_empty()
+    pub(super) fn for_family(mut self, family: Option<super::sorting::Category>) -> Self {
+        self.metadata = None;
+        if let Some(family) =
+            family.filter(|family| !super::metadata::Field::for_family(*family).is_empty())
         {
             let end = self.extra.unwrap_or(self.size);
             let available = (end - self.left).max(0.0);
@@ -1278,6 +1279,7 @@ impl ListColumns {
         header: Rect,
         sort: Option<super::sorting::Sort>,
         colors: WorkbenchColors,
+        show_type: bool,
     ) -> Option<super::sorting::Column> {
         use super::sorting::Column;
         let mut clicked = None;
@@ -1288,11 +1290,17 @@ impl ListColumns {
                 header.left() + 8.0,
                 header.left() + 64.0,
             ),
-            (Column::Name, "Name", header.left() + 64.0, self.name_end()),
+            (
+                Column::Name,
+                "Name",
+                header.left() + if show_type { 64.0 } else { 8.0 },
+                self.name_end(),
+            ),
             (Column::Size, "Size", self.size, self.modified),
             (Column::Modified, "Modified", self.modified, self.right),
         ]
         .into_iter()
+        .filter(|(column, ..)| show_type || *column != Column::Type)
         {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
             let active = sort
@@ -1325,7 +1333,9 @@ pub(super) fn sort_heading(
     colors: WorkbenchColors,
 ) -> egui::Response {
     let response = ui
-        .interact(cell, id, Sense::click())
+        // Own the gesture so a pinned header click cannot start dragging the
+        // surrounding scroll area when the pointer moved during that frame.
+        .interact(cell, id, Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
     if response.hovered() {
@@ -1841,22 +1851,45 @@ fn visible_media_rows(offsets: &[f32], offset: f32, height: f32) -> std::ops::Ra
         .min(offsets.len().saturating_sub(1));
     first..end
 }
-fn media_rows(
+fn media_rows<R>(
     ui: &mut Ui,
     scroll: egui::ScrollArea,
     offsets: &[f32],
-    mut row: impl FnMut(&mut Ui, usize, Rect),
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+    groups: &[(usize, super::sorting::Category)],
+    mut header: impl FnMut(&mut Ui, Rect, super::sorting::Category) -> Option<R>,
+    mut row: impl FnMut(&mut Ui, usize, Rect) -> Option<R>,
+) -> egui::scroll_area::ScrollAreaOutput<Option<R>> {
     scroll.show_viewport(ui, |ui, viewport| {
         ui.set_min_height(offsets.last().copied().unwrap_or(0.0));
         let origin = ui.min_rect().min;
+        let mut clicked = None;
+        let group = groups
+            .partition_point(|(index, _)| offsets[*index] <= viewport.min.y)
+            .saturating_sub(1);
+        if let Some(&(_, family)) = groups.get(group) {
+            let next = groups
+                .get(group + 1)
+                .map_or(f32::INFINITY, |(index, _)| offsets[*index]);
+            let push = (next - viewport.min.y - GROUP_HEADER_HEIGHT).min(0.0);
+            let pinned = Rect::from_min_size(
+                origin + vec2(0.0, viewport.min.y + push),
+                vec2(ui.available_width(), GROUP_HEADER_HEIGHT),
+            );
+            clicked = header(ui, pinned, family);
+            // Clip both painting and hit testing below the pinned header, so
+            // preview clicks, selection and drop targets cannot pass through it.
+            let mut clip = ui.clip_rect();
+            clip.min.y = clip.min.y.max(pinned.bottom());
+            ui.set_clip_rect(clip);
+        }
         for index in visible_media_rows(offsets, viewport.min.y, viewport.height()) {
             let rect = Rect::from_min_size(
                 origin + vec2(0.0, offsets[index]),
                 vec2(ui.available_width(), offsets[index + 1] - offsets[index]),
             );
-            row(ui, index, rect);
+            clicked = row(ui, index, rect).or(clicked);
         }
+        clicked
     })
 }
 

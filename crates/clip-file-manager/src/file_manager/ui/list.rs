@@ -287,12 +287,25 @@ impl FileManager {
             });
     }
     fn list_header(&mut self, ui: &mut Ui, colors: WorkbenchColors) -> ListColumns {
-        let width = ui.available_width();
-        let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        let columns = self.search_columns(ui, header, colors);
+        let family = self.single_family;
+        let height = family.map_or(ROW_HEIGHT, |_| GROUP_HEADER_HEIGHT);
+        let (header, _) =
+            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        let fields = Rect::from_min_max(
+            pos2(header.left(), header.bottom() - ROW_HEIGHT),
+            header.max,
+        );
+        let columns = self.search_columns(ui, fields, colors).for_family(family);
         let sort = self.list_sort();
-        if let Some(column) = columns.sort_header(ui, header, sort, colors) {
-            self.sort_by(column);
+        let clicked = if family.is_some() {
+            group_header(ui, header, family, columns, sort, &self.metadata, colors).1
+        } else {
+            columns
+                .sort_header(ui, fields, sort, colors, true)
+                .map(GroupSort::File)
+        };
+        if let Some(column) = clicked {
+            column.apply(self);
             self.focus_list = true;
         }
         ui.separator();
@@ -350,6 +363,8 @@ impl FileManager {
         let preview_paths = std::collections::BTreeSet::new();
         self.containers.protect(selected);
         let sort = self.list_sort();
+        let grouped = self.grouped_by_type();
+        let typed = grouped || self.single_family.is_some();
         let mut previews = ListPreviews {
             selected,
             can_edit,
@@ -375,50 +390,71 @@ impl FileManager {
             hovered_video: false,
             play: None,
         };
-        let mut group_sort = None;
         let mut hash_priority = Vec::new();
         let metadata = &self.metadata;
         let search = &self.search;
         let images = &self.search.images;
         let answers = &self.search.answers;
         let mut answer_priority = Vec::new();
-        let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
-            let family = sort.and_then(|sort| sort.group_at(directory, &self.visible, index));
-            let entry = &directory.entries[self.visible[index]];
-            let columns = columns.for_entry(sort, entry);
-            previews.columns = columns;
-            let (rect, clicked) = group_header(ui, rect, family, columns, sort, metadata, colors);
-            group_sort = clicked.or(group_sort);
-            let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-            let (rect, detail) = search.result_row(ui, rect, entry, colors);
-            let (mut response, engaged) =
-                previews.row(ui, rect, entry, marked, colors, palette, &mut actions);
-            if let Some(detail) = detail {
-                response = response.union(detail);
-            }
-            metadata.paint_cells(ui, columns, rect, entry, colors);
-            hash_priority.push(entry.path.clone());
-            images.paint_cell(ui, columns, rect, entry, colors);
-            answers.paint_cells(
-                ui,
-                columns,
-                rect,
-                entry,
-                usize::from(images.active()),
-                colors,
-            );
-            answer_priority.push(self.visible[index]);
-            if entry.directory && ui.is_enabled() {
-                targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
-            }
-            if engaged {
-                actions.selection = Some((entry.path.clone(), false, false));
-            } else if search.is_offline(&entry.path) {
-                actions.unavailable_row(ui, &response, entry, selected);
-            } else {
-                actions.row(ui, &response, entry, selected, can_edit, selection_count);
-            }
-        });
+        let output = media_rows(
+            ui,
+            scroll,
+            &self.list_offsets,
+            &self.list_groups,
+            |ui, rect, family| {
+                group_header(
+                    ui,
+                    rect,
+                    Some(family),
+                    columns.for_family(Some(family)),
+                    sort,
+                    metadata,
+                    colors,
+                )
+                .1
+            },
+            |ui, index, rect| {
+                let entry = &directory.entries[self.visible[index]];
+                let columns =
+                    columns.for_family(typed.then_some(super::super::sorting::family(entry)));
+                let family = sort
+                    .filter(|_| grouped)
+                    .and_then(|sort| sort.group_at(directory, &self.visible, index));
+                previews.columns = columns;
+                let (rect, clicked) =
+                    group_header(ui, rect, family, columns, sort, metadata, colors);
+                let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
+                let (rect, detail) = search.result_row(ui, rect, entry, colors);
+                let (mut response, engaged) =
+                    previews.row(ui, rect, entry, marked, colors, palette, &mut actions);
+                if let Some(detail) = detail {
+                    response = response.union(detail);
+                }
+                metadata.paint_cells(ui, columns, rect, entry, colors);
+                hash_priority.push(entry.path.clone());
+                images.paint_cell(ui, columns, rect, entry, colors);
+                answers.paint_cells(
+                    ui,
+                    columns,
+                    rect,
+                    entry,
+                    usize::from(images.active()),
+                    colors,
+                );
+                answer_priority.push(self.visible[index]);
+                if entry.directory && ui.is_enabled() {
+                    targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
+                }
+                if engaged {
+                    actions.selection = Some((entry.path.clone(), false, false));
+                } else if search.is_offline(&entry.path) {
+                    actions.unavailable_row(ui, &response, entry, selected);
+                } else {
+                    actions.row(ui, &response, entry, selected, can_edit, selection_count);
+                }
+                clicked
+            },
+        );
         self.search.images.prioritize(hash_priority);
         self.search.answers.priority = answer_priority;
         if previews.paths.is_empty() {
@@ -440,7 +476,7 @@ impl FileManager {
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         self.list_audio(play);
-        if let Some(column) = group_sort {
+        if let Some(column) = output.inner {
             column.apply(self);
             self.focus_list = true;
         }
@@ -480,8 +516,14 @@ impl GroupSort {
         match self {
             Self::File(column) => manager.sort_by(column),
             Self::Metadata(family, field) => {
-                manager.metadata.toggle_sort(family, field);
-                manager.finish_sort();
+                if manager.single_family.is_some()
+                    && field == super::super::metadata::Field::Filename
+                {
+                    manager.sort_by(super::super::sorting::Column::Name);
+                } else {
+                    manager.metadata.toggle_sort(family, field);
+                    manager.finish_sort();
+                }
             }
         }
         // In-content headers must stay under the pointer while their rows
@@ -509,6 +551,9 @@ fn group_header(
         rect.max,
     );
     let rect = Rect::from_min_max(rect.min, pos2(rect.right(), content.top()));
+    if !rect.intersect(ui.clip_rect()).is_positive() {
+        return (content, None);
+    }
     ui.painter().rect_filled(rect, 0.0, colors.recessed);
     let title = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 24.0));
     let label = if !super::super::metadata::Field::for_family(family).is_empty() {
@@ -525,10 +570,11 @@ fn group_header(
         colors.text_primary,
     );
     let header = Rect::from_min_max(pos2(rect.left(), title.bottom()), rect.max);
+    let file_sort = metadata.sort(family).map_or(sort, |_| None);
     let clicked = ui
         .push_id(("family_header", family), |ui| {
             let file = columns
-                .sort_header(ui, header, sort, colors)
+                .sort_header(ui, header, file_sort, colors, false)
                 .map(GroupSort::File);
             metadata
                 .paint_header(ui, columns, header, family, colors)
@@ -548,6 +594,154 @@ mod tests {
         sorting::{Category, Column},
     };
 
+    fn list_frame(
+        manager: &mut FileManager,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 400.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    manager.list_contents(
+                        ui,
+                        WorkbenchColors::from_palette(&AppPalette::default()),
+                        &AppPalette::default(),
+                    )
+                });
+            },
+        )
+    }
+
+    fn heading_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with(label)
+                        && shape.clip_rect.contains(text.pos) =>
+                {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing visible heading {label}"))
+    }
+
+    #[test]
+    fn family_headers_stick_switch_and_remain_clickable_without_sorting_type_in_single_family() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..20 {
+            std::fs::write(root.path().join(format!("track-{index:02}.wav")), "fixture").unwrap();
+        }
+        let mut manager = FileManager {
+            pending: None,
+            ..Default::default()
+        };
+        manager.commit(
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap(),
+            Navigation::New,
+        );
+        assert_eq!(manager.single_family, Some(Category::Audio));
+        let ctx = egui::Context::default();
+        for view in [BrowserView::List, BrowserView::Columns] {
+            manager.set_view(view);
+            manager.location_mut().unwrap().scroll = 450.0;
+            manager.restore_scroll = true;
+            let output = list_frame(&mut manager, &ctx, vec![]);
+            assert!(manager.list_groups.is_empty());
+            let names = output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Name")).count();
+            assert_eq!(
+                names, 1,
+                "one header replaces the generic and family header pair"
+            );
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Type")));
+            heading_position(&output, "Audio");
+            let point = heading_position(&output, "Duration") + vec2(10.0, 7.0);
+            let before = manager.location().unwrap().scroll;
+            for pressed in [true, false] {
+                let _ = list_frame(
+                    &mut manager,
+                    &ctx,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                manager.metadata.sort(Category::Audio).map(|sort| sort.0),
+                Some(Field::Duration)
+            );
+            assert_eq!(manager.location().unwrap().scroll, before);
+        }
+        for index in 0..20 {
+            std::fs::write(root.path().join(format!("photo-{index:02}.png")), "fixture").unwrap();
+        }
+        manager.commit(
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap(),
+            Navigation::Refresh,
+        );
+        manager.sort_by(Column::Type);
+        assert_eq!(manager.single_family, None);
+        assert_eq!(manager.list_groups.len(), 2);
+        manager.location_mut().unwrap().scroll = manager.list_offsets[5] + 13.0;
+        manager.restore_scroll = true;
+        let output = list_frame(&mut manager, &ctx, vec![]);
+        let before = manager.metadata.sort(Category::Audio);
+        let offset = manager.location().unwrap().scroll;
+        let point = heading_position(&output, "Duration") + vec2(10.0, 7.0);
+        for pressed in [true, false] {
+            let _ = list_frame(
+                &mut manager,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_ne!(
+            manager.metadata.sort(Category::Audio),
+            before,
+            "pinned header must receive the sort click"
+        );
+        assert_eq!(manager.location().unwrap().scroll, offset);
+        assert_eq!(
+            manager.selection_count(),
+            0,
+            "header clicks must not select the covered row"
+        );
+        let mut previous_top = None;
+        for (index, label) in [(5, "Audio"), (10, "Audio"), (25, "Images")] {
+            manager.location_mut().unwrap().scroll = manager.list_offsets[index] + 13.0;
+            manager.restore_scroll = true;
+            let output = list_frame(&mut manager, &ctx, vec![]);
+            let top = heading_position(&output, label).y;
+            if let Some(previous) = previous_top {
+                assert_eq!(top, previous);
+            }
+            previous_top = Some(top);
+        }
+    }
+
     #[test]
     fn typed_columns_reserve_and_paint_size_and_modified_for_every_metadata_family() {
         let root = tempfile::tempdir().unwrap();
@@ -562,17 +756,12 @@ mod tests {
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, ROW_HEIGHT));
-                    let columns = ListColumns::new(header).for_entry(
-                        Some(super::super::super::sorting::Sort {
-                            column: Column::Type,
-                            descending: false,
-                        }),
-                        entry,
-                    );
+                    let columns = ListColumns::new(header)
+                        .for_family(Some(super::super::super::sorting::family(entry)));
                     let last = columns.metadata_fields().len() - 1;
                     assert!(columns.metadata_cell(header, last).unwrap().right() <= columns.size);
                     let colors = WorkbenchColors::from_palette(&AppPalette::default());
-                    columns.sort_header(ui, header, None, colors);
+                    columns.sort_header(ui, header, None, colors, true);
                     columns.paint(
                         ui,
                         header.translate(vec2(0.0, 40.0)),
