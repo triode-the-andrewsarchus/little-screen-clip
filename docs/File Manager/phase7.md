@@ -120,3 +120,40 @@ contained-row composition into its own rendering responsibility.
   `/tmp/phase7-options-light-01/report.json`. They verify automatic-off hides
   child previews, explicit expansion works while off, automatic-on restores
   archive previews, plus the original collapse/navigation/history/studio cases.
+
+### Next integration constraints
+
+The initial cards are a preview slice, not the completed expanded location model.
+The remaining work must make ordinary children selectable, searchable in `here`,
+and safely actionable; nested folder expansion and archive-member artwork/opening
+must retain provenance. Do not flatten member names into host paths. In
+particular, `edits::begin_naming` currently chooses a non-search rename parent
+from the current folder: child selection must change that to the actual selected
+entry's parent and retain execution-time ordinary-directory/source checks.
+
+Keep explicit expansion choices distinct from cancellable cached observations;
+scrolling, view switches and history must not accidentally redefine the user's
+choice. Preserve the visible path/relative position when expansion heights or
+metadata group headers change. Search must retain its existing guarded roots,
+exclusions, scope bounds, incomplete coverage and stale-generation behavior when
+expanded descendants are added.
+
+Metadata type groups need one broad-family identity (e.g. Images, not JPG). Group
+headers must reserve matching row cells, support artist/album/genre and useful
+image/video/document fields, and put unknown/pending values consistently last in
+both directions. Expensive metadata belongs on bounded workers, not in comparison
+functions or per-frame probes. Completing a metadata sort must preserve selected
+file identity and its visible anchor, rather than continually reshuffling the
+active interaction as each individual result arrives.
+
+Remembered folder preferences belong in local application state with explicit
+nearest-parent inheritance and a clear override/reset action. Browsing must not
+create sidecars in content folders. Preference writes must retain an accepted
+write owner and integrate with close deferral; do not turn them into cancellable
+preview jobs. Miller columns should reuse existing directory/source/navigation
+and preview owners, keeping a single adjacent active preview and conventional
+List available, rather than embedding a studio per column.
+
+Final container checkpoint: full file-manager library passes 880 tests with six
+ignored; strict library/test Clippy passes. Leaf Rust formatting, Python syntax
+checks and `git diff --check` pass. Personal config edits remain outside commits.
