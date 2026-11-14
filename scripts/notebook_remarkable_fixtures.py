@@ -8,6 +8,7 @@ import tarfile
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 from reportlab.pdfgen import canvas
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent / "docs/examples/notebooks/remarkable"
 
@@ -47,6 +48,19 @@ def main():
     # Filename differs from the template's fileName: resolution must use JSON.
     files["Review Grid.rmt"] = template
     (output / "layered-template.rmn").write_bytes(tar_bytes(files))
+
+    raster = BytesIO()
+    Image.new("RGB", (1404, 1872), (232, 240, 255)).save(raster, format="PNG")
+    files = deepcopy(original)
+    raster_content = json.loads(original[root + ".content"])
+    for page in raster_content["cPages"]["pages"]:
+        page["template"]["value"] = "review-raster"
+    files[root + ".content"] = json_bytes(raster_content)
+    files["Raster.rmt"] = tar_bytes({
+        "template.json": json_bytes({"name": "Review Raster", "fileName": "review-raster"}),
+        "template.png": raster.getvalue(),
+    })
+    (output / "raster-template.rmn").write_bytes(tar_bytes(files))
 
     pdf_buffer = BytesIO()
     pdf = canvas.Canvas(pdf_buffer, pagesize=(468, 624), invariant=1)

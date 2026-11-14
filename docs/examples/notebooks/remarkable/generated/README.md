@@ -9,6 +9,8 @@ exports or independent tablet image references. Source notices remain in
   into a plain TAR notebook archive. It changes template references to a nested
   RMT containing our own warm-colored grid SVG. The RMT's filename differs from
   its JSON `fileName` to exercise actual template identity resolution.
+- `raster-template.rmn` uses the same real v6 ink over our own pale-blue PNG
+  template, exercising an RMT without an SVG member.
 - `redirected-pdf.rmdoc` retains the same real ink, adds our own deterministic
   two-page PDF with clearly different background colors, reverses source PDF
   page references, and adds an intentionally empty inserted page. This tests

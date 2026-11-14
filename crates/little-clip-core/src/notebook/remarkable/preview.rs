@@ -189,6 +189,7 @@ mod tests {
         for (name, pages, warned) in [
             ("archives/Test.rmdoc", 2, true),
             ("generated/layered-template.rmn", 2, false),
+            ("generated/raster-template.rmn", 2, false),
             ("generated/legacy-paper.rmn", 2, false),
             ("generated/redirected-pdf.rmdoc", 3, false),
         ] {
@@ -214,6 +215,8 @@ mod tests {
                             .all(|(a, b)| a.abs_diff(b) <= 1),
                         "{name} page {page}: {corner:?}"
                     );
+                } else if name.ends_with("raster-template.rmn") {
+                    assert_eq!(corner, [232, 240, 255]);
                 } else if name.ends_with("layered-template.rmn")
                     || name.ends_with("legacy-paper.rmn") && page == 1
                 {
