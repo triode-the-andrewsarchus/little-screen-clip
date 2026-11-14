@@ -336,6 +336,13 @@ impl WorkbenchApp {
             self.start_midi_load(fp.to_path_buf());
         } else if little_clip_scene::is_splat_file(fp) || is_3d_model_file(fp) {
             self.replace_viewer(Some(scene_file_viewer(fp.to_path_buf(), &self.config)));
+        } else if is_image && little_clip_core::notebook::is_candidate_path(fp) {
+            self.replace_viewer(Some(ViewerSession::Pdf(
+                PdfEditorState::new_notebook_checked(
+                    fp.to_path_buf(),
+                    crate::file_source::ReadCheck::default(),
+                ),
+            )));
         } else if little_clip_core::pdf::is_pdf_path(fp) {
             self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(
                 fp.to_path_buf(),

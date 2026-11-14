@@ -1,4 +1,18 @@
 //! Shared preflight budgets before materializing untrusted XML trees.
+/// Borrows the first root tag without interpreting entities or following references.
+pub(crate) fn root(bytes: &[u8]) -> Option<quick_xml::events::BytesStart<'_>> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    for _ in 0..1024 {
+        match reader.read_event().ok()? {
+            Event::Start(element) | Event::Empty(element) => return Some(element),
+            Event::Eof => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 pub(crate) fn validate(bytes: &[u8], max_events: usize, max_depth: usize) -> Result<(), String> {
     let mut reader = quick_xml::Reader::from_reader(bytes);
     let mut depth = 0usize;

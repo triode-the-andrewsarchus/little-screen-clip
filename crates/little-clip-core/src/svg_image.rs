@@ -50,17 +50,8 @@ pub fn is_markup(bytes: &[u8]) -> bool {
     root(bytes).is_some()
 }
 fn root(bytes: &[u8]) -> Option<quick_xml::events::BytesStart<'_>> {
-    use quick_xml::events::Event;
-    let mut reader = quick_xml::Reader::from_reader(&bytes[..bytes.len().min(MAX_DOCUMENT_BYTES)]);
-    loop {
-        match reader.read_event().ok()? {
-            Event::Start(element) | Event::Empty(element) => {
-                return (element.local_name().as_ref() == b"svg").then_some(element);
-            }
-            Event::Eof => return None,
-            _ => {}
-        }
-    }
+    let element = crate::xml_content::root(&bytes[..bytes.len().min(MAX_DOCUMENT_BYTES)])?;
+    (element.local_name().as_ref() == b"svg").then_some(element)
 }
 /// Reads declared SVG/SVGZ dimensions from at most 64 KiB of expanded XML.
 ///

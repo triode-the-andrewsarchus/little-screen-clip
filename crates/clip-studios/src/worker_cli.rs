@@ -3,6 +3,9 @@
 /// Handles a studio worker invocation before normal application argument parsing.
 /// Worker failures exit with status 2; unrelated arguments return false.
 pub fn run() -> bool {
+    if little_clip_core::notebook::run_worker_cli() {
+        return true;
+    }
     if little_clip_render::diagram::run_worker_cli() {
         return true;
     }

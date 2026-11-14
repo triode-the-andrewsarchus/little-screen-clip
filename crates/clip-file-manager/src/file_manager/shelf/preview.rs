@@ -77,6 +77,7 @@ pub(in crate::file_manager) enum Source {
         height: u32,
         colors: Vec<[u8; 3]>,
     },
+    Handwritten(PathBuf),
     PdfPage {
         path: PathBuf,
         page: usize,
@@ -122,6 +123,7 @@ impl Source {
             Self::System(_) => (super::super::system::jobs(), 2, 3),
             Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
             Self::Gallery { .. }
+            | Self::Handwritten(_)
             | Self::PdfPage { .. }
             | Self::Photo { .. }
             | Self::StudioPhoto { .. }
@@ -195,6 +197,21 @@ impl Source {
             }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
             Source::Material(request) => request.load(token),
+            Source::Handwritten(path) => {
+                if little_clip_core::notebook::has_header(&path, token).unwrap_or(false) {
+                    let mut data = Data::new(display_path(&path), "Notebook".into(), Icon::Pdf);
+                    match little_clip_core::notebook::inspect(&path, token) {
+                        Ok(info) => {
+                            data.detail = format!("{} · {} pages", info.format, info.pages.len());
+                            data.handwritten_info = Some(Arc::new(info));
+                        }
+                        Err(error) => data.text = error,
+                    }
+                    data
+                } else {
+                    document_preview(&path, token)
+                }
+            }
             Source::PdfPage { path, page, edge } => {
                 super::super::pdf_strip::load_page(&path, page, edge, token)
             }

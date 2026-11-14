@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn notebook_pages_reject_both_public_and_queued_pdf_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("original.note");
+    std::fs::write(&path, b"unchanged notebook").unwrap();
+    let mut state = action_guard_state(path.clone(), 2, Some(1));
+    state.source = PageSource::Notebook;
+    state.delete_current_page(1.0);
+    state.rotate_current_page(90, 2.0);
+    state.start_edit_on(&BackgroundJobs::new(1, 1), "delete", 1, 3.0, |_, _| {
+        panic!("A notebook must never enter a PDF mutation worker")
+    });
+    assert!(!state.edit_in_progress);
+    assert!(state.edit_ticket.is_none());
+    assert!(state.edit_rx.is_none());
+    assert!(!state.start_existing_ocr_check());
+    assert_eq!(std::fs::read(path).unwrap(), b"unchanged notebook");
+}
+
+#[test]
 fn dropping_editor_releases_temporary_raster_cache() {
     let state = raster_state(2, 16);
     let cache_path = state.raster_cache.as_ref().unwrap().path().to_owned();

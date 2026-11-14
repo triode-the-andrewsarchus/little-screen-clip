@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn notebook_view_omits_pdf_tools_and_ignores_their_shortcuts_in_both_themes() {
+    for appearance in [
+        little_clip_core::config::WorkbenchAppearance::Dark,
+        little_clip_core::config::WorkbenchAppearance::Light,
+    ] {
+        let ctx = egui::Context::default();
+        let palette = crate::ui_appearance::palette(appearance);
+        let mut state = raster_state(2, 16);
+        state.source = PageSource::Notebook;
+        let events = [egui::Key::R, egui::Key::Delete, egui::Key::T, egui::Key::F]
+            .into_iter()
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: if key == egui::Key::F {
+                    egui::Modifiers::CTRL
+                } else {
+                    egui::Modifiers::NONE
+                },
+            })
+            .collect();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut false));
+            },
+        );
+        let labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in [
+            "Okular",
+            "Rotate [R]",
+            "Delete [Del]",
+            "Find [Ctrl+F]",
+            "OCR",
+            "Contents",
+        ] {
+            assert!(
+                !labels.contains(forbidden),
+                "Notebook exposed {forbidden}: {labels}"
+            );
+        }
+        assert!(!state.edit_in_progress);
+        assert!(state.document_tools.layout.is_none());
+        assert!(state.document_tools.layout_error.is_none());
+        assert!(state.navigation.right.is_none());
+        assert!(matches!(state.navigation.left, navigation::LeftTab::Pages));
+        assert_eq!(state.selected_page, Some(1));
+    }
+}
+
+#[test]
 fn pdf_selection_and_error_labels_meet_contrast_in_both_appearances() {
     for appearance in [
         little_clip_core::config::WorkbenchAppearance::Dark,

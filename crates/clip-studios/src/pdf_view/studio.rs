@@ -25,7 +25,10 @@ impl PdfEditorState {
                 return;
             }
         }
-        if !ctx.wants_keyboard_input() && !self.document_tools.ocr_busy() {
+        if !self.source.read_only()
+            && !ctx.wants_keyboard_input()
+            && !self.document_tools.ocr_busy()
+        {
             if ctx.input(|input| {
                 input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
             }) {
@@ -44,20 +47,19 @@ impl PdfEditorState {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none().fill(colors.canvas).inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
-                let actions_enabled = self.info_job.is_none() && !self.edit_in_progress
-                    && !self.document_tools.ocr_busy() && self.selected_page.is_some();
+                let read_only = self.source.read_only();
                 let mut rotate = false;
                 let mut delete = false;
                 let mut shell = StudioShell::new(&self.title, Icon::Pdf, palette, close)
-                    .with_badge(if self.page_count == 0 { "Loading PDF…".into() }
+                    .with_badge(if self.page_count == 0 { "Loading pages…".into() }
                         else { format!("{} pages", self.page_count) }, None)
-                    .with_escape_hatch(EscapeHatch::primary("Okular", "okular", "Open PDF in Okular").with_icon(Icon::Pdf))
-                    .with_footer_hints("Drag text: Select | Ctrl+C: Copy | Right-click image: Copy | Space-drag: Pan | Scroll: Zoom | T: ToC")
+                    .with_footer_hints(if read_only { "Drag: Pan | Scroll: Zoom | Click thumbnail: Select page" } else { "Drag text: Select | Ctrl+C: Copy | Right-click image: Copy | Space-drag: Pan | Scroll: Zoom | T: ToC" })
                     .with_footer_readout(self.selected_page.map(|page| format!("Page {page} of {}", self.page_count)).unwrap_or_default());
+                if !read_only {
+                    shell = shell.with_escape_hatch(EscapeHatch::primary("Okular", "okular", "Open PDF in Okular").with_icon(Icon::Pdf));
+                }
                 let hatch = shell.render_header(ui, |ui| {
-                    self.navigation_buttons(ui, palette);
-                    rotate = ui.add_enabled(actions_enabled, clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::RotateCw), "Rotate [R]", palette)).clicked();
-                    delete = ui.add_enabled(actions_enabled, clip_ui::buttons::ButtonRole::Destructive.button_with_icon(Some(Icon::Trash), "Delete [Del]", palette)).clicked();
+                    (rotate, delete) = self.render_pdf_actions(ui, palette);
                 });
                 if let Some(0) = hatch { EscapeHatchLauncher::launch("PDF Viewer", "okular", &self.path, &mut self.status_toast, now); }
                 if rotate { self.rotate_current_page(90, now); }
@@ -76,6 +78,42 @@ impl PdfEditorState {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+    }
+
+    fn render_pdf_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> (bool, bool) {
+        if self.source.read_only() {
+            return (false, false);
+        }
+        let enabled = self.info_job.is_none()
+            && !self.edit_in_progress
+            && !self.document_tools.ocr_busy()
+            && self.selected_page.is_some();
+        self.navigation_buttons(ui, palette);
+        let rotate = ui
+            .add_enabled(
+                enabled,
+                clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                    Some(Icon::RotateCw),
+                    "Rotate [R]",
+                    palette,
+                ),
+            )
+            .clicked();
+        let delete = ui
+            .add_enabled(
+                enabled,
+                clip_ui::buttons::ButtonRole::Destructive.button_with_icon(
+                    Some(Icon::Trash),
+                    "Delete [Del]",
+                    palette,
+                ),
+            )
+            .clicked();
+        (rotate, delete)
     }
 
     fn render_docked_body(
@@ -98,7 +136,11 @@ impl PdfEditorState {
         let center = (content - left - right).max(0.0);
         ui.horizontal(|ui| {
             self.render_pane(ui, Vec2::new(left, height), palette, |state, ui| {
-                state.navigation.left_tabs(ui, palette);
+                if state.source.read_only() {
+                    ui.label("Pages");
+                } else {
+                    state.navigation.left_tabs(ui, palette);
+                }
                 ui.separator();
                 match state.navigation.left {
                     LeftTab::Pages => state.render_page_thumbnails(ui, ctx, palette),
@@ -224,7 +266,11 @@ impl PdfEditorState {
     ) {
         let Some(page_num) = self.selected_page else {
             ui.centered_and_justified(|ui| {
-                ui.label("Loading PDF pages…");
+                ui.label(if self.info_job.is_some() {
+                    "Loading pages…"
+                } else {
+                    "No document pages available. Reload the file to try again."
+                });
             });
             return;
         };

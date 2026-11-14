@@ -356,6 +356,9 @@ fn load_last_action_from_disk() -> Option<little_clip_core::ipc::LastAction> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if little_clip_core::notebook::run_worker_cli() {
+        return Ok(());
+    }
     if little_clip_render::diagram::run_worker_cli() {
         return Ok(());
     }

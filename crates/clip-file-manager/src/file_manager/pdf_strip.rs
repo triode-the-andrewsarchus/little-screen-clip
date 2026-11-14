@@ -46,12 +46,12 @@ impl Pages {
         row: egui::Rect,
         entry: &Entry,
         identity: uuid::Uuid,
-        info: Option<&little_clip_core::pdf::PdfInfo>,
+        page_count: Option<usize>,
         colors: WorkbenchColors,
     ) -> Option<usize> {
         let strip = super::ui::strip_body(ui, row, Icon::Pdf, colors);
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
-        let Some(info) = info else {
+        let Some(page_count) = page_count else {
             let label = if little_clip_core::document::is_office_document(&entry.path) {
                 "Document preview unavailable or loading…"
             } else {
@@ -67,7 +67,7 @@ impl Pages {
             return None;
         };
         let slots = super::previews::strip_slots(
-            info.page_count,
+            page_count,
             ((strip.width() / 56.0).floor() as usize).clamp(3, 64),
         );
         let edge = (128.0 * ui.ctx().pixels_per_point())
@@ -207,6 +207,8 @@ pub(super) fn load_page(
         let (png, _, _) = if little_clip_core::document::is_office_document(path) {
             let pdf_path = little_clip_core::document::ensure_rendered_pdf(path)?;
             little_clip_core::pdf::render_pdf_page_thumbnail(&pdf_path, page, edge)?
+        } else if little_clip_core::notebook::is_candidate_path(path) {
+            little_clip_core::notebook::render_page(path, page, edge, cancelled)?
         } else {
             little_clip_core::pdf::render_pdf_page_thumbnail(path, page, edge)?
         };
@@ -215,7 +217,7 @@ pub(super) fn load_page(
             return Err("Preview cancelled".into());
         }
         little_clip_core::ImageThumbnail::generate_with_mime(&png, Some("image/png"), edge, edge)
-            .ok_or_else(|| "Could not decode PDF page thumbnail".to_string())
+            .ok_or_else(|| "Could not decode document page thumbnail".to_string())
     })();
     match result {
         Ok(image) => data.image = Some(image),

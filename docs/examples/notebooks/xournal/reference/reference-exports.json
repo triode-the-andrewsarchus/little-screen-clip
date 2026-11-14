@@ -1,0 +1,130 @@
+[
+  {
+    "source": "legacy-stroke.xoj",
+    "page": 1,
+    "image": "legacy-stroke-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "69827e72edaa5195e21af563f354c99e66dabfe6858d69bd0e17338ab58a850f",
+    "diagnostic": "xopp-Message: 19:45:49.184: Image file successfully created\n"
+  },
+  {
+    "source": "load/strokes.xopp",
+    "page": 1,
+    "image": "strokes-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "f18032715fe2baadce00a0501c43a8cf762e729e86bde7d68fec2ea6e3bbb359",
+    "diagnostic": "xopp-Message: 19:45:49.211: Image file successfully created\n"
+  },
+  {
+    "source": "load/layers.xopp",
+    "page": 1,
+    "image": "layers-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "ae59ea082bf8b0d47b9c8552bbbcf86d2e24598014323e771c2f6a64ed10868e",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.248: Image file successfully created\n"
+  },
+  {
+    "source": "load/text-fileversion-5.xopp",
+    "page": 1,
+    "image": "transformed-text-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "43a2dcbd5fe04c6fb48fb22ad7b5b2af38f1403efc0949b1eec9b84486cd71bd",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.286: Image file successfully created\n"
+  },
+  {
+    "source": "load/image-fileversion-5.xopp",
+    "page": 1,
+    "image": "transformed-images-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "e0b4b9b53d82be9cbbf2fba93a889c9de0107644572dc91bdb6c98bc7a0f0bb6",
+    "diagnostic": "xopp-Message: 19:45:49.320: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 3,
+    "image": "lined-page-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "5afabde10c8a6496715872d6cbfad57bdda191953dc596a8a83b37d1f99d22b7",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.354: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 11,
+    "image": "image-background-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "4e80f648d014b077e23f1a21156dd185e61e30f753c33bf7129814106a068ac2",
+    "diagnostic": "xopp-Message: 19:45:49.400: Image file successfully created\n"
+  },
+  {
+    "source": "load/relativePaths.xopp",
+    "page": 1,
+    "image": "external-pdf-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "f442526a359044d5474f6f9a0cc1a268616a2c887d04d88fce691296eefaac09",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.450: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 5,
+    "image": "staves-page-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "65f2a473d515eed71c7079dad98ecdf7890eab5fc33dd31f5f8b00e0e9794e49",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.485: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 7,
+    "image": "dotted-page-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "d5cc4e882284f68fc88c7b8afbca292c8105a300e58f85bd363fe259a2766f9f",
+    "diagnostic": "xopp-Message: 19:45:49.521: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 8,
+    "image": "isodotted-page-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "d8ce9cac51ee142fcb623de4ae54f5e7c0c25bb95389f2952066bbd4e347adca",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.557: Image file successfully created\n"
+  },
+  {
+    "source": "load/pages.xopp",
+    "page": 9,
+    "image": "isograph-page-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "7e121ccab4cce5b392c945e98d2ff320d9f09f0027bb2c8bc9ebeacbf51daa76",
+    "diagnostic": "Fontconfig warning: using without calling FcInit()\nxopp-Message: 19:45:49.606: Image file successfully created\n"
+  },
+  {
+    "source": "packaged/image.xopp",
+    "page": 1,
+    "image": "packaged-image-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "f29b5461930c3a76ed0351ed696dbf819491e687cda7d65697b179f889893926",
+    "diagnostic": "xopp-Message: 19:45:49.645: Image file successfully created\n"
+  },
+  {
+    "source": "load/latex-fileversion-5.xopp",
+    "page": 1,
+    "image": "embedded-latex-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "7afadb8af0af141e4666e78510d5ac0119db03c035e19e51cd1008339406735a",
+    "diagnostic": "xopp-Message: 19:45:49.676: Image file successfully created\n"
+  },
+  {
+    "source": "packaged/stroke.xopp",
+    "page": 1,
+    "image": "packaged-stroke-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "982d4a585f5f36b26b3af69e91676d891755c0727d1d08889acc3be81f2188c1",
+    "diagnostic": "xopp-Message: 19:45:49.703: Image file successfully created\n"
+  },
+  {
+    "source": "packaged/pdf-background.xopp",
+    "page": 2,
+    "image": "packaged-pdf-page-2-reference.png",
+    "font_policy": "bundled Arimo/Tinos/Cousine and CJK fallback",
+    "sha256": "993ec8164295eb56bfbeca3528a780719e5a0cac4640f8fd92b465ebb3fd0bb1",
+    "diagnostic": "\n(com.github.xournalpp.xournalpp:4061988): xopp-WARNING **: 19:45:49.721: XML parser: Attribute \"pageno\" was not entirely parsed as unsigned long. The value is \"1ll\"\n\n(com.github.xournalpp.xournalpp:4061988): xopp-WARNING **: 19:45:49.721: XML parser: Attribute \"pageno\" was not entirely parsed as unsigned long. The value is \"2ll\"\nxopp-Message: 19:45:49.739: Image file successfully created\n"
+  }
+]

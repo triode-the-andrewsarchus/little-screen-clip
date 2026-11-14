@@ -156,8 +156,15 @@ async fn copy_item_to_os_clipboard(item: little_clip_core::ClipItem) {
     }
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if little_clip_core::notebook::run_worker_cli() {
+        return Ok(());
+    }
+    run_cli()
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let sock_path = get_socket_path();
 
