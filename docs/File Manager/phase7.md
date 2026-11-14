@@ -24,6 +24,13 @@ checkpoints below. Current implementation and acceptance cover:
 
 ### Miller column review correction
 
+- [x] Arrow Up/Down in Columns steps through current-folder rows, skipping
+  inline preview descendants. A clicked descendant resumes keyboard movement
+  relative to its owning folder row. Preview clicks and ordinary List keyboard
+  behavior remain available; Left/Right retain parent/selected-folder navigation.
+  Regression and full file-manager tests pass (952 passed, six ignored); strict
+  all-target Clippy passes.
+
 - [x] Replace the vertical full-path rail with conventional horizontally scrolling
   folder columns. Keep older ancestors in the chain; reveal the current column
   on navigation and resize. A single-line bottom path bar navigates ancestors,

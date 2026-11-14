@@ -879,16 +879,24 @@ impl FileManager {
     }
 
     fn move_selection_by(&mut self, delta: isize, extend: bool) {
-        let entries = self.displayed_entries();
+        let mut entries = self.displayed_entries();
+        // Miller columns navigate folder rows. Inline descendants remain
+        // clickable previews, rather than additional stops between those rows.
+        let folder_rows = self.view == BrowserView::Columns && !self.search.has_result_sources();
+        if folder_rows {
+            entries.retain(|entry| entry.path.parent() == Some(self.path()));
+        }
         if entries.is_empty() {
             return;
         }
         let selected = self
             .location()
             .and_then(|location| location.selected.as_ref());
-        let index = entries
-            .iter()
-            .position(|entry| Some(&entry.path) == selected);
+        let index = entries.iter().position(|entry| {
+            selected.is_some_and(|path| {
+                path == &entry.path || (folder_rows && path.starts_with(&entry.path))
+            })
+        });
         let index = match index {
             Some(i) => i.saturating_add_signed(delta).min(entries.len() - 1),
             None if delta >= 0 => 0,
