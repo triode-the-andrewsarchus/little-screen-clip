@@ -46,9 +46,9 @@ def exercise(session, root):
         ("strip-title-deep.png", (430, 410, 545, 432)),
     ]
     session.observe("initial", ["a-small", "b-large"])
-    session.click(645, 160)  # Collapse Shelf to expose all four fixture rows.
+    session.click(730, 160)  # Collapse Shelf to expose all four fixture rows.
     session.observe("00-contained-files", ["a-small", "Inside folder", "readme.txt", "sun.png", "Archive contents", "payload.json", "manual"])
-    session.click(755, 160)  # Folder previews menu in the observed toolbar.
+    session.click(845, 160)  # Folder previews menu in the observed toolbar.
     session.observe("preview-settings", ["Auto-expand small folders and archives"])
     x, y = session.word("preview-settings", "Auto-expand")
     session.click(x + 5, y)
@@ -59,7 +59,7 @@ def exercise(session, root):
     _, y = session.word("automatic-off", "a-small")
     session.click(360, y)
     session.observe("manual-override", ["readme.txt", "sun.png"])
-    session.click(755, 160)
+    session.click(845, 160)
     session.observe("preview-settings-again", ["Auto-expand small folders and archives"])
     x, y = session.word("preview-settings-again", "Auto-expand")
     session.click(x + 5, y)

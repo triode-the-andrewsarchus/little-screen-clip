@@ -49,9 +49,10 @@ def preserve_file_clipboard(env):
 
 
 class Session:
-    def __init__(self, output, env, niri, process, children=None):
+    def __init__(self, output, env, niri, process, children=None, *, logical_size=(1280, 800)):
         self.output, self.env, self.niri, self.process = output, env, niri, process
         self.children = children
+        self.logical_size = logical_size
         self.observations = []
         self.pointer = private.build_private_virtual_pointer(output)
         private.verify_private_wayland_target(env, output / "runtime")
@@ -92,11 +93,15 @@ class Session:
         self.key("Return")
 
     def click(self, x, y, delay=0.2):
-        private.run_checked([str(self.pointer), "click", "1280", "800", str(x), str(y)], env=self.env)
+        private.run_checked([str(self.pointer), "click", *map(str, self.logical_size), str(x), str(y)], env=self.env)
         time.sleep(delay)
 
+    def scroll(self, x, y, amount, *, horizontal=False):
+        private.run_checked([str(self.pointer), "hscroll" if horizontal else "scroll", *map(str, self.logical_size), str(x), str(y), str(amount)], env=self.env)
+        time.sleep(0.2)
+
     def move_pointer_to_title(self):
-        pointer = subprocess.Popen([str(self.pointer), "move", "1280", "800", "120", "40"], env=self.env, stdout=subprocess.DEVNULL)
+        pointer = subprocess.Popen([str(self.pointer), "move", *map(str, self.logical_size), "120", "40"], env=self.env, stdout=subprocess.DEVNULL)
         time.sleep(0.1)
         pointer.terminate()
         pointer.wait(timeout=3)
@@ -132,9 +137,7 @@ class Session:
             if all("".join(fragment.lower().split()) in rendered for fragment in expected):
                 self.observe(name, expected)
                 return
-            private.run_checked([
-                str(self.pointer), "scroll", "1280", "800", *map(str, position), str(step),
-            ], env=self.env)
+            self.scroll(*position, step)
             time.sleep(0.5)
         raise RuntimeError(f"Unable to find {expected} in bounded inspector scroll")
 
@@ -415,8 +418,8 @@ def phase2(session, root):
     (session.output / "context-clipboard.txt").write_text(payload)
 
 
-def isolated_runner(output, appearance, children):
-    args = private.create_parser().parse_args(["--output-dir", str(output), "--appearance", appearance, "--allow-server-decorations"])
+def isolated_runner(output, appearance, children, *, logical_size=(1280, 800)):
+    args = private.create_parser().parse_args(["--output-dir", str(output), "--appearance", appearance, "--allow-server-decorations", "--width", str(logical_size[0]), "--height", str(logical_size[1])])
     config = private.prepare_configuration(args, output)
     with config["niri_config"].open("a") as file:
         file.write('window-rule { match app-id="little-clip-file-manager"; open-floating true; }\n')
@@ -459,13 +462,14 @@ def run_application_acceptance(args, output, root, exercise, scope, prepare_envi
     children = private.ChildProcesses()
     report = {"status": "running", "appearance": args.appearance, "scope": scope}
     try:
-        config, env = isolated_runner(output, args.appearance, children)
+        logical_size = getattr(args, "output_size", (1280, 800))
+        config, env = isolated_runner(output, args.appearance, children, logical_size=logical_size)
         if prepare_environment:
             prepare_environment(env, children)
         process = children.start("files", [str(args.binary.resolve()), str(root)], env=env,
                                  cwd=config["scratch"], log_path=output / "files.log")
         _, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
-        session = Session(output, env, config["niri_bin"], process, children)
+        session = Session(output, env, config["niri_bin"], process, children, logical_size=logical_size)
         exercise(session, root)
         session.close(expected_exit_code)
         report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations,

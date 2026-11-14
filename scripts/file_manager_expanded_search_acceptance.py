@@ -28,7 +28,7 @@ def fixtures(root):
 def exercise(session, root):
     session.ocr_regions = [("strip-title-deep.png", (430, 410, 545, 432))]
     session.observe("initial", ["a-open", "b-closed"])
-    session.click(645, 160)  # Collapse Shelf in the observed initial List toolbar.
+    session.click(730, 160)  # Collapse Shelf in the observed initial List toolbar.
     session.observe("loaded-folder", ["direct.txt", "nested"])
     session.click(510, 320)  # Separate disclosure on the nested-folder card.
     session.observe("expanded-tree", ["deep.txt", "a-open"])

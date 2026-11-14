@@ -17,7 +17,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
 - [x] Search `here` includes explicitly expanded ordinary descendants through the
   existing scope model, with accurate provenance, coverage and file actions.
-- [ ] Miller columns with an adjacent preview, familiar navigation/history and
+- [x] Miller columns with an adjacent preview, familiar navigation/history and
   the conventional List retained. Mixed/unsupported files remain accessible.
 - [x] Persist per-folder view overrides with explicit parent inheritance and a
   way to clear overrides. Browsing creates no sidecars in user folders.
@@ -25,7 +25,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
   appropriate metadata headers and sortable fields. Audio artist/album/genre,
   useful image/video/document metadata, deterministic missing values and stable
   selected-file identity while background metadata arrives.
-- [ ] Retain Phase 6 image hash/reference sorting. Warm/cool sorting is optional
+- [x] Retain Phase 6 image hash/reference sorting. Warm/cool sorting is optional
   exploration in the roadmap, not a prerequisite for the requested delivery.
 - [ ] Native review in both appearances and narrow/wide windows; targeted safety,
   lifecycle, navigation and ordering tests; full workspace tests with bounded
@@ -792,3 +792,60 @@ acceptance remains open until the subsequent width defect is corrected.
   file URI copying and List/Columns switching. This validates the preceding
   spacing and resize fixes together with the docked renderer. The tracked driver
   and its shared sizing/input support are committed as the acceptance increment.
+
+### Integrated Columns and reference-sort acceptance checkpoint
+
+- [x] Extend the existing private native runner with optional output dimensions
+  and matching pointer coordinates, retaining the 1280×800 default. Add explicit
+  horizontal-wheel input to its existing pointer helper. Parse the axis alongside
+  the other input modes instead of growing the event-dispatch branching. This
+  affects acceptance tooling, not application input or user configuration.
+- [x] Extend the Columns driver with 1560×900 and 760×800 windows on a 1760×1000
+  private output. Both themes pass at
+  `/tmp/phase7-columns-geometry-{dark,light}-04/report.json`: two parent columns,
+  ordinary/unsupported files, text preview, opening/returning from a studio,
+  selection of row 99 in a 100-file listing, resizing with that row still visible,
+  narrow horizontal text access, actual selected-file clipboard URI publication,
+  wide restoration and List/Columns switching. Both-theme screenshots were
+  visually reviewed. Earlier failures led to the three separately committed
+  spacing, resize and docked-text fixes recorded above.
+- [x] Extend the existing preference scenario to exercise Columns. Both themes
+  pass at `/tmp/phase7-columns-preferences-{dark,light}-01/report.json`: saved
+  parent Columns, explicit inheritance, child List override, restart, reset to
+  inherited Columns, a second restart and unchanged content folders. The same
+  driver retains its Photos mode. Update observed toolbar positions after the
+  Columns tab was added.
+- [x] Existing root-image ordering scenarios pass at
+  `/tmp/phase7-image-order-{dark,light}-01/report.json`. Add an expanded-folder
+  mode to the same driver; both themes pass at
+  `/tmp/phase7-expanded-image-order-{dark,light}-01/report.json`. Alpha/Copy are
+  actual contained-file cards, while opposite/unreadable images remain at the
+  root. Verify chosen-reference distances, reference retention after selection,
+  header reversal, invalidation after changing the contained reference, unsigned
+  dHash ordering including the maximum u64 hash, honest failed-image coverage,
+  restored browsing, and absence of embedding index/models/runtime enrollment.
+- [x] Refresh the existing expanded-search/container drivers' toolbar coordinates.
+  The guarded expanded-name/content/fallback/copy/ancestor-replacement scenario
+  passes at `/tmp/phase7-expanded-search-dark-04/report.json`. The full container
+  preview/settings/collapse/history/nesting/rename/open scenario passes at
+  `/tmp/phase7-containers-light-10/report.json`; the preceding run clicked the
+  now-moved Shelf button instead of Folder previews and is retained as a failed
+  observation, not a product failure.
+- [x] `cargo test --workspace -j4 -- --test-threads=4` passes: 3,274 passed,
+  zero failed, 36 ignored across 47 reported suites. Log:
+  `/tmp/phase7-workspace-tests.log`. The ignored tests are not claimed as run.
+  Python compilation and diff whitespace checks pass for the changed drivers.
+
+Architecture comparison against `before-phase7-columns-integration` retains
+aggregate duplication and maximum complexity, with no newly flagged function
+complexity or clone regression. Reported dependency cycles are unchanged Python
+functions with reordered membership; the input helper's axis parser keeps mode
+recognition separate from event dispatch. Existing renderer, file-source,
+selection, preference and search owners remain in place.
+
+The Columns and image-reference delivery checkboxes are now checked. The final
+whole-milestone gate remains open: full-workspace strict Clippy/formatting and the
+final requirement/source/evidence audit have not yet been completed. Further
+metadata/nested-layout regression review may still identify follow-up work.
+The user requested a pause after this acceptance commit to review the branch;
+this checkpoint does not mark the goal complete.
