@@ -386,3 +386,21 @@ query dispatch and action guards avoid independent search-policy implementations
 Image reference selection from expanded cards still needs the separate image-sort
 compatibility audit above; temporary answer columns are not claimed for inline
 cards by this checkpoint.
+
+### Expanded-card image reference compatibility
+
+- [x] Fix similarity-sort reference selection for ordinary images selected inside
+  expanded folders. Feed the captured root/child entry iterators into the existing
+  image-order owner for both admission and ongoing reference validation, without
+  copying a whole directory or adding another hash cache/decoder.
+- [x] Five image-order tests pass, including a real nested-folder reference and
+  invalidation when its captured revision changes. Existing unsigned hash order,
+  Hamming-distance order and missing/error placement remain covered. Strict
+  file-manager library/test Clippy and diff whitespace checks pass
+  (`/tmp/phase7-expanded-reference-{tests,clippy}.log`).
+
+Architecture comparison against `before-phase7-expanded-image-reference` leaves
+production complexity, file count and clone count unchanged. Its clone flag is
+existing visible-photo filtering in status/tick; reported Python dependency-cycle
+changes only reorder the same unchanged members. The main image-sort acceptance
+item remains open for final integrated milestone validation.

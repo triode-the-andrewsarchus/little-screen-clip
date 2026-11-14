@@ -205,7 +205,14 @@ impl FileManager {
                     .location()
                     .map(|location| location.selection.clone())
                     .unwrap_or_default();
-                if let Err(error) = self.search.images.begin(&query, directory, &selected) {
+                if let Err(error) = self.search.images.begin(
+                    &query,
+                    directory
+                        .entries
+                        .iter()
+                        .chain(self.search.here_entries.iter()),
+                    &selected,
+                ) {
                     self.search.error = Some(error);
                     return;
                 }
@@ -400,10 +407,13 @@ impl FileManager {
         }
         if let Some(directory) = &self.directory {
             let origin = self.search.restore_directory.as_ref().unwrap_or(directory);
-            let (changed, error) =
-                self.search
-                    .images
-                    .tick(directory, origin, &self.visible, &self.previews, jobs);
+            let (changed, error) = self.search.images.tick(
+                directory,
+                origin.entries.iter().chain(self.search.here_entries.iter()),
+                &self.visible,
+                &self.previews,
+                jobs,
+            );
             if let Some(error) = error {
                 self.search.error = Some(error);
             }
