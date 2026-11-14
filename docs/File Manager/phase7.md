@@ -8,12 +8,12 @@ explicitly excluded by the user; existing automatic behavior is preserved.
 
 - [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;
   fix actual gaps and replace its stale capability/architecture descriptions.
-- [ ] Preview small folders directly in List, with distinct containment styling,
+- [x] Preview small folders directly in List, with distinct containment styling,
   names, useful existing file previews and obvious child activation. Disclosure
   and opening a folder remain separate actions.
 - [ ] Preview archive contents in the same interaction model. Retain archive
   provenance; never treat member names as host paths or extract implicitly.
-- [ ] Configurable automatic expansion of small folders, explicit expand/collapse,
+- [x] Configurable automatic expansion of small folders, explicit expand/collapse,
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
 - [ ] Search `here` includes explicitly expanded ordinary descendants through the
   existing scope model, with accurate provenance, coverage and file actions.
@@ -301,3 +301,54 @@ files and reordered unchanged Python cycles; it is not a clean aggregate result.
 Nested inline levels, expanded-scope search and preservation of the visible
 scroll anchor during layout changes remain required work, alongside archive
 member previews/opening, metadata groups/sorts and Miller columns.
+
+
+### Bounded nested inline sections
+
+- [x] Add separate disclosure controls to actual folder/archive cards. Selecting,
+  dragging and opening their names retain the normal browser actions; disclosure
+  expands an indented subsection without navigating away. Nested headers reuse
+  the host's row renderer and columns through an explicit rendering callback.
+- [x] Automatic expansion remains one level. Further expansion is explicit, up
+  to four container levels including the root. Each root preview lays out at most
+  32 sections and discloses truncation; global observations remain capped at 32,
+  with 32 child records each and two actual executing inventory reads. Only
+  visible subsection rows admit reads, and frame retirement cancels hidden work.
+- [x] Use the same bounded section walk for height, displayed entries and keyboard
+  reveal offsets. Hidden subsections reserve no space or expose descendants while
+  hidden files are disabled. A collapsed subsection removes descendants from the
+  active selection model. Selected descendants protect every retained ancestor.
+- [x] Preserve selection through unknown ancestor coverage during refresh/history
+  loading, while requiring observed entries for mutation. Completed observations
+  prove absence; unchanged nested observations survive a same-folder refresh.
+  Revision invalidation has one node-owned transition that preserves explicit
+  expansion intent while cancelling obsolete work and clearing stale observations.
+- [x] Twenty-one container tests are covered by the full file-manager library:
+  902 passed, six ignored (`/tmp/phase7-nested-library-tests.log`). Native reports
+  pass in `/tmp/phase7-nested-dark-02/report.json` and
+  `/tmp/phase7-nested-light-01/report.json`, verifying nested expansion in place,
+  the nested child's exact clipboard URI, collapse, and the previous ordinary
+  child rename/history/open workflow. Screenshots confirm the indented hierarchy;
+  an isolated label crop handles a dark-theme OCR omission without weakening the
+  clipboard/path assertions.
+
+Architecture review: new functions remain below the excessive-complexity gate;
+scoped Lizard measures maximum CCN 13. Shared revision invalidation and test setup
+remove actual repeated implementation. Aggregate comparison still reports
+REGRESSION: its new source clone is a seven-line rendering parameter declaration,
+plus a six-line refresh/assertion sequence in tests; pre-existing touched-file
+clones and reordered unchanged Python cycles remain. These are not duplicate
+business rules, and no wrapper was added merely to hide their tokens. File-target
+Valknut measurement was unavailable, so dependency findings use the full-tree
+comparison rather than claiming a successful scoped structural check.
+
+The folder-preview and configurable-expansion delivery items are now checked off.
+Expanded-scope search and scroll-anchor preservation still require integration;
+archive member artwork/opening and broader compressed inventories, metadata
+family headers/sorts and Miller columns remain open. This checkpoint does not
+mark Phase 7 complete.
+
+Final nested checkpoint checks: strict file-manager library/test Clippy passes
+(`/tmp/phase7-nested-clippy.log`), the current binary builds without warnings
+(`/tmp/phase7-nested-build.log`), leaf Rust formatting and Python syntax checks
+pass, and `git diff --check` is clean. Personal configuration remains unstaged.

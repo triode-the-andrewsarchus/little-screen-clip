@@ -164,13 +164,13 @@ fn disabling_automatic_previews_starts_no_reads_but_explicit_expansion_still_wor
     let mut previews = Previews::default();
     previews.configure(false, 0);
     assert_eq!(previews.options.small_items, 1);
-    assert_eq!(previews.height(&source), 28.0);
+    assert_eq!(previews.height(&source, false), 28.0);
     previews.request(&source);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.nodes.get_mut(&source.path).unwrap().expanded = Some(true);
     previews.request(&source);
     assert!(previews.nodes[&source.path].task.is_some());
-    assert_eq!(previews.height(&source), 108.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     previews.configure(true, usize::MAX);
     assert_eq!(previews.options.small_items, inventory::LIMIT);
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
@@ -196,7 +196,7 @@ fn disabling_automatic_previews_retires_automatic_reads_and_preserves_manual_cho
     previews.request(&source);
     previews.configure(false, 2);
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
-    assert_eq!(previews.height(&source), 108.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     std::fs::write(source.path.join("changed.txt"), "new child").unwrap();
     previews.request(&entry(root.path(), "folder"));
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
@@ -211,24 +211,24 @@ fn explicit_choices_survive_scrolling_view_changes_and_folder_history() {
     // A click records intent separately from the visible observation cache.
     previews.choices.insert(source.path.clone(), false);
     previews.request(&source);
-    assert_eq!(previews.height(&source), 28.0);
+    assert_eq!(previews.height(&source, false), 28.0);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.retain(&BTreeSet::new());
     assert!(previews.nodes.is_empty());
-    assert_eq!(previews.height(&source), 28.0);
+    assert_eq!(previews.height(&source, false), 28.0);
     previews.request(&source);
     assert!(previews.nodes[&source.path].task.is_none());
     previews.clear(); // Folder change, studio entry or view switch.
     previews.configure(true, 32);
     previews.request(&source);
-    assert_eq!(previews.height(&source), 28.0);
+    assert_eq!(previews.height(&source, false), 28.0);
     assert!(previews.nodes[&source.path].task.is_none());
 
     previews.clear();
     previews.choices.insert(source.path.clone(), true);
     previews.configure(false, 1);
     previews.request(&source);
-    assert_eq!(previews.height(&source), 108.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     assert!(previews.nodes[&source.path].task.is_some());
     let token = previews.nodes[&source.path]
         .task
@@ -238,7 +238,7 @@ fn explicit_choices_survive_scrolling_view_changes_and_folder_history() {
         .clone();
     previews.clear();
     assert!(token.load(std::sync::atomic::Ordering::Acquire));
-    assert_eq!(previews.height(&source), 108.0);
+    assert_eq!(previews.height(&source, false), 108.0);
     previews.request(&source);
     assert_eq!(previews.nodes[&source.path].expanded, Some(true));
 }
@@ -314,6 +314,15 @@ fn duplicate_tar_members_do_not_publish_an_ambiguous_inventory() {
     assert!(error.contains("Duplicate archive member path"), "{error}");
 }
 
+fn observe_container(previews: &mut Previews, source: &Entry) {
+    let mut node = Node::new(source.revision);
+    node.expanded = previews.choices.get(&source.path).copied();
+    node.ready = Some(Arc::new(
+        inventory::load(source, &AtomicBool::new(false)).unwrap(),
+    ));
+    previews.nodes.insert(source.path.clone(), node);
+}
+
 fn browser_with_expanded_container(
     root: &std::path::Path,
     name: &str,
@@ -324,11 +333,7 @@ fn browser_with_expanded_container(
         super::super::Navigation::New,
     );
     let folder = entry(root, name);
-    let mut node = Node::new(folder.revision);
-    node.ready = Some(Arc::new(
-        inventory::load(&folder, &AtomicBool::new(false)).unwrap(),
-    ));
-    browser.containers.nodes.insert(folder.path, node);
+    observe_container(&mut browser.containers, &folder);
     browser
 }
 
@@ -464,4 +469,156 @@ fn archive_members_never_become_selectable_or_mutable_host_entries() {
     browser.reconcile_selection();
     assert_eq!(browser.selection_count(), 0);
     assert!(!root.path().join("assets").exists());
+}
+
+fn nested_fixture(name: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    let nested = folder.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let child = nested.join(name);
+    std::fs::write(&child, b"nested bytes").unwrap();
+    (root, folder, nested, child)
+}
+
+#[test]
+fn explicit_nested_sections_share_layout_selection_and_collapse() {
+    let (root, folder, nested, child) = nested_fixture("inside.txt");
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    let source = entry(root.path(), "folder");
+    assert_eq!(browser.containers.height(&source, false), 108.0);
+    assert!(!browser.displayed_entries().iter().any(|e| e.path == child));
+    browser.containers.choose(nested.clone(), true);
+    assert_eq!(browser.containers.height(&source, false), 216.0);
+    observe_container(&mut browser.containers, &entry(&folder, "nested"));
+    browser.select(child.clone());
+    assert!(browser.selection_is_mutable());
+    assert_eq!(
+        browser.containers.selection_offset(&source, &child, false),
+        138.0
+    );
+    browser.commit(
+        super::super::filesystem::read_directory(root.path(), &AtomicBool::new(false)).unwrap(),
+        super::super::Navigation::Refresh,
+    );
+    assert!(
+        browser.selection_is_mutable(),
+        "unchanged nested snapshots survive a refresh"
+    );
+    browser
+        .containers
+        .protect(Some(&browser.location().unwrap().selection.clone()));
+    assert!(browser.containers.protected.contains(&folder));
+    assert!(browser.containers.protected.contains(&nested));
+    browser.containers.retire();
+    browser.reconcile_selection();
+    assert_eq!(browser.selected_paths(), [child]);
+    browser.containers.choose(nested, false);
+    browser.reconcile_selection();
+    assert_eq!(browser.containers.height(&source, false), 108.0);
+    assert_eq!(browser.selection_count(), 0);
+}
+
+#[test]
+fn nested_layout_and_entries_stop_at_the_documented_depth() {
+    let root = tempfile::tempdir().unwrap();
+    let mut parent = root.path().to_path_buf();
+    let mut previews = Previews::default();
+    let names = ["folder", "level1", "level2", "level3", "level4", "level5"];
+    for name in names {
+        parent = parent.join(name);
+        std::fs::create_dir(&parent).unwrap();
+    }
+    parent = root.path().to_path_buf();
+    for name in names {
+        let source = entry(&parent, name);
+        previews.choose(source.path.clone(), true);
+        observe_container(&mut previews, &source);
+        parent = source.path;
+    }
+    let source = entry(root.path(), "folder");
+    let (sections, truncated) = previews.sections(&source, false);
+    assert!(!truncated);
+    assert_eq!(
+        sections.iter().map(|(_, depth)| *depth).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert_eq!(previews.height(&source, false), DEPTH as f32 * 108.0);
+    assert!(
+        previews
+            .children(&source, false)
+            .iter()
+            .any(|e| e.name == "level4")
+    );
+    assert!(
+        !previews
+            .children(&source, false)
+            .iter()
+            .any(|e| e.name == "level5")
+    );
+}
+
+#[test]
+fn wide_nested_layout_discloses_truncation_without_unbounded_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let mut previews = Previews::default();
+    for i in 0..32 {
+        let nested = folder.join(format!("nested-{i:02}"));
+        std::fs::create_dir(&nested).unwrap();
+        previews.choose(nested, true);
+    }
+    let source = entry(root.path(), "folder");
+    observe_container(&mut previews, &source);
+    previews.choose(folder, true);
+    let (sections, truncated) = previews.sections(&source, false);
+    assert_eq!(sections.len(), CACHE);
+    assert!(truncated);
+    assert_eq!(previews.height(&source, false), CACHE as f32 * 108.0 + 24.0);
+}
+
+#[test]
+fn ancestor_refresh_preserves_pending_nested_selection_until_fresh_coverage() {
+    let (root, folder, nested, child) = nested_fixture("selected.txt");
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    browser.containers.choose(nested.clone(), true);
+    observe_container(&mut browser.containers, &entry(&folder, "nested"));
+    browser.select(child.clone());
+    std::fs::remove_file(&child).unwrap();
+    std::fs::write(folder.join("changed.txt"), b"new parent revision").unwrap();
+    browser.commit(
+        super::super::filesystem::read_directory(root.path(), &AtomicBool::new(false)).unwrap(),
+        super::super::Navigation::Refresh,
+    );
+    assert_eq!(browser.selected_paths(), std::slice::from_ref(&child));
+    assert!(!browser.selection_is_mutable());
+    observe_container(&mut browser.containers, &entry(root.path(), "folder"));
+    browser.reconcile_selection();
+    assert_eq!(browser.selected_paths(), [child]);
+    assert!(!browser.selection_is_mutable());
+    observe_container(&mut browser.containers, &entry(&folder, "nested"));
+    browser.reconcile_selection();
+    assert_eq!(browser.selection_count(), 0);
+}
+
+#[test]
+fn hidden_nested_sections_do_not_reserve_space_or_expose_children_until_enabled() {
+    let (root, folder, _, _) = nested_fixture("ordinary.txt");
+    let private = folder.join(".private");
+    std::fs::create_dir(&private).unwrap();
+    let secret = private.join("note.txt");
+    std::fs::write(&secret, b"hidden content").unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    browser.containers.choose(private, true);
+    observe_container(&mut browser.containers, &entry(&folder, ".private"));
+    let source = entry(root.path(), "folder");
+    assert_eq!(browser.containers.height(&source, false), 108.0);
+    assert!(!browser.displayed_entries().iter().any(|e| e.path == secret));
+    browser.show_hidden = true;
+    assert_eq!(browser.containers.height(&source, true), 216.0);
+    assert!(browser.displayed_entries().iter().any(|e| e.path == secret));
+    browser.select(secret);
+    browser.toggle_hidden();
+    assert_eq!(browser.selection_count(), 0);
 }

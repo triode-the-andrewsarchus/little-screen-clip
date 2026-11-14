@@ -780,7 +780,7 @@ impl FileManager {
                     )
                     .is_some_and(|(selected, entry)| {
                         selected == &entry.path
-                            || (entry.directory && selected.parent() == Some(entry.path.as_path()))
+                            || (entry.directory && selected.starts_with(&entry.path))
                     })
             }) {
                 scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
@@ -788,10 +788,24 @@ impl FileManager {
                 } else if self.view == super::BrowserView::Videos {
                     self.video_offsets[index]
                 } else {
-                    self.list_offsets
+                    let base = self
+                        .list_offsets
                         .get(index)
                         .copied()
-                        .unwrap_or(index as f32 * row_height)
+                        .unwrap_or(index as f32 * row_height);
+                    let nested = self
+                        .location()
+                        .and_then(|location| location.selected.as_ref())
+                        .zip(
+                            self.directory
+                                .as_ref()
+                                .map(|directory| &directory.entries[self.visible[index]]),
+                        )
+                        .map_or(0.0, |(selected, entry)| {
+                            self.containers
+                                .selection_offset(entry, selected, self.show_hidden)
+                        });
+                    base + nested
                 });
             }
             self.reveal_selection = false;

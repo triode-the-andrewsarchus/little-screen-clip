@@ -43,6 +43,7 @@ def exercise(session, root):
         ("strip-title-image.png", (735, 302, 849, 324)),
         ("strip-title-zip.png", (410, 438, 525, 460)),
         ("strip-title-tar.png", (410, 546, 525, 568)),
+        ("strip-title-deep.png", (430, 410, 545, 432)),
     ]
     session.observe("initial", ["a-small", "b-large"])
     session.click(645, 160)  # Collapse Shelf to expose all four fixture rows.
@@ -80,14 +81,24 @@ def exercise(session, root):
     _, folder_y = session.word("returned-to-collapsed", "a-small")
     session.click(360, folder_y)
     session.observe("expanded", ["nested", "readme.txt", "sun.png"])
-    x, y = session.word("expanded", "readme.txt")
-    session.click(x + 2, y)  # A contained file uses the ordinary selection owner.
+    session.click(510, 320)  # Disclosure on the observed nested-folder card.
+    session.observe("nested-inline", ["deep.txt", "a-small", "b-large"])
+    # The isolated label crop can recognize text that full-window OCR drops.
+    x, y = session.word("nested-inline", "deep.txt", required=False) or (435, 418)
+    session.click(x + 2, y)
     session.key("c", "ctrl")
-    def copied_child():
+    def copied_path(path):
         result = subprocess.run(["wl-paste", "--no-newline", "--type", "text/uri-list"],
             env=session.env, capture_output=True, timeout=5)
-        return result.returncode == 0 and (root / "a-small/readme.txt").as_uri().encode() in result.stdout
-    wait_for(copied_child, "contained file clipboard reference")
+        return result.returncode == 0 and path.as_uri().encode() in result.stdout
+    wait_for(lambda: copied_path(root / "a-small/nested/deep.txt"), "nested inline file clipboard reference")
+    session.click(510, 320)
+    session.observe("nested-collapsed", ["readme.txt", "Archive contents"])
+    assert "deep.txt" not in (session.output / "nested-collapsed.txt").read_text()
+    x, y = session.word("nested-collapsed", "readme.txt")
+    session.click(x + 2, y)  # A contained file uses the ordinary selection owner.
+    session.key("c", "ctrl")
+    wait_for(lambda: copied_path(root / "a-small/readme.txt"), "contained file clipboard reference")
     session.key("F2")
     session.observe("child-rename", ["Rename", "Name:"])
     session.key("a", "ctrl")

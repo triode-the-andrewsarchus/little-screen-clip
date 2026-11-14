@@ -186,14 +186,24 @@ impl<'a> ListPreviews<'a> {
             colors,
             palette,
             self.selected,
-            |ui, response, child| {
+            self.can_request,
+            |ui, child, target| {
+                let response = match target {
+                    super::super::container_preview::Target::Header(rect) => {
+                        let marked = self
+                            .selected
+                            .is_some_and(|paths| paths.contains(&child.path));
+                        file_row(ui, rect, child, marked, self.columns, None, colors)
+                    }
+                    super::super::container_preview::Target::Card(response) => response.clone(),
+                };
                 if child.directory && ui.is_enabled() {
                     self.child_targets
                         .push((response.rect.intersect(ui.clip_rect()), child.path.clone()));
                 }
                 actions.row(
                     ui,
-                    response,
+                    &response,
                     child,
                     self.selected,
                     self.can_edit,
@@ -396,7 +406,9 @@ impl FileManager {
         if !previews.hovered_video {
             previews.videos.clear_hover();
         }
-        previews.containers.retain(&previews.container_paths);
+        previews
+            .containers
+            .finish_frame(&mut previews.container_paths);
         let play = previews.play.take();
         targets.append(&mut previews.child_targets);
         drop(previews);

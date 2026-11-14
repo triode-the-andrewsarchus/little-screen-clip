@@ -15,9 +15,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The host owns ordinary row painting/actions; contained cards retain their
+/// own geometry while nested section headers reuse the host's table columns.
+pub(super) enum Target<'a> {
+    Header(Rect),
+    Card(&'a egui::Response),
+}
+
 const CACHE: usize = 32;
 const READS: usize = 2;
 const CHOICES: usize = 4096;
+pub(super) const DEPTH: usize = 4;
 const FRESHNESS: Duration = Duration::from_secs(5);
 // Directory metadata may stall on a remote mount. Keep its actual executing
 // reads at two, even after a UI delivery deadline, without starving navigation.
@@ -69,6 +77,13 @@ impl Node {
             touched: 0,
         }
     }
+    fn revise(&mut self, revision: u64) {
+        if self.revision != revision {
+            let expanded = self.expanded;
+            *self = Self::new(revision);
+            self.expanded = expanded;
+        }
+    }
     fn expanded(&self, options: Options) -> bool {
         self.expanded.unwrap_or_else(|| {
             options.automatic && {
@@ -114,6 +129,7 @@ impl Previews {
                     .text("Maximum items"),
             );
             ui.label("Use + or − beside a folder or archive to override.");
+            ui.small("Nested previews expand explicitly, up to four levels. At most 32 container observations are retained.");
         });
         self.configure(options.automatic, options.small_items);
     }
@@ -126,7 +142,7 @@ impl Previews {
         self.protected = selected
             .into_iter()
             .flatten()
-            .filter_map(|path| path.parent().map(PathBuf::from))
+            .flat_map(|path| path.ancestors().skip(1).take(DEPTH).map(PathBuf::from))
             .collect();
     }
     pub fn retain(&mut self, visible: &BTreeSet<PathBuf>) {
@@ -134,38 +150,59 @@ impl Previews {
         // payloads. Retain bounded observations for keyboard/file actions while
         // retiring every hidden read. Admission evicts unselected old snapshots.
         self.nodes.retain(|path, node| {
-            if !visible.contains(path) {
+            let displayed = visible.contains(path);
+            if !displayed {
                 node.task = None;
             }
-            node.ready.is_some() || visible.contains(path)
+            node.ready.is_some() || displayed
         });
         self.frame_paths.clear();
+    }
+    pub fn finish_frame(&mut self, visible: &mut BTreeSet<PathBuf>) {
+        // Nested sections request only when their own row is visible. Merge
+        // those admissions with the outer list's visible container rows.
+        visible.append(&mut self.frame_paths);
+        self.retain(visible);
     }
     pub fn retire(&mut self) {
         self.retain(&BTreeSet::new());
     }
     pub fn reconcile_roots(&mut self, entries: &[Entry]) {
+        let revisions: BTreeMap<_, _> = entries
+            .iter()
+            .filter(|entry| candidate(entry))
+            .flat_map(|entry| self.sections(entry, true).0)
+            .filter(|(entry, _)| self.nodes.contains_key(&entry.path))
+            .map(|(entry, _)| (entry.path.clone(), entry.revision))
+            .collect();
         self.nodes.retain(|path, node| {
-            let Some(entry) = entries.iter().find(|entry| &entry.path == path) else {
+            let Some(revision) = revisions.get(path) else {
                 return false;
             };
-            if node.revision != entry.revision {
-                let choice = node.expanded;
-                *node = Node::new(entry.revision);
-                node.expanded = choice;
-            }
+            node.revise(*revision);
             true
         });
     }
+    pub fn pending_selection(&self, path: &std::path::Path, unknown: &BTreeSet<PathBuf>) -> bool {
+        for parent in path.ancestors().skip(1).take(DEPTH) {
+            if unknown.contains(parent) {
+                return true;
+            }
+            if !self.explicitly_expanded(parent) {
+                break;
+            }
+        }
+        false
+    }
     pub fn unknown_children(&self, entry: &Entry) -> bool {
-        self.height(entry) > 28.0
+        self.base_height(entry) > 28.0
             && self
                 .nodes
                 .get(&entry.path)
                 .and_then(|node| node.ready.as_ref())
                 .is_none_or(|ready| !ready.complete)
     }
-    pub fn children<'a>(&'a self, entry: &Entry, hidden: bool) -> Vec<&'a Entry> {
+    fn direct_children<'a>(&'a self, entry: &Entry, hidden: bool) -> Vec<&'a Entry> {
         self.nodes
             .get(&entry.path)
             .filter(|node| node.revision == entry.revision && node.expanded(self.options))
@@ -178,7 +215,7 @@ impl Previews {
             })
             .collect()
     }
-    pub fn height(&self, entry: &Entry) -> f32 {
+    fn base_height(&self, entry: &Entry) -> f32 {
         if self.nodes.get(&entry.path).map_or_else(
             || {
                 self.choices
@@ -192,6 +229,81 @@ impl Previews {
         } else {
             28.0
         }
+    }
+    pub fn explicitly_expanded(&self, path: &std::path::Path) -> bool {
+        self.choices.get(path) == Some(&true)
+    }
+    fn sections<'a>(&'a self, entry: &'a Entry, hidden: bool) -> (Vec<(&'a Entry, usize)>, bool) {
+        let mut rows = Vec::new();
+        let mut truncated = false;
+        self.collect_sections(entry, hidden, 0, &mut rows, &mut truncated);
+        (rows, truncated)
+    }
+    fn collect_sections<'a>(
+        &'a self,
+        entry: &'a Entry,
+        hidden: bool,
+        depth: usize,
+        rows: &mut Vec<(&'a Entry, usize)>,
+        truncated: &mut bool,
+    ) {
+        if rows.len() >= CACHE {
+            *truncated = true;
+            return;
+        }
+        rows.push((entry, depth));
+        if depth + 1 < DEPTH && self.base_height(entry) > 28.0 {
+            for child in self.direct_children(entry, hidden) {
+                if candidate(child) && self.explicitly_expanded(&child.path) {
+                    self.collect_sections(child, hidden, depth + 1, rows, truncated);
+                }
+            }
+        }
+    }
+    pub fn children<'a>(&'a self, entry: &'a Entry, hidden: bool) -> Vec<&'a Entry> {
+        self.sections(entry, hidden)
+            .0
+            .into_iter()
+            .flat_map(|(section, _)| self.direct_children(section, hidden))
+            .collect()
+    }
+    pub fn height(&self, entry: &Entry, hidden: bool) -> f32 {
+        let (sections, truncated) = self.sections(entry, hidden);
+        sections
+            .into_iter()
+            .map(|(entry, _)| self.base_height(entry))
+            .sum::<f32>()
+            + if truncated { 24.0 } else { 0.0 }
+    }
+    pub fn selection_offset(&self, entry: &Entry, selected: &std::path::Path, hidden: bool) -> f32 {
+        let mut offset = 0.0;
+        for (section, _) in self.sections(entry, hidden).0 {
+            if section.path == selected {
+                return offset;
+            }
+            if self
+                .direct_children(section, hidden)
+                .iter()
+                .any(|child| child.path == selected)
+            {
+                return offset + 30.0;
+            }
+            offset += self.base_height(section);
+        }
+        0.0
+    }
+    fn choose(&mut self, path: PathBuf, expanded: bool) {
+        if self.choices.len() >= CHOICES && !self.choices.contains_key(&path) {
+            return;
+        }
+        self.choices.insert(path.clone(), expanded);
+        if let Some(node) = self.nodes.get_mut(&path) {
+            node.expanded = Some(expanded);
+            if !expanded {
+                node.task = None;
+            }
+        }
+        self.layout_changed = true;
     }
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         let mut changed = std::mem::take(&mut self.layout_changed);
@@ -247,11 +359,7 @@ impl Previews {
             node.expanded = choice;
             node
         });
-        if node.revision != entry.revision {
-            let expanded = node.expanded;
-            *node = Node::new(entry.revision);
-            node.expanded = expanded;
-        }
+        node.revise(entry.revision);
         node.touched = self.sequence;
         if !node.expanded(self.options) || active >= READS || node.task.is_some() {
             return;
@@ -285,7 +393,68 @@ impl Previews {
         colors: WorkbenchColors,
         _palette: &AppPalette,
         selected: Option<&BTreeSet<PathBuf>>,
-        mut interact: impl FnMut(&mut Ui, &egui::Response, &Entry),
+        can_request: bool,
+        mut interact: impl FnMut(&mut Ui, &Entry, Target<'_>),
+    ) {
+        // Only the bounded section descriptors are copied; sample/image payloads
+        // remain with their existing shared preview owners.
+        let (sections, truncated) = self.sections(entry, hidden);
+        let sections: Vec<_> = sections
+            .into_iter()
+            .map(|(entry, depth)| (entry.clone(), depth))
+            .collect();
+        let mut top = rect.top();
+        for (section, depth) in sections {
+            let height = self.base_height(&section);
+            let target = Rect::from_min_max(
+                pos2(rect.left() + depth as f32 * 18.0, top),
+                pos2(rect.right(), top + height),
+            );
+            if ui.clip_rect().intersects(target) {
+                if depth > 0 && can_request {
+                    self.request(&section);
+                }
+                self.show_section(
+                    ui,
+                    target,
+                    &section,
+                    depth,
+                    files,
+                    keep,
+                    hidden,
+                    colors,
+                    selected,
+                    &mut interact,
+                );
+            }
+            top += height;
+        }
+        if truncated {
+            ui.painter().text(
+                pos2(rect.left() + 18.0, top + 2.0),
+                Align2::LEFT_TOP,
+                "Inline preview limit reached · open folder to see more",
+                FontId::proportional(12.0),
+                colors.text_secondary,
+            );
+        }
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Explicit section painting and host interaction boundary"
+    )]
+    fn show_section(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        entry: &Entry,
+        depth: usize,
+        files: &mut EntryPreviews,
+        keep: &mut BTreeSet<PathBuf>,
+        hidden: bool,
+        colors: WorkbenchColors,
+        selected: Option<&BTreeSet<PathBuf>>,
+        interact: &mut dyn FnMut(&mut Ui, &Entry, Target<'_>),
     ) {
         let can_choose = self.choices.len() < CHOICES || self.choices.contains_key(&entry.path);
         let Some(node) = self.nodes.get_mut(&entry.path) else {
@@ -299,6 +468,15 @@ impl Previews {
             return;
         };
         let expanded = node.expanded(self.options);
+        let ready = node.ready.clone();
+        let error = node.error.clone();
+        if depth > 0 {
+            let header = Rect::from_min_max(
+                rect.min + vec2(26.0, 0.0),
+                pos2(rect.right(), rect.top() + 28.0),
+            );
+            interact(ui, entry, Target::Header(header));
+        }
         let toggle =
             Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2(24.0, 24.0));
         ui.allocate_ui_at_rect(toggle, |ui| {
@@ -311,12 +489,7 @@ impl Previews {
                 .on_disabled_hover_text("This session has reached its 4,096 folder-preview choices")
                 .clicked()
             {
-                node.expanded = Some(!expanded);
-                self.choices.insert(entry.path.clone(), !expanded);
-                if expanded {
-                    node.task = None;
-                }
-                self.layout_changed = true;
+                self.choose(entry.path.clone(), !expanded);
                 ui.ctx().request_repaint();
             }
         });
@@ -332,11 +505,11 @@ impl Previews {
             [body.left_top(), body.left_bottom()],
             egui::Stroke::new(2.0_f32, colors.text_secondary.gamma_multiply(0.4)),
         );
-        let Some(ready) = &node.ready else {
+        let Some(ready) = ready else {
             ui.painter().text(
                 body.left_center() + vec2(10.0, 0.0),
                 Align2::LEFT_CENTER,
-                node.error.as_deref().unwrap_or("Reading contained files…"),
+                error.as_deref().unwrap_or("Reading contained files…"),
                 FontId::proportional(12.0),
                 colors.text_secondary,
             );
@@ -363,6 +536,7 @@ impl Previews {
             body.left_top() + vec2(6.0, 17.0),
             body.right_bottom() - vec2(4.0, 2.0),
         );
+        let mut choice = None;
         ui.allocate_ui_at_rect(cards, |ui| {
             egui::ScrollArea::horizontal()
                 .id_source(("container-cards", &entry.path))
@@ -370,16 +544,23 @@ impl Previews {
                 .show(ui, |ui| {
                     inventory_cards(
                         ui,
-                        ready,
+                        &ready,
                         files,
                         keep,
                         hidden,
                         colors,
                         selected,
-                        &mut interact,
+                        interact,
+                        &self.choices,
+                        depth + 1 < DEPTH,
+                        &mut choice,
                     );
                 });
         });
+        if let Some((path, expanded)) = choice {
+            self.choose(path, expanded);
+            ui.ctx().request_repaint();
+        }
     }
 }
 
@@ -395,7 +576,10 @@ fn inventory_cards(
     hidden: bool,
     colors: WorkbenchColors,
     selected: Option<&BTreeSet<PathBuf>>,
-    interact: &mut impl FnMut(&mut Ui, &egui::Response, &Entry),
+    interact: &mut dyn FnMut(&mut Ui, &Entry, Target<'_>),
+    choices: &BTreeMap<PathBuf, bool>,
+    can_descend: bool,
+    choice: &mut Option<(PathBuf, bool)>,
 ) {
     ui.horizontal(|ui| {
         for child in &ready.children {
@@ -403,9 +587,14 @@ fn inventory_cards(
                 continue;
             }
             let marked = matches!(child, Child::File(entry) if selected.is_some_and(|paths| paths.contains(&entry.path)));
-            let response = card(ui, child, files, keep, colors, marked);
+            let (response, disclosure) = card(ui, child, files, keep, colors, marked);
             if let Child::File(entry) = child {
-                interact(ui, &response, entry);
+                interact(ui, entry, Target::Card(&response));
+                if let Some(disclosure) = disclosure
+                    && let Some(expanded) = nested_disclosure(ui, disclosure, entry, choices, can_descend)
+                {
+                    *choice = Some((entry.path.clone(), expanded));
+                }
             }
         }
         if ready.children.is_empty() {
@@ -427,6 +616,30 @@ fn inventory_cards(
     });
 }
 
+fn nested_disclosure(
+    ui: &mut Ui,
+    rect: Rect,
+    entry: &Entry,
+    choices: &BTreeMap<PathBuf, bool>,
+    can_descend: bool,
+) -> Option<bool> {
+    let expanded = choices.get(&entry.path) == Some(&true);
+    let available = can_descend && (choices.len() < CHOICES || choices.contains_key(&entry.path));
+    ui.allocate_ui_at_rect(rect, |ui| {
+        ui.add_enabled(
+            available,
+            egui::Button::new(if expanded { "−" } else { "+" }).small(),
+        )
+        .on_hover_text("Expand or collapse contents here; double-click the name to open")
+        .on_disabled_hover_text(
+            "Inline previews have a four-level and 4,096-choice limit; open the folder to continue",
+        )
+        .clicked()
+        .then_some(!expanded)
+    })
+    .inner
+}
+
 fn card(
     ui: &mut Ui,
     child: &Child,
@@ -434,8 +647,23 @@ fn card(
     keep: &mut BTreeSet<PathBuf>,
     colors: WorkbenchColors,
     marked: bool,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(154.0, 48.0), Sense::click_and_drag());
+) -> (egui::Response, Option<Rect>) {
+    let (rect, allocated) = ui.allocate_exact_size(vec2(154.0, 48.0), Sense::hover());
+    let disclosure = matches!(child, Child::File(entry) if candidate(entry)).then(|| {
+        Rect::from_min_size(
+            pos2(rect.right() - 25.0, rect.top() + 13.0),
+            vec2(23.0, 23.0),
+        )
+    });
+    let mut target = rect;
+    if disclosure.is_some() {
+        target.max.x -= 26.0;
+    }
+    let response = ui.interact(
+        target,
+        allocated.id.with("card-body"),
+        Sense::click_and_drag(),
+    );
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
     painter.rect_filled(
         rect,
@@ -489,7 +717,7 @@ fn card(
             .to_owned(),
         FontId::proportional(13.0),
         colors.text_primary,
-        108.0,
+        if disclosure.is_some() { 80.0 } else { 108.0 },
     );
     painter.galley(
         rect.left_top() + vec2(43.0, 5.0),
@@ -503,5 +731,5 @@ fn card(
             super::filesystem::format_size(*size)
         ),
     };
-    response.on_hover_text(hover)
+    (response.on_hover_text(hover), disclosure)
 }

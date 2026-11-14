@@ -168,38 +168,37 @@ impl FileManager {
         let Some(index) = self.index else {
             return;
         };
-        let paths: BTreeSet<_> = self
-            .displayed_entries()
-            .iter()
-            .map(|entry| entry.path.clone())
-            .collect();
-        // A fresh expanded-folder read may not have arrived yet after history
-        // navigation or refresh. Unknown coverage cannot prove a child vanished.
+        let entries = self.displayed_entries();
+        let paths: BTreeSet<_> = entries.iter().map(|entry| entry.path.clone()).collect();
+        // Unknown ancestor coverage after a refresh cannot prove that a selected
+        // descendant vanished. Retain intent, while mutation still requires an
+        // actual current displayed entry.
         let selected_parents: BTreeSet<_> = self.history[index]
             .selection
             .iter()
-            .filter_map(|path| path.parent().map(PathBuf::from))
-            .collect();
-        let unknown: BTreeSet<_> = self
-            .directory
-            .iter()
-            .flat_map(|directory| {
-                self.visible
-                    .iter()
-                    .filter_map(|&i| directory.entries.get(i))
+            .flat_map(|path| {
+                path.ancestors()
+                    .skip(1)
+                    .take(super::container_preview::DEPTH)
+                    .map(PathBuf::from)
             })
+            .collect();
+        let unknown: BTreeSet<_> = entries
+            .iter()
             .filter(|entry| {
                 selected_parents.contains(&entry.path)
                     && self.view == super::BrowserView::List
                     && !self.search.has_result_sources()
                     && entry.directory
                     && super::container_preview::candidate(entry)
+                    && (entry.path.parent() == Some(self.path())
+                        || self.containers.explicitly_expanded(&entry.path))
                     && self.containers.unknown_children(entry)
             })
             .map(|entry| entry.path.clone())
             .collect();
         let available = |path: &PathBuf| {
-            paths.contains(path) || path.parent().is_some_and(|parent| unknown.contains(parent))
+            paths.contains(path) || self.containers.pending_selection(path, &unknown)
         };
         let location = &mut self.history[index];
         location.selection.retain(available);

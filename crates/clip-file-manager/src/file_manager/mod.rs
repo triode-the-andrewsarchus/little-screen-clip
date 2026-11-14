@@ -828,7 +828,7 @@ impl FileManager {
                 let height = if self.search.has_offline_results() {
                     28.0
                 } else if !self.search.has_result_sources() && container_preview::candidate(entry) {
-                    self.containers.height(entry)
+                    self.containers.height(entry, self.show_hidden)
                 } else if entry.system.is_some()
                     || self.previews.is_text(entry)
                     || entry.has_content_strip()
