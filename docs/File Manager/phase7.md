@@ -41,9 +41,10 @@ and do not authorize extraction, external resource resolution or mutations.
 Persistent preferences belong to local application state, using lossless paths;
 portable project/visibility/session schemas remain Phase 8.
 
-## Phase 4 audit in progress
+## Completed Phase 4 audit
 
-The old `phase4.md` describes the initial checkpoint, not current behavior:
+The original audit input, preserved in `phase4_initial_checkpoint.md`, described
+the initial checkpoint rather than current behavior:
 shared studios now live in `clip-studios`; PDF/MIDI/model/notebook and other list
 strips exist; embedded video works; studio title/path controls have changed.
 These are stale documentation findings, not evidence that those features are
@@ -253,3 +254,8 @@ columns, followed by the full milestone acceptance audit.
   the captured operation, and verifies exact bytes remain in the child folder
   while a same-named root sibling is untouched. This prepares child actions;
   it does not yet expose/select children in the browser location model.
+
+Final verification for this checkpoint: the current full file-manager library
+passes 893 tests with six ignored (`/tmp/phase7-checkpoint-library-tests.log`),
+and strict library/test Clippy passes (`/tmp/phase7-child-rename-clippy.log`).
+Personal `.cargo/config.toml` and `config.toml` edits remain outside commits.
