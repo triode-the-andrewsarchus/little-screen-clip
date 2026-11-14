@@ -363,7 +363,7 @@ impl FileManager {
         if let Some(document) = &ready.data.document {
             egui::ScrollArea::vertical()
                 .id_source("column-text-preview")
-                .show(ui, |ui| document.excerpt_ui(ui, 0.0, 1, palette));
+                .show(ui, |ui| document.pane_ui(ui, palette));
         } else if ready.texture.is_some() {
             let rect = ui.available_rect_before_wrap();
             self.previews.show(ui, rect, entry);

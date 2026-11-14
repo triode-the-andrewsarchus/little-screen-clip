@@ -771,3 +771,24 @@ Phase 7 acceptance gates.
 
 The viewport correction is committed separately. Narrow horizontal text preview
 acceptance remains open until the subsequent width defect is corrected.
+
+### Docked Columns text-preview width correction
+
+- [x] Separate docked text excerpt sizing from hover-overlay sizing, sharing the
+  existing syntax/run renderer. Docked panes use their available width and keep
+  their short-file content independent of pointer height. Hover previews retain
+  their existing screen/pointer budget. The former hover-only renderer forced a
+  760-pixel width inside a 300-pixel pane, creating blank over-scroll space.
+- [x] Add a rendering regression for a 300-pixel pane on a 1600-pixel screen,
+  with the pointer at both top and bottom. It fails at 760 pixels before the fix;
+  the pane entrypoint stays within 300 pixels and renders the excerpt at both
+  positions. All 13 text-strip tests pass, along with strict library/test Clippy
+  and the application build. Logs:
+  `/tmp/phase7-columns-text-{before,after,clippy,build}.log`.
+- [x] Native geometry reports pass in both themes at
+  `/tmp/phase7-columns-geometry-{dark,light}-04/report.json`, including wide two-
+  parent Columns, unsupported-file accessibility, studio return, a distant row
+  through resizing, narrow horizontal access to the text preview, actual selected
+  file URI copying and List/Columns switching. This validates the preceding
+  spacing and resize fixes together with the docked renderer. The tracked driver
+  and its shared sizing/input support are committed as the acceptance increment.

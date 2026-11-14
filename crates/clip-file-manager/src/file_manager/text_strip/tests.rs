@@ -359,3 +359,39 @@ fn million_line_file_keeps_whole_document_with_bounded_retained_data() {
         image.premultiplied_rgba.len()
     );
 }
+
+#[test]
+fn docked_excerpt_respects_local_width_and_ignores_pointer_height() {
+    let doc = document("note.txt", b"Visible marker in the docked preview.\n");
+    for pointer_y in [10.0, 880.0] {
+        let ctx = egui::Context::default();
+        let mut measured_width = 0.0;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 900.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(800.0, pointer_y))],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(300.0, 400.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            doc.pane_ui(ui, &little_clip_core::palette::AppPalette::default());
+                            measured_width = ui.min_rect().width();
+                        },
+                    );
+                });
+            },
+        );
+        assert!(
+            measured_width <= 300.0,
+            "Docked preview expanded to {measured_width} pixels"
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Visible marker"))), "Pointer at {pointer_y} suppressed docked content");
+    }
+}
