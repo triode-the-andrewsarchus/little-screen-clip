@@ -6,7 +6,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
 
 ## Required delivery and acceptance
 
-- [ ] Audit every Phase 4 scope/gate against current owners, tests and native UI;
+- [x] Audit every Phase 4 scope/gate against current owners, tests and native UI;
   fix actual gaps and replace its stale capability/architecture descriptions.
 - [ ] Preview small folders directly in List, with distinct containment styling,
   names, useful existing file previews and obvious child activation. Disclosure
@@ -49,8 +49,8 @@ strips exist; embedded video works; studio title/path controls have changed.
 These are stale documentation findings, not evidence that those features are
 missing. Current owners include `viewers.rs`, `viewers/chrome.rs`,
 `viewers/rename.rs`, `ui/list.rs`, `previews.rs`, shared studio source/save owners
-and core `FileSource`/ordinary-directory pins. Final audit will tie each original
-scope item to current tests and observed UI before marking Phase 4 complete.
+and core `FileSource`/ordinary-directory pins. The completed audit in `phase4.md` ties each original scope item to current tests
+and observed UI; both-theme current native audits pass.
 
 ## Initial container-preview checkpoint
 
@@ -74,7 +74,7 @@ scope item to current tests and observed UI before marking Phase 4 complete.
   opening. Tracked driver: `scripts/file_manager_phase7_acceptance.py`.
 
 This is an initial slice, not completion of the container requirements above:
-small-folder threshold is initially eight; configuration, nested inline levels,
+small-folder threshold defaults to eight and is configurable; nested inline levels,
 child selection/search integration, archive member artwork/opening and broader
 compressed archive families remain to implement. Search-result inventories are
 not expanded yet, preserving published-result source guards until descendant

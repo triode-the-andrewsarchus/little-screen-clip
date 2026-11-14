@@ -1,6 +1,6 @@
 # File Manager Implementation Plan
 
-Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is in progress; [phase4.md](phase4.md) records current capabilities, save contracts and verification evidence. Phase 5 is complete; [phase5.md](phase5.md) records the media workflow audit and verification.
+Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is complete after its current-scope audit; [phase4.md](phase4.md) records supported capabilities, save contracts and verification evidence. Phase 5 is complete; [phase5.md](phase5.md) records the media workflow audit and verification.
 
 The product goals are recorded in [core.md](core.md). This plan turns those goals into a sequence of usable milestones. The later phases describe intended capabilities, not settled specifications: each needs a short design pass before implementation. Phase 1 establishes the browser foundation; subsequent phases build on it.
 
@@ -202,6 +202,8 @@ Connect browsing to the existing hand/inventory model.
 Copying text or an image elsewhere and pasting into a folder creates a usable file. Held file groups can be carried between locations with clear copy/move intent.
 
 ## Phase 4 — Rich previews and built-in editors
+
+Status: complete. [phase4.md](phase4.md) records the 2026-11-14 audit. Further format coverage and editor enhancements are ongoing work.
 
 ### Goal
 
@@ -606,4 +608,12 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Phase 4 remains in progress. Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
+Phase 3 is accepted and committed as `278091e`. Phase 4 is complete after a current-source and both-theme native audit; shared studios, bounded listing previews, guarded saves and protected exports are recorded in [phase4.md](phase4.md). Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
+
+
+Current active milestone: [Phase 7](phase7.md). Prioritize inline folder/archive
+previews, bounded nested expansion and search integration, meaningful metadata
+groups/headers/sorting, remembered folder views with explicit inheritance, and
+Miller columns with an adjacent preview. Automatic media-view selection is
+excluded from the current authorized milestone. Additional format support does
+not hold Phase 4 or Phase 6 open.
