@@ -109,6 +109,7 @@ impl FileManagerApp {
             browser.search.error = Some(error);
         }
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
+        browser.view_preferences = super::view_preferences::Preferences::for_user(&browser.home);
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
         browser.containers.configure(
             config.file_manager.inline_container_previews,
@@ -354,6 +355,9 @@ impl FileManagerApp {
                     for title in ["File", "Edit", "View"] {
                         ui.menu_button(title, |ui| {
                             if title == "View" {
+                                if !self.viewers.active() {
+                                    self.browser.folder_view_settings(ui, &self.palette);
+                                }
                                 ui.menu_button("Photos", |ui| {
                                     ui.style_mut().wrap = Some(false);
                                     let current_mode = self.browser.photo_mode;
@@ -617,6 +621,7 @@ impl FileManagerApp {
             || self.browser.transfers.busy()
             || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
+            || self.browser.view_preferences.writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
             || self.browser.shelf.sending()
@@ -766,6 +771,9 @@ impl eframe::App for FileManagerApp {
             .constellation
             .render_duplicate_warning(ctx, &self.palette);
         self.main_content(ctx);
+        if self.browser.view_preferences.active() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.browser.previews.multisample.finish_frame(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))

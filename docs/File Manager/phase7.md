@@ -19,7 +19,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
   existing scope model, with accurate provenance, coverage and file actions.
 - [ ] Miller columns with an adjacent preview, familiar navigation/history and
   the conventional List retained. Mixed/unsupported files remain accessible.
-- [ ] Persist per-folder view overrides with explicit parent inheritance and a
+- [x] Persist per-folder view overrides with explicit parent inheritance and a
   way to clear overrides. Browsing creates no sidecars in user folders.
 - [ ] Sort/group by broad content family (all images together). Each group gets
   appropriate metadata headers and sortable fields. Audio artist/album/genre,
@@ -157,3 +157,36 @@ List available, rather than embedding a studio per column.
 Final container checkpoint: full file-manager library passes 880 tests with six
 ignored; strict library/test Clippy passes. Leaf Rust formatting, Python syntax
 checks and `git diff --check` pass. Personal config edits remain outside commits.
+
+### Remembered folder views
+
+- [x] Add View → Folder view actions to remember the current view, explicitly
+  inherit it in descendants, clear an override and reload saved preferences.
+  Temporary manual choices remain authoritative for the current visit/history;
+  a late save acknowledgement cannot undo a newer manual view choice.
+- [x] Store bounded, versioned, lossless-path preferences in
+  `$XDG_STATE_HOME/little-screen-clip/folder-views.json` (or the ordinary HOME
+  fallback). Browsing alone creates nothing in state or content folders. Choices
+  are path-based; renaming/moving a folder does not migrate its preference.
+- [x] Merge cooperating-window writes under a nonblocking advisory lock, pin
+  output directories and preserve accepted writes through publication/close.
+  Corrupt, future-version, symlinked or protected state is never overwritten.
+- [x] Keep the controls in the existing View menu. Truncate long inherited-origin
+  labels with the full origin available on hover; move photo selection guidance
+  into its button tooltip so the Photos toolbar remains usable.
+- [x] Eight preference tests pass; full file-manager library passes 889 tests
+  with six ignored (`/tmp/phase7-preferences-library-tests.log`). Strict library/
+  test Clippy passed before the final label/layout change; final checks continue
+  with the following slices. Native dark/light restart/inheritance/override/reset
+  checks pass in `/tmp/phase7-preferences-dark-08/report.json` and
+  `/tmp/phase7-preferences-light-02/report.json`. These verify exact saved state
+  and unchanged content files. Earlier closes use Ctrl+Q; the final fresh client
+  uses compositor close because GDB showed wtype delivering Ctrl+Escape instead
+  of its requested first Ctrl+Q. No application shortcut behavior was changed.
+
+Architecture review retains the baseline maximum complexity and slightly lowers
+whole-tree duplication. Separating the general/photo/masonry toolbar duties
+reduces `media_view_toolbar` complexity from 19 to 4. Preference tests share their
+browser setup and acknowledgement polling. The aggregate comparison still flags
+pre-existing clones in touched broad files and unchanged Python cycles; it is not
+reported as an unqualified clean whole-tree architecture result.

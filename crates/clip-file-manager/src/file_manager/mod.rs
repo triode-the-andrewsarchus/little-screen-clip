@@ -51,6 +51,7 @@ mod text_strip;
 mod transfers;
 mod video_playback;
 mod video_timeline;
+mod view_preferences;
 mod viewers;
 pub use app::run;
 #[cfg(test)]
@@ -112,7 +113,8 @@ pub(super) enum DocumentPosition {
     SubtitleCue(usize),
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::file_manager) enum BrowserView {
     #[default]
     List,
@@ -252,6 +254,8 @@ pub(crate) struct FileManager {
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
     view: BrowserView,
+    view_epoch: u64,
+    view_preferences: view_preferences::Preferences,
     music_threshold: u8,
     video_timeline_decimation: u8,
     music_previews: previews::EntryPreviews,
@@ -337,6 +341,8 @@ impl FileManager {
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
             view: BrowserView::List,
+            view_epoch: 0,
+            view_preferences: Default::default(),
             music_threshold: 75,
             video_timeline_decimation: 1,
             music_previews: previews::EntryPreviews::default(),
@@ -516,6 +522,7 @@ impl FileManager {
             self.last_status = None;
             self.edits.report = None;
         }
+        self.tick_view_preferences(&view_preferences::IO);
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
@@ -714,6 +721,7 @@ impl FileManager {
             _ => {}
         }
         self.containers.clear();
+        self.view_preferences.reload();
         self.tree.reveal(&directory.path);
         self.directory = Some(directory);
         self.rebuild_visible();

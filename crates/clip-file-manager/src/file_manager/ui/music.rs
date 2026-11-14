@@ -46,6 +46,7 @@ impl FileManager {
         } else {
             self.location()
                 .and_then(|l| l.manual_view)
+                .or_else(|| self.view_preferences.effective(self.path()))
                 .unwrap_or(automatic)
         };
         if self.view != view {

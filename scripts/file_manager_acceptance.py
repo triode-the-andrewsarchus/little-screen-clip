@@ -81,7 +81,10 @@ class Session:
         assert self.process.poll() is not None, 'Close the previous Files client before restarting'
         self.process = self.children.start('files-resumed', [str(binary.resolve()), str(root)],
             env=self.env, cwd=self.output/'scratch', log_path=self.output/'files-resumed.log')
-        private.wait_for_app_window(self.niri, self.env, self.process, self.output)
+        windows, _ = private.wait_for_app_window(self.niri, self.env, self.process, self.output)
+        private.run_checked([str(self.niri), "msg", "action", "focus-window", "--id", str(windows[0]["id"])], env=self.env)
+        wait_for(lambda: any(window.get("is_focused") for window in private.own_windows(
+            self.niri, self.env, {self.process.pid})), "restarted client keyboard focus")
 
     def address(self, path):
         self.key("l", "ctrl")
@@ -418,8 +421,8 @@ def isolated_runner(output, appearance, children):
     with config["niri_config"].open("a") as file:
         file.write('window-rule { match app-id="little-clip-file-manager"; open-floating true; }\n')
     _, env, _ = private.start_compositors(config, args, output, children)
-    env |= {"HOME": str(output / "home"), "XDG_DATA_HOME": str(output / "data")}
-    for key in ["HOME", "XDG_DATA_HOME"]:
+    env |= {"HOME": str(output / "home"), "XDG_DATA_HOME": str(output / "data"), "XDG_STATE_HOME": str(output / "state")}
+    for key in ["HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]:
         Path(env[key]).mkdir()
     private.verify_private_wayland_target(env, config["runtime"])
     private.APP_ID = "little-clip-file-manager"
