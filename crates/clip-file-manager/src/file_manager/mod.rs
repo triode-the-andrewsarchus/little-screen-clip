@@ -822,9 +822,13 @@ impl FileManager {
     fn rebuild_list_offsets(&mut self) {
         self.list_offsets.clear();
         self.list_offsets.push(0.0);
+        let sort = self.list_sort();
         if let Some(directory) = &self.directory {
-            for index in &self.visible {
+            for (position, index) in self.visible.iter().enumerate() {
                 let entry = &directory.entries[*index];
+                let heading = sort
+                    .and_then(|sort| sort.group_at(directory, &self.visible, position))
+                    .map_or(0.0, |_| ui::GROUP_HEADER_HEIGHT);
                 let height = if self.search.has_offline_results() {
                     28.0
                 } else if !self.search.has_result_sources() && container_preview::candidate(entry) {
@@ -842,6 +846,7 @@ impl FileManager {
                 };
                 self.list_offsets.push(
                     self.list_offsets.last().copied().unwrap_or(0.0)
+                        + heading
                         + height
                         + self.search.result_height(entry),
                 );

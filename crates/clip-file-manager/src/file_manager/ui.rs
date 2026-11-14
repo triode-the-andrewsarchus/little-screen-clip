@@ -16,6 +16,7 @@ pub(super) mod music;
 mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
+pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
 
 fn address_id() -> Id {
     Id::new("file_manager_address")
@@ -805,7 +806,13 @@ impl FileManager {
                             self.containers
                                 .selection_offset(entry, selected, self.show_hidden)
                         });
-                    base + nested
+                    let heading = self
+                        .list_sort()
+                        .and_then(|sort| {
+                            sort.group_at(self.directory.as_ref()?, &self.visible, index)
+                        })
+                        .map_or(0.0, |_| GROUP_HEADER_HEIGHT);
+                    base + heading + nested
                 });
             }
             self.reveal_selection = false;
@@ -1203,7 +1210,11 @@ impl ListColumns {
         ] {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
             let response = ui
-                .interact(cell, Id::new(("files_sort", column)), Sense::click())
+                .interact(
+                    cell,
+                    ui.make_persistent_id(("files_sort", column)),
+                    Sense::click(),
+                )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(format!("Sort by {label}; click again to reverse"));
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));

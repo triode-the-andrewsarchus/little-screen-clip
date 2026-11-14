@@ -404,3 +404,43 @@ production complexity, file count and clone count unchanged. Its clone flag is
 existing visible-photo filtering in status/tick; reported Python dependency-cycle
 changes only reorder the same unchanged members. The main image-sort acceptance
 item remains open for final integrated milestone validation.
+
+### Broad-family List sections
+
+- [x] Type sorting now orders broad content families, with natural filenames
+  across formats inside each family. JPEG/PNG and WAV/MP3 do not form separate
+  extension subgroups. Multisample instruments join Audio; structured documents
+  and archives retain their family instead of falling into generic text/binary
+  groups merely because their serialization is textual or binary.
+- [x] Add named section headers to the same variable-height List virtualization,
+  preserving actual row selection, drag targets and nested-child keyboard reveal.
+  Headers have distinct widget identities and reuse existing sort controls;
+  ordering, answer-column state and row geometry share one active-sort predicate.
+- [x] Test both family directions, natural intra-family ordering, exact added
+  header heights, normal-view restoration and selected-file identity. Full
+  file-manager library: 906 passed / 6 ignored
+  (`/tmp/phase7-family-all-tests.log`). Strict library/test Clippy, application
+  build, leaf formatting, Python compilation and diff whitespace checks pass.
+- [x] Native dark/light reports pass at
+  `/tmp/phase7-family-{dark,light}-03/report.json`: existing name/size/date sorts,
+  type-navigation focus, Audio/Images headers, reversed family order and clicking
+  a section's own Size header. Synthetic invalid media confirms grouping does not
+  depend on decoder success. Earlier runs with the expanded Shelf correctly
+  failed visibility checks; final runs explicitly collapse it to expose both
+  sections together.
+
+The architecture comparison against `before-phase7-family-groups` adds no
+excessive-complexity function or clone group. Reviewed aggregate flags touch
+pre-existing test fragments and unchanged Python cycle/chokepoint observations;
+scoped duplication does not touch the new family test. File-kind handling and
+format grouping remain separate, and row layout shares the same family boundaries
+as sorting.
+
+This checkpoint supplies the family sections, not the completed metadata feature.
+Family-specific fields, bounded metadata acquisition and metadata sorting remain
+required under the unchecked main milestone item. Existing music previews already
+parse artist/album; their waveform/cover work must not be repeated just to sort
+unseen files. Reuse their tag parsing for lightweight summaries, add genre, and
+retain those small revision-checked summaries independently of visible waveform
+textures. Keep missing/pending values last in either direction and selected-file
+identity stable as values arrive.

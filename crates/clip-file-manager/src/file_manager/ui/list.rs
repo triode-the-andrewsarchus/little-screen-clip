@@ -267,17 +267,7 @@ impl FileManager {
         let width = ui.available_width();
         let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
         let columns = self.search_columns(ui, header, colors);
-        let sort = (self
-            .search
-            .answers
-            .current()
-            .is_none_or(|folder| folder.sort.is_none())
-            && !self
-                .search
-                .applied
-                .as_ref()
-                .is_some_and(|query| crate::file_manager::sorting::for_query(query).is_none()))
-        .then_some(self.sort);
+        let sort = self.list_sort();
         if let Some(column) = columns.sort_header(ui, header, sort, colors) {
             self.sort_by(column);
             self.focus_list = true;
@@ -333,6 +323,7 @@ impl FileManager {
         let mut targets = Vec::new();
         let preview_paths = std::collections::BTreeSet::new();
         self.containers.protect(selected);
+        let sort = self.list_sort();
         let mut previews = ListPreviews {
             selected,
             can_edit,
@@ -358,12 +349,16 @@ impl FileManager {
             hovered_video: false,
             play: None,
         };
+        let mut group_sort = None;
         let mut hash_priority = Vec::new();
         let search = &self.search;
         let images = &self.search.images;
         let answers = &self.search.answers;
         let mut answer_priority = Vec::new();
         let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
+            let family = sort.and_then(|sort| sort.group_at(directory, &self.visible, index));
+            let (rect, clicked) = group_header(ui, rect, family, columns, sort, colors);
+            group_sort = clicked.or(group_sort);
             let entry = &directory.entries[self.visible[index]];
             let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
             let (rect, detail) = search.result_row(ui, rect, entry, colors);
@@ -415,6 +410,10 @@ impl FileManager {
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         self.list_audio(play);
+        if let Some(column) = group_sort {
+            self.sort_by(column);
+            self.focus_list = true;
+        }
     }
 
     fn list_audio(&mut self, play: Option<(PathBuf, f32)>) {
@@ -435,4 +434,39 @@ impl FileManager {
             self.music.seek(time);
         }
     }
+}
+
+fn group_header(
+    ui: &mut Ui,
+    rect: Rect,
+    family: Option<super::super::sorting::Category>,
+    columns: ListColumns,
+    sort: Option<super::super::sorting::Sort>,
+    colors: WorkbenchColors,
+) -> (Rect, Option<super::super::sorting::Column>) {
+    let Some(family) = family else {
+        return (rect, None);
+    };
+    let content = Rect::from_min_max(
+        pos2(rect.left(), rect.top() + GROUP_HEADER_HEIGHT),
+        rect.max,
+    );
+    let rect = Rect::from_min_max(rect.min, pos2(rect.right(), content.top()));
+    ui.painter().rect_filled(rect, 0.0, colors.recessed);
+    let title = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 24.0));
+    paint_text(
+        ui,
+        title,
+        8.0,
+        title.width() - 16.0,
+        family.label(),
+        colors.text_primary,
+    );
+    let header = Rect::from_min_max(pos2(rect.left(), title.bottom()), rect.max);
+    let clicked = ui
+        .push_id(("family_header", family), |ui| {
+            columns.sort_header(ui, header, sort, colors)
+        })
+        .inner;
+    (content, clicked)
 }

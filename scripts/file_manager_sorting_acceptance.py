@@ -41,12 +41,16 @@ def exercise(session, root):
     private.run_checked(["wtype", "Beta"], env=session.env)
     session.observe("type-after-sort", ["Find: Beta", "Selection: 1 file"])
 
+    session.click(645, 160)  # Collapse Shelf so both family sections fit the private output.
     session.address(root.parent / "types")
     session.observe("types-start", ["Type", "Name", "Size", "Modified"])
     sort_header(session, "types-start", "Type")
-    ordered(session, "type-groups", ["Delta.mp3", "Beta.wav", "Alpha.jpg"])
+    ordered(session, "type-groups", ["Beta.wav", "Delta.mp3", "Alpha.jpg"])
+    session.observe("family-headers", ["Audio", "Images"])
     sort_header(session, "type-groups", "Type")
-    ordered(session, "type-groups-reversed", ["Gamma.png", "Alpha.jpg", "Beta.wav"])
+    ordered(session, "type-groups-reversed", ["Alpha.jpg", "Gamma.png", "Beta.wav"])
+    session.click(*session.word("type-groups-reversed", "Size", minimum_y=260))
+    ordered(session, "group-header-size", ["Alpha.jpg", "Beta.wav", "Delta.mp3"])
 
 
 def main():
@@ -61,7 +65,7 @@ def main():
     types.mkdir()
     for name in ["Alpha.jpg", "Beta.wav", "Gamma.png", "Delta.mp3"]:
         (types / name).write_bytes(b"preview failure must still sort")
-    return run_application_acceptance(args, output, root, exercise, "Natural name, category/extension, size and modified header sorting")
+    return run_application_acceptance(args, output, root, exercise, "Natural name, broad-family groups, size and modified header sorting")
 
 
 if __name__ == "__main__":

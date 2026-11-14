@@ -1420,7 +1420,7 @@ fn header_sorting_uses_natural_names_and_keeps_selection_across_size_and_refresh
 }
 
 #[test]
-fn header_type_sorting_keeps_content_categories_and_extensions_contiguous() {
+fn header_type_sorting_groups_broad_families_with_natural_names() {
     use super::sorting::Column;
     let temp = tempfile::tempdir().unwrap();
     for name in [
@@ -1433,15 +1433,76 @@ fn header_type_sorting_keeps_content_categories_and_extensions_contiguous() {
     assert_eq!(
         visible_names(&manager),
         [
-            "e.mp3", "f.MP3", "a.wav", "b.WAV", "c.jpg", "d.JPG", "g.png", "h.PNG"
+            "a.wav", "b.WAV", "e.mp3", "f.MP3", "c.jpg", "d.JPG", "g.png", "h.PNG"
         ]
     );
     manager.sort_by(Column::Type);
     assert_eq!(
         visible_names(&manager),
         [
-            "g.png", "h.PNG", "c.jpg", "d.JPG", "a.wav", "b.WAV", "e.mp3", "f.MP3"
+            "c.jpg", "d.JPG", "g.png", "h.PNG", "a.wav", "b.WAV", "e.mp3", "f.MP3"
         ]
+    );
+}
+
+#[test]
+fn family_headers_are_virtualized_once_per_family_and_preserve_selection() {
+    use super::sorting::{Category, Column};
+    let temp = tempfile::tempdir().unwrap();
+    for name in [
+        "a.jpg",
+        "b.png",
+        "c.wav",
+        "d.mp3",
+        "notes.md",
+        "book.epub",
+        "pack.zip",
+        "piano.sfz",
+    ] {
+        std::fs::write(temp.path().join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(temp.path());
+    let selected = temp.path().join("b.png");
+    manager.select(selected.clone());
+    let plain_height = *manager.list_offsets.last().unwrap();
+    let groups = [
+        Category::Audio,
+        Category::Image,
+        Category::Document,
+        Category::Text,
+        Category::Archive,
+    ];
+    for descending in [false, true] {
+        manager.sort_by(Column::Type);
+        let directory = manager.directory.as_ref().unwrap();
+        let actual = manager
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(position, _)| {
+                manager.sort.group_at(directory, &manager.visible, position)
+            })
+            .collect::<Vec<_>>();
+        let mut expected = groups.to_vec();
+        if descending {
+            expected.reverse();
+        }
+        assert_eq!(actual, expected);
+        assert_eq!(
+            *manager.list_offsets.last().unwrap(),
+            plain_height + groups.len() as f32 * super::ui::GROUP_HEADER_HEIGHT
+        );
+        assert_eq!(
+            manager.location().unwrap().selected.as_ref(),
+            Some(&selected)
+        );
+        assert_eq!(manager.selection_count(), 1);
+    }
+    manager.sort_by(Column::Name);
+    assert_eq!(*manager.list_offsets.last().unwrap(), plain_height);
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&selected)
     );
 }
 
