@@ -1456,6 +1456,7 @@ fn file_row(
     row_background(ui, rect, selected, response.hovered(), colors);
     let rect = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
     let name_width = columns.name_end() - rect.left();
+    let count = count.filter(|_| name_width >= 260.0);
     let icon = if entry.symlink {
         Icon::Link
     } else if entry.directory {

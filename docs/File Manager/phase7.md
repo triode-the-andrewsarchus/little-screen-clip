@@ -23,6 +23,10 @@ checkpoints below. These changes must be completed before final acceptance:
 
 ### Review verification in progress
 
+- [x] Keep filenames legible in narrow List/Columns rows: optional line/page
+  counts yield their horizontal reservation when the name column is narrow.
+  Native column inspection and shared List rendering cover this.
+
 - [x] Fix mixed-size SVG icon softness. egui 0.27 caches textures without the
   SVG size hint; icon URIs now distinguish raster sizes. Regression test loads
   16px, 40px and 64px versions in one context and verifies their actual sizes.
