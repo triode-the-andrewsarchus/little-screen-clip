@@ -751,3 +751,23 @@ not mark Phase 7 complete.
 This correction is committed independently from the ongoing wide/narrow native
 acceptance driver changes. It does not close the remaining Columns or integrated
 Phase 7 acceptance gates.
+
+### Columns resize selection correction
+
+- [x] Detect changes to the Columns viewport and reveal the active row in the
+  resized current column. Give current and preview panes stable widget identities
+  when the number of displayed parents changes. A shorter window could otherwise
+  leave the selected last row below the visible range.
+- [x] Add a persistent-context rendering regression across 1600×600 and 700×320
+  frames with 100 rows. It verifies the selected row in the actual current-column
+  bounds and paint clip, rather than accepting its name in the adjacent preview.
+  It fails at 700×320 before the correction and passes afterward. Reuse the
+  existing long-list fixture for the spacing test. Logs:
+  `/tmp/phase7-columns-resize-{before,after}.log`.
+- [x] Strict library/test Clippy and application build pass:
+  `/tmp/phase7-columns-resize-{clippy,build}.log`. Both native geometry runs at
+  `/tmp/phase7-columns-geometry-{dark,light}-03/` reach and pass the distant-row
+  resize observation; they later expose a separate text-preview width defect.
+
+The viewport correction is committed separately. Narrow horizontal text preview
+acceptance remains open until the subsequent width defect is corrected.

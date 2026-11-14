@@ -122,9 +122,18 @@ impl FileManager {
         let mut actions = ListActions::for_browser(self);
         let mut ancestor_navigation = None;
         let mut scroll = self.location().map_or(0.0, |location| location.scroll);
+        let viewport = ui.available_size();
+        let viewport_id = ui.id().with("miller-viewport");
+        let resized = ui.ctx().data_mut(|data| {
+            let changed = data
+                .get_temp::<egui::Vec2>(viewport_id)
+                .is_some_and(|old| old != viewport);
+            data.insert_temp(viewport_id, viewport);
+            changed
+        });
         let restore = std::mem::take(&mut self.restore_scroll);
-        let reveal = std::mem::take(&mut self.reveal_selection);
-        let height = ui.available_height().max(0.0);
+        let reveal = std::mem::take(&mut self.reveal_selection) || resized;
+        let height = viewport.y.max(0.0);
         let route = parents(&current, ui.available_width());
         egui::ScrollArea::horizontal()
             .id_source("miller-columns")
@@ -149,23 +158,30 @@ impl FileManager {
                         });
                         ui.separator();
                     }
-                    let current_panel = panel(ui, WIDTH, height, |ui| {
-                        scroll = self.column_current(ui, &mut actions, restore, reveal, colors);
-                    });
+                    let current_panel = ui
+                        .push_id("miller-current-column", |ui| {
+                            panel(ui, WIDTH, height, |ui| {
+                                scroll =
+                                    self.column_current(ui, &mut actions, restore, reveal, colors);
+                            })
+                        })
+                        .inner;
                     if ui.is_enabled() {
                         self.drop_targets.push((
                             current_panel.response.rect.intersect(ui.clip_rect()),
                             current.clone(),
                         ));
                     }
-                    if restore {
+                    if restore || resized {
                         current_panel
                             .response
                             .scroll_to_me(Some(egui::Align::Center));
                     }
                     ui.separator();
-                    panel(ui, PREVIEW, height, |ui| {
-                        self.column_preview(ui, &mut actions, palette)
+                    ui.push_id("miller-preview", |ui| {
+                        panel(ui, PREVIEW, height, |ui| {
+                            self.column_preview(ui, &mut actions, palette)
+                        })
                     });
                 });
             });
@@ -372,8 +388,7 @@ mod tests {
         assert!(parents(Path::new("/"), 800.0).is_empty());
     }
 
-    #[test]
-    fn column_selection_and_parent_route_reveal_include_virtual_row_spacing() {
+    fn long_listing() -> (tempfile::TempDir, FileManager, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         for index in 0..100 {
             std::fs::create_dir(root.path().join(format!("row{index:03}"))).unwrap();
@@ -397,6 +412,12 @@ mod tests {
             .or_default()
             .directory =
             Some(super::super::super::filesystem::read_directory(root.path(), &cancel).unwrap());
+        (root, browser, target)
+    }
+
+    #[test]
+    fn column_selection_and_parent_route_reveal_include_virtual_row_spacing() {
+        let (root, mut browser, target) = long_listing();
         for spacing in [0.0, 6.0, 12.0] {
             for ancestor in [false, true] {
                 let ctx = egui::Context::default();
@@ -425,6 +446,38 @@ mod tests {
                 );
                 assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099")), "Selected row was outside the painted virtual range: spacing={spacing}, ancestor={ancestor}");
             }
+        }
+    }
+
+    #[test]
+    fn resizing_columns_keeps_active_row_in_current_viewport() {
+        let (_root, mut browser, _target) = long_listing();
+        browser.reveal_selection = true;
+        let ctx = egui::Context::default();
+        for (width, height) in [
+            (1600.0, 600.0),
+            (1600.0, 600.0),
+            (700.0, 320.0),
+            (700.0, 320.0),
+        ] {
+            browser.drop_targets.clear();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        browser.columns_ui(
+                            ui,
+                            WorkbenchColors::from_palette(&AppPalette::default()),
+                            &AppPalette::default(),
+                        )
+                    });
+                },
+            );
+            let (current, _) = browser.drop_targets.last().unwrap();
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "row099" && current.x_range().contains(text.pos.x) && shape.clip_rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size())))), "Selected current-column row disappeared at {width}x{height}");
         }
     }
 }
