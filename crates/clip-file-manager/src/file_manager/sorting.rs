@@ -137,7 +137,8 @@ fn extension_category(extension: &str) -> Category {
         "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
         | "epub" | "cbz" | "gpx" | "sfz" | "sf2" | "nki" | "gcode" | "geojson" | "sqlite"
         | "sqlite3" | "db" | "db3" | "ics" | "eml" | "ipynb" => Category::Document,
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Category::Archive,
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "tgz" | "tbz" | "tbz2" | "txz" | "tzst"
+        | "7z" | "rar" => Category::Archive,
         _ => Category::Other,
     }
 }

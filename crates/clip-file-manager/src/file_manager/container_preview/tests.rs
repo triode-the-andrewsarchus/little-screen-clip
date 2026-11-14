@@ -133,6 +133,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         complete: true,
         omitted: 0,
         archive: false,
+        notice: None,
         source: None,
     }));
     assert!(
@@ -147,6 +148,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         complete: true,
         omitted: 0,
         archive: false,
+        notice: None,
         source: None,
     }));
     node.expanded = Some(false);

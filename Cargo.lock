@@ -1406,6 +1406,7 @@ name = "clip-file-manager"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bzip2",
  "chrono",
  "clip-search",
  "clip-studios",
@@ -1414,6 +1415,7 @@ dependencies = [
  "egui",
  "egui-winit",
  "egui_extras",
+ "flate2",
  "fuse-binwalk",
  "hound",
  "image 0.25.10",
@@ -1454,7 +1456,9 @@ dependencies = [
  "uuid",
  "wayland-client",
  "wuff",
+ "xz2",
  "zip 7.4.0",
+ "zstd",
 ]
 
 [[package]]

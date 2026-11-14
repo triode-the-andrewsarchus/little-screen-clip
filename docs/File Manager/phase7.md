@@ -571,3 +571,39 @@ policies. The shared header control removes separate rendering implementations;
 format-specific loaders delegate to their existing owners. The metadata delivery
 item is now checked; final whole-milestone narrow/wide, lifecycle, compatibility
 and workspace validation remain under the separate unchecked acceptance gate.
+
+### Bounded compressed TAR inventories
+
+- [x] Preview gzip, bzip2, xz and zstd TARs through native compiled decoders,
+  including common short aliases. Ordinary compressed non-TAR files are not
+  guessed as containers. Reuse the existing pinned ordinary source, revision,
+  TAR member-path, duplicate-name and special/link omission policies. No member
+  is extracted or treated as a host path.
+- [x] Bound encoded sources to 512 MiB and decoded reads to 64 MiB. Xz memory
+  and zstd window limits are 64 MiB. Check cancellation and a cooperative
+  five-second deadline at read boundaries; this does not interrupt a blocked
+  underlying filesystem read. Existing two-worker ownership remains unchanged.
+- [x] Stop after 33 observed members and display at most 32 cards. Stop before
+  skipping a declared oversized payload. Retain partial header observations with
+  a visible preview-limit notice, explicitly marking remaining payloads unverified.
+  Complete small inventories require decoder EOF, including checksum validation;
+  concatenated gzip/TAR streams are inspected rather than silently omitted.
+- [x] Six codec tests cover real compressed data, lossless non-UTF8 source paths,
+  concatenation, bad/truncated trailers, unsafe/duplicate member names, decoded
+  and card limits, exact-budget EOF, cancellation and deadline checks. Full
+  file-manager library tests: 923 passed / 6 ignored. Strict library/test Clippy
+  and application build pass. Logs: `/tmp/phase7-compressed-{all-tests,clippy,build}.log`.
+- [x] Native dark/light reports pass at
+  `/tmp/phase7-compressed-{dark,light}-03/report.json`. Each codec's own rendered
+  row contains its decoded member; expanding a genuine 128 MiB member exposes
+  the partial-limit notice. Source hashes are unchanged and no extracted paths
+  exist. Both-theme screenshots were visually reviewed.
+
+Architecture comparison against `before-phase7-compressed-archives` reports
+unchanged rounded duplication and maximum complexity, with one additional clone
+cluster. Scoped review identifies test limit-fixture setup, dependency manifest
+lists and existing rendering signatures/fixtures; there is no duplicated
+production decoding or member-path policy. Reported Python cycles concern
+unchanged upstream/worker functions with reordered members. This increment adds
+inventory coverage only: the archive milestone remains open for member artwork,
+activation and safe navigation. Final integrated Phase 7 acceptance is also open.

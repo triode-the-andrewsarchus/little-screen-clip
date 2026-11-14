@@ -655,7 +655,8 @@ fn inventory_cards(
                 );
         }
         if !ready.complete {
-            ui.label("More contents · open to browse");
+            ui.label(if ready.notice.is_some() { "Preview limit · open to browse" } else { "More contents · open to browse" })
+                .on_hover_text(ready.notice.as_deref().unwrap_or("The inventory is bounded; open the container to inspect more."));
         }
     });
 }

@@ -1,4 +1,5 @@
 //! Bounded, read-only inventories. Archive member names never become host paths.
+mod compressed;
 use std::{
     collections::BTreeSet,
     fs::File,
@@ -47,15 +48,17 @@ pub(super) struct Inventory {
     /// Entries observed but deliberately excluded from actionable cards.
     pub omitted: usize,
     pub archive: bool,
+    pub notice: Option<String>,
     pub source: Option<clip_search::source::SourceRoot>,
 }
 
 pub(super) fn archive(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| {
-        ["zip", "tar"]
-            .iter()
-            .any(|known| ext.eq_ignore_ascii_case(known))
-    })
+    compressed::format(path).is_some()
+        || path.extension().is_some_and(|ext| {
+            ["zip", "tar"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
 }
 
 pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
@@ -76,6 +79,8 @@ pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, Stri
             .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
         {
             zip(&mut file, cancel)
+        } else if let Some(format) = compressed::format(&entry.path) {
+            compressed::load(&mut file, cancel, format)
         } else {
             tar(&mut file, cancel)
         }?;
@@ -120,6 +125,7 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         complete,
         omitted: directory.skipped,
         archive: false,
+        notice: None,
         source,
     })
 }
@@ -177,15 +183,7 @@ fn tar(input: &mut File, cancel: &AtomicBool) -> Result<Inventory, String> {
         {
             return Err("Truncated archive member".into());
         }
-        let kind = member.header().entry_type();
-        if !kind.is_file() && !kind.is_dir() {
-            members.omitted += 1;
-            members.observed += 1;
-            continue;
-        }
-        let path = member.path().map_err(|e| e.to_string())?;
-        let name = path.to_str().ok_or("Archive member name is not UTF-8")?;
-        members.add(name, kind.is_dir(), member.size())?;
+        members.add_tar(member)?;
     }
     Ok(members.finish(true))
 }
@@ -196,8 +194,21 @@ struct Members {
     children: Vec<Child>,
     observed: usize,
     omitted: usize,
+    notice: Option<String>,
 }
 impl Members {
+    fn add_tar<R: std::io::Read>(&mut self, member: tar::Entry<'_, R>) -> Result<(), String> {
+        let kind = member.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            self.omitted += 1;
+            self.observed += 1;
+            return Ok(());
+        }
+        let path = member.path().map_err(|e| e.to_string())?;
+        let name = path.to_str().ok_or("Archive member name is not UTF-8")?;
+        self.add(name, kind.is_dir(), member.size())
+    }
+
     fn add(&mut self, name: &str, directory: bool, size: u64) -> Result<(), String> {
         // Retain full member provenance; do not join it onto the archive's parent.
         if name.len() > 4096 || name.contains(['\\', '\0']) || name.chars().any(char::is_control) {
@@ -250,6 +261,7 @@ impl Members {
             children: self.children,
             observed: self.observed,
             archive: true,
+            notice: self.notice,
             source: None,
         }
     }
