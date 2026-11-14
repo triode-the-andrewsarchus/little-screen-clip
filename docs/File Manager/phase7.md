@@ -68,6 +68,10 @@ by this review correction.
 
 ### Review verification
 
+- [x] Reserve and paint Size and Modified for every typed metadata family,
+  including audio, images, video and documents. Metadata fields stop before
+  those common columns instead of suppressing their headers and values.
+
 - [x] Arrow selection in List and Columns leaves already-visible rows in place,
   scrolling only enough to reveal a row crossing the viewport edge. Oversized
   rows align at their top. The shared viewport bounds are used before row

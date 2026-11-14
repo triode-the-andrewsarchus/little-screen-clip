@@ -549,6 +549,46 @@ mod tests {
     };
 
     #[test]
+    fn typed_columns_reserve_and_paint_size_and_modified_for_every_metadata_family() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["sound.wav", "photo.png", "movie.mp4", "book.pdf"] {
+            std::fs::write(root.path().join(name), "fixture").unwrap();
+        }
+        let directory =
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        let ctx = egui::Context::default();
+        for entry in &directory.entries {
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, ROW_HEIGHT));
+                    let columns = ListColumns::new(header).for_entry(
+                        Some(super::super::super::sorting::Sort {
+                            column: Column::Type,
+                            descending: false,
+                        }),
+                        entry,
+                    );
+                    let last = columns.metadata_fields().len() - 1;
+                    assert!(columns.metadata_cell(header, last).unwrap().right() <= columns.size);
+                    let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                    columns.sort_header(ui, header, None, colors);
+                    columns.paint(
+                        ui,
+                        header.translate(vec2(0.0, 40.0)),
+                        "12 KiB",
+                        "2026-11-14",
+                        colors.text_primary,
+                    );
+                });
+            });
+            for expected in ["Size", "Modified", "12 KiB", "2026-11-14"] {
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing {expected} for {}", entry.name);
+            }
+        }
+    }
+
+    #[test]
     fn family_header_sort_preserves_rendered_scroll_with_an_offscreen_selection() {
         let root = tempfile::tempdir().unwrap();
         for index in 0..80 {

@@ -1218,7 +1218,7 @@ impl ListColumns {
         if sort.is_some_and(|sort| sort.column == super::sorting::Column::Type)
             && !super::metadata::Field::for_family(family).is_empty()
         {
-            let end = self.extra.unwrap_or(self.right);
+            let end = self.extra.unwrap_or(self.size);
             let available = (end - self.left).max(0.0);
             let left = self.left + (available * 0.4).max(120.0).min(available);
             self.metadata = Some((left, end, family));
@@ -1261,9 +1261,6 @@ impl ListColumns {
     }
 
     fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
-        if self.metadata.is_some() && self.extra.is_none() {
-            return;
-        }
         paint_text(ui, row, self.size - row.left() + 5.0, 80.0, size, color);
         paint_text(
             ui,
@@ -1296,9 +1293,7 @@ impl ListColumns {
             (Column::Modified, "Modified", self.modified, self.right),
         ]
         .into_iter()
-        .filter(|(column, ..)| {
-            self.metadata.is_none() || matches!(column, Column::Type | Column::Name)
-        }) {
+        {
             let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
             let active = sort
                 .filter(|sort| sort.column == column)
