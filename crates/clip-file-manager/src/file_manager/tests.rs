@@ -1906,3 +1906,49 @@ fn returning_to_current_folder_exits_search_and_restores_unfiltered_rows() {
     assert!(!manager.search.open);
     assert_eq!(manager.visible.len(), 2);
 }
+
+#[test]
+fn columns_navigation_keeps_view_and_restores_file_selection_and_scroll_in_history() {
+    let root = tempfile::tempdir().unwrap();
+    let child = root.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    let file = root.path().join("selected.txt");
+    std::fs::write(&file, "column preview").unwrap();
+    let (mut manager, jobs) = loaded(root.path());
+    manager.set_view(BrowserView::Columns);
+    manager.select(file.clone());
+    manager.location_mut().unwrap().scroll = 56.0;
+    manager.navigate(child.clone(), Navigation::New);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), child);
+    assert_eq!(manager.view, BrowserView::Columns);
+    manager.history_step(false);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), root.path());
+    assert_eq!(manager.view, BrowserView::Columns);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&file));
+    assert_eq!(manager.location().unwrap().scroll, 56.0);
+    let names: Vec<_> = manager
+        .displayed_entries()
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    manager.set_view(BrowserView::List);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&file));
+    assert_eq!(
+        manager
+            .displayed_entries()
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>(),
+        names
+    );
+    assert_eq!(
+        serde_json::to_string(&BrowserView::Columns).unwrap(),
+        "\"columns\""
+    );
+    assert_eq!(
+        serde_json::from_str::<BrowserView>("\"columns\"").unwrap(),
+        BrowserView::Columns
+    );
+}

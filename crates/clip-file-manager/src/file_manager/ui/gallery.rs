@@ -30,6 +30,7 @@ impl FileManager {
             || matches!(
                 view,
                 super::super::BrowserView::List
+                    | super::super::BrowserView::Columns
                     | super::super::BrowserView::Videos
                     | super::super::BrowserView::Constellation
             )
@@ -72,6 +73,7 @@ impl FileManager {
                         self.view,
                         &[
                             Tab::new(super::super::BrowserView::List, "List"),
+                            Tab::new(super::super::BrowserView::Columns, "Columns"),
                             Tab::new(super::super::BrowserView::Photos, "Photos"),
                             Tab::new(super::super::BrowserView::Music, "Music"),
                             Tab::new(super::super::BrowserView::Videos, "Videos"),

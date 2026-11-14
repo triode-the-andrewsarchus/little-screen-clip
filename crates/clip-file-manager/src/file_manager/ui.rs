@@ -9,6 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
 mod bookmarks;
+mod columns;
 pub(crate) mod gallery;
 mod list;
 mod mounts;
@@ -204,13 +205,20 @@ impl FileManager {
                 },
             ))
             .show_inside(ui, |ui| {
-                if ui.is_enabled() && self.view != super::BrowserView::Constellation {
+                if ui.is_enabled()
+                    && !matches!(
+                        self.view,
+                        super::BrowserView::Constellation | super::BrowserView::Columns
+                    )
+                {
                     self.drop_targets.push((
                         ui.available_rect_before_wrap().intersect(ui.clip_rect()),
                         self.path().to_path_buf(),
                     ));
                 }
-                if self.view == super::BrowserView::Photos {
+                if self.view == super::BrowserView::Columns {
+                    self.columns_ui(ui, colors, palette);
+                } else if self.view == super::BrowserView::Photos {
                     self.gallery_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Music {
                     self.music_ui(ui, colors, palette);
@@ -368,6 +376,7 @@ impl FileManager {
     }
 
     fn list_shortcuts(&mut self, ctx: &egui::Context) {
+        self.column_shortcuts(ctx);
         if self.view == super::BrowserView::Photos {
             for (key_code, delta) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
                 if key(ctx, Modifiers::NONE, key_code) {

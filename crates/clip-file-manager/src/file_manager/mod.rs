@@ -119,6 +119,7 @@ pub(super) enum DocumentPosition {
 pub(in crate::file_manager) enum BrowserView {
     #[default]
     List,
+    Columns,
     Photos,
     Music,
     Videos,
@@ -689,6 +690,9 @@ impl FileManager {
     }
 
     fn append_location(&mut self, path: PathBuf) {
+        let manual_view = (self.view == BrowserView::Columns
+            && self.view_preferences.effective(&path).is_none())
+        .then_some(BrowserView::Columns);
         self.history.push(Location {
             path,
             selected: None,
@@ -696,7 +700,7 @@ impl FileManager {
             anchor: None,
             selection_undo: None,
             scroll: 0.0,
-            manual_view: None,
+            manual_view,
         });
         self.index = Some(self.history.len() - 1);
     }

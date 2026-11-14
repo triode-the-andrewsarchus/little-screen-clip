@@ -607,3 +607,55 @@ production decoding or member-path policy. Reported Python cycles concern
 unchanged upstream/worker functions with reordered members. This increment adds
 inventory coverage only: the archive milestone remains open for member artwork,
 activation and safe navigation. Final integrated Phase 7 acceptance is also open.
+
+### Initial Miller columns and adjacent preview
+
+- [x] Add a Columns view alongside List, sharing the browser's current directory,
+  sorted/filtered visible entries, selection, row menus, file actions, history
+  and view preferences. Ordinary folder clicks navigate; modified clicks retain
+  multi-selection. Left returns to the parent and reveals the departed folder;
+  Right enters a selected folder. Existing Up/Down, Enter and Alt+Back/Forward
+  keep their browser roles.
+- [x] Reuse the sidebar's directory observations and bounded directory jobs for
+  nearby parent columns, without a second listing cache or recursive sibling
+  enumeration. Show one parent at ordinary widths and two when space permits;
+  horizontally scroll smaller layouts. Virtualize each vertical listing and
+  reveal offscreen route/keyboard selections. Clip painting and hit targets to
+  the actual column/dock boundaries. Parent-column drops retain the parent as
+  destination instead of inheriting the current folder's drop target.
+- [x] Render one chosen file beside the current column through the shared preview
+  owner. Text uses existing syntax-colored excerpts, images use existing decoded
+  textures, and other available summaries use their existing details. Unknown
+  formats remain visible/openable. Retire other preview requests on selection or
+  view changes. The adjacent pane is a preview, not a second studio; its Open
+  action uses the ordinary shared viewer dispatch.
+- [x] Keep Columns during new navigation unless the destination has a saved view;
+  history restores its own view, selection and scroll. List remains available
+  without losing selected-file identity. Columns uses the existing local view
+  preference serialization/inheritance machinery and adds no folder sidecars.
+- [x] Full file-manager library tests: 925 passed / 6 ignored with four test
+  threads. The first unrestricted run hit a playback-worker QueueFull error;
+  bounded reruns pass. Added route-width/root tests and actual browser navigation,
+  history, selection/scroll, view-switch and serialization checks. Strict
+  library/test Clippy, application build, leaf formatting and Python compilation
+  pass. Logs: `/tmp/phase7-columns-{tests,route-test,clippy,build}.log`.
+- [x] Both-theme native reports pass at
+  `/tmp/phase7-columns-{dark,light}-03/report.json`: folder navigation, text
+  excerpts, an image verified by rendered pixel colors, Back/Forward, keyboard
+  parent/child navigation and keyboard preview selection. Screenshots were
+  visually reviewed. Earlier light OCR missed a filename despite correct
+  navigation; the driver now includes a crop of the actual current column.
+
+Architecture comparison against `before-phase7-miller-columns` retains rounded
+aggregate duplication and maximum complexity. The existing dock dispatcher gains
+one necessary view branch (CCN 18 to 19); new view-specific keyboard handling
+lives with the column renderer rather than growing generic list shortcuts.
+Reported clones are existing view transition/setup blocks and test fixture/assert
+patterns. Directory loading, guarded viewer dispatch, selection/file operations,
+preview decoding and persisted preferences retain their existing owners.
+
+This is the first working Columns delivery. The main acceptance checkbox remains
+open until narrow/wide native review, broader mixed-format/interaction checks and
+whole-milestone verification. Archive member artwork/activation and image-reference
+compatibility acceptance also remain open; this checkpoint does not complete
+Phase 7.

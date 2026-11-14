@@ -10,6 +10,7 @@ impl BrowserView {
     pub(in crate::file_manager) fn label(self) -> &'static str {
         match self {
             Self::List => "List",
+            Self::Columns => "Columns",
             Self::Photos => "Photos",
             Self::Music => "Music",
             Self::Videos => "Videos",

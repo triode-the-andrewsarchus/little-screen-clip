@@ -50,7 +50,10 @@ impl FileManager {
                 .unwrap_or(automatic)
         };
         if self.view != view {
-            if matches!(view, BrowserView::List | BrowserView::Videos) {
+            if matches!(
+                view,
+                BrowserView::List | BrowserView::Columns | BrowserView::Videos
+            ) {
                 self.stop_previews();
             }
             self.retire_media_previews();
