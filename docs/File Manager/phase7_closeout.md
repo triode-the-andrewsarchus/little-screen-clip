@@ -14,7 +14,7 @@ Personal `.cargo/config.toml` and `config.toml` changes stay outside commits.
 - [x] 6. Pass workspace tests, strict all-target Clippy, owned-source formatting and canonical build.
 - [x] Record requirement-by-requirement review checkpoint and remaining intentional limits.
 - [x] Merge Phase 7 into main, preserving personal configuration changes.
-- [ ] Start Phase 8 with its roadmap and a first usable implementation slice.
+- [x] Start Phase 8 with its roadmap and a first usable implementation slice.
 
 ## Evidence
 
@@ -165,3 +165,7 @@ Merged with `--no-ff` as `bf6bf73e` on main. The complete Phase 7 branch is an
 ancestor of main; the merge has no additional source changes beyond the tested
 branch. Both personal configuration files were restored with identical SHA-256
 hashes. Phase 8 starts on `feat/file-manager-phase8` from that merge.
+
+Phase 8 now has a working static Home pin surface and persistence, with native
+restart/open/unpin/folder-return verification in both appearances. Its initial
+scope, evidence and remaining roadmap are recorded in `phase8.md`.

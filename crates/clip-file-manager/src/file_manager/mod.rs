@@ -22,6 +22,7 @@ pub(crate) mod fuse_binwalk;
 mod gallery;
 mod gcode;
 mod geography;
+mod home;
 mod image_strip;
 mod local_state;
 mod mail;
@@ -218,6 +219,7 @@ struct Request {
 
 pub(crate) struct FileManager {
     home: PathBuf,
+    home_surface: home::Home,
     history: Vec<Location>,
     index: Option<usize>,
     directory: Option<Directory>,
@@ -312,6 +314,7 @@ impl FileManager {
             bookmark_drop_rect: None,
             native_drag_point: None,
             home,
+            home_surface: Default::default(),
             history: Vec::new(),
             index: None,
             directory: None,
@@ -419,6 +422,10 @@ impl FileManager {
         }
     }
 
+    fn local_state_busy(&self) -> bool {
+        self.view_preferences.active() || self.home_surface.busy()
+    }
+
     fn stop_previews(&mut self) {
         self.metadata.retire();
         self.previews.multisample.clear();
@@ -429,6 +436,8 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.home_surface.open = false;
+        self.home_surface.opening = None;
         self.archives.cancel();
         let path = self.archives.resolve(&path);
         self.containers.retire();
@@ -540,6 +549,7 @@ impl FileManager {
             self.edits.report = None;
         }
         self.tick_view_preferences(&local_state::IO);
+        self.home_surface.tick(&local_state::IO);
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
@@ -554,7 +564,11 @@ impl FileManager {
             self.set_status(Icon::Alert, text.clone(), true);
             self.edits.report = Some(edits::EditReport { text, failed: true });
         }
-        if self.directory.is_none() && self.pending.is_none() && self.error.is_none() {
+        if !self.home_surface.open
+            && self.directory.is_none()
+            && self.pending.is_none()
+            && self.error.is_none()
+        {
             self.navigate(self.home.clone(), Navigation::New);
         }
         let mut completion = None;
@@ -588,6 +602,7 @@ impl FileManager {
                         display_path(&request.path)
                     ));
                     self.reveal_target = None;
+                    self.home_surface.opening = None;
                     // Retrying a rejected inspector relationship must not turn it
                     // into an unguarded path navigation to the replacement.
                     self.failed = request
@@ -606,11 +621,13 @@ impl FileManager {
         self.tick_transfers(jobs);
         self.tick_mounts(jobs);
         self.tick_fuse_binwalk(jobs);
-        if self.refresh_after_transfer && self.pending.is_none() {
+        if self.refresh_after_transfer && self.pending.is_none() && !self.home_surface.open {
             self.refresh_after_transfer = false;
             self.refresh();
         }
-        self.tick_watch(jobs);
+        if !self.home_surface.open {
+            self.tick_watch(jobs);
+        }
         self.tree.tick(jobs);
     }
 
@@ -758,6 +775,20 @@ impl FileManager {
             // same namespace when the inspector followed a directory alias.
             if let Some(name) = path.file_name() {
                 self.reveal_path(self.path().join(name));
+            }
+        }
+        if let Some(path) = self.home_surface.opening.take() {
+            if self
+                .location()
+                .and_then(|l| l.selected.as_ref())
+                .is_some_and(|selected| selected.file_name() == path.file_name())
+            {
+                self.open_selected();
+            } else {
+                self.set_error(format!(
+                    "Pinned file is unavailable: {}",
+                    display_path(&path)
+                ));
             }
         }
         self.restore_scroll = true;

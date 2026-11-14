@@ -108,6 +108,7 @@ impl FileManagerApp {
         {
             browser.search.error = Some(error);
         }
+        browser.home_surface = super::home::Home::for_user(&browser.home);
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.view_preferences = super::view_preferences::Preferences::for_user(&browser.home);
         browser.containers.configure(
@@ -351,6 +352,7 @@ impl FileManagerApp {
         if !self.viewers.video_fullscreen() {
             egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
+                    ui.set_enabled(!self.browser.home_surface.open || self.viewers.active());
                     for title in ["File", "Edit", "View"] {
                         ui.menu_button(title, |ui| {
                             if title == "View" {
@@ -641,6 +643,7 @@ impl FileManagerApp {
             || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
             || self.browser.view_preferences.writing()
+            || self.browser.home_surface.writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
             || self.browser.shelf.sending()
@@ -799,7 +802,7 @@ impl eframe::App for FileManagerApp {
             .constellation
             .render_duplicate_warning(ctx, &self.palette);
         self.main_content(ctx);
-        if self.browser.view_preferences.active() {
+        if self.browser.local_state_busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.browser.previews.multisample.finish_frame(ctx);

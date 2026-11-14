@@ -11,6 +11,7 @@ use crate::ui_ext;
 mod bookmarks;
 mod columns;
 pub(crate) mod gallery;
+mod home;
 mod list;
 mod mounts;
 pub(super) mod music;
@@ -49,6 +50,18 @@ impl FileManager {
         self.drop_targets.clear();
         self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
+        if self.home_surface.open {
+            ui.set_enabled(!self.browser_modal());
+            self.home_ui(ui, palette);
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
+                    false,
+                )
+            });
+            self.schedule_repaints(ui.ctx());
+            return;
+        }
         self.sync_preview_context();
         let settle_focus = self.sync_browser_focus(ui.ctx());
         let focus_handoff = self.focus_list;
@@ -514,7 +527,7 @@ impl FileManager {
             if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
             if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
             if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
-            let address_width = (ui.available_width() - 235.0).max(80.0);
+            let address_width = (ui.available_width() - 300.0).max(80.0);
             let mut output = egui::TextEdit::singleline(&mut self.address)
                 .id(address_id()).hint_text("Directory path [Ctrl+L]")
                 .desired_width(address_width).show(ui);
@@ -531,12 +544,16 @@ impl FileManager {
             }
             self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
             self.index_ui(ui);
+            if ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Home", palette)).on_hover_text("Your pinned files and folders").clicked() { self.show_home(); }
             if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
             if ui.add(clip_ui::buttons::ButtonRole::Secondary.button(if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, palette)).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }
         });
     }
 
     pub(super) fn selection_summary(&self) -> String {
+        if self.home_surface.open {
+            return format!("{} pinned items", self.home_surface.pins().len());
+        }
         if self.view == super::BrowserView::Constellation {
             return self.constellation.sample_count_label();
         }
