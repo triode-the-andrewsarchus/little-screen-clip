@@ -15,7 +15,7 @@ explicitly excluded by the user; existing automatic behavior is preserved.
   provenance; never treat member names as host paths or extract implicitly.
 - [x] Configurable automatic expansion of small folders, explicit expand/collapse,
   bounded depth/reads/entries/cache, cancellation and replacement invalidation.
-- [ ] Search `here` includes explicitly expanded ordinary descendants through the
+- [x] Search `here` includes explicitly expanded ordinary descendants through the
   existing scope model, with accurate provenance, coverage and file actions.
 - [ ] Miller columns with an adjacent preview, familiar navigation/history and
   the conventional List retained. Mixed/unsupported files remain accessible.
@@ -352,3 +352,37 @@ Final nested checkpoint checks: strict file-manager library/test Clippy passes
 (`/tmp/phase7-nested-clippy.log`), the current binary builds without warnings
 (`/tmp/phase7-nested-build.log`), leaf Rust formatting and Python syntax checks
 pass, and `git diff --check` is clean. Personal configuration remains unstaged.
+
+### Expanded-folder search scopes
+
+- [x] Include expanded ordinary folders in `here` name, regex, metadata,
+  content and semantic searches. Capture at most 33 directories including the
+  current folder, through four levels; retain the captured scope across query
+  edits and refreshes. Closed folders, directory aliases and archive members do
+  not become descendant scopes. No automatic index enrollment is introduced.
+- [x] Revalidate captured directory identities and mount/session observations in
+  disposable readers, including first probes of pending observations. Apply exact
+  parent constraints before lexical/vector result limits and recheck coverage
+  before publication. Preserve exclusions, hidden-file policy and partial results.
+- [x] Share worker dispatch across submission, refresh and directory watching so
+  ordinary watch updates cannot replace expanded results. Hidden-file changes
+  rerun the accepted query. Preserve bounded preview observations on studio/search
+  transitions. File actions verify every captured ancestor, even if a leaf and its
+  immediate parent retained their identities after an ancestor replacement.
+- [x] Full library tests pass: file manager 904 passed / 6 ignored; search 298
+  passed / 4 ignored (`/tmp/phase7-expanded-search-final-tests.log`). Strict
+  library/test Clippy, application build, search rustdoc/doctest, leaf formatting,
+  Python compilation and diff whitespace checks pass.
+- [x] Native dark/light acceptance passes at
+  `/tmp/phase7-expanded-search-{dark,light}-03/report.json`: name/content search,
+  unenrolled semantic filename fallback, real child clipboard paths and rejection
+  of an ancestor replacement while leaf identity/timestamps remain unchanged.
+
+Architecture comparison against `before-phase7-expanded-search` adds no excessive
+complexity function and leaves maximum complexity unchanged. Aggregate clone
+flags include existing SQLite error handling and typed test-fixture setup;
+reviewed scoped production duplication is pre-existing. Shared scope preparation,
+query dispatch and action guards avoid independent search-policy implementations.
+Image reference selection from expanded cards still needs the separate image-sort
+compatibility audit above; temporary answer columns are not claimed for inline
+cards by this checkpoint.

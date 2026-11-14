@@ -851,7 +851,9 @@ impl FileManager {
 
     fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
-        self.rebuild_visible();
+        if !self.refresh_search_results() {
+            self.rebuild_visible();
+        }
     }
 
     fn move_selection(&mut self, down: bool, extend: bool) {
@@ -921,13 +923,12 @@ impl FileManager {
 
 impl FileManager {
     fn tick_watch(&mut self, jobs: &BackgroundJobs) {
-        if self.search.applied.as_ref().is_some_and(|query| {
-            query.scope != search::query::Scope::Here
-                || matches!(
-                    query.operator,
-                    search::query::Operator::Content(_) | search::query::Operator::Embedding(_)
-                )
-        }) {
+        if self
+            .search
+            .applied
+            .as_ref()
+            .is_some_and(|query| self.search.uses_worker(query))
+        {
             self.watch = None;
             return;
         }

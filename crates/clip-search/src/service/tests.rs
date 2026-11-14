@@ -4,6 +4,7 @@ use little_clip_core::file_inventory as filesystem;
 
 fn test_worker(path: &Path, store: Option<Store>) -> Worker {
     Worker {
+        here: None,
         paths: Paths {
             data: path.join("unused-search-cache"),
             helpers: PathBuf::new(),
@@ -1276,6 +1277,7 @@ fn rejected_controls_preserve_interactive_work_and_accepted_controls_cancel_it()
     let cancel = Arc::new(AtomicBool::new(false));
     service
         .send(Command::Search {
+            here: None,
             id: 1,
             path: "/ordinary".into(),
             query: Query::parse(":emb:\"ordinary\"").unwrap(),
@@ -1550,6 +1552,7 @@ fn maintenance_admission_interrupts_a_foreground_model_and_reaps_before_return()
     let cancel = Arc::new(AtomicBool::new(false));
     service
         .send(Command::Search {
+            here: None,
             id: 1,
             path: fixture.path().into(),
             query: Query::parse(":emb:\"ordinary\"").unwrap(),
@@ -1656,6 +1659,7 @@ fn progress_is_request_scoped_and_replaced_only_after_queue_admission() {
     });
     service.send(Command::Setup).unwrap();
     let next = || Command::Search {
+        here: None,
         id: 5,
         path: PathBuf::from("/unused"),
         query: Query::parse(":image").unwrap(),

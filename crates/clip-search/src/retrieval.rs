@@ -305,6 +305,7 @@ impl Drop for SqlCancellation<'_> {
 ///
 /// Offline observations remain labeled; callers revalidate sources before opening.
 pub struct Retrieval<'a> {
+    pub here: Option<&'a crate::here::HereScope>,
     pub store: &'a Store,
     pub pipeline: &'a str,
     pub vector: &'a [f32],
@@ -327,14 +328,7 @@ impl Retrieval<'_> {
     pub fn search(&self) -> Result<Vec<Hit>, String> {
         check(self.cancel)?;
         let _cancellation = SqlCancellation::new(&self.store.connection, self.cancel);
-        if self
-            .floors
-            .values()
-            .any(|floor| !floor.is_finite() || !(-1.0..=1.0).contains(floor))
-        {
-            return Err("Semantic cosine floors must be finite values between -1 and 1".into());
-        }
-        validate_query_vector(self.vector)?;
+        self.validate_inputs()?;
         register_name_filter(&self.store.connection)?;
         let cache_epoch = if self.vector.is_empty() {
             None
@@ -453,6 +447,20 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 impl Retrieval<'_> {
+    fn validate_inputs(&self) -> Result<(), String> {
+        if let Some(here) = self.here {
+            here.check_shape(self.path, self.query.scope)?;
+        }
+        if self
+            .floors
+            .values()
+            .any(|floor| !floor.is_finite() || !(-1.0..=1.0).contains(floor))
+        {
+            return Err("Semantic cosine floors must be finite values between -1 and 1".into());
+        }
+        validate_query_vector(self.vector)?;
+        Ok(())
+    }
     fn current(&self) -> String {
         // Semantic scoring requires an inventory-verified membership. The
         // model-independent lexical pass may consider checking memberships;
@@ -469,9 +477,9 @@ impl Retrieval<'_> {
             "((m.verified=1 OR :pipeline='') AND r.available=1)"
         };
         let scope = match self.query.scope {
-            Scope::Here => " AND p.parent=:directory",
-            Scope::Recursive => " AND p.path>=:lower AND p.path<:upper",
-            Scope::Indexed => "",
+            Scope::Here => format!(" AND {}", self.here_predicate()),
+            Scope::Recursive => " AND p.path>=:lower AND p.path<:upper".into(),
+            Scope::Indexed => String::new(),
         };
         format!(
             "(:pipeline='' OR f.pipeline=:pipeline) AND f.extraction_version={version} AND f.state IN ('ready','unsupported') AND EXISTS(SELECT 1 FROM memberships m JOIN roots r ON r.id=m.root_id LEFT JOIN source_sessions ss ON ss.root_id=r.id WHERE m.path=p.path AND (ss.scope=f.scope OR (r.available=0 AND ss.root_id IS NULL)) AND {availability}{visible}){scope}",
@@ -514,11 +522,33 @@ impl Retrieval<'_> {
                     .map_err(|e| e.to_string())?;
             }
         }
+        if let Some(here) = self.here {
+            for (number, directory) in here.directories.iter().enumerate() {
+                if let Some(index) = statement
+                    .parameter_index(&format!(":here{number}"))
+                    .map_err(|e| e.to_string())?
+                {
+                    statement
+                        .raw_bind_parameter(index, directory.path.as_os_str().as_encoded_bytes())
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
         Ok(statement)
+    }
+    fn here_predicate(&self) -> String {
+        let mut parents = vec![":directory".to_owned()];
+        if let Some(here) = self.here {
+            parents.extend((0..here.directories.len()).map(|i| format!(":here{i}")));
+        }
+        format!("p.parent IN ({})", parents.join(","))
     }
     fn path_matches(&self, current: &Path) -> bool {
         let scoped = match self.query.scope {
-            Scope::Here => current.parent() == Some(self.path),
+            Scope::Here => self.here.map_or_else(
+                || current.parent() == Some(self.path),
+                |here| here.contains_parent(current),
+            ),
             Scope::Recursive => current.starts_with(self.path),
             Scope::Indexed => true,
         };
@@ -577,9 +607,9 @@ impl Retrieval<'_> {
         // These bounded probes decide whether to invest in a hint cache. They
         // never restrict candidates or substitute for source/scope admission.
         let scope = match self.query.scope {
-            Scope::Here => " WHERE p.parent=:directory",
-            Scope::Recursive => " WHERE p.path>=:lower AND p.path<:upper",
-            Scope::Indexed => "",
+            Scope::Here => format!(" WHERE {}", self.here_predicate()),
+            Scope::Recursive => " WHERE p.path>=:lower AND p.path<:upper".into(),
+            Scope::Indexed => String::new(),
         };
         for (sql, expression, minimum) in [
             (

@@ -133,6 +133,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         complete: true,
         omitted: 0,
         archive: false,
+        source: None,
     }));
     assert!(
         !node.expanded(Options::default()),
@@ -146,6 +147,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         complete: true,
         omitted: 0,
         archive: false,
+        source: None,
     }));
     node.expanded = Some(false);
     assert!(
@@ -621,4 +623,75 @@ fn hidden_nested_sections_do_not_reserve_space_or_expose_children_until_enabled(
     browser.select(secret);
     browser.toggle_hidden();
     assert_eq!(browser.selection_count(), 0);
+}
+
+#[test]
+fn here_scope_captures_expanded_parents_and_pending_nested_identity_without_archives() {
+    let (root, folder, nested, child) = nested_fixture("needle.txt");
+    std::fs::write(folder.join(".hidden-value.txt"), b"hidden metadata").unwrap();
+    let mut browser = browser_with_expanded_container(root.path(), "folder");
+    browser.containers.choose(nested.clone(), true);
+    let directory = browser.directory.as_ref().unwrap();
+    let (pending, _) = browser
+        .containers
+        .search_scope(directory, false)
+        .unwrap()
+        .unwrap();
+    pending
+        .check_shape(root.path(), clip_search::query::Scope::Here)
+        .unwrap();
+    assert_eq!(pending.directories.len(), 2);
+    assert_eq!(
+        pending
+            .pending
+            .iter()
+            .map(|entry| &entry.path)
+            .collect::<Vec<_>>(),
+        [&nested]
+    );
+    observe_container(&mut browser.containers, &entry(&folder, "nested"));
+    let (ready, entries) = browser
+        .containers
+        .search_scope(browser.directory.as_ref().unwrap(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready.directories.len(), 3);
+    assert!(ready.pending.is_empty());
+    assert!(entries.iter().any(|entry| entry.path == child));
+    let mut query = clip_search::query::Query::navigation("needle".into());
+    query.resolve_navigation_entries(
+        browser
+            .directory
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .chain(entries.iter()),
+        false,
+    );
+    assert_eq!(
+        query.scope,
+        clip_search::query::Scope::Here,
+        "known expanded hits must not trigger recursive fallback"
+    );
+    for hidden in [false, true] {
+        let mut navigation = clip_search::query::Query::navigation("hidden-value".into());
+        navigation.resolve_navigation_entries(entries.iter(), hidden);
+        assert_eq!(
+            navigation.scope,
+            if hidden {
+                clip_search::query::Scope::Here
+            } else {
+                clip_search::query::Scope::Recursive
+            }
+        );
+    }
+    browser.containers.choose(folder, false);
+    assert!(
+        browser
+            .containers
+            .search_scope(browser.directory.as_ref().unwrap(), false)
+            .unwrap()
+            .is_none()
+    );
 }

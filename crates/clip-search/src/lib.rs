@@ -4,6 +4,7 @@
 //! Query grammar, guarded source readers, transactional storage, bounded ranking,
 //! inference and coordinator lifetimes share one headless owner. The host keeps
 //! navigation/UI and explicitly dispatches reader/extraction worker entrypoints.
+pub mod here;
 pub mod name_match;
 pub mod policy;
 pub mod query;

@@ -86,6 +86,7 @@ pub(in crate::file_manager) struct SourceGuard {
     entry: Entry,
     sources: Arc<Vec<SourceRoot>>,
     unavailable: bool,
+    exact_parent: bool,
 }
 impl SourceGuard {
     pub fn expected_identity(&self) -> Option<filesystem::Identity> {
@@ -101,6 +102,7 @@ impl SourceGuard {
             && self.entry.identity == other.entry.identity
             && self.entry.revision == other.entry.revision
             && self.unavailable == other.unavailable
+            && self.exact_parent == other.exact_parent
     }
 
     /// Run only on a worker. A fresh probe must never adopt a replacement root.
@@ -108,23 +110,36 @@ impl SourceGuard {
         if self.unavailable {
             return Err("Last-known unavailable result. Reconnect and refresh the search before opening or collecting it.".into());
         }
-        for root in self
+        let roots: Vec<_> = self
             .sources
             .iter()
-            .filter(|root| self.entry.path.starts_with(&root.path))
-        {
-            if matches!(
+            .filter(|root| {
+                self.entry.path.starts_with(&root.path)
+                    && (!self.exact_parent || self.entry.path != root.path)
+            })
+            .collect();
+        let verify = |root: &&SourceRoot| {
+            matches!(
                 reader::call(
                     &Request::Verify {
-                        root: root.clone(),
-                        entry: self.entry.clone()
+                        root: (*root).clone(),
+                        entry: self.entry.clone(),
                     },
                     cancel
                 ),
                 Ok(Reply::Verified)
-            ) {
-                return Ok(());
-            }
+            )
+        };
+        let verified = if self.exact_parent {
+            roots
+                .iter()
+                .any(|root| Some(root.path.as_path()) == self.entry.path.parent())
+                && roots.iter().all(verify)
+        } else {
+            roots.iter().any(verify)
+        };
+        if verified {
+            return Ok(());
         }
         Err("Search result changed or its source is unavailable. Refresh the search before opening it.".into())
     }
@@ -151,13 +166,28 @@ impl SourceGuard {
         })
     }
 }
+impl super::Search {
+    fn guard(&self, entry: &Entry) -> Option<SourceGuard> {
+        Some(SourceGuard {
+            entry: entry.clone(),
+            sources: self.sources.clone()?,
+            unavailable: self.is_offline(&entry.path),
+            exact_parent: self.here.is_some()
+                && self
+                    .applied
+                    .as_ref()
+                    .is_some_and(|query| query.scope == super::Scope::Here),
+        })
+    }
+}
+
 impl FileManager {
     pub(in crate::file_manager) fn search_preview_context(&self) -> PreviewContext {
         self.search.preview_context.clone()
     }
     pub(in crate::file_manager) fn sync_preview_context(&mut self) {
         if !self.search.preview_context.matches(&self.search.sources) {
-            self.containers.clear();
+            self.containers.retire();
             let paths = self
                 .directory
                 .as_ref()
@@ -196,25 +226,19 @@ impl FileManager {
         }
     }
     pub(in crate::file_manager) fn search_source_guard(&self, path: &Path) -> Option<SourceGuard> {
-        let sources = self.search.sources.as_ref()?;
         let entry = self
             .directory
             .as_ref()?
             .entries
             .iter()
-            .find(|entry| entry.path == path)?
-            .clone();
-        Some(SourceGuard {
-            entry,
-            sources: sources.clone(),
-            unavailable: self.search.is_offline(path),
-        })
+            .find(|entry| entry.path == path)?;
+        self.search.guard(entry)
     }
     pub(in crate::file_manager) fn search_source_guards(
         &self,
         paths: &[PathBuf],
     ) -> std::collections::HashMap<PathBuf, SourceGuard> {
-        let (Some(sources), Some(directory)) = (&self.search.sources, &self.directory) else {
+        let (Some(_), Some(directory)) = (&self.search.sources, &self.directory) else {
             return Default::default();
         };
         let chosen = paths.iter().collect::<std::collections::HashSet<_>>();
@@ -222,15 +246,10 @@ impl FileManager {
             .entries
             .iter()
             .filter(|entry| chosen.contains(&entry.path))
-            .map(|entry| {
-                (
-                    entry.path.clone(),
-                    SourceGuard {
-                        entry: entry.clone(),
-                        sources: sources.clone(),
-                        unavailable: self.search.is_offline(&entry.path),
-                    },
-                )
+            .filter_map(|entry| {
+                self.search
+                    .guard(entry)
+                    .map(|guard| (entry.path.clone(), guard))
             })
             .collect()
     }
@@ -397,6 +416,7 @@ mod tests {
             .entries
             .remove(0);
         let offline = SourceGuard {
+            exact_parent: false,
             entry,
             sources: Arc::new(vec![root]),
             unavailable: true,

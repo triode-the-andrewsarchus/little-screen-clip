@@ -25,7 +25,7 @@ pub(super) enum Target<'a> {
 const CACHE: usize = 32;
 const READS: usize = 2;
 const CHOICES: usize = 4096;
-pub(super) const DEPTH: usize = 4;
+pub(super) const DEPTH: usize = clip_search::here::MAX_DEPTH;
 const FRESHNESS: Duration = Duration::from_secs(5);
 // Directory metadata may stall on a remote mount. Keep its actual executing
 // reads at two, even after a UI delivery deadline, without starving navigation.
@@ -274,6 +274,50 @@ impl Previews {
             .map(|(entry, _)| self.base_height(entry))
             .sum::<f32>()
             + if truncated { 24.0 } else { 0.0 }
+    }
+    pub fn search_scope(
+        &self,
+        directory: &super::filesystem::Directory,
+        hidden: bool,
+    ) -> Result<Option<(clip_search::here::HereScope, Vec<Entry>)>, String> {
+        let mut scope = clip_search::here::HereScope::default();
+        let mut entries = Vec::new();
+        let mut expanded = false;
+        for root in directory
+            .entries
+            .iter()
+            .filter(|entry| entry.directory && candidate(entry) && (hidden || !entry.hidden))
+        {
+            let eligible = self.explicitly_expanded(&root.path)
+                || self
+                    .nodes
+                    .get(&root.path)
+                    .is_some_and(|node| node.ready.is_some() && node.expanded(self.options));
+            if !eligible {
+                continue;
+            }
+            if !expanded {
+                scope.directories.push(clip_search::source::SourceRoot::from_directory(directory)
+                    .ok_or("Folder source observations are unavailable; refresh before expanded search")?);
+                expanded = true;
+            }
+            let (sections, truncated) = self.sections(root, hidden);
+            scope.incomplete += usize::from(truncated);
+            for (entry, _) in sections.into_iter().filter(|(entry, _)| entry.directory) {
+                let source = self
+                    .nodes
+                    .get(&entry.path)
+                    .filter(|node| node.revision == entry.revision)
+                    .and_then(|node| node.ready.as_ref())
+                    .and_then(|ready| ready.source.as_ref());
+                if scope.observe(entry, source) {
+                    // Retain known metadata for hidden-file toggles; query admission still
+                    // applies the current hidden flag and source-reader policy.
+                    entries.extend(self.direct_children(entry, true).into_iter().cloned());
+                }
+            }
+        }
+        Ok(expanded.then_some((scope, entries)))
     }
     pub fn selection_offset(&self, entry: &Entry, selected: &std::path::Path, hidden: bool) -> f32 {
         let mut offset = 0.0;

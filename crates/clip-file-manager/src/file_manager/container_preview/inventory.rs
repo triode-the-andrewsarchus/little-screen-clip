@@ -47,6 +47,7 @@ pub(super) struct Inventory {
     /// Entries observed but deliberately excluded from actionable cards.
     pub omitted: usize,
     pub archive: bool,
+    pub source: Option<clip_search::source::SourceRoot>,
 }
 
 pub(super) fn archive(path: &Path) -> bool {
@@ -105,6 +106,7 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         cancel,
         LIMIT + 1,
     )?;
+    let source = clip_search::source::SourceRoot::from_directory(&directory);
     let observed = directory.entries.len();
     let complete = directory.skipped == 0 && observed <= LIMIT;
     Ok(Inventory {
@@ -118,6 +120,7 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         complete,
         omitted: directory.skipped,
         archive: false,
+        source,
     })
 }
 
@@ -247,6 +250,7 @@ impl Members {
             children: self.children,
             observed: self.observed,
             archive: true,
+            source: None,
         }
     }
 }

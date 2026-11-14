@@ -130,6 +130,7 @@ impl Corpus {
             .get(id)
             .expect("quality query has no real model embedding");
         let mut retrieval = Retrieval {
+            here: None,
             progress: None,
             store: &self.store,
             pipeline: PIPELINE,

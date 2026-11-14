@@ -266,6 +266,7 @@ impl Corpus {
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = AtomicU64::new(0);
         let retrieval = Retrieval {
+            here: None,
             progress: semantic.then_some(&progress),
             store: &self.store,
             pipeline: if semantic { "benchmark-v1" } else { "" },
