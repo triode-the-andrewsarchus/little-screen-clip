@@ -110,6 +110,10 @@ impl FileManagerApp {
         }
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
+        browser.containers.configure(
+            config.file_manager.inline_container_previews,
+            usize::from(config.file_manager.small_container_items),
+        );
         browser
             .music_previews
             .set_audio_spectrum(config.file_manager.audio_spectrum);

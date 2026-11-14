@@ -47,6 +47,8 @@ pub struct AppConfig {
 #[serde(default)]
 pub struct FileManagerConfig {
     pub music_threshold_percent: u8,
+    pub inline_container_previews: bool,
+    pub small_container_items: u8,
     /// Render file-manager audio strips as spectra instead of waveforms.
     pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
@@ -74,6 +76,8 @@ impl Default for FileManagerConfig {
     fn default() -> Self {
         Self {
             music_threshold_percent: 75,
+            inline_container_previews: true,
+            small_container_items: 8,
             audio_spectrum: false,
             video_timeline_decimation: 1,
             video_subtitles_enabled: false,

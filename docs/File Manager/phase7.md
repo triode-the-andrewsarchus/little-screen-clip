@@ -86,3 +86,16 @@ clones in the container modules. The aggregate tool still reports REGRESSION for
 existing clones in touched large files/manifests and reordered untouched Python
 cycles. The initial increase of ListPreviews::row above 15 was removed by moving
 contained-row composition into its own rendering responsibility.
+
+### Configurable inline previews
+
+- [x] Add a List toolbar menu to enable/disable automatic small-container previews
+  and set their item threshold (1–32). Explicit +/− remains available when the
+  automatic default is disabled. No automatic media-view selection is changed.
+- [x] Add backwards-compatible `[file_manager]` defaults:
+  `inline_container_previews = true`, `small_container_items = 8`. Runtime menu
+  changes are session-local; manual config edits set startup defaults. The later
+  per-folder preference owner will provide remembered folder overrides.
+- [x] Seven container tests and fourteen selected core configuration tests pass;
+  strict file-manager library/test Clippy passes. Disabling automatic previews
+  starts no inventory reads; explicit expansion and clamped limits are tested.

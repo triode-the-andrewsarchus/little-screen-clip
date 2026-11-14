@@ -17,14 +17,27 @@ use std::{
 
 const CACHE: usize = 32;
 const READS: usize = 2;
-const SMALL: usize = 8;
 const FRESHNESS: Duration = Duration::from_secs(5);
 // Directory metadata may stall on a remote mount. Keep its actual executing
 // reads at two, even after a UI delivery deadline, without starving navigation.
 static INVENTORY_JOBS: OnceLock<BackgroundJobs> = OnceLock::new();
 
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct Options {
+    pub automatic: bool,
+    pub small_items: usize,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            automatic: true,
+            small_items: 8,
+        }
+    }
+}
 #[derive(Default)]
 pub(super) struct Previews {
+    options: Options,
     nodes: BTreeMap<PathBuf, Node>,
     layout_changed: bool,
 }
@@ -47,11 +60,13 @@ impl Node {
             expanded: None,
         }
     }
-    fn expanded(&self) -> bool {
+    fn expanded(&self, options: Options) -> bool {
         self.expanded.unwrap_or_else(|| {
-            self.ready
-                .as_ref()
-                .is_none_or(|r| r.complete && r.observed <= SMALL)
+            options.automatic && {
+                self.ready
+                    .as_ref()
+                    .is_none_or(|r| r.complete && r.observed <= options.small_items)
+            }
         })
     }
 }
@@ -62,6 +77,32 @@ pub(super) fn candidate(entry: &Entry) -> bool {
         && (entry.directory || (entry.regular_file && inventory::archive(&entry.path)))
 }
 impl Previews {
+    pub fn configure(&mut self, automatic: bool, small_items: usize) {
+        let options = Options {
+            automatic,
+            small_items: small_items.clamp(1, inventory::LIMIT),
+        };
+        if self.options != options {
+            self.options = options;
+            self.clear();
+            self.layout_changed = true;
+        }
+    }
+    pub fn settings(&mut self, ui: &mut Ui) {
+        let mut options = self.options;
+        ui.menu_button("Folder previews", |ui| {
+            ui.checkbox(
+                &mut options.automatic,
+                "Automatically preview small folders and archives",
+            );
+            ui.add(
+                egui::Slider::new(&mut options.small_items, 1..=inventory::LIMIT)
+                    .text("Small-container item limit"),
+            );
+            ui.label("Use + / − beside a container to override its preview.");
+        });
+        self.configure(options.automatic, options.small_items);
+    }
     pub fn clear(&mut self) {
         self.nodes.clear();
     }
@@ -69,7 +110,11 @@ impl Previews {
         self.nodes.retain(|path, _| visible.contains(path));
     }
     pub fn height(&self, entry: &Entry) -> f32 {
-        if self.nodes.get(&entry.path).is_none_or(Node::expanded) {
+        if self
+            .nodes
+            .get(&entry.path)
+            .map_or(self.options.automatic, |node| node.expanded(self.options))
+        {
             108.0
         } else {
             28.0
@@ -117,7 +162,7 @@ impl Previews {
         if node.revision != entry.revision {
             *node = Node::new(entry.revision);
         }
-        if !node.expanded() || active >= READS || node.task.is_some() {
+        if !node.expanded(self.options) || active >= READS || node.task.is_some() {
             return;
         }
         if (node.ready.is_some() || node.error.is_some()) && node.refreshed.elapsed() < FRESHNESS {
@@ -151,7 +196,7 @@ impl Previews {
     ) -> Option<(PathBuf, bool)> {
         self.request(entry);
         let node = self.nodes.get_mut(&entry.path)?;
-        let expanded = node.expanded();
+        let expanded = node.expanded(self.options);
         let toggle =
             Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2(24.0, 24.0));
         ui.allocate_ui_at_rect(toggle, |ui| {

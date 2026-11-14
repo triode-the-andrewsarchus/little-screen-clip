@@ -134,11 +134,11 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         archive: false,
     }));
     assert!(
-        !node.expanded(),
+        !node.expanded(Options::default()),
         "Larger folders require explicit expansion"
     );
     node.expanded = Some(true);
-    assert!(node.expanded());
+    assert!(node.expanded(Options::default()));
     node.ready = Some(Arc::new(inventory::Inventory {
         children: Vec::new(),
         observed: 2,
@@ -147,9 +147,29 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
     }));
     node.expanded = Some(false);
     assert!(
-        !node.expanded(),
+        !node.expanded(Options::default()),
         "Manual collapse wins over the small-folder default"
     );
     node.expanded = None;
-    assert!(node.expanded());
+    assert!(node.expanded(Options::default()));
+}
+
+#[test]
+fn disabling_automatic_previews_starts_no_reads_but_explicit_expansion_still_works() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("folder")).unwrap();
+    let source = entry(root.path(), "folder");
+    let mut previews = Previews::default();
+    previews.configure(false, 0);
+    assert_eq!(previews.options.small_items, 1);
+    assert_eq!(previews.height(&source), 28.0);
+    previews.request(&source);
+    assert!(previews.nodes[&source.path].task.is_none());
+    previews.nodes.get_mut(&source.path).unwrap().expanded = Some(true);
+    previews.request(&source);
+    assert!(previews.nodes[&source.path].task.is_some());
+    assert_eq!(previews.height(&source), 108.0);
+    previews.configure(true, usize::MAX);
+    assert_eq!(previews.options.small_items, inventory::LIMIT);
+    assert!(previews.nodes.is_empty());
 }

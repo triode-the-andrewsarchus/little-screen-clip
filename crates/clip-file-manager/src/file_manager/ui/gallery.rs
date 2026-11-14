@@ -88,6 +88,9 @@ impl FileManager {
                 ui.small("Last-known matches: metadata list");
             }
             self.transfer_toolbar(ui, palette);
+            if self.view == super::super::BrowserView::List {
+                self.containers.settings(ui);
+            }
             if self.view == super::super::BrowserView::Photos {
                 if ui
                     .add(ButtonRole::Secondary.button(
