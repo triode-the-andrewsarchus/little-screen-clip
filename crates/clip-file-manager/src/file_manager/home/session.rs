@@ -67,10 +67,6 @@ impl Session {
         let mut previous = self.board.clone();
         prune(&mut previous);
         previous.revision = board.revision;
-        let added = board
-            .cards
-            .iter()
-            .any(|card| !previous.cards.iter().any(|old| old.id == card.id));
         if previous != *board {
             self.remember(previous);
         } else {
@@ -88,9 +84,6 @@ impl Session {
             .any(|card| Some(card.id) == self.selected)
         {
             self.selected = None;
-        }
-        if added {
-            self.canvas.fit();
         }
     }
     pub fn settled_for_relocation(&self) -> bool {
@@ -587,6 +580,21 @@ mod tests {
         assert!(session.split_projects(aggregate.id, &[]).is_err());
         assert_eq!(session.board.cards, vec![aggregate]);
         assert!(!session.can_undo());
+    }
+    #[test]
+    fn adding_a_reference_preserves_the_current_camera() {
+        let mut session = Session::default();
+        session.install(&Board::default());
+        let view = clip_studios::drawing_canvas::ViewState {
+            center: [330., 220.],
+            scale: 2.5,
+        };
+        session.canvas.restore_view(view);
+        let pin = Pin::new("/example".into(), true);
+        let mut added = session.board.clone();
+        added.add_shortcut(pin.id);
+        session.references_changed(&added, &[pin]);
+        assert_eq!(session.canvas.view(), Some(view));
     }
     #[test]
     fn resizing_is_bounded_and_cancelling_a_drag_restores_the_whole_card() {

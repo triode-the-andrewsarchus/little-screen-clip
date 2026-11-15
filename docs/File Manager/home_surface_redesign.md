@@ -556,7 +556,8 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   placement, resizing and its label inspector work outside Arrange, including
   restored sections and folder shortcuts. Shortcuts select on click and open on
   double-click/Enter; middle/right drags do not move cards.
-- [ ] Preserve the camera when adding placements.
+- [x] Preserve the camera when adding placements. Reference delivery no longer
+  requests Fit; the existing view remains intact and drop coordinates stay exact.
 - [ ] Bound Home zoom/pan and its grid to a useful workspace.
 - [ ] Offer project versus folder-preview choices for folder drops.
 - [ ] Dock click-region controls on the left and align their actions.
