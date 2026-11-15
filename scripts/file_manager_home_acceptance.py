@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the native Home desk, persistent references and guarded handoffs."""
 import json
+from collections import Counter
 from PIL import Image, ImageOps
 from pathlib import Path
 import ui_acceptance_capture as private
@@ -69,23 +70,25 @@ def resize_handle(session, shot):
 
 
 def artwork_target(session, shot, element, view):
-    # Find the actual white paper in the captured frame, then verify native ink
+    # Find the actual themed canvas in the captured frame, then verify native ink
     # at the authored source point under the persisted camera transform. This
     # avoids targeting another similarly named live card or a source text field.
     session.capture_text(shot, session.output / f"{shot}.png", [])
     with Image.open(session.output / f"{shot}.png").convert("RGB") as picture:
         pixels = picture.load()
-        rows = [y for y in range(140, 740) if sum(min(pixels[x,y]) > 253 for x in range(96,1184)) > 900]
+        background = Counter(picture.crop((100,175,1180,720)).getdata()).most_common(1)[0][0]
+        near_background = lambda color: max(abs(a-b) for a,b in zip(color,background)) < 3
+        rows = [y for y in range(140, 740) if sum(near_background(pixels[x,y]) for x in range(96,1184)) > 900]
         if not rows: return None
         top, bottom = min(rows), max(rows) + 1
-        white = [x for x in range(96,1184) if min(pixels[x,top+8]) > 253]
+        white = [x for x in range(96,1184) if near_background(pixels[x,top+8])]
         left, right = min(white), max(white) + 1
         scale = view["scale"]
         cx, cy = view["center"]
         point = element["points"][len(element["points"])//2]
         x = round((left+right)/2 + (element["x"]+point[0]-cx)*scale)
         y = round((top+bottom)/2 + (element["y"]+point[1]-cy)*scale)
-        ink = [(px,py) for py in range(y-6,y+7) for px in range(x-6,x+7) if max(pixels[px,py]) < 120]
+        ink = [(px,py) for py in range(y-6,y+7) for px in range(x-6,x+7) if max(abs(a-b) for a,b in zip(pixels[px,py],background)) > 20]
         return min(ink, key=lambda p: (p[0]-x)**2+(p[1]-y)**2) if ink else None
 
 

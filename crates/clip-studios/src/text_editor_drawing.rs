@@ -312,6 +312,9 @@ impl DrawingEditor {
             self.camera.fitted = false;
         }
         let frame = preview.native_frame(ui, Format::Excalidraw, source);
+        if options.composition {
+            return self.composition_ui(ui, rect, &response, frame, palette, options);
+        }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         self.resize_available = frame.as_ref().is_some_and(|frame| frame.vector.is_some());
@@ -365,11 +368,10 @@ impl DrawingEditor {
             return None;
         }
         let blocked = embedded::pointer_blocked(ui, &self.camera, rect, options.excluded);
-        let activated = if !options.editable && ready && response.clicked() && !blocked {
-            self.artwork_at(ui, rect)
-        } else {
-            None
-        };
+        let activated = self.artwork_activation(ui, response, rect, options, ready);
+        if options.composition {
+            return activated;
+        }
         if !options.editable || self.panning {
             if response.dragged_by(egui::PointerButton::Primary) && !blocked {
                 self.camera.pan(ui.input(|input| input.pointer.delta()));
@@ -382,6 +384,68 @@ impl DrawingEditor {
             self.interact(ui, response, rect);
         }
         activated
+    }
+
+    fn composition_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        response: &egui::Response,
+        frame: Option<crate::diagram_preview::NativeFrame>,
+        palette: &AppPalette,
+        options: embedded::Options<'_>,
+    ) -> (Rect, Option<String>) {
+        if let Some(frame) = &frame {
+            self.camera.fit_if_ready(
+                embedded::fit_layout(frame.layout, options.extent),
+                rect,
+                frame.fresh,
+            );
+        }
+        if options.enabled {
+            self.camera.input(ui, response, rect);
+            if response.clicked() {
+                response.request_focus();
+            }
+        }
+        embedded::composition_grid(&ui.painter_at(rect), &self.camera, rect, palette);
+        let ready =
+            frame.as_ref().is_some_and(|frame| frame.fresh) && self.model.is_some() && !self.busy();
+        let activated = self.artwork_activation(ui, response, rect, options, ready);
+        if let Some(frame) = frame {
+            let image = self.camera.image_rect(frame.layout, rect);
+            let motion = clip_ui::vectors::svg::Changes {
+                invert_neutral_ink: frame
+                    .vector
+                    .as_ref()
+                    .is_some_and(|scene| scene.needs_lightness_inversion(palette.is_dark)),
+                ..Default::default()
+            };
+            if let Some(error) = frame.paint(ui, rect, image, motion, Color32::WHITE) {
+                self.parse_error = Some(error);
+            }
+        }
+        (rect, activated)
+    }
+
+    fn artwork_activation(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        rect: Rect,
+        options: embedded::Options<'_>,
+        ready: bool,
+    ) -> Option<String> {
+        if options.enabled
+            && !options.editable
+            && ready
+            && response.clicked()
+            && !embedded::pointer_blocked(ui, &self.camera, rect, options.excluded)
+        {
+            self.artwork_at(ui, rect)
+        } else {
+            None
+        }
     }
 
     fn artwork_at(&self, ui: &egui::Ui, rect: Rect) -> Option<String> {

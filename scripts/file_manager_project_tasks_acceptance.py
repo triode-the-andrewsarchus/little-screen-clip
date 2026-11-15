@@ -45,7 +45,7 @@ def exercise(session, root):
     wait_for(lambda: any(card["content"]["kind"] == "project" for card in json.loads(home.read_text())["board"]["cards"]), "layout redo restored area")
     assert todo.read_bytes() == checked
     session.observe("redone-area", ["Garden", "Water herbs"])
-    click_word(session, "redone-area", "Arrange", minimum_y=90, maximum_y=145, control_bounds=(485,104,560,131))
+    session.key("Escape")
     session.observe("before-failed-save", ["Garden", "Water herbs"])
     with (root / ".fmproject.lock").open("rb") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -74,7 +74,7 @@ def exercise(session, root):
     click_word(session, "returned-desk", "Projects", minimum_y=90, maximum_y=145)
     session.observe("project-menu", ["Garden", "Unregister"])
     click_word(session, "project-menu", "Unregister", minimum_y=135)
-    session.observe("unregistered-area", ["This project is no longer registered", "Home"])
+    session.observe("unregistered-area", ["This project is no longer registered"])
     assert todo.read_bytes() == restored
     assert (root / ".fmproject").is_file()
 

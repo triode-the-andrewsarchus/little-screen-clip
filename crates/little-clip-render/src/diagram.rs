@@ -64,6 +64,8 @@ struct Request {
     source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     foreground: Option<[u8; 3]>,
+    #[serde(default)]
+    transparent_drawing: bool,
 }
 
 /// Natural equation dimensions relative to the surrounding text's font size.
@@ -155,7 +157,18 @@ impl Rendered {
 /// # Errors
 /// Returns source-budget, admission/spawn, cancellation, parse/render or protocol errors.
 pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
-    render_request(format, source, None, cancelled)
+    render_request(format, source, None, false, cancelled)
+}
+
+/// Renders drawing artwork without its document paper, using the ordinary helper.
+///
+/// Call from a bounded preview worker, like [`render`]. Source colors and alpha
+/// remain unchanged; a host may adapt eligible neutral ink at presentation time.
+///
+/// # Errors
+/// Returns the same source, worker, cancellation and rendering errors as [`render`].
+pub fn render_drawing_artwork(source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
+    render_request(Format::Excalidraw, source, None, true, cancelled)
 }
 
 /// Renders a transparent equation with native text metrics and the requested ink.
@@ -178,6 +191,7 @@ pub fn render_math(
         },
         source,
         Some(foreground),
+        false,
         cancelled,
     )
 }
@@ -186,6 +200,7 @@ fn render_request(
     format: Format,
     source: &str,
     foreground: Option<[u8; 3]>,
+    transparent_drawing: bool,
     cancelled: &AtomicBool,
 ) -> Result<Rendered, String> {
     validate_source(format, source)?;
@@ -196,6 +211,7 @@ fn render_request(
         format,
         source: source.to_owned(),
         foreground,
+        transparent_drawing,
     })
     .map_err(|error| error.to_string())?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -328,7 +344,15 @@ pub fn run_worker_cli() -> bool {
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         let request: Request = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        render_inline(request.format, &request.source, request.foreground)
+        if request.transparent_drawing {
+            if request.format != Format::Excalidraw {
+                return Err("Transparent drawing mode requires a drawing source".into());
+            }
+            validate_source(request.format, &request.source)?;
+            excalidraw::render_background(&request.source, false)
+        } else {
+            render_inline(request.format, &request.source, request.foreground)
+        }
     })();
     if let Err(error) = serde_json::to_writer(std::io::stdout().lock(), &response)
         .and_then(|_| std::io::stdout().flush().map_err(serde_json::Error::io))
@@ -1208,8 +1232,8 @@ impl Cache {
         self.0.retain(|entry| {
             entry.format != format || entry.source != source || entry.foreground != foreground
         });
-        let result = render_request(format, source, foreground, &AtomicBool::new(false)).and_then(
-            |rendered| {
+        let result = render_request(format, source, foreground, false, &AtomicBool::new(false))
+            .and_then(|rendered| {
                 little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
                     .map(|image| {
                         std::sync::Arc::new(Thumbnail {
@@ -1219,8 +1243,7 @@ impl Cache {
                         })
                     })
                     .ok_or_else(|| "Invalid diagram raster".into())
-            },
-        );
+            });
         // Many small inline formulas share this cache with large diagrams.
         // Bound both entry count and retained pixels instead of evicting every
         // formula in a dense visible row on each screen refresh.

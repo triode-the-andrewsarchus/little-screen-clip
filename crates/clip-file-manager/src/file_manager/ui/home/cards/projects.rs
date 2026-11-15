@@ -21,7 +21,6 @@ impl Renderer<'_, '_> {
         );
         let mut live = ui.child_ui(body, egui::Layout::top_down(egui::Align::Min));
         live.set_clip_rect(body.intersect(ui.clip_rect()));
-        live.visuals_mut().clone_from(&egui::Visuals::light());
         let style = live.style_mut();
         style.override_font_id = Some(FontId::proportional((16.0 * scale).clamp(11.0, 48.0)));
         style.spacing.interact_size = vec2(32.0, 24.0) * scale.max(0.6);

@@ -35,7 +35,7 @@ impl Renderer<'_, '_> {
             Content::Section { title, color } => self.section(ui, card, rect, title, *color),
             Content::Projects { title } | Content::Project { title, .. } => {
                 ui.painter()
-                    .rect_filled(rect, 12.0, Color32::from_rgb(247, 250, 248));
+                    .rect_filled(rect, 12.0, ui.visuals().panel_fill);
                 self.section(ui, card, rect, title, [69, 132, 134]);
             }
             Content::Shortcut { pin, label } => {
@@ -182,7 +182,7 @@ impl Renderer<'_, '_> {
             egui::Align2::LEFT_TOP,
             title,
             FontId::proportional((22.0 * self.viewport.scale() as f32).clamp(6.0, 64.0)),
-            ink,
+            ui.visuals().text_color(),
         );
         if self.selected == Some(card.id) {
             painter.line_segment(
@@ -197,10 +197,10 @@ impl Renderer<'_, '_> {
         painter.rect(
             rect,
             10.0,
-            Color32::from_rgb(252, 250, 245),
+            ui.visuals().panel_fill,
             egui::Stroke::new(1.2_f32, Color32::from_rgb(183, 178, 164)),
         );
-        let ink = Color32::from_rgb(47, 56, 59);
+        let ink = ui.visuals().text_color();
         let icon = if pin.folder { Icon::Folder } else { Icon::Text };
         icon.paint(
             &painter,
@@ -226,7 +226,7 @@ impl Renderer<'_, '_> {
             egui::Align2::LEFT_TOP,
             display_path(&pin.path),
             FontId::proportional((11.0 * scale).clamp(5.0, 32.0)),
-            Color32::from_rgb(116, 120, 116),
+            ui.visuals().weak_text_color(),
         );
     }
 }

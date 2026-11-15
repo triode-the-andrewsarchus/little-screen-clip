@@ -8,6 +8,11 @@ pub use crate::diagram_preview::ViewState;
 /// Controls interaction and reserves world-space areas for live widgets.
 #[derive(Clone, Copy)]
 pub struct Options<'a> {
+    /// Uses a themed composition grid without document-editing controls.
+    ///
+    /// Primary input belongs to host placement/activation; only middle drag pans.
+    /// Existing drawing source is displayed as transparent legacy artwork.
+    pub composition: bool,
     /// Enables drawing tools and properties rather than shortcut browsing.
     pub editable: bool,
     /// Temporarily disables edits without hiding or moving their controls.
@@ -21,6 +26,7 @@ impl Options<'_> {
     /// Returns ordinary drawing-editor interaction with no live overlays.
     pub fn editing() -> Self {
         Self {
+            composition: false,
             editable: true,
             enabled: true,
             excluded: &[],
@@ -155,15 +161,16 @@ impl Canvas {
         overlay: impl FnOnce(&mut egui::Ui, Viewport<'_>),
     ) -> Response {
         let changed = self.poll(ui.ctx(), source);
+        self.preview.set_drawing_transparency(options.composition);
         let current = changed.as_deref().unwrap_or(source);
         self.editor.prepare_model(current);
-        if options.editable {
+        if options.editable && !options.composition {
             ui.add_enabled_ui(options.enabled, |ui| self.editor.toolbar(ui, palette));
         }
         let size = ui.available_size().max(Vec2::splat(1.0));
         let (_, activated) = ui
             .horizontal_top(|ui| {
-                if options.editable {
+                if options.editable && !options.composition {
                     let width = (size.x * 0.22).clamp(170.0, 216.0);
                     ui.allocate_ui_with_layout(
                         Vec2::new(width, size.y),
@@ -203,6 +210,37 @@ impl Canvas {
             })
             .inner;
         Response { changed, activated }
+    }
+}
+
+pub(super) fn composition_grid(
+    painter: &egui::Painter,
+    camera: &Camera,
+    rect: Rect,
+    palette: &AppPalette,
+) {
+    let colors = clip_ui::ui_appearance::WorkbenchColors::from_palette(palette);
+    painter.rect_filled(rect, 0.0, colors.canvas);
+    let mut step = 32.0;
+    while step * camera.scale < 24.0 {
+        step *= 2.0;
+    }
+    while step * camera.scale > 72.0 {
+        step *= 0.5;
+    }
+    while (f64::from(rect.width() * rect.height()) / (step * camera.scale).powi(2)) > 4096.0 {
+        step *= 2.0;
+    }
+    let start = camera.world(rect.min, rect);
+    let end = camera.world(rect.max, rect);
+    let ink = colors.text_muted.gamma_multiply(0.35);
+    for y in (start[1] / step).floor() as i64..=(end[1] / step).ceil() as i64 {
+        for x in (start[0] / step).floor() as i64..=(end[0] / step).ceil() as i64 {
+            let point = camera.screen([x as f64 * step, y as f64 * step], rect);
+            if rect.contains(point) {
+                painter.circle_filled(point, 0.9, ink);
+            }
+        }
     }
 }
 
@@ -248,6 +286,74 @@ pub(super) fn pointer_blocked(
 mod tests {
     use super::*;
     use little_clip_render::diagram::DrawingLayout;
+
+    #[test]
+    fn composition_primary_drag_does_not_pan_but_middle_drag_does() {
+        for button in [egui::PointerButton::Primary, egui::PointerButton::Middle] {
+            let mut editor = DrawingEditor::default();
+            editor.camera.restore(ViewState {
+                center: [0.0; 2],
+                scale: 1.0,
+            });
+            let ctx = egui::Context::default();
+            let start = egui::pos2(300.0, 200.0);
+            for frame in 0..3 {
+                let events = match frame {
+                    1 => vec![
+                        egui::Event::PointerMoved(start),
+                        egui::Event::PointerButton {
+                            pos: start,
+                            button,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    2 => vec![egui::Event::PointerMoved(start + egui::vec2(40.0, 20.0))],
+                    _ => vec![],
+                };
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let (rect, response) = ui.allocate_exact_size(
+                                ui.available_size(),
+                                egui::Sense::click_and_drag(),
+                            );
+                            editor.camera.input(ui, &response, rect);
+                            editor.surface_input(
+                                ui,
+                                &response,
+                                rect,
+                                false,
+                                Options {
+                                    composition: true,
+                                    editable: false,
+                                    enabled: true,
+                                    excluded: &[],
+                                    extent: None,
+                                },
+                            );
+                        });
+                    },
+                );
+            }
+            assert_eq!(
+                editor.camera.view().unwrap().center,
+                if button == egui::PointerButton::Middle {
+                    [-40.0, -20.0]
+                } else {
+                    [0.0, 0.0]
+                }
+            );
+        }
+    }
 
     #[test]
     fn only_changed_unsubmitted_text_requires_a_leave_decision() {
@@ -362,6 +468,7 @@ mod tests {
                             &source,
                             &AppPalette::default(),
                             Options {
+                                composition: false,
                                 editable,
                                 enabled,
                                 excluded,
@@ -466,6 +573,7 @@ mod pan_tests {
                             source,
                             &AppPalette::default(),
                             Options {
+                                composition: false,
                                 editable: false,
                                 enabled: true,
                                 excluded: &[],

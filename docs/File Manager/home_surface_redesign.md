@@ -22,7 +22,7 @@ it must not force the user to design their space from a small shape toolbox.
 - [ ] Support immediate pressure-sensitive tablet ink with a few brushes/colors.
   Verify that native tablet pressure reaches the application; mouse/touch input
   must not be mistaken for pen pressure. Mouse drawing controls are unnecessary.
-- [ ] Pan only with middle-button dragging. Left input selects/places/activates;
+- [x] Pan only with middle-button dragging. Left input selects/places/activates;
   wheel zooms around the pointer without also scrolling an underlying folder.
 - [ ] Right-button tracing creates a transparent arbitrary closed click region.
   Offer a discoverable region manager with add/edit/delete, enabled state,
@@ -93,3 +93,46 @@ source-backed task workflows are being rerun in both appearances. The Add menu
 has a readable minimum width so long destination paths do not squeeze into a
 column of letters. The native driver scopes Home to its toolbar and keeps the
 pointer over submenus when inspecting them.
+
+## Composition surface delivery
+
+Home now uses a distinct composition presentation of the shared canvas: no drawing
+toolbar or shape properties, a neutral theme-aware dot grid, and middle-button-only
+pan. Primary drag stays available for placing live panels. The full drawing editor
+keeps its existing document behavior. Existing Home artwork is rendered without
+paper through the same bounded helper protocol, retaining its source, geometry,
+alpha, bindings and camera. There is no second renderer or GL context.
+
+The shared native SVG scene classifies eligible near-neutral single-color ink on
+its preparation worker. Home can invert its HSL lightness per frame, retaining hue,
+saturation and alpha, without rewriting source colors or scheduling a theme-change
+decode. Images, gradients, multiple colors, masks/effects and recognized opaque
+backdrops are conservative exclusions. This is the rendering foundation; importing
+SVG/notebook assets as independent movable objects remains outstanding.
+
+- Native review passes nine observations in each appearance:
+  `/tmp/home-redesign-surface-dark-02/report.json` and
+  `/tmp/home-redesign-surface-light-02/report.json`. These verify real source-backed
+  checkboxes, external refresh, primary drag leaving the camera unchanged, real
+  middle drag changing it, clicking actual vector ink, visibility and restart.
+  Source artwork/color JSON remains byte-for-byte unchanged. Both rendered desks
+  were inspected. The native pointer helper now supports middle drag explicitly.
+- The full task workflow passes 21 observations with an individual project panel:
+  `/tmp/home-redesign-project-dark-03/report.json` (dark initial panel delivery) and
+  `/tmp/home-redesign-tasks-light-02/report.json` (light composition surface).
+  It covers failed writes, missing/external sources, layout undo independence,
+  ordinary editor handoff and unregistering without losing source files.
+- Seven shared SVG tests, the transparent-artwork regression, nineteen shared
+  drawing tests and five Home UI regressions pass. Strict all-target Clippy for
+  file manager, studios, shared UI and render passes. The affected-library suite also passed; results are recorded below.
+- Architecture comparison retains average/max complexity and reduces duplication
+  by 0.01 points. After separating the composition and document input paths and
+  separating SVG traversal/paint/backdrop classification, no new excessive-CCN
+  function remains. The diff-aware tool still flags short existing/test clones;
+  lifecycle, renderer, camera and protocol owners remain shared.
+
+Remaining work is the unchecked revised scope above, including asset placement,
+legacy-area migration, tablet input/ink, arbitrary click regions/action manager
+and live folder panes/filters. None is implied complete by these foundation checks.
+
+Affected-library gate: 2076 passed, zero failed, 19 ignored across file manager, studios, UI and render (`/tmp/home-redesign-all-affected-tests.log`). Final shared strict Clippy, build, formatting and diff checks passed. The redesigned scope remains active; this is a committed foundation, not its completion.

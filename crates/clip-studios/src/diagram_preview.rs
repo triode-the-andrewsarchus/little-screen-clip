@@ -133,6 +133,7 @@ impl NativeFrame {
 /// Owns debouncing, cancellation and the last valid image for one diagram source.
 #[derive(Default)]
 pub struct Preview {
+    transparent_drawing: bool,
     source: Option<(Format, String, Option<[u8; 3]>)>,
     pending: Option<Task<Result<Pixels, String>>>,
     due: Option<Instant>,
@@ -145,6 +146,14 @@ pub struct Preview {
     stale: bool,
 }
 impl Preview {
+    pub(crate) fn set_drawing_transparency(&mut self, transparent: bool) {
+        if self.transparent_drawing != transparent {
+            self.transparent_drawing = transparent;
+            self.source = None;
+            self.pending = None;
+            self.stale = true;
+        }
+    }
     #[cfg(test)]
     pub(crate) fn drawing_fixture(ctx: &egui::Context, source: &str) -> Self {
         Self {
@@ -275,6 +284,7 @@ impl Preview {
             self.prepared_at = Some(Instant::now());
             self.stale = true;
             let source = source.to_owned();
+            let transparent_drawing = self.transparent_drawing;
             self.pending = Some(Task::start(
                 BackgroundJobs::global(),
                 Duration::from_secs(10),
@@ -286,6 +296,8 @@ impl Preview {
                             color,
                             cancelled,
                         )?
+                    } else if transparent_drawing && format == Format::Excalidraw {
+                        little_clip_render::diagram::render_drawing_artwork(&source, cancelled)?
                     } else {
                         little_clip_render::diagram::render(format, &source, cancelled)?
                     };

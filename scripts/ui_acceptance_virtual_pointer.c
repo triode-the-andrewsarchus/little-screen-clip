@@ -53,7 +53,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click|right-click <width> <height> <x> <y> | "
-            "drag|drag-held|right-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
+            "drag|drag-held|right-drag|middle-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
             "scroll|hscroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -138,9 +138,10 @@ int main(int argc, char **argv) {
     int click = button != 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
     int right_drag = argc == 8 && strcmp(argv[1], "right-drag") == 0;
+    int middle_drag = argc == 8 && strcmp(argv[1], "middle-drag") == 0;
     int drag_held = argc == 8 && strcmp(argv[1], "drag-held") == 0;
-    int drag = right_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
-    uint32_t drag_button = right_drag ? BTN_RIGHT : BTN_LEFT;
+    int drag = right_drag || middle_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
+    uint32_t drag_button = right_drag ? BTN_RIGHT : middle_drag ? BTN_MIDDLE : BTN_LEFT;
     int scroll_axis = argc == 7 ? parse_scroll_axis(argv[1]) : -1;
     int scroll = scroll_axis >= 0;
     int scroll_amount = 0;

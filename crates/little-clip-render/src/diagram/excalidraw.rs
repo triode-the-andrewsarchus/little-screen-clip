@@ -15,6 +15,13 @@ pub fn measure_text(
 }
 
 pub(super) fn render(source: &str) -> Result<Rendered, String> {
+    render_background(source, true)
+}
+
+pub(super) fn render_background(
+    source: &str,
+    include_background: bool,
+) -> Result<Rendered, String> {
     let scene = SceneDocument::parse(source.trim_start_matches('\u{feff}').as_bytes())
         .map_err(|error| error.to_string())?;
     let limits = ResourceLimits::builder()
@@ -37,6 +44,7 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
         .map_err(|error| error.to_string())?;
     let request = RenderRequest::builder(OutputFormat::Svg)
         .sizing(Sizing::Scale(1.0))
+        .include_background(include_background)
         .resource_limits(limits)
         .build()
         .map_err(|error| error.to_string())?;
@@ -68,7 +76,7 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
         );
     }
     warnings.extend(report.diagnostics().iter().map(ToString::to_string));
-    let mut rendered = super::rasterize_svg(svg, true, ImagePolicy::EmbeddedRaster)?;
+    let mut rendered = super::rasterize_svg(svg, include_background, ImagePolicy::EmbeddedRaster)?;
     rendered.drawing = Some(layout);
     rendered.warnings.extend(warnings);
     rendered.warnings = super::bounded_warnings(rendered.warnings);
@@ -86,6 +94,17 @@ fn attribution(svg: &str) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn composition_artwork_omits_paper_without_changing_document_rendering() {
+        let source = r##"{"type":"excalidraw","version":2,"elements":[{"id":"ink","type":"line","x":0,"y":0,"width":80,"height":80,"points":[[0,0],[80,80]],"strokeColor":"#111111","strokeWidth":2}],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}"##;
+        let document = render(source).unwrap();
+        let artwork = render_background(source, false).unwrap();
+        let document = image::load_from_memory(&document.png).unwrap().to_rgba8();
+        let artwork = image::load_from_memory(&artwork.png).unwrap().to_rgba8();
+        assert_eq!(document.get_pixel(0, 0)[3], 255);
+        assert_eq!(artwork.get_pixel(0, 0)[3], 0);
+        assert!(artwork.pixels().any(|pixel| pixel[3] != 0));
+    }
     #[test]
     fn native_text_measurement_uses_shaping_advances_and_canonical_line_metrics() {
         for family in [1, 2, 3, 5, 6, 7, 8, 9] {

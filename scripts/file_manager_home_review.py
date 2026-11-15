@@ -50,7 +50,7 @@ def create(root, *, state_home=None):
         if pin:
             bindings.append({"element": identifier, "pin": pin})
 
-    def text(identifier, x, y, value, size=26, color="#334b53", pin=None):
+    def text(identifier, x, y, value, size=26, color="#161616", pin=None):
         elements.append({"id": identifier, "type": "text", "x": x, "y": y,
             "width": len(value) * size * .58, "height": size * 1.4, "text": value,
             "fontSize": size, "fontFamily": 1, "strokeColor": color,
@@ -61,13 +61,13 @@ def create(root, *, state_home=None):
     text("welcome", 45, 15, "A place for the things in progress", 30)
     text("notes-label", 80, 210, "Field notes", 28, pin=pins[0]["id"])
     ink("notebook", 95, 100, [[0, 8], [85, 0], [90, 91], [2, 98], [0, 8],
-        [15, 7], [17, 97], [19, 97], [17, 7]], "#2d6665", pins[0]["id"])
-    ink("notebook-lines", 128, 124, [[0, 0], [37, 0], [0, 0], [0, 19], [37, 19]], "#2d6665", pins[0]["id"])
+        [15, 7], [17, 97], [19, 97], [17, 7]], "#161616", pins[0]["id"])
+    ink("notebook-lines", 128, 124, [[0, 0], [37, 0], [0, 0], [0, 19], [37, 19]], "#161616", pins[0]["id"])
     text("ideas-label", 305, 210, "Small ideas", 28, pin=pins[1]["id"])
     ink("idea-star", 330, 110, [[35, 0], [47, 25], [75, 28], [54, 47], [60, 77],
-        [35, 62], [8, 77], [15, 47], [0, 28], [26, 25], [35, 0]], "#a76b2e", pins[1]["id"])
+        [35, 62], [8, 77], [15, 47], [0, 28], [26, 25], [35, 0]], "#161616", pins[1]["id"])
     text("annotation", 80, 295, "Click the ink to go there", 20)
-    ink("underline", 72, 260, [[0, 4], [120, 0], [250, 3], [410, 0]], "#91b5a1")
+    ink("underline", 72, 260, [[0, 4], [120, 0], [250, 3], [410, 0]], "#161616")
     text("reminder", 85, 420, "Leave room for the next idea...", 23)
     text("source-note", 640, 590, "These checkboxes edit the real TODO files", 19)
     cards = [{"id": str(uuid.uuid4()), "rect": [620, 80 + index * 255, 570, 240],
@@ -94,8 +94,8 @@ def create(root, *, state_home=None):
         (root / "README.md").write_text("# Phase 8 review desk\n\nRun `./open-review.sh` to open an isolated Home. "
             "Your normal Home, bookmarks and configuration are untouched.\n\n"
             "Click the notebook, star or their labels. Check a project task, then inspect "
-            "its `projects/*/TODO.md`: only that real source changes. Use Arrange to draw, "
-            "move the live area, rename the desk or link new artwork. Pan/zoom, quit and reopen.\n\n"
+            "its `projects/*/TODO.md`: only that real source changes. Use Arrange to place and resize content, "
+            "move each project panel or rename the desk. Pan/zoom, quit and reopen.\n\n"
             "In notes, Rules off reveals scratch.tmp; Rules on deliberately reveals .field-notes.md. "
             "Session marks and Sets are independent controls in the browser.\n\n"
             "The generator refuses an existing destination so rerunning cannot erase your changes.\n")

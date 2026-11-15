@@ -3,8 +3,9 @@
 import json
 from pathlib import Path
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
-from file_manager_home_acceptance import artwork_target, click_word
+from file_manager_home_acceptance import artwork_target, click_word, drag
 from file_manager_home_review import create
+import ui_acceptance_capture as private
 
 
 def exercise(session, root, binary):
@@ -12,7 +13,7 @@ def exercise(session, root, binary):
     session.close()
     state_home = Path(session.env["XDG_STATE_HOME"])
     desk = root / "desk"
-    create(desk, state_home=state_home)
+    original = create(desk, state_home=state_home)
     home = state_home / "little-screen-clip/home.json"
     session.restart(binary)
     session.observe("review-desk", ["My little field desk", "Field recorder", "Courtyard garden", "Pack spare batteries", "Sketch the planting beds", "Click the ink"])
@@ -28,6 +29,14 @@ def exercise(session, root, binary):
     session.observe("external-refresh", ["External addition"])
     wait_for(lambda: json.loads(home.read_text())["board"]["view"], "initial camera persisted")
     board = json.loads(home.read_text())["board"]
+    drag(session, (1100, 700), (1135, 680))
+    session.observe("primary-drag-still", ["Field recorder", "Courtyard garden"])
+    assert json.loads(home.read_text())["board"]["view"] == board["view"], "primary drag must not pan"
+    private.run_checked([str(session.pointer), "middle-drag", *map(str, session.logical_size),
+                         "1100", "700", "1135", "680"], env=session.env)
+    wait_for(lambda: json.loads(home.read_text())["board"]["view"] != board["view"], "middle drag pans the composition")
+    board = json.loads(home.read_text())["board"]
+    session.observe("middle-drag-panned", ["Field recorder", "Courtyard garden"])
     notebook = next(element for element in json.loads(board["drawing"])["elements"] if element["id"] == "notebook")
     target = []
     def ink():
@@ -45,6 +54,7 @@ def exercise(session, root, binary):
     session.observe("restart", ["My little field desk", "External addition", "Courtyard garden"])
     assert todo.read_bytes() == external
     assert json.loads(home.read_text())["board"]["view"] == board["view"]
+    assert json.loads(home.read_text())["board"]["drawing"] == original["board"]["drawing"], "theme adaptation must never rewrite source colors"
 
 
 if __name__ == "__main__":

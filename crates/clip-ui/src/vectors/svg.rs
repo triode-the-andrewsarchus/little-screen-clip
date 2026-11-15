@@ -8,6 +8,7 @@ use std::{
     },
 };
 use vg::{Color, FillRule, Paint, Path, Transform2D};
+mod ink;
 
 type ClipPaths = Vec<(usvg::tiny_skia_path::Path, usvg::FillRule)>;
 
@@ -19,6 +20,7 @@ pub struct Scene {
     tree: usvg::Tree,
     images: HashMap<usize, Arc<image::RgbaImage>>,
     clips: HashMap<usize, ClipPaths>,
+    neutral_ink: Option<bool>,
 }
 
 /// Worker-derived source-space geometry for named SVG groups.
@@ -29,6 +31,9 @@ pub struct Geometry {
 /// Per-frame transforms and ready replacement geometry for named SVG groups.
 #[derive(Clone, Default)]
 pub struct Changes {
+    /// Inverts HSL lightness while retaining hue, saturation and alpha.
+    /// Use [`Scene::needs_lightness_inversion`] to qualify monochrome artwork.
+    pub invert_neutral_ink: bool,
     /// Local affine coefficients `[a, b, c, d, e, f]`: `x' = ax + cy + e`,
     /// `y' = bx + dy + f`. Applied after the canonical group transform, before
     /// clipping and any additional local translation or replacement artwork.
@@ -119,12 +124,20 @@ impl Scene {
                 Ok((clip.as_ref() as *const usvg::ClipPath as usize, paths))
             })
             .collect::<Result<HashMap<_, _>, String>>()?;
+        let neutral_ink = ink::classify(&tree);
         Ok(Arc::new(Self {
             id: NEXT_SCENE.fetch_add(1, Ordering::Relaxed),
             tree,
             images,
             clips,
+            neutral_ink,
         }))
+    }
+
+    /// Returns whether transparent near-neutral monochrome ink needs contrast.
+    /// Opaque backdrops, multiple colors, images and effects retain source colors.
+    pub fn needs_lightness_inversion(&self, dark_background: bool) -> bool {
+        self.neutral_ink == Some(dark_background)
     }
 
     /// Paints the scene with optional per-group live translations and geometry.
@@ -441,7 +454,7 @@ impl Cached {
         for node in group.children() {
             match node {
                 usvg::Node::Group(group) => self.group(canvas, group, scene, motion)?,
-                usvg::Node::Path(path) => self.path(canvas, path),
+                usvg::Node::Path(path) => self.path(canvas, path, motion.invert_neutral_ink),
                 usvg::Node::Image(image) => {
                     canvas.save();
                     // Image fitting/cropping is normalized into its absolute
@@ -462,7 +475,7 @@ impl Cached {
         Ok(())
     }
 
-    fn path(&mut self, canvas: &mut Canvas<OpenGl>, path: &usvg::Path) {
+    fn path(&mut self, canvas: &mut Canvas<OpenGl>, path: &usvg::Path, invert: bool) {
         if !path.is_visible() {
             return;
         }
@@ -471,10 +484,10 @@ impl Cached {
             .entry(path as *const usvg::Path as usize)
             .or_insert_with(|| path_data(path.data()));
         let fill = path.fill().map(|fill| {
-            brush(fill.paint(), fill.opacity().get()).with_fill_rule(rule(fill.rule()))
+            brush(fill.paint(), fill.opacity().get(), invert).with_fill_rule(rule(fill.rule()))
         });
         let stroke = path.stroke().map(|stroke| {
-            brush(stroke.paint(), stroke.opacity().get())
+            brush(stroke.paint(), stroke.opacity().get(), invert)
                 .with_line_width(stroke.width().get())
                 .with_miter_limit(stroke.miterlimit().get())
                 .with_line_cap(match stroke.linecap() {
@@ -612,26 +625,22 @@ fn path_data(path: &usvg::tiny_skia_path::Path) -> Path {
     output
 }
 
-fn rgba(color: usvg::Color, alpha: f32) -> Color {
-    Color::rgbaf(
-        f32::from(color.red) / 255.0,
-        f32::from(color.green) / 255.0,
-        f32::from(color.blue) / 255.0,
-        alpha,
-    )
+fn rgba(color: usvg::Color, alpha: f32, invert: bool) -> Color {
+    let [r, g, b] = ink::rgb(color, invert);
+    Color::rgbaf(r, g, b, alpha)
 }
 fn gradient_stops(stops: &[usvg::Stop], opacity: f32) -> impl Iterator<Item = (f32, Color)> + '_ {
     stops.iter().map(move |stop| {
         (
             stop.offset().get(),
-            rgba(stop.color(), opacity * stop.opacity().get()),
+            rgba(stop.color(), opacity * stop.opacity().get(), false),
         )
     })
 }
 
-fn brush(paint: &usvg::Paint, opacity: f32) -> Paint {
+fn brush(paint: &usvg::Paint, opacity: f32, invert: bool) -> Paint {
     match paint {
-        usvg::Paint::Color(color) => Paint::color(rgba(*color, opacity)),
+        usvg::Paint::Color(color) => Paint::color(rgba(*color, opacity, invert)),
         usvg::Paint::LinearGradient(g) => Paint::linear_gradient_stops(
             g.x1(),
             g.y1(),

@@ -63,7 +63,7 @@ impl FileManager {
                         self.home_surface.session.arrange,
                         palette,
                     ))
-                    .on_hover_text("Draw, write and move your shortcuts")
+                    .on_hover_text("Place and resize objects on your desk")
                     .clicked()
                 {
                     let session = &mut self.home_surface.session;
@@ -291,7 +291,7 @@ impl FileManager {
                         }
                     });
                 }
-                ui.weak("Pencil P · text T · select V · wheel zoom · middle-drag pan");
+                ui.weak("Drag to place · wheel zoom · middle-drag pan");
             });
         });
     }
@@ -342,6 +342,7 @@ impl FileManager {
         let mut spawn = session.spawn;
         let mut paper_pressed = false;
         let options = clip_studios::drawing_canvas::Options {
+            composition: true,
             editable: session.arrange,
             enabled,
             excluded: &excluded,
@@ -370,14 +371,14 @@ impl FileManager {
                         egui::Align2::CENTER_CENTER,
                         "Make this place yours",
                         FontId::proportional(26.0),
-                        Color32::from_rgb(73, 91, 91),
+                        ui.visuals().text_color(),
                     );
                     ui.painter().text(
                         center + vec2(0.0, 20.0),
                         egui::Align2::CENTER_CENTER,
-                        "Add shortcuts. Arrange a corner. Draw a landmark.",
+                        "Place artwork, projects and live folders.",
                         FontId::proportional(16.0),
-                        Color32::from_rgb(117, 126, 122),
+                        ui.visuals().weak_text_color(),
                     );
                 }
                 let renderer = Renderer {
