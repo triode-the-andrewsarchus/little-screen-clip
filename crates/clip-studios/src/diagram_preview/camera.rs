@@ -88,23 +88,16 @@ impl Camera {
             origin: [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5],
             size,
         };
-        let minimum = (f64::from(rect.width()) / size[0])
-            .min(f64::from(rect.height()) / size[1])
-            .clamp(0.05, 1.0);
+        // Leave room to inspect the whole desk with breathing space, rather than
+        // stopping at its fitted size. Keep the center in the workspace so a pan
+        // cannot lose the desk, even when the viewport is larger than its bounds.
+        let minimum = ((f64::from(rect.width()) / size[0]).min(f64::from(rect.height()) / size[1])
+            * 0.25)
+            .clamp(0.025, 0.25);
         self.scale = self.scale.clamp(minimum, 16.);
         for axis in 0..2 {
-            let half = f64::from(if axis == 0 {
-                rect.width()
-            } else {
-                rect.height()
-            }) / (2. * self.scale);
-            let low = workspace.origin[axis] + half;
-            let high = workspace.origin[axis] + size[axis] - half;
-            self.center[axis] = if low <= high {
-                self.center[axis].clamp(low, high)
-            } else {
-                center[axis]
-            };
+            self.center[axis] = self.center[axis]
+                .clamp(workspace.origin[axis], workspace.origin[axis] + size[axis]);
         }
         workspace
     }
@@ -194,7 +187,19 @@ mod tests {
             scale: 0.001,
         });
         let workspace = camera.constrain_composition(layout, rect);
-        assert!(camera.scale >= 0.3);
+        let fit = (f64::from(rect.width()) / workspace.size[0])
+            .min(f64::from(rect.height()) / workspace.size[1]);
+        assert!((camera.scale - fit * 0.25).abs() < 1e-6);
+        let saved = ViewState {
+            center: [600., 400.],
+            scale: 0.2,
+        };
+        camera.restore(saved);
+        camera.constrain_composition(
+            layout,
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(2048., 1080.)),
+        );
+        assert_eq!(camera.view(), Some(saved));
         assert!(
             camera.center[0] >= workspace.origin[0]
                 && camera.center[0] <= workspace.origin[0] + workspace.size[0]

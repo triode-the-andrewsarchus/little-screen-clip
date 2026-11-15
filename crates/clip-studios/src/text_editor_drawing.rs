@@ -418,8 +418,8 @@ impl DrawingEditor {
             ),
             options.extent,
         );
-        let workspace = self.camera.constrain_composition(layout, rect);
-        embedded::composition_grid(&ui.painter_at(rect), &self.camera, rect, palette, workspace);
+        self.camera.constrain_composition(layout, rect);
+        embedded::composition_grid(&ui.painter_at(rect), &self.camera, rect, palette);
         let ready =
             frame.as_ref().is_some_and(|frame| frame.fresh) && self.model.is_some() && !self.busy();
         let activated = self.artwork_activation(ui, response, rect, options, ready);

@@ -224,23 +224,11 @@ pub(super) fn composition_grid(
     camera: &Camera,
     rect: Rect,
     palette: &AppPalette,
-    workspace: little_clip_render::diagram::DrawingLayout,
 ) {
     let colors = clip_ui::ui_appearance::WorkbenchColors::from_palette(palette);
-    painter.rect_filled(rect, 0., colors.recessed);
-    let paper = Rect::from_two_pos(
-        camera.screen(workspace.origin, rect),
-        camera.screen(
-            [
-                workspace.origin[0] + workspace.size[0],
-                workspace.origin[1] + workspace.size[1],
-            ],
-            rect,
-        ),
-    )
-    .intersect(rect);
-    painter.rect_filled(paper, 0., colors.canvas);
-    let painter = painter.with_clip_rect(paper);
+    // Camera limits bound navigation, not the painted surface: letterboxing the
+    // workspace wastes the sides of wide windows when zoomed out.
+    painter.rect_filled(rect, 0., colors.canvas);
     let mut step = 32.0;
     while step * camera.scale < 24.0 {
         step *= 2.0;
@@ -251,8 +239,8 @@ pub(super) fn composition_grid(
     while (f64::from(rect.width() * rect.height()) / (step * camera.scale).powi(2)) > 4096.0 {
         step *= 2.0;
     }
-    let start = camera.world(paper.min, rect);
-    let end = camera.world(paper.max, rect);
+    let start = camera.world(rect.min, rect);
+    let end = camera.world(rect.max, rect);
     let ink = colors.text_muted.gamma_multiply(0.35);
     for y in (start[1] / step).floor() as i64..=(end[1] / step).ceil() as i64 {
         for x in (start[0] / step).floor() as i64..=(end[0] / step).ceil() as i64 {

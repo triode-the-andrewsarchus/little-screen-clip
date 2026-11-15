@@ -603,3 +603,12 @@ native drag proving a restored folder shortcut can move outside Arrange:
 `/tmp/home-round2-native-light-03/report.json`. Both modes verify repeated color
 changes through the still-open popup and aligned region action columns. The
 committed native acceptance scripts reproduce these checks on private desktops.
+
+## Camera review correction
+
+- [x] Remove zoomed-out side gutters: the themed grid fills the viewport. The
+  workspace bounds constrain navigation rather than painting a letterboxed page.
+- [x] Allow zooming out to one quarter of the fitted workspace scale and panning
+  while zoomed out. The camera center stays bounded to the workspace so the desk
+  cannot be lost entirely. The regression covers a wide 2048×1080 viewport and
+  preserves a deliberately zoomed-out, off-center view.
