@@ -29,7 +29,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
 
 ## Delivery ledger
 
-- [ ] C1. Expose the existing native drawing surface for host-managed live overlays
+- [x] C1. Expose the existing native drawing surface for host-managed live overlays
       and clickable artwork without copying its renderer/editor.
 - [ ] C2. Home canvas: migration, free arrangement, artwork shortcuts, named
       sections, live card placement, view state, undo/redo and deliberate editing.
@@ -79,3 +79,25 @@ or native evidence. C2/C4 need observed live interactions, not static screenshot
 alone. Verify external TODO edits, write failures, stale identities, restart,
 rename/move, malformed/newer persistence, no-overwrite creation and missing
 mounts/targets. The completed goal is the whole scope above, not only Home polish.
+
+## Evidence and ongoing work
+
+C1 exposes `clip_studios::drawing_canvas::Canvas`, reusing the existing native
+editor/renderer/camera. Browse clicks return artwork IDs; host-owned live widgets
+reserve their world bounds so underlying artwork cannot capture their clicks.
+Overlay coordinates use the same camera through zoom, pan and Fit; live bounds
+participate in Fit without fake drawing elements. Hosts own source history/saves,
+and can poll accepted edits while the canvas is hidden. No new renderer, browser
+engine, GL context or preview cache was introduced.
+
+- `cargo test -p clip-studios --lib -j4 -- --test-threads=1`: 845 passed,
+  zero failed, 12 ignored; includes existing native editor regressions and new
+  artwork activation/overlay-coordinate/hit-exclusion tests.
+  Log: `/tmp/phase8-canvas-studios-tests.log`.
+- `cargo clippy -p clip-studios --all-targets -j4 -- -D warnings`: passed.
+  Log: `/tmp/phase8-canvas-clippy.log`.
+- The API has Rust documentation for interaction and host source/save ownership.
+
+C2 is in progress: versioned board migration and stale-layout write protection
+are being added before replacing the static Home presentation. C1 is an embedding
+foundation, not evidence that the requested Home canvas is already delivered.

@@ -454,7 +454,7 @@ fn inside(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
 pub(super) fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
-fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {
+pub(super) fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {
     let p = item.bounds.to_local(point);
     if [Kind::Line, Kind::Arrow, Kind::Freedraw].contains(&item.kind) {
         return item.points.windows(2).any(|pair| {

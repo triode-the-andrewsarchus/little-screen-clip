@@ -18,6 +18,7 @@ use std::{
 mod canvas;
 mod connections;
 mod controls;
+pub mod embedded;
 mod resize;
 mod text;
 use crate::diagram_preview::Camera;
@@ -273,6 +274,7 @@ impl DrawingEditor {
                 source,
                 preview,
                 palette,
+                embedded::Options::editing(),
             );
         });
         self.navigation(ui, palette);
@@ -293,15 +295,29 @@ impl DrawingEditor {
         source: &str,
         preview: &mut Preview,
         palette: &AppPalette,
-    ) {
+        options: embedded::Options<'_>,
+    ) -> (Rect, Option<String>) {
+        let mut activated = None;
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         self.focus = Some(response.id);
+        if self.camera.scale < 0.001 {
+            let layout = embedded::fit_layout(
+                little_clip_render::diagram::DrawingLayout {
+                    origin: [0.0; 2],
+                    size: [1.0; 2],
+                },
+                options.extent,
+            );
+            self.camera.fit(layout, rect);
+            self.camera.fitted = false;
+        }
         let frame = preview.native_frame(ui, Format::Excalidraw, source);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         self.resize_available = frame.as_ref().is_some_and(|frame| frame.vector.is_some());
         if let Some(frame) = frame {
-            self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
+            let fit_layout = embedded::fit_layout(frame.layout, options.extent);
+            self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
             self.camera.input(ui, &response, rect);
             let image = self.camera.image_rect(frame.layout, rect);
             let tint = if frame.fresh {
@@ -314,28 +330,63 @@ impl DrawingEditor {
                 self.ghost = None;
                 self.retained_move = None;
             }
-            if self.panning {
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    self.camera.pan(ui.input(|input| input.pointer.delta()));
-                }
-                if response.clicked() {
-                    response.request_focus();
-                }
-                response.clone().on_hover_cursor(egui::CursorIcon::Grab);
-            } else if ready {
-                self.interact(ui, &response, rect);
-            }
+            activated = self.surface_input(ui, &response, rect, ready, options);
             let motion = self.vector_motion(ui.ctx(), frame.layout.origin);
             if let Some(error) = frame.paint(ui, rect, image, motion, tint) {
                 self.parse_error = Some(error);
             }
-            self.paint_feedback(&painter, rect, palette);
+            if options.editable {
+                self.paint_feedback(&painter, rect, palette);
+            }
             if response.double_clicked_by(egui::PointerButton::Middle) {
                 self.camera.fitted = false;
-                self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
+                self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
             }
         }
-        self.keyboard(ui, &response);
+        if options.editable {
+            self.keyboard(ui, &response);
+        }
+        (rect, activated)
+    }
+
+    fn surface_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        rect: Rect,
+        ready: bool,
+        options: embedded::Options<'_>,
+    ) -> Option<String> {
+        let blocked = embedded::pointer_blocked(ui, &self.camera, rect, options.excluded);
+        let activated = if !options.editable && ready && response.clicked() && !blocked {
+            self.artwork_at(ui, rect)
+        } else {
+            None
+        };
+        if !options.editable || self.panning {
+            if response.dragged_by(egui::PointerButton::Primary) && !blocked {
+                self.camera.pan(ui.input(|input| input.pointer.delta()));
+            }
+            if response.clicked() {
+                response.request_focus();
+            }
+            response.clone().on_hover_cursor(egui::CursorIcon::Grab);
+        } else if ready && (!blocked || self.gesture.is_some()) {
+            self.interact(ui, response, rect);
+        }
+        activated
+    }
+
+    fn artwork_at(&self, ui: &egui::Ui, rect: Rect) -> Option<String> {
+        let pointer = ui.input(|input| input.pointer.interact_pos())?;
+        let point = self.camera.world(pointer, rect);
+        self.model
+            .as_ref()?
+            .items
+            .iter()
+            .rev()
+            .find(|item| canvas::hit(item, point, 6.0 / self.camera.scale))
+            .map(|item| item.id.clone())
     }
 
     fn vector_motion(

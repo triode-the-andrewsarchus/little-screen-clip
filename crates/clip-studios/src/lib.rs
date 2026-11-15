@@ -27,6 +27,7 @@ pub mod spreadsheet_view;
 pub mod subtitle_view;
 pub mod text_editor;
 mod text_editor_drawing;
+pub use text_editor_drawing::embedded as drawing_canvas;
 mod text_editor_wave;
 mod text_editor_wireviz;
 pub mod text_preview;
