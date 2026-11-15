@@ -562,7 +562,11 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   composition camera uses content bounds plus room to grow, caps zoom-out, and
   keeps the workspace in view. Document editors keep their original camera rules.
   The bounded-camera regression passes.
-- [ ] Offer project versus folder-preview choices for folder drops.
+- [x] Offer project versus folder-preview choices for folder drops. Classification
+  runs off the UI thread through guarded sources. Preview placement preserves the
+  drop point; project choice reuses registration/creation and then places its TODO
+  panel. Cancel/close retires the Copy-only handoff without removing sources.
+  The worker/intent/placement regression passes.
 - [x] Dock click-region controls on the left and align their actions. Names and
   wrapped destinations sit above a consistent action row in a resizable sidebar;
   freehand tracing does not open a panel midway through the gesture.

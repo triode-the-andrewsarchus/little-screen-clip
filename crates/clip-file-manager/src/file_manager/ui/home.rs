@@ -4,6 +4,7 @@ use crate::file_manager::home::{Board, Content, Pin};
 use little_clip_core::diagram::drawing::Bounds;
 use uuid::Uuid;
 pub(super) mod cards;
+mod drops;
 mod ink;
 mod projects;
 mod regions;
@@ -25,6 +26,7 @@ impl FileManager {
         }
         self.home_recovery(ui, palette);
         self.home_project_form(ui, palette);
+        self.home_folder_drop(ui, palette);
         self.home_region_panel(ui, palette);
         self.home_ink_feedback(ui, palette);
         self.edit_status(ui, WorkbenchColors::from_palette(palette), palette);
@@ -220,7 +222,8 @@ impl FileManager {
                 }
             }
             if let Some(path) = target {
-                self.home_surface.add_folder(path);
+                self.home_surface
+                    .add_folder(path, self.home_surface.session.spawn);
                 ui.close_menu();
             }
         });

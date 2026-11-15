@@ -1,6 +1,7 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
 pub(in crate::file_manager) mod artwork;
 mod board;
+pub(in crate::file_manager) mod drops;
 pub(in crate::file_manager) mod folders;
 pub(in crate::file_manager) mod ink;
 pub(in crate::file_manager) mod projects;
@@ -285,6 +286,7 @@ pub(super) struct Home {
     pub drop_rect: Option<egui::Rect>,
     pub region_ui: regions::Interaction,
     pub ink: ink::Ink,
+    pub drops: drops::Drops,
     pub recipes: recipes::Recipes,
     pub native_results: Vec<(u64, bool)>,
     path: Option<PathBuf>,
@@ -425,11 +427,11 @@ impl Home {
         });
         true
     }
-    pub fn add_folder(&mut self, path: PathBuf) {
+    pub fn add_folder(&mut self, path: PathBuf, point: [f64; 2]) {
         if self.ready() {
             self.queued = Some(Change::Folder {
                 pin: Pin::new(path, true),
-                point: self.session.spawn,
+                point,
             });
         }
     }
@@ -455,6 +457,7 @@ impl Home {
         self.session.poll(ctx);
     }
     pub fn prepare_close(&mut self) -> bool {
+        self.cancel_drop();
         self.finish_ink();
         if self.ink.drawing() {
             self.open = true;
@@ -604,6 +607,7 @@ impl Home {
     }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         self.projects.tick(jobs);
+        self.tick_drops();
         self.recipes.tick();
         if !self.open {
             self.projects.previews.retire();
@@ -1040,6 +1044,32 @@ mod session_delivery_tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn dropped_folders_wait_for_intent_and_preview_placement_uses_drop_coordinates() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Folder");
+        std::fs::create_dir(&folder).unwrap();
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut home = Home::new(root.path().join("home.json"));
+        home.open = true;
+        await_state(&mut home, &jobs, Home::ready);
+        assert!(home.receive_drop(vec![folder.clone()], [900., 600.], 71, Default::default()));
+        await_state(&mut home, &jobs, |home| !home.drops.items.is_empty());
+        assert!(home.session.board.cards.is_empty());
+        assert!(!folder.join(".fmproject").exists());
+        let super::drops::Item::Folder(path, manifest) = home.drops.items.pop().unwrap() else {
+            panic!()
+        };
+        assert!(!manifest);
+        home.add_folder(path, home.drops.point);
+        await_state(&mut home, &jobs, |home| {
+            home.ready() && !home.session.board.cards.is_empty()
+        });
+        assert_eq!(home.session.board.cards[0].rect, [600., 380., 600., 440.]);
+        home.tick(&jobs);
+        assert!(home.native_results.contains(&(71, true)));
+        assert!(!folder.join(".fmproject").exists());
     }
     #[test]
     fn unsaved_region_requires_explicit_discard_before_leaving() {

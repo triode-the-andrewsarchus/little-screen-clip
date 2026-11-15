@@ -80,11 +80,9 @@ fn receive_native_files(
     pads_visible: bool,
 ) -> bool {
     match destination {
-        Some(DropDestination::Home(point)) if !moving => {
-            browser
-                .home_surface
-                .import_artwork(paths, point, Some(token))
-        }
+        Some(DropDestination::Home(point)) if !moving => browser
+            .home_surface
+            .receive_drop(paths, point, token, guards),
         Some(DropDestination::Pad(index, append)) if !moving && pads_visible => browser
             .constellation
             .drop_on_pad(index, paths, append, Some(token)),
