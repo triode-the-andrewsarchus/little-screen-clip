@@ -48,7 +48,11 @@ impl Session {
             self.redo.clear();
             self.selected = None;
             self.title_draft = board.title.clone();
-            self.canvas.fit();
+            if let Some(view) = board.view {
+                self.canvas.restore_view(view);
+            } else {
+                self.canvas.fit();
+            }
         }
         self.loaded = true;
     }
@@ -133,6 +137,14 @@ impl Session {
         }
         if !self.canvas.selected().is_empty() {
             self.selected = None;
+        }
+    }
+    pub fn retain_view(&mut self) {
+        if let Some(view) = self.canvas.view()
+            && self.board.view != Some(view)
+        {
+            self.board.view = Some(view);
+            self.touch();
         }
     }
     pub fn select(&mut self, id: Uuid) {
@@ -249,6 +261,7 @@ impl Session {
     pub fn undo(&mut self) {
         if let Some(mut previous) = self.undo.pop() {
             previous.revision = self.board.revision;
+            previous.view = self.board.view;
             self.redo.push(std::mem::replace(&mut self.board, previous));
             self.selected = None;
             self.title_draft = self.board.title.clone();
@@ -258,6 +271,7 @@ impl Session {
     pub fn redo(&mut self) {
         if let Some(mut next) = self.redo.pop() {
             next.revision = self.board.revision;
+            next.view = self.board.view;
             self.undo.push(std::mem::replace(&mut self.board, next));
             self.selected = None;
             self.title_draft = self.board.title.clone();
@@ -268,6 +282,41 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persisted_camera_restores_and_layout_undo_keeps_the_new_view() {
+        use clip_studios::drawing_canvas::ViewState;
+        let view = ViewState {
+            center: [-42.0, 809.0],
+            scale: 1.5,
+        };
+        let board = super::Board {
+            view: Some(view),
+            ..Default::default()
+        };
+        let mut session = super::Session::default();
+        session.install(&board);
+        assert_eq!(session.canvas.view(), Some(view));
+        session.edit(|board| board.title = "My desk".into());
+        let changed = ViewState {
+            center: [1000.0, -280.0],
+            scale: 0.75,
+        };
+        assert!(session.canvas.restore_view(changed));
+        session.retain_view();
+        assert!(session.dirty());
+        session.undo();
+        assert_eq!(session.board.title, "Home");
+        assert_eq!(session.board.view, Some(changed));
+        assert_eq!(session.canvas.view(), Some(changed));
+        session.redo();
+        assert_eq!(session.board.title, "My desk");
+        assert_eq!(session.board.view, Some(changed));
+        let bytes = serde_json::to_vec(&session.board).unwrap();
+        let saved = serde_json::from_slice(&bytes).unwrap();
+        let mut reopened = super::Session::default();
+        reopened.install(&saved);
+        assert_eq!(reopened.canvas.view(), Some(changed));
+    }
     use super::*;
     #[test]
     fn late_save_acknowledgement_keeps_newer_edits_and_advances_their_base_revision() {

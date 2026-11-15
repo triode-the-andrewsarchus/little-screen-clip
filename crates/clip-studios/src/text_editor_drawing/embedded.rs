@@ -3,6 +3,7 @@
 //! The host owns source history and durable writes. Supply returned source edits
 //! on the next frame; overlays use the exact camera used to paint the artwork.
 use super::*;
+pub use crate::diagram_preview::ViewState;
 
 /// Controls interaction and reserves world-space areas for live widgets.
 #[derive(Clone, Copy)]
@@ -72,6 +73,14 @@ pub struct Canvas {
     preview: Preview,
 }
 impl Canvas {
+    /// Returns the current finite camera after its first completed Fit.
+    pub fn view(&self) -> Option<ViewState> {
+        self.editor.camera.view()
+    }
+    /// Restores a saved camera, returning false without changes for invalid input.
+    pub fn restore_view(&mut self, view: ViewState) -> bool {
+        self.editor.camera.restore(view)
+    }
     /// Returns selected artwork IDs for host-managed shortcut binding.
     pub fn selected(&self) -> &[String] {
         &self.editor.selected

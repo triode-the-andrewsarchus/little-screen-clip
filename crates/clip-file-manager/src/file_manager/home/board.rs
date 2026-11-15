@@ -15,6 +15,8 @@ pub(in crate::file_manager) struct Board {
     pub drawing: String,
     pub cards: Vec<Card>,
     pub bindings: Vec<Binding>,
+    #[serde(default)]
+    pub view: Option<clip_studios::drawing_canvas::ViewState>,
 }
 impl Default for Board {
     fn default() -> Self {
@@ -24,6 +26,7 @@ impl Default for Board {
             drawing: EMPTY_DRAWING.into(),
             cards: Vec::new(),
             bindings: Vec::new(),
+            view: None,
         }
     }
 }
@@ -104,6 +107,7 @@ impl Board {
             || self.cards.len() > 1024
             || self.bindings.len() > 2048
             || self.revision == u64::MAX
+            || self.view.is_some_and(|view| !view.valid())
         {
             return Err("Home board exceeds its title, artwork or card budget".into());
         }

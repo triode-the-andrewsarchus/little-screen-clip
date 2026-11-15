@@ -3,6 +3,25 @@ use egui::{Pos2, Rect};
 use little_clip_render::diagram::DrawingLayout;
 const MIN_SCALE: f64 = 0.001;
 
+/// Stores a viewport-independent canvas center and zoom for a host session.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewState {
+    /// Contains the world point at the center of the viewport.
+    pub center: [f64; 2],
+    /// Contains screen pixels per world unit.
+    pub scale: f64,
+}
+impl ViewState {
+    /// Rejects nonfinite or unreasonable persisted camera values.
+    pub fn valid(self) -> bool {
+        self.center
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= 1e8)
+            && (MIN_SCALE..=16.0).contains(&self.scale)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Camera {
     pub fitted: bool,
@@ -11,6 +30,22 @@ pub(crate) struct Camera {
 }
 
 impl Camera {
+    pub fn view(&self) -> Option<ViewState> {
+        let view = ViewState {
+            center: self.center,
+            scale: self.scale,
+        };
+        (self.fitted && view.valid()).then_some(view)
+    }
+    pub fn restore(&mut self, view: ViewState) -> bool {
+        if !view.valid() {
+            return false;
+        }
+        self.center = view.center;
+        self.scale = view.scale;
+        self.fitted = true;
+        true
+    }
     /// Keeps a pending Fit request until its current-source layout arrives.
     /// Stale frames retain the existing camera mapping during replacement.
     pub fn fit_if_ready(&mut self, layout: DrawingLayout, rect: Rect, fresh: bool) {
@@ -96,6 +131,49 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restored_view_preserves_world_center_across_viewport_sizes_and_skips_auto_fit() {
+        let saved = ViewState {
+            center: [-1032.5, 298.0],
+            scale: 2.75,
+        };
+        let mut camera = Camera::default();
+        assert!(camera.view().is_none());
+        assert!(camera.restore(saved));
+        let rect = Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(1100.0, 700.0));
+        camera.fit_if_ready(
+            DrawingLayout {
+                origin: [0.0; 2],
+                size: [1.0; 2],
+            },
+            rect,
+            true,
+        );
+        assert_eq!(camera.world(rect.center(), rect), saved.center);
+        assert_eq!(camera.screen(saved.center, rect), rect.center());
+        assert_eq!(camera.view(), Some(saved));
+        for invalid in [
+            ViewState {
+                center: [f64::NAN, 0.0],
+                ..saved
+            },
+            ViewState {
+                center: [1e9, 0.0],
+                ..saved
+            },
+            ViewState {
+                scale: f64::INFINITY,
+                ..saved
+            },
+            ViewState {
+                scale: 0.0,
+                ..saved
+            },
+        ] {
+            assert!(!camera.restore(invalid));
+            assert_eq!(camera.view(), Some(saved));
+        }
+    }
     #[test]
     fn first_stale_image_has_a_finite_mapping_without_consuming_fit() {
         let rect = Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(800.0, 400.0));

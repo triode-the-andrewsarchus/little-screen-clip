@@ -373,6 +373,9 @@ impl FileManager {
             },
         );
         session.spawn = spawn;
+        if enabled {
+            session.retain_view();
+        }
         if paper_pressed || !session.canvas.selected().is_empty() {
             session.selected = None;
         }

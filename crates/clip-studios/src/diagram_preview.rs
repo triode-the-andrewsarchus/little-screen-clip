@@ -6,6 +6,7 @@ use std::{
 };
 mod camera;
 pub(crate) use camera::Camera;
+pub use camera::ViewState;
 
 /// Delivery from a graphical source transaction to the session's undo owner.
 pub(crate) enum GraphicalUpdate {

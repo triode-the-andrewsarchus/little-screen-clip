@@ -159,8 +159,8 @@ Rejected writes retain the draft with explicit retry/discard controls.
   move/undo/redo, section-body drawing, artwork binding, restart, clicking real
   painted ink to open its file, studio return, folder opening and non-destructive
   unpin. Report: `/tmp/phase8-desk-selection-dark-02/report.json`.
-- Light-theme acceptance passed the same 28-observation workflow before the final
-  mutual-selection correction: `/tmp/phase8-desk-resize-light/report.json`.
+- Light-theme acceptance passed the same 28-observation workflow with the final
+  mutual-selection correction: `/tmp/phase8-desk-selection-light/report.json`.
   Both rendered desks were visually inspected. OCR needs
   `TESSDATA_PREFIX=/tmp/clip-video-ocr/tessdata` in this environment.
 - Targeted Home tests: 20 passed (`/tmp/phase8-home-canvas-tests.log`).
@@ -175,3 +175,14 @@ Rejected writes retain the draft with explicit retry/discard controls.
 
 This delivery does not complete C2 or Phase 8: camera persistence, draft-close
 handling, live projects/tasks and the other organization/history work remain.
+
+### C2 persisted camera
+
+Home stores finite world-center/zoom state, restores it independently of window
+size and keeps it out of layout undo/redo. Older boards without camera state
+still Fit normally. Invalid camera data is rejected rather than silently applied.
+The existing shared camera owns mapping and validation; Home does not introduce
+a second transform. Home tests pass (21), shared camera tests pass (4), and strict
+combined Clippy passes. Logs: `/tmp/phase8-view-{tests,camera-tests,clippy}.log`.
+Native acceptance now projects observed ink through the saved camera and asserts
+that restart leaves that camera unchanged. Draft-close behavior remains pending.
