@@ -8,25 +8,17 @@ mod projects;
 use cards::{Action, Renderer};
 
 impl FileManager {
-    pub(super) fn show_home(&mut self) {
-        self.archives.cancel();
-        self.pending = None;
-        self.watch = None;
-        self.containers.retire();
-        self.stop_previews();
-        if self.search.open {
-            self.close_search();
-        }
-        self.home_surface.open = true;
-        self.home_surface.reload();
-    }
     pub(super) fn home_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let back = self.home_header(ui, palette);
-        if (back || self.home_keys(ui)) && self.home_surface.session.allow_leave() {
-            self.home_surface.session.commit_labels();
-            self.home_surface.open = false;
-            self.home_surface.session.canvas.suspend();
-            self.focus_list = true;
+        if !self.home_surface.open {
+            return;
+        }
+        let keyboard_back = self.home_keys(ui);
+        if !self.home_surface.open {
+            return;
+        }
+        if (back || keyboard_back) && self.home_surface.session.allow_leave() {
+            self.return_from_home();
             return;
         }
         self.home_recovery(ui, palette);
@@ -44,6 +36,7 @@ impl FileManager {
     fn home_header(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
         let editing = self.home_surface.editing_allowed();
         ui.horizontal_wrapped(|ui| {
+            self.history_buttons(ui, palette);
             let back = ui
                 .add(clip_ui::buttons::ButtonRole::Secondary.button("Back to folder", palette))
                 .clicked();
@@ -106,7 +99,7 @@ impl FileManager {
                 session.canvas.fit();
             }
             self.home_projects_menu(ui);
-            if self.home_surface.busy() {
+            if self.home_surface.busy() || self.pending.is_some() {
                 ui.spinner();
             }
             back
@@ -307,6 +300,14 @@ impl FileManager {
         if text {
             return false;
         }
+        if key(ui.ctx(), Modifiers::ALT, Key::ArrowLeft) {
+            self.history_step(false);
+            return false;
+        }
+        if key(ui.ctx(), Modifiers::ALT, Key::ArrowRight) {
+            self.history_step(true);
+            return false;
+        }
         let editing = self.home_surface.editing_allowed();
         let session = &mut self.home_surface.session;
         if key(ui.ctx(), Modifiers::NONE, Key::Escape) {
@@ -318,9 +319,6 @@ impl FileManager {
                 session.arrange = false;
                 return false;
             }
-            return true;
-        }
-        if key(ui.ctx(), Modifiers::ALT, Key::ArrowLeft) {
             return true;
         }
         if editing && session.arrange && !session.canvas.busy() {
@@ -646,6 +644,15 @@ mod tests {
         assert!(browser.open_file.is_none());
         assert!(browser.drop_targets.is_empty());
         let _ = render(&mut browser, Key::Escape);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while browser.pending.is_some() {
+            browser.tick(little_clip_core::BackgroundJobs::global());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Home return did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
         assert!(!browser.home_surface.open);
         let _ = render(&mut browser, Key::ArrowDown);
         assert_eq!(browser.selected_paths(), [root.path().join("b.txt")]);

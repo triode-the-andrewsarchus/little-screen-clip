@@ -506,3 +506,44 @@ recorded and do not count toward acceptance. Formatting also passed
 (`/tmp/phase8-rules-format.log`).
 
 C7 is complete. C8/C9 remain required before Phase 8 is complete.
+
+### C8 Home history/startup delivery
+
+Home now has an explicit virtual history kind with a retained real folder context.
+No fabricated path enters filesystem navigation. Folder and Home surfaces share
+Back/Forward controls. Keyboard history, Escape and Back to folder preserve folder
+selection/scroll and forward visits. Reopening the current Home is idempotent;
+opening a shortcut creates a normal visit even for the same contextual folder.
+No-argument startup opens the personal Home; an explicit directory argument opens
+that directory. The desk remains one persistent canvas rather than a separate
+copy per visit. The contract is in `home_navigation.md`.
+
+A Home visit can retain context A while the cache belongs to later folder B.
+Returning now keeps Home visible until the guarded A read is accepted. Failed
+navigation leaves Home visible with its error instead of exposing B under A's
+address. Accepted desk writes retain their owners and unapplied text still blocks
+leaving. The existing UI regression now waits for that accepted folder read before
+checking resumed keyboard selection.
+
+- Full file-manager tests: 1,017 passed, zero failed, 6 ignored
+  (`/tmp/phase8-home-history-tests.log`). Four new regressions cover virtual
+  visits, selection/scroll/forward history, startup context, same-folder visits,
+  and a missing return folder with an unrelated cache, including the pending
+  transition before failure.
+- Strict Clippy, build and workspace formatting passed:
+  `/tmp/phase8-home-history-{clippy,build,format}.log`.
+- Native acceptance passed all 12 observations in each appearance:
+  `/tmp/phase8-home-history-dark-02/report.json` and
+  `/tmp/phase8-home-history-light-03/report.json`. Back/Forward, Escape, the
+  Back to folder button, no-argument restart and real-home context navigation
+  are observed in a private environment. Both appearances were visually reviewed.
+  Narrow header OCR avoids bordered-control omissions; Home is identified by
+  its actual empty-desk content and navigation controls. Earlier failed captures
+  remain available rather than being counted as successful evidence.
+- Shared history-button presentation is reused by both surfaces, removing new
+  header complexity. No separate navigation controller, canvas or decoder cache
+  was introduced.
+
+The history/startup part of C8 is delivered. Confirmed rename/move retargeting of
+Home pins, organization and project references remains outstanding, as does C9.
+Phase 8 is not complete.

@@ -77,10 +77,10 @@ class Session:
         private.run_checked(command, env=self.env)
         time.sleep(0.15)
 
-    def restart(self, binary, root):
+    def restart(self, binary, root=None):
         """Reopen a closed client with this run's private environment and ownership."""
         assert self.process.poll() is not None, 'Close the previous Files client before restarting'
-        self.process = self.children.start('files-resumed', [str(binary.resolve()), str(root)],
+        self.process = self.children.start('files-resumed', [str(binary.resolve())] + ([] if root is None else [str(root)]),
             env=self.env, cwd=self.output/'scratch', log_path=self.output/'files-resumed.log')
         windows, _ = private.wait_for_app_window(self.niri, self.env, self.process, self.output)
         private.run_checked([str(self.niri), "msg", "action", "focus-window", "--id", str(windows[0]["id"])], env=self.env)

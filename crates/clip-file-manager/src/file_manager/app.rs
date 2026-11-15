@@ -133,6 +133,8 @@ impl FileManagerApp {
             config.file_manager.photo_recursive_timeout_seconds;
         if let Some(path) = initial {
             browser.navigate(path, Navigation::New);
+        } else {
+            browser.show_home();
         }
         Self {
             vector_runtime,

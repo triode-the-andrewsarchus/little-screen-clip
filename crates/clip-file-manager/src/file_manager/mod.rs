@@ -23,6 +23,7 @@ mod gallery;
 mod gcode;
 mod geography;
 mod home;
+mod home_history;
 mod image_strip;
 mod local_state;
 mod mail;
@@ -133,8 +134,15 @@ pub(in crate::file_manager) enum BrowserView {
 
 const VIDEO_ROW_HEIGHT: f32 = 108.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocationKind {
+    Folder,
+    Home,
+}
+
 #[derive(Clone, Debug)]
 struct Location {
+    kind: LocationKind,
     path: PathBuf,
     selected: Option<PathBuf>,
     selection: BTreeSet<PathBuf>,
@@ -462,7 +470,11 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
-        self.home_surface.open = false;
+        // A virtual visit can retain a different folder's cache. Keep Home
+        // visible until the requested real directory has actually been accepted.
+        self.home_surface.open = self
+            .location()
+            .is_some_and(|location| location.kind == LocationKind::Home);
         self.home_surface.opening = None;
         self.archives.cancel();
         let path = self.archives.resolve(&path);
@@ -486,7 +498,12 @@ impl FileManager {
         }
         self.watch = None;
         self.watch_started = std::time::Instant::now();
-        if matches!(navigation, Navigation::New) && self.directory.is_some() && path == self.path()
+        if matches!(navigation, Navigation::New)
+            && self.directory.is_some()
+            && path == self.path()
+            && self
+                .location()
+                .is_some_and(|location| location.kind == LocationKind::Folder)
         {
             self.pending = None;
             self.error = None;
@@ -515,6 +532,17 @@ impl FileManager {
             index.checked_sub(1)
         };
         if let Some(target) = target.filter(|target| *target < self.history.len()) {
+            if self.home_surface.open {
+                if !self.home_surface.session.allow_leave() {
+                    return;
+                }
+                self.home_surface.session.commit_labels();
+                self.home_surface.session.canvas.suspend();
+            }
+            if self.history[target].kind == LocationKind::Home {
+                self.activate_home(target);
+                return;
+            }
             self.navigate(
                 self.history[target].path.clone(),
                 Navigation::History(target),
@@ -632,6 +660,9 @@ impl FileManager {
                     ));
                     self.reveal_target = None;
                     self.home_surface.opening = None;
+                    self.home_surface.open = self
+                        .location()
+                        .is_some_and(|location| location.kind == LocationKind::Home);
                     // Retrying a rejected inspector relationship must not turn it
                     // into an unguarded path navigation to the replacement.
                     self.failed = request
@@ -752,6 +783,7 @@ impl FileManager {
             && self.view_preferences.effective(&path).is_none())
         .then_some(BrowserView::Columns);
         self.history.push(Location {
+            kind: LocationKind::Folder,
             path,
             selected: None,
             selection: BTreeSet::new(),
@@ -764,6 +796,7 @@ impl FileManager {
     }
 
     fn commit(&mut self, directory: Directory, navigation: Navigation) {
+        self.home_surface.open = false;
         fuse_binwalk::refresh_cached_mount_table();
         if self
             .directory
@@ -779,7 +812,12 @@ impl FileManager {
             _ if self.index.is_none() => {
                 self.append_location(directory.path.clone());
             }
-            Navigation::New if directory.path != self.path() => {
+            Navigation::New
+                if directory.path != self.path()
+                    || self
+                        .location()
+                        .is_some_and(|location| location.kind == LocationKind::Home) =>
+            {
                 self.history.truncate(self.index.map_or(0, |i| i + 1));
                 self.append_location(directory.path.clone());
             }

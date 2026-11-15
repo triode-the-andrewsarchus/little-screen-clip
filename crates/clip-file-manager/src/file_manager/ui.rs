@@ -528,10 +528,30 @@ impl FileManager {
         }
     }
 
+    pub(super) fn history_buttons(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if nav_button(
+            ui,
+            Icon::ArrowLeft,
+            "Back [Alt+Left]",
+            self.index.is_some_and(|i| i > 0),
+            palette,
+        ) {
+            self.history_step(false);
+        }
+        if nav_button(
+            ui,
+            Icon::ArrowRight,
+            "Forward [Alt+Right]",
+            self.index.is_some_and(|i| i + 1 < self.history.len()),
+            palette,
+        ) {
+            self.history_step(true);
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
-            if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
-            if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
+            self.history_buttons(ui,palette);
             if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
             let address_width = (ui.available_width() - 300.0).max(80.0);
             let mut output = egui::TextEdit::singleline(&mut self.address)
@@ -2156,6 +2176,7 @@ mod tests {
         let mut browser = FileManager::new(temp.path().into());
         browser.history = vec![
             super::super::Location {
+                kind: super::super::LocationKind::Folder,
                 path: first.clone(),
                 selected: None,
                 selection: Default::default(),
@@ -2165,6 +2186,7 @@ mod tests {
                 manual_view: None,
             },
             super::super::Location {
+                kind: super::super::LocationKind::Folder,
                 path: second.clone(),
                 selected: None,
                 selection: Default::default(),
