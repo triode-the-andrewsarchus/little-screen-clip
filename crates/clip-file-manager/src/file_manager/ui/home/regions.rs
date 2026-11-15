@@ -185,11 +185,17 @@ impl FileManager {
                 .add(
                     egui::TextEdit::singleline(&mut draft.path)
                         .desired_width(ui.available_width().min(400.0))
-                        .hint_text("Absolute file or folder path"),
+                        .hint_text("Absolute path or ~/folder"),
                 )
                 .changed();
             if edited {
-                draft.target = Some(Pin::new(PathBuf::from(&draft.path), draft.folder));
+                draft.target = super::super::super::filesystem::parse_address(
+                    &draft.path,
+                    self.path(),
+                    &self.home,
+                )
+                .ok()
+                .map(|path| Pin::new(path, draft.folder));
             } else if changed && let Some(pin) = &mut draft.target {
                 pin.folder = draft.folder;
             }

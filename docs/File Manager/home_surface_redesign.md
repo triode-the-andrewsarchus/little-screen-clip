@@ -563,4 +563,5 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
 - [x] Dock click-region controls on the left and align their actions. Names and
   wrapped destinations sit above a consistent action row in a resizable sidebar;
   freehand tracing does not open a panel midway through the gesture.
-- [ ] Expand `~/` in click-region targets without shell evaluation.
+- [x] Expand `~/` in click-region targets without shell evaluation, using the
+  browser's existing path-address decoder and showing the resolved destination.
