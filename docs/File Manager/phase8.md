@@ -1,6 +1,8 @@
 # Phase 8 — organization and a real Home
 
-Status: started on `feat/file-manager-phase8`, from the Phase 7 merge `bf6bf73e`.
+Status: active completion work on `feat/file-manager-phase8`. The full current
+requirements and delivery ledger are in [phase8_completion.md](phase8_completion.md).
+The original initial slice started from Phase 7 merge `bf6bf73e`.
 Architecture baseline: `before-phase8-home`.
 
 ## First delivery: static Home pins
@@ -45,8 +47,9 @@ claimed. Home must never be implemented as a fabricated filesystem path.
   preserving every pre-existing file during conversion.
 - Define and verify restart/rename/move behavior across marks and projects.
 
-The current objective requires starting Phase 8 after the Phase 7 closeout;
-it does not claim completion of this full roadmap.
+The original objective only required starting Phase 8. The current objective is
+to complete the full roadmap, including the personal drawable Home and live
+project task views specified in `phase8_completion.md`.
 
 ## Delivered initial slice
 
