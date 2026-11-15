@@ -36,6 +36,7 @@ pub(crate) mod mounts;
 mod multisample;
 mod music;
 mod native_drag;
+mod native_tablet;
 mod notebook;
 mod organization;
 mod reference_updates;

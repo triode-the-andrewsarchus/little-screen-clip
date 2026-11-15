@@ -17,6 +17,8 @@ pub(in crate::file_manager) struct Board {
     pub bindings: Vec<Binding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<Region>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ink: Vec<super::ink::Stroke>,
     #[serde(default)]
     pub view: Option<clip_studios::drawing_canvas::ViewState>,
 }
@@ -29,6 +31,7 @@ impl Default for Board {
             cards: Vec::new(),
             bindings: Vec::new(),
             regions: Vec::new(),
+            ink: Vec::new(),
             view: None,
         }
     }
@@ -88,7 +91,10 @@ impl Card {
 }
 impl Board {
     pub fn is_empty(&self) -> bool {
-        self.cards.is_empty() && self.regions.is_empty() && self.drawing == EMPTY_DRAWING
+        self.cards.is_empty()
+            && self.regions.is_empty()
+            && self.ink.is_empty()
+            && self.drawing == EMPTY_DRAWING
     }
     pub fn add_shortcut(&mut self, pin: Uuid) {
         if self
@@ -185,6 +191,7 @@ impl Board {
             card.validate(&pin_ids)?;
         }
         super::regions::validate(&self.regions, &pin_ids)?;
+        super::ink::validate(&self.ink)?;
         self.validate_bindings(&pin_ids)
     }
 

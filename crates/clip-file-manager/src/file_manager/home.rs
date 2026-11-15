@@ -2,6 +2,7 @@
 pub(in crate::file_manager) mod artwork;
 mod board;
 pub(in crate::file_manager) mod folders;
+pub(in crate::file_manager) mod ink;
 pub(in crate::file_manager) mod projects;
 pub(in crate::file_manager) mod recipes;
 pub(in crate::file_manager) mod regions;
@@ -224,7 +225,7 @@ impl State {
                     );
                 }
                 board.retain_artwork_bindings()?;
-                self.board = board;
+                self.board = *board;
             }
         }
         if previous != self.board {
@@ -258,7 +259,7 @@ enum Change {
     Relocate(Vec<super::reference_updates::Relocation>),
     Board {
         expected: u64,
-        board: Board,
+        board: Box<Board>,
         generation: Option<u64>,
     },
 }
@@ -283,6 +284,7 @@ pub(super) struct Home {
     pub folder_filters: BTreeSet<Uuid>,
     pub drop_rect: Option<egui::Rect>,
     pub region_ui: regions::Interaction,
+    pub ink: ink::Ink,
     pub recipes: recipes::Recipes,
     pub native_results: Vec<(u64, bool)>,
     path: Option<PathBuf>,
@@ -314,6 +316,7 @@ impl Home {
         &mut projects::Projects,
         &mut artwork::Assets,
         &mut folders::Previews,
+        &mut ink::Ink,
     ) {
         (
             &self.state.pins,
@@ -321,6 +324,7 @@ impl Home {
             &mut self.projects,
             &mut self.artwork,
             &mut self.folders,
+            &mut self.ink,
         )
     }
     pub fn pins(&self) -> &[Pin] {
@@ -335,7 +339,8 @@ impl Home {
             || (self.session.dirty() && self.error.is_none())
     }
     pub fn writing(&self) -> bool {
-        self.recipes.writing()
+        self.ink.drawing()
+            || self.recipes.writing()
             || self.relocations.writing()
             || self.projects.writing()
             || self.session.dirty()
@@ -450,6 +455,11 @@ impl Home {
         self.session.poll(ctx);
     }
     pub fn prepare_close(&mut self) -> bool {
+        self.finish_ink();
+        if self.ink.drawing() {
+            self.open = true;
+            return false;
+        }
         if self.region_ui.draft.is_some() || self.region_ui.tracing {
             self.region_ui.leave_notice = true;
             self.open = true;
@@ -537,7 +547,7 @@ impl Home {
             }
             self.queued = Some(Change::Board {
                 expected: state.board.revision,
-                board,
+                board: Box::new(board),
                 generation: None,
             });
         }
@@ -555,7 +565,7 @@ impl Home {
         {
             self.queued = Some(Change::Board {
                 expected: self.session.board.revision,
-                board: self.session.board.clone(),
+                board: Box::new(self.session.board.clone()),
                 generation: Some(self.session.generation()),
             });
         }
@@ -598,6 +608,7 @@ impl Home {
         if !self.open {
             self.projects.previews.retire();
             self.artwork.retire();
+            self.ink.retire_reads();
             self.folders.retire();
             self.recipes.retire_reads();
         }
@@ -904,7 +915,7 @@ mod board_persistence_tests {
             &path,
             Change::Board {
                 expected: initial.board.revision,
-                board: first,
+                board: Box::new(first),
                 generation: None,
             },
         )
@@ -917,7 +928,7 @@ mod board_persistence_tests {
                 &path,
                 Change::Board {
                     expected: initial.board.revision,
-                    board: second,
+                    board: Box::new(second),
                     generation: None
                 }
             )
@@ -1104,7 +1115,7 @@ mod session_delivery_tests {
             &path,
             Change::Board {
                 expected: other.revision,
-                board: other,
+                board: Box::new(other),
                 generation: None,
             },
         )

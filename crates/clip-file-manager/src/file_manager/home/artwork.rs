@@ -10,7 +10,7 @@ use std::{
 };
 use uuid::Uuid;
 
-static READS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 2));
+pub(super) static READS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 2));
 const CAPACITY: usize = 128;
 const MEMORY: usize = 128 * 1024 * 1024;
 const SVG_BYTES: usize = 2 * 1024 * 1024;

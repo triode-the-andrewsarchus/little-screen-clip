@@ -62,6 +62,7 @@ realfft = "3.5.1"
 midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 globset = "0.4"
+octotablet = { version = "0.1.0", default-features = false, features = ["wayland-tablet-unstable-v2"] }
 
 [dev-dependencies]
 little-clip-render = { path = "../little-clip-render", features = ["test-support"] }

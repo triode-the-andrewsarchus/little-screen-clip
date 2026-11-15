@@ -1429,6 +1429,7 @@ dependencies = [
  "midir",
  "ndarray",
  "object 0.40.0",
+ "octotablet",
  "ort",
  "pulldown-cmark 0.13.6",
  "raw-cpuid",
@@ -3155,6 +3156,18 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f282cfdfe92516eb26c2af8589c274c7c17681f5ecc03c18255fe741c6aa64eb"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa18ce2bc66555b3218614519ac839ddb759a7d6720732f979ef8d13be147ecd"
+dependencies = [
+ "once_cell",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7647,6 +7660,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "octotablet"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c4b9470450ffa669cb3be55ef863dfd9592a06284cb291546363c514bb4aa3"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg_aliases 0.2.2",
+ "enum_dispatch",
+ "raw-window-handle 0.6.2",
+ "smallvec",
+ "strum",
+ "thiserror 1.0.69",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols 0.31.2",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10781,6 +10812,28 @@ version = "0.1.0"
 dependencies = [
  "structurizr-core",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "strum"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -421,3 +421,62 @@ and debug build pass. Architecture metrics retain average/max complexity and
 duplication. The analyzer flags short fixture/history snippets and reorders
 pre-existing cycle members in untouched files; no new runtime dependency or owner
 is introduced.
+
+
+## Native pressure ink implementation
+
+Home now owns a small persisted tablet-stroke collection alongside its linked
+artwork, live cards and regions. Each stroke retains measured normalized pressure,
+local coordinates, world origin, brush width/color and marker state. Layout
+history/atomic writes own its persistence; source drawing JSON and imported files
+stay unchanged. Theme ink adapts at paint time, while authored colors retain their
+color. There are two brushes, three widths and four colors in the compact Ink
+menu. Mouse dragging cannot create strokes. Arrange and ordinary controls remain
+usable with the pen. Escape discards an unfinished stroke; accepted ink shares
+ordinary Undo/Redo and close protection.
+
+[octotablet](https://docs.rs/octotablet/0.1.0/octotablet/) receives real Wayland
+pressure-pen frames on eframe's existing display, with emulated mouse tools
+excluded. Hardware ownership stays in the desktop host, not shared widgets.
+Contact/pose events are combined only at their frame boundary; missing pressure
+is never replaced by an invented constant. Logical window positions account for
+UI zoom. Captured ink suppresses compatibility clicks, while uncaptured pen frames
+operate normal widgets. Proximity loss, device removal and failures finish the
+owned stroke, and the input owner drops before eframe tears down its display.
+The small raw-handle lifetime boundary is explicitly documented. This adapter
+currently targets Wayland; it does not claim X11 tablet support.
+
+The separate renderer commit exposes the existing pressure-aware freehand outline
+algorithm rather than duplicating it. Live points prepare bounded CPU geometry
+once per paint, then fill vector paths through one shared native callback/context.
+Reloaded ink prepares on the existing two-worker Home artwork queue. No SVG/XML
+parsing, font work, rasterization, new GL context or general drawing-editor runtime
+is added to the live path. Limits are 256 strokes, 16,384 total measured points and
+4,096 points per segment; long strokes continue as bounded segments. Save errors
+retain the ordinary dirty layout; a conflicting unfinished stroke requires an
+explicit discard rather than silently losing its data.
+
+Validation: 1,052 file-manager tests pass (6 ignored), covering frame-order
+independence, absent pressure, balanced uncaptured pointer input, suppression of
+captured clicks, pressure preservation, invalid geometry, history and themes. The
+maximum-point outline check prepared 4,096 points in approximately 0.4 ms locally.
+The separate renderer integration test verifies pressure-dependent outline width
+and invalid-input rejection. Strict all-target Clippy for file manager/render,
+formatting and the debug build pass.
+
+Native paint/history workflows pass seven observations per appearance:
+`/tmp/home-ink-dark-03/report.json` and `/tmp/home-ink-light-01/report.json`.
+Pixel checks verify soft/hard and varying-pressure stroke thickness through the
+actual GL renderer. They also cover mouse isolation, brush controls, clear/undo
+and restart. These fixtures supply persisted measured-pressure values; **physical
+tablet feel and end-to-end hardware input remain unverified**. The tablet checklist
+item stays open for that check rather than claiming mouse automation as hardware
+validation.
+
+Architecture review separates pen-frame delivery, capture eligibility and stroke
+painting, eliminating the initial excessive-CCN input controller. Average/max
+complexity and dependency owners remain stable, and duplication percentage drops
+0.01 points. Remaining short clone flags concern host wiring/state transactions,
+fixtures and dependency declarations. Ink reuses worker admission, native vector
+painting, layout history and atomic persistence; the native input owner is the
+necessary new hardware boundary.

@@ -4,6 +4,7 @@ use crate::file_manager::home::{Board, Content, Pin};
 use little_clip_core::diagram::drawing::Bounds;
 use uuid::Uuid;
 pub(super) mod cards;
+mod ink;
 mod projects;
 mod regions;
 use cards::{Action, Renderer};
@@ -25,6 +26,7 @@ impl FileManager {
         self.home_recovery(ui, palette);
         self.home_project_form(ui, palette);
         self.home_region_panel(ui, palette);
+        self.home_ink_feedback(ui, palette);
         self.edit_status(ui, WorkbenchColors::from_palette(palette), palette);
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
@@ -78,6 +80,7 @@ impl FileManager {
                     }
                 }
                 self.home_add_menu(ui);
+                self.home_ink_controls(ui, palette);
             });
             let session = &mut self.home_surface.session;
             if ui
@@ -300,7 +303,7 @@ impl FileManager {
     }
     fn home_inspector(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let editable = self.home_surface.editing_allowed();
-        let (pins, session, _, _, _) = self.home_surface.canvas_parts();
+        let (pins, session, _, _, _, _) = self.home_surface.canvas_parts();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if session.selected.is_some() {
@@ -386,6 +389,10 @@ impl FileManager {
         let editing = self.home_surface.editing_allowed();
         let session = &mut self.home_surface.session;
         if key(ui.ctx(), Modifiers::NONE, Key::Escape) {
+            if self.home_surface.ink.drawing() {
+                self.home_surface.ink.discard();
+                return false;
+            }
             if self.home_surface.region_ui.cancel() {
                 return false;
             }
@@ -414,7 +421,7 @@ impl FileManager {
         let mut region_ui = std::mem::take(&mut home.region_ui);
         let mut folder_filters = std::mem::take(&mut home.folder_filters);
         folder_filters.retain(|id| home.session.board.cards.iter().any(|card| card.id == *id));
-        let (pins, session, projects, artwork, folders) = home.canvas_parts();
+        let (pins, session, projects, artwork, folders, ink) = home.canvas_parts();
         projects.previews.begin();
         artwork.begin();
         folders.begin();
@@ -488,6 +495,7 @@ impl FileManager {
                             |ui, card, rect, actions| rows.folder(ui, card, rect, actions),
                         );
                     });
+                ink.paint(ui, &renderer.viewport, &session.board.ink, palette);
                 play = requested_play;
                 region_activated = region_ui.surface(
                     ui,
@@ -668,7 +676,16 @@ fn board_extent(board: &Board) -> Bounds {
         max[0] = max[0].max(card.rect[0] + card.rect[2]);
         max[1] = max[1].max(card.rect[1] + card.rect[3]);
     }
-    for point in board.regions.iter().flat_map(|region| &region.points) {
+    for point in board
+        .regions
+        .iter()
+        .flat_map(|region| &region.points)
+        .copied()
+        .chain(board.ink.iter().flat_map(|stroke| {
+            let b = stroke.bounds();
+            [[b.x, b.y], [b.x + b.width, b.y + b.height]]
+        }))
+    {
         min[0] = min[0].min(point[0]);
         min[1] = min[1].min(point[1]);
         max[0] = max[0].max(point[0]);

@@ -21,6 +21,7 @@ mod ditaa;
 mod erd;
 mod excalidraw;
 pub use excalidraw::measure_text as measure_drawing_text;
+pub use excalidraw_render::{InkCommand, InkPath};
 mod fonts;
 mod goat;
 mod graphviz;

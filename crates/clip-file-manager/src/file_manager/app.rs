@@ -103,6 +103,7 @@ struct FileManagerApp {
     external: super::external::Launcher,
     palette: AppPalette,
     native: Option<super::native_drag::NativeDrag>,
+    tablet: Option<super::native_tablet::NativeTablet>,
     drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
     pad_studio: Option<super::constellation::pad_interaction::StudioRequest>,
     closing: bool,
@@ -175,6 +176,7 @@ impl FileManagerApp {
             external: Default::default(),
             palette,
             native: super::native_drag::NativeDrag::new(cc),
+            tablet: super::native_tablet::NativeTablet::new(cc),
             drop_destinations: Default::default(),
         }
     }
@@ -744,6 +746,75 @@ impl FileManagerApp {
             self.finish_app_close(ctx);
         }
     }
+    fn tablet_input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        let Some(tablet) = &mut self.tablet else {
+            return;
+        };
+        let frames = match tablet.pump() {
+            Ok(frames) => frames,
+            Err(error) => {
+                self.browser.home_surface.finish_ink();
+                self.browser.home_surface.ink.error =
+                    Some(format!("Tablet input stopped: {error}"));
+                self.browser.home_surface.ink.available = false;
+                self.tablet = None;
+                if let Some(pos) = ctx.input(|input| input.pointer.interact_pos()) {
+                    input.events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: input.modifiers,
+                    });
+                }
+                input.events.push(egui::Event::PointerGone);
+                return;
+            }
+        };
+        self.browser.home_surface.ink.available = tablet.available;
+        if input.focused && !self.closing {
+            // This native queue borrows eframe's display. Pump on the UI thread;
+            // idle polling discovers a first pen, proximity polling follows pen
+            // frames promptly even when no emulated pointer event wakes winit.
+            ctx.request_repaint_after(std::time::Duration::from_millis(if tablet.proximity {
+                8
+            } else if tablet.connected {
+                50
+            } else {
+                1000
+            }));
+        }
+        let zoom = ctx.zoom_factor();
+        if tablet.proximity || !frames.is_empty() {
+            let points: Vec<_> = frames
+                .iter()
+                .filter_map(|frame| frame.pulse.point)
+                .chain(tablet.last_point)
+                .map(|p| egui::pos2(p[0] / zoom, p[1] / zoom))
+                .collect();
+            // Remove only compatibility clicks at the observed pen position;
+            // an independent mouse remains usable while a pen hovers elsewhere.
+            input.events.retain(|event|!matches!(event,egui::Event::PointerButton {button:egui::PointerButton::Primary,pos,..} if points.iter().any(|point|point.distance(*pos)<2.)));
+        }
+        let focused = input.focused && !self.viewers.active() && !self.closing;
+        self.browser
+            .home_surface
+            .tablet_input(std::iter::empty(), zoom, focused);
+        for frame in frames {
+            let pulse = frame.pulse;
+            let captured = self
+                .browser
+                .home_surface
+                .tablet_input([frame], zoom, focused);
+            if input.focused && !self.closing {
+                // Tablet-aware Wayland clients do not necessarily receive mouse
+                // emulation. Real pen frames still operate ordinary controls and
+                // Arrange mode; captured ink never becomes a second click.
+                input
+                    .events
+                    .extend(pulse.pointer_events(zoom, input.modifiers, captured));
+            }
+        }
+    }
     fn finish_app_close(&mut self, ctx: &egui::Context) {
         let ready = self
             .browser
@@ -762,6 +833,7 @@ impl FileManagerApp {
 
 impl eframe::App for FileManagerApp {
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.tablet.take();
         if let (Some(runtime), Some(gl)) = (&mut self.vector_runtime, gl) {
             // SAFETY: eframe retains this application's current context through
             // on_exit. Runtime checks the identity before releasing GPU objects.
@@ -772,6 +844,7 @@ impl eframe::App for FileManagerApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.tablet_input(ctx, input);
         if let Some(native) = &mut self.native {
             native.raw_input(ctx, input);
         }
@@ -949,6 +1022,7 @@ mod media_view_removal_tests {
             external: Default::default(),
             palette: Default::default(),
             native: None,
+            tablet: None,
             drop_destinations: Default::default(),
             pad_studio: None,
             closing: false,
