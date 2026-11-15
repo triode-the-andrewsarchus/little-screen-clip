@@ -650,3 +650,14 @@ C8 is complete. C9 integration/review and final workspace gates remain open.
 
 All C1–C9 deliveries are complete. Earlier pending notes above describe historical
 checkpoints; the closeout audit records current verification and explicit limits.
+
+### Review fix: Arrange button affordance
+
+- [x] Replace Home's unselected `selectable_label` with the existing shared
+  `clip_ui::ui_ext::mode_tab_button`. Arrange now has the standard raised/bordered
+  button surface when inactive and an accent surface when active, retaining the
+  existing draft guards, enabled state and interaction handling. No new widget
+  style was added.
+- Validation: five Home UI regressions passed; strict file-manager all-target
+  Clippy, workspace formatting and diff checks passed. Logs:
+  `/tmp/phase8-arrange-button-{tests,clippy,format}.log`.

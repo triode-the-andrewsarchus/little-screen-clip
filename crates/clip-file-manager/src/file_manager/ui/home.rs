@@ -58,7 +58,11 @@ impl FileManager {
             }
             ui.add_enabled_ui(editing, |ui| {
                 if ui
-                    .selectable_label(self.home_surface.session.arrange, "Arrange")
+                    .add(clip_ui::ui_ext::mode_tab_button(
+                        "Arrange",
+                        self.home_surface.session.arrange,
+                        palette,
+                    ))
                     .on_hover_text("Draw, write and move your shortcuts")
                     .clicked()
                 {
