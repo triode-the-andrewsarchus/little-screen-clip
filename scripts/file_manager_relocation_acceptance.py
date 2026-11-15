@@ -28,6 +28,7 @@ def rename(session,shot,source,name,label):
 
 
 def exercise(session,root,binary,appearance):
+    session.ocr_regions=[("home-controls-ocr.png",(185,98,780,138)),("contrast-line-reference-error-ocr.png",(96,92,1178,120))]
     text=session.observe("initial",["project-old","Home"])
     close_shelf(session,"initial",text)
     session.observe("initial-ready",["source.txt","Home"])
@@ -61,6 +62,9 @@ def exercise(session,root,binary,appearance):
     click_word(session,"close-refused","Retry",minimum_y=90,maximum_y=300)
     wait_for(lambda:pin_path(state,file_pin)==str(renamed),"Home references retried")
     wait_for(lambda:load(state/"organization.json")["sets"]["members"][0]["path"]==str(renamed),"set reference renamed")
+    # Bring the selected row bottom above the operation-status dock before
+    # checking its underline; a visible filename alone does not prove that.
+    session.scroll(1050,600,160)
     session.observe("renamed",["renamed.txt","Session:"])
     green=(89,194,135) if appearance=="dark" else (23,121,73)
     assert line_count(session,"renamed",green)>0,"rename should retain the review mark"
