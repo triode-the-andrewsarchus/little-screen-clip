@@ -533,7 +533,7 @@ checking resumed keyboard selection.
 - Strict Clippy, build and workspace formatting passed:
   `/tmp/phase8-home-history-{clippy,build,format}.log`.
 - Native acceptance passed all 12 observations in each appearance:
-  `/tmp/phase8-home-history-dark-02/report.json` and
+  `/tmp/phase8-home-history-dark-03/report.json` and
   `/tmp/phase8-home-history-light-03/report.json`. Back/Forward, Escape, the
   Back to folder button, no-argument restart and real-home context navigation
   are observed in a private environment. Both appearances were visually reviewed.
