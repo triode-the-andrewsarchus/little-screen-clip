@@ -6,7 +6,7 @@
 use std::io::{Read, Seek, SeekFrom};
 
 mod raster;
-pub use raster::render;
+pub use raster::{render, render_ink};
 
 const MAX_SOURCE: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BLOCK: usize = 1024 * 1024;

@@ -136,3 +136,20 @@ legacy-area migration, tablet input/ink, arbitrary click regions/action manager
 and live folder panes/filters. None is implied complete by these foundation checks.
 
 Affected-library gate: 2076 passed, zero failed, 19 ignored across file manager, studios, UI and render (`/tmp/home-redesign-all-affected-tests.log`). Final shared strict Clippy, build, formatting and diff checks passed. The redesigned scope remains active; this is a committed foundation, not its completion.
+
+## Supernote ink import foundation
+
+The existing bounded notebook helper now offers an explicit Supernote ink mode.
+It excludes the background/template layer and makes the decoder's white/erased
+pixels transparent. Ordinary notebook rendering retains its original paper and
+template behavior. Legacy flattened pages cannot separate nonwhite template
+pixels from ink, and bitmap resolution is retained rather than traced into fake
+vector detail. The Home importer prepares grayscale light/dark variants on its
+worker; changing themes does not parse the notebook again.
+
+All eight Supernote decoder tests pass, including unchanged canonical reference
+exports and the new alpha/paper regression (`/tmp/home-redesign-note-tests.log`).
+The real subprocess notebook acceptance also passes, including new transparent
+ink output, dimensions, source guards, cancellation and existing Xournal and
+reMarkable behavior (`/tmp/home-redesign-note-worker-tests.log`).
+Strict core all-target Clippy passed (`/tmp/home-redesign-note-clippy.log`).

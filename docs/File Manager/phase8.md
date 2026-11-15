@@ -1,6 +1,7 @@
 # Phase 8 — organization and a real Home
 
-Status: complete on `feat/file-manager-phase8`. The final requirement audit,
+Status: original delivery complete on `feat/file-manager-phase8`; the user's revised
+Home composition design is active in [home_surface_redesign.md](home_surface_redesign.md). The final requirement audit,
 workspace gate and both-theme native evidence are in [phase8_closeout.md](phase8_closeout.md).
 The delivery history is in [phase8_completion.md](phase8_completion.md).
 The original initial slice started from Phase 7 merge `bf6bf73e`.

@@ -40,10 +40,35 @@ pub fn render_page(
     edge: u32,
     cancel: &AtomicBool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    render_page_mode(path, page, edge, cancel, "page")
+}
+
+/// Renders Supernote bitmap ink with transparent paper and no template layer.
+///
+/// Other notebook formats return an explicit unsupported-operation error.
+///
+/// # Errors
+/// Returns source, cancellation, page, resource or worker-protocol failures.
+pub fn render_ink_page(
+    path: &Path,
+    page: usize,
+    edge: u32,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    render_page_mode(path, page, edge, cancel, "ink")
+}
+
+fn render_page_mode(
+    path: &Path,
+    page: usize,
+    edge: u32,
+    cancel: &AtomicBool,
+    mode: &str,
+) -> Result<(Vec<u8>, u32, u32), String> {
     if page == 0 || page > 4096 || !(1..=4096).contains(&edge) {
         return Err("Notebook page or preview size is outside the supported range".into());
     }
-    let png = request(path, "page", page, edge, cancel)?;
+    let png = request(path, mode, page, edge, cancel)?;
     let size = imagesize::blob_size(&png).map_err(|error| error.to_string())?;
     if !png.starts_with(b"\x89PNG\r\n\x1a\n")
         || size.width == 0
@@ -175,6 +200,10 @@ fn prepare(input: &mut File, mode: &str, page: usize, edge: u32) -> Result<Vec<u
         (_, _, _, None) => Err("Unrecognized notebook header".into()),
         ("info", 0, 0, Some(kind)) => {
             serde_json::to_vec(&prepare_info(input, kind)?).map_err(|error| error.to_string())
+        }
+        ("ink", 1..=4096, 1..=4096, Some(SourceKind::Supernote)) => {
+            super::supernote::render_ink(input, page, edge, &AtomicBool::new(false))
+                .map(|result| result.0)
         }
         ("page", 1..=4096, 1..=4096, Some(kind)) => {
             prepare_page(input, kind, page, edge).map(|result| result.0)

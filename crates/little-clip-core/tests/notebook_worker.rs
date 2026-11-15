@@ -19,6 +19,11 @@ fn main() {
     assert_eq!((info.pages[0].width, info.pages[0].height), (1404, 1872));
     let (png, width, height) = notebook::render_page(&path, 10, 320, &cancel).unwrap();
     assert_eq!((width, height), (240, 320));
+    let (ink, ink_width, ink_height) = notebook::render_ink_page(&path, 10, 320, &cancel).unwrap();
+    assert_eq!((ink_width, ink_height), (240, 320));
+    let ink = image::load_from_memory(&ink).unwrap().to_rgba8();
+    assert!(ink.pixels().any(|pixel| pixel[3] == 0));
+    assert!(ink.pixels().any(|pixel| pixel[3] > 0));
     assert!(
         image::load_from_memory(&png)
             .unwrap()

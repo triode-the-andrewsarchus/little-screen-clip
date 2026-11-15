@@ -611,7 +611,9 @@ Unresolved later-phase decisions should not block the basic browser.
 Phase 3 is accepted and committed as `278091e`. Phase 4 is complete after a current-source and both-theme native audit; shared studios, bounded listing previews, guarded saves and protected exports are recorded in [phase4.md](phase4.md). Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 is complete for the authorized scope except the explicitly excluded audio similarity sorting/map: [final acceptance](phase6_acceptance.md) records the requirement audit, validation and limits. [phase6.md](phase6.md) retains the historical initial navigation checkpoint, and [the work ledger](../../differences_from_phase_6_plan.md) records design changes and measurements. Shelf polish remains follow-up work.
 
 
-Phase 8 is complete on `feat/file-manager-phase8`; its [closeout](phase8_closeout.md)
+The original Phase 8 delivery is complete on `feat/file-manager-phase8`; the
+[revised Home composition design](home_surface_redesign.md) is now active and
+must be completed against the user's newer requirements. The original [closeout](phase8_closeout.md)
 records the full drawable Home/organization requirement audit, workspace gate,
 native workflows in both themes and review launcher. Phase 7 is complete and
 merged as `bf6bf73e`; its [closeout](phase7_closeout.md) records its audit and limits.

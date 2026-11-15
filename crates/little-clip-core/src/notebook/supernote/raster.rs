@@ -26,6 +26,32 @@ pub fn render(
     max_dim: u32,
     cancel: &AtomicBool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    render_mode(input, page, max_dim, cancel, true)
+}
+
+/// Renders visible ink without the template/background layer or white paper.
+///
+/// This preserves bitmap density; it does not trace or invent vector strokes.
+/// Legacy flattened pages cannot separate nonwhite template pixels from ink.
+///
+/// # Errors
+/// Returns the same bounded container, page and decoding errors as [`render`].
+pub fn render_ink(
+    input: &mut (impl Read + Seek),
+    page: usize,
+    max_dim: u32,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    render_mode(input, page, max_dim, cancel, false)
+}
+
+fn render_mode(
+    input: &mut (impl Read + Seek),
+    page: usize,
+    max_dim: u32,
+    cancel: &AtomicBool,
+    background: bool,
+) -> Result<(Vec<u8>, u32, u32), String> {
     check_cancel(cancel)?;
     let doc = inspect(input)?;
     let sheet = page
@@ -47,13 +73,27 @@ pub fn render(
             cancel,
         )?
     } else {
-        compose(&mut reader, &doc, sheet, cancel)?
+        compose(&mut reader, &doc, sheet, cancel, background)?
     };
     check_cancel(cancel)?;
     let max_dim = max_dim
         .clamp(1, 4096)
         .min(canvas.width().max(canvas.height()));
-    let image = image::DynamicImage::ImageRgb8(canvas).thumbnail(max_dim, max_dim);
+    let image = if background {
+        image::DynamicImage::ImageRgb8(canvas)
+    } else {
+        let rgba = image::RgbaImage::from_fn(canvas.width(), canvas.height(), |x, y| {
+            let rgb = canvas.get_pixel(x, y).0;
+            // White is the decoder's empty/erased layer value, matching compose.
+            if rgb == [255; 3] {
+                image::Rgba([0; 4])
+            } else {
+                image::Rgba([rgb[0], rgb[1], rgb[2], 255])
+            }
+        });
+        image::DynamicImage::ImageRgba8(rgba)
+    }
+    .thumbnail(max_dim, max_dim);
     let (width, height) = (image.width(), image.height());
     let mut png = Cursor::new(Vec::new());
     image
@@ -67,6 +107,7 @@ fn compose<R: Read + Seek>(
     doc: &Document,
     page: &Page,
     cancel: &AtomicBool,
+    background: bool,
 ) -> Result<RgbImage, String> {
     let order = required(&page.properties, "LAYERSEQ")?
         .split(',')
@@ -82,6 +123,9 @@ fn compose<R: Read + Seek>(
         check_cancel(cancel)?;
         if !seen.insert(name) {
             return Err("Duplicate Supernote layer in sequence".into());
+        }
+        if !background && name == "BGLAYER" {
+            continue;
         }
         if !visibility.get(name).copied().unwrap_or(false) {
             continue;
@@ -345,6 +389,23 @@ fn asa(data: &[u8], page: &Page) -> Result<RgbImage, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ink_export_has_transparent_paper_without_changing_document_rendering() {
+        let source = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/examples/notebooks/supernote/demo-a5x-20230015-1to10.note"),
+        )
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let (document, _, _) = render(&mut Cursor::new(&source), 1, 320, &cancel).unwrap();
+        let (ink, _, _) = render_ink(&mut Cursor::new(&source), 1, 320, &cancel).unwrap();
+        let document = image::load_from_memory(&document).unwrap().to_rgba8();
+        let ink = image::load_from_memory(&ink).unwrap().to_rgba8();
+        assert_eq!(document.dimensions(), ink.dimensions());
+        assert!(document.pixels().all(|pixel| pixel[3] == 255));
+        assert!(ink.pixels().any(|pixel| pixel[3] == 0));
+        assert!(ink.pixels().any(|pixel| pixel[3] > 0));
+    }
     use super::*;
     #[test]
     fn rle_short_extended_special_and_tail_runs_are_checked() {
