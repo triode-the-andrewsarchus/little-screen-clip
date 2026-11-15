@@ -472,3 +472,19 @@ viewing state, independent from file permissions and source content.
 
 C7 remains unchecked pending final native results and review. C8/C9 are still
 required before Phase 8 is complete.
+
+C7 acceptance follow-up: recovery captures visibly contained the rule files and
+ordinary dotfiles, but sparse OCR omitted leading dots. Native assertions now use
+unambiguous basename fragments for those rows, while parser/preview tests retain
+exact path checks. Independent pixel counts also verify the actual solid Shown
+and ignored-Hidden backgrounds, rather than inferring them from labels alone.
+Final reports are still pending under `/tmp/phase8-rules-*-03/`.
+
+C8 implementation entry point: `FileManager::follow_rename` already receives
+confirmed naming results, completed move pairs (including partial batch reports)
+and studio rename handoffs. It currently updates browser history/selection and
+pending navigation only. Home pins, project registry and organization persistence
+still require accepted, queued semantic retargeting through their existing owners;
+a read-style refresh must not replace those writes or drop events while busy.
+Copy results must not retarget references. Home also remains a separate open flag,
+so virtual history/startup integration still needs implementation and tests.
