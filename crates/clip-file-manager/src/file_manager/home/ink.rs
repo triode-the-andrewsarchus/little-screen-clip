@@ -335,7 +335,8 @@ fn live_at(board: &super::Board, world: [f64; 2]) -> bool {
     board.cards.iter().any(|card| {
         matches!(
             card.content,
-            super::Content::Folder { .. }
+            super::Content::Shortcut { .. }
+                | super::Content::Folder { .. }
                 | super::Content::Project { .. }
                 | super::Content::Projects { .. }
         ) && {
@@ -503,6 +504,27 @@ mod tests {
         let mut oversized = ink;
         oversized.points = vec![[0., 0., 0.5]; 4097];
         assert!(!oversized.valid());
+    }
+    #[test]
+    fn pen_taps_operate_shortcuts_while_artwork_remains_a_drawing_surface() {
+        let pin = Uuid::new_v4();
+        let mut board = super::super::Board {
+            cards: vec![super::super::Card {
+                id: Uuid::new_v4(),
+                rect: [0., 0., 100., 100.],
+                content: super::super::Content::Shortcut {
+                    pin,
+                    label: "Folder".into(),
+                },
+            }],
+            ..Default::default()
+        };
+        assert!(live_at(&board, [50., 50.]));
+        board.cards[0].content = super::super::Content::Artwork {
+            pin,
+            label: "Artwork".into(),
+        };
+        assert!(!live_at(&board, [50., 50.]));
     }
     #[test]
     fn maximum_stroke_prepares_bounded_geometry_with_measured_pressure() {

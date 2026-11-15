@@ -505,3 +505,10 @@ workspace all-target Clippy also passes with warnings denied
 (`/tmp/home-redesign-workspace-clippy.log`). Disk availability remains roughly
 77–79 GiB. The remaining unchecked delivery validation is physical tablet input
 and feel; native mouse automation does not establish that result.
+
+
+## Input review fixes
+
+- [x] Pen taps on pinned file/folder shortcuts operate their controls instead of
+  starting ink. Artwork remains a pen-drawing surface outside Arrange. All five
+  ink-model/routing tests pass (`/tmp/home-ink-shortcut-tests.log`).
