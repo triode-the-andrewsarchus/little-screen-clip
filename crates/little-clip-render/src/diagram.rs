@@ -60,12 +60,53 @@ const CPU_LIMIT: u64 = 6;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request {
-    format: Format,
+    target: RenderTarget,
     source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    foreground: Option<[u8; 3]>,
-    #[serde(default)]
-    transparent_drawing: bool,
+}
+
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+enum RenderTarget {
+    Diagram {
+        format: Format,
+        foreground: Option<[u8; 3]>,
+    },
+    DrawingArtwork,
+    SvgArtwork,
+}
+impl RenderTarget {
+    fn format(self) -> Option<Format> {
+        match self {
+            Self::Diagram { format, .. } => Some(format),
+            Self::DrawingArtwork => Some(Format::Excalidraw),
+            Self::SvgArtwork => None,
+        }
+    }
+    fn validate_source(self, source: &str) -> Result<(), String> {
+        match self.format() {
+            Some(format) => validate_source(format, source),
+            None => validate_source_size(source, MAX_SVG),
+        }
+    }
+    fn render(self, source: &str) -> Result<Rendered, String> {
+        self.validate_source(source)?;
+        match self {
+            Self::Diagram { format, foreground } => render_inline(format, source, foreground),
+            Self::DrawingArtwork => excalidraw::render_background(source, false),
+            Self::SvgArtwork => {
+                let (svg, warnings) = compose_svg(
+                    [source.to_owned()],
+                    default_fonts(),
+                    "Noto Sans CJK JP",
+                    ImagePolicy::EmbeddedRaster,
+                    ViewportPolicy::Preserve,
+                )?;
+                let mut result = rasterize_svg(svg, false, ImagePolicy::EmbeddedRaster)?;
+                result.warnings.extend(warnings);
+                result.warnings = bounded_warnings(result.warnings);
+                Ok(result)
+            }
+        }
+    }
 }
 
 /// Natural equation dimensions relative to the surrounding text's font size.
@@ -121,11 +162,16 @@ pub struct Rendered {
 
 impl Rendered {
     fn validate(&self, format: Format) -> Result<(), String> {
-        let expects_math = matches!(format, Format::Math | Format::MathInline);
+        self.validate_layouts(
+            matches!(format, Format::Math | Format::MathInline),
+            format == Format::Excalidraw,
+        )
+    }
+    fn validate_layouts(&self, expects_math: bool, expects_drawing: bool) -> Result<(), String> {
         if self.math.is_some() != expects_math || self.math.is_some_and(|layout| !layout.valid()) {
             return Err("Invalid equation layout in worker response".into());
         }
-        if self.drawing.is_some() != (format == Format::Excalidraw)
+        if self.drawing.is_some() != expects_drawing
             || self.drawing.is_some_and(|layout| !layout.valid())
         {
             return Err("Invalid drawing viewport in worker response".into());
@@ -157,7 +203,14 @@ impl Rendered {
 /// # Errors
 /// Returns source-budget, admission/spawn, cancellation, parse/render or protocol errors.
 pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
-    render_request(format, source, None, false, cancelled)
+    render_request(
+        RenderTarget::Diagram {
+            format,
+            foreground: None,
+        },
+        source,
+        cancelled,
+    )
 }
 
 /// Renders drawing artwork without its document paper, using the ordinary helper.
@@ -168,7 +221,19 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
 /// # Errors
 /// Returns the same source, worker, cancellation and rendering errors as [`render`].
 pub fn render_drawing_artwork(source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
-    render_request(Format::Excalidraw, source, None, true, cancelled)
+    render_request(RenderTarget::DrawingArtwork, source, cancelled)
+}
+
+/// Prepares standalone SVG artwork through the bounded diagram helper.
+///
+/// Retains transparency and vectors, outlines text with shared fonts, and applies
+/// the existing embedded-image policy without a filesystem/network resolver.
+/// Call from a preview worker, never from a UI callback.
+///
+/// # Errors
+/// Returns bounded source, resource, cancellation, parsing or worker errors.
+pub fn render_svg_artwork(source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
+    render_request(RenderTarget::SvgArtwork, source, cancelled)
 }
 
 /// Renders a transparent equation with native text metrics and the requested ink.
@@ -184,34 +249,31 @@ pub fn render_math(
     cancelled: &AtomicBool,
 ) -> Result<Rendered, String> {
     render_request(
-        if display {
-            Format::Math
-        } else {
-            Format::MathInline
+        RenderTarget::Diagram {
+            format: if display {
+                Format::Math
+            } else {
+                Format::MathInline
+            },
+            foreground: Some(foreground),
         },
         source,
-        Some(foreground),
-        false,
         cancelled,
     )
 }
 
 fn render_request(
-    format: Format,
+    target: RenderTarget,
     source: &str,
-    foreground: Option<[u8; 3]>,
-    transparent_drawing: bool,
     cancelled: &AtomicBool,
 ) -> Result<Rendered, String> {
-    validate_source(format, source)?;
+    target.validate_source(source)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Diagram preview cancelled".into());
     }
     let request = serde_json::to_vec(&Request {
-        format,
+        target,
         source: source.to_owned(),
-        foreground,
-        transparent_drawing,
     })
     .map_err(|error| error.to_string())?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -236,7 +298,11 @@ fn render_request(
     let result: Result<Rendered, String> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Invalid diagram worker response: {error}"))?;
     let rendered = result.map_err(|error| error.chars().take(4096).collect::<String>())?;
-    rendered.validate(format)?;
+    if let Some(format) = target.format() {
+        rendered.validate(format)?;
+    } else {
+        rendered.validate_layouts(false, false)?;
+    }
     Ok(rendered)
 }
 
@@ -344,15 +410,7 @@ pub fn run_worker_cli() -> bool {
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         let request: Request = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        if request.transparent_drawing {
-            if request.format != Format::Excalidraw {
-                return Err("Transparent drawing mode requires a drawing source".into());
-            }
-            validate_source(request.format, &request.source)?;
-            excalidraw::render_background(&request.source, false)
-        } else {
-            render_inline(request.format, &request.source, request.foreground)
-        }
+        request.target.render(&request.source)
     })();
     if let Err(error) = serde_json::to_writer(std::io::stdout().lock(), &response)
         .and_then(|_| std::io::stdout().flush().map_err(serde_json::Error::io))
@@ -383,6 +441,10 @@ fn validate_source(format: Format, source: &str) -> Result<(), String> {
     } else {
         MAX_SOURCE
     };
+    validate_source_size(source, limit)
+}
+
+fn validate_source_size(source: &str, limit: usize) -> Result<(), String> {
     if source.len() > limit || source.contains('\0') {
         return Err(format!(
             "Diagram source exceeds {} KiB or contains a NUL byte",
@@ -684,6 +746,22 @@ fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn svg_artwork_outlines_text_and_retains_alpha_with_no_document_layout() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="20" y="45" fill="#111">Hello</text><path d="M20 70L180 70" fill="none" stroke="#111" stroke-opacity="0.4" stroke-width="4"/></svg>"##;
+        let result = super::RenderTarget::SvgArtwork.render(source).unwrap();
+        result.validate_layouts(false, false).unwrap();
+        assert!(!result.svg.contains("<text"));
+        super::retained::prepare_preview(&result.svg).unwrap();
+        let pixels = image::load_from_memory(&result.png).unwrap().to_rgba8();
+        assert_eq!(pixels.get_pixel(0, 0)[3], 0);
+        assert!(pixels.pixels().any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+        assert!(
+            super::RenderTarget::SvgArtwork
+                .validate_source(&"x".repeat(super::MAX_SVG + 1))
+                .is_err()
+        );
+    }
     use super::*;
 
     #[test]
@@ -1232,18 +1310,22 @@ impl Cache {
         self.0.retain(|entry| {
             entry.format != format || entry.source != source || entry.foreground != foreground
         });
-        let result = render_request(format, source, foreground, false, &AtomicBool::new(false))
-            .and_then(|rendered| {
-                little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
-                    .map(|image| {
-                        std::sync::Arc::new(Thumbnail {
-                            image,
-                            warnings: rendered.warnings,
-                            math: rendered.math,
-                        })
+        let result = render_request(
+            RenderTarget::Diagram { format, foreground },
+            source,
+            &AtomicBool::new(false),
+        )
+        .and_then(|rendered| {
+            little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
+                .map(|image| {
+                    std::sync::Arc::new(Thumbnail {
+                        image,
+                        warnings: rendered.warnings,
+                        math: rendered.math,
                     })
-                    .ok_or_else(|| "Invalid diagram raster".into())
-            });
+                })
+                .ok_or_else(|| "Invalid diagram raster".into())
+        });
         // Many small inline formulas share this cache with large diagrams.
         // Bound both entry count and retained pixels instead of evicting every
         // formula in a dense visible row on each screen refresh.

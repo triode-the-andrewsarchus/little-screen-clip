@@ -194,7 +194,9 @@ impl Session {
                 .iter()
                 .find(|card| card.id == id)
                 .map(|card| match &card.content {
-                    Content::Shortcut { label, .. } => label.clone(),
+                    Content::Shortcut { label, .. } | Content::Artwork { label, .. } => {
+                        label.clone()
+                    }
                     Content::Section { title, .. }
                     | Content::Projects { title }
                     | Content::Project { title, .. } => title.clone(),
@@ -233,7 +235,9 @@ impl Session {
                 .find(|card| Some(card.id) == selected)
             {
                 match &mut card.content {
-                    Content::Shortcut { label, .. } => *label = title,
+                    Content::Shortcut { label, .. } | Content::Artwork { label, .. } => {
+                        *label = title
+                    }
                     Content::Section { title: label, .. }
                     | Content::Projects { title: label }
                     | Content::Project { title: label, .. }
@@ -274,8 +278,19 @@ impl Session {
     pub fn drag(&mut self, id: Uuid, delta: [f64; 2], resize: bool) {
         if let Some(card) = self.board.cards.iter_mut().find(|card| card.id == id) {
             if resize {
-                card.rect[2] = (card.rect[2] + delta[0]).clamp(80.0, 8000.0);
-                card.rect[3] = (card.rect[3] + delta[1]).clamp(50.0, 8000.0);
+                if matches!(card.content, Content::Artwork { .. }) {
+                    let [width, height] = [card.rect[2], card.rect[3]];
+                    let [x, y] = [delta[0] / width, delta[1] / height];
+                    let factor = (1.0 + if x.abs() > y.abs() { x } else { y }).clamp(
+                        (8.0 / width).max(8.0 / height),
+                        (8000.0 / width).min(8000.0 / height),
+                    );
+                    card.rect[2] = width * factor;
+                    card.rect[3] = height * factor;
+                } else {
+                    card.rect[2] = (card.rect[2] + delta[0]).clamp(80.0, 8000.0);
+                    card.rect[3] = (card.rect[3] + delta[1]).clamp(50.0, 8000.0);
+                }
             } else {
                 card.rect[0] = (card.rect[0] + delta[0]).clamp(-1e8, 1e8);
                 card.rect[1] = (card.rect[1] + delta[1]).clamp(-1e8, 1e8);
@@ -328,6 +343,29 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artwork_resize_scales_both_axes_and_undo_keeps_its_reference() {
+        let mut session = super::Session::default();
+        let id = uuid::Uuid::new_v4();
+        let pin = uuid::Uuid::new_v4();
+        session.board.cards.push(super::Card {
+            id,
+            rect: [10.0, 20.0, 320.0, 240.0],
+            content: super::Content::Artwork {
+                pin,
+                label: String::new(),
+            },
+        });
+        session.begin_drag(id);
+        session.drag(id, [40.0, 0.0], true);
+        session.end_drag();
+        assert_eq!(session.board.cards[0].rect, [10.0, 20.0, 360.0, 270.0]);
+        session.undo();
+        assert_eq!(session.board.cards[0].rect, [10.0, 20.0, 320.0, 240.0]);
+        assert!(
+            matches!(session.board.cards[0].content, super::Content::Artwork {pin: actual,..} if actual == pin)
+        );
+    }
     #[test]
     fn closing_commits_unfocused_title_and_card_label_drafts() {
         let mut session = super::Session::default();

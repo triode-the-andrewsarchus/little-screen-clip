@@ -1,4 +1,5 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
+pub(in crate::file_manager) mod artwork;
 mod board;
 pub(in crate::file_manager) mod projects;
 mod session;
@@ -121,6 +122,33 @@ impl State {
                     }
                 }
             }
+            Change::Import { pins, point, .. } => {
+                for (index, pin) in pins.into_iter().enumerate() {
+                    let id = self
+                        .pins
+                        .iter()
+                        .find(|old| old.path == pin.path)
+                        .map(|old| old.id)
+                        .unwrap_or_else(|| {
+                            let id = pin.id;
+                            self.pins.push(pin);
+                            id
+                        });
+                    self.board.cards.push(Card {
+                        id: Uuid::new_v4(),
+                        rect: [
+                            point[0] - 160.0 + index as f64 * 24.0,
+                            point[1] - 120.0 + index as f64 * 24.0,
+                            320.0,
+                            240.0,
+                        ],
+                        content: Content::Artwork {
+                            pin: id,
+                            label: String::new(),
+                        },
+                    });
+                }
+            }
             Change::Remove(id) => {
                 self.pins.retain(|p| p.id != id);
                 self.board.remove_pin(id);
@@ -152,6 +180,11 @@ impl State {
 #[derive(Clone)]
 enum Change {
     Add(Vec<Pin>),
+    Import {
+        pins: Vec<Pin>,
+        point: [f64; 2],
+        token: Option<u64>,
+    },
     Remove(Uuid),
     Relocate(Vec<super::reference_updates::Relocation>),
     Board {
@@ -176,6 +209,9 @@ pub(super) struct Home {
     pub session: Session,
     pub projects: projects::Projects,
     pub opening: Option<PathBuf>,
+    pub artwork: artwork::Assets,
+    pub drop_rect: Option<egui::Rect>,
+    pub native_results: Vec<(u64, bool)>,
     path: Option<PathBuf>,
     state: State,
     loaded: bool,
@@ -197,8 +233,20 @@ impl Home {
             ..Self::default()
         }
     }
-    pub fn canvas_parts(&mut self) -> (&[Pin], &mut Session, &mut projects::Projects) {
-        (&self.state.pins, &mut self.session, &mut self.projects)
+    pub fn canvas_parts(
+        &mut self,
+    ) -> (
+        &[Pin],
+        &mut Session,
+        &mut projects::Projects,
+        &mut artwork::Assets,
+    ) {
+        (
+            &self.state.pins,
+            &mut self.session,
+            &mut self.projects,
+            &mut self.artwork,
+        )
     }
     pub fn pins(&self) -> &[Pin] {
         &self.state.pins
@@ -246,6 +294,39 @@ impl Home {
             self.queued = Some(Change::Add(pins));
         }
     }
+    pub fn drop_point(&self, point: egui::Pos2) -> Option<[f64; 2]> {
+        if !self.open || !self.ready() {
+            return None;
+        }
+        self.session.canvas.world_in(self.drop_rect?, point)
+    }
+    pub fn import_artwork(
+        &mut self,
+        paths: Vec<PathBuf>,
+        point: [f64; 2],
+        token: Option<u64>,
+    ) -> bool {
+        if !self.open
+            || !self.ready()
+            || paths.is_empty()
+            || paths.len() > 32
+            || !point
+                .iter()
+                .all(|value| value.is_finite() && value.abs() <= 1e8)
+            || paths.iter().any(|path| !artwork::supported(path))
+        {
+            return false;
+        }
+        self.queued = Some(Change::Import {
+            pins: paths
+                .into_iter()
+                .map(|path| Pin::new(path, false))
+                .collect(),
+            point,
+            token,
+        });
+        true
+    }
     pub fn remove(&mut self, id: Uuid) {
         if self.ready() {
             self.queued = Some(Change::Remove(id));
@@ -292,6 +373,12 @@ impl Home {
         }
     }
     fn accept(&mut self, state: State, action: Action) {
+        if let Action::Change(Change::Import {
+            token: Some(token), ..
+        }) = &action
+        {
+            self.native_results.push((*token, true));
+        }
         match action {
             Action::Change(Change::Board {
                 generation: Some(generation),
@@ -324,7 +411,7 @@ impl Home {
                 self.session
                     .references_relocated(&state.board, &state.pins, &replacements);
             }
-            Action::Change(Change::Add(_) | Change::Remove(_)) => {
+            Action::Change(Change::Add(_) | Change::Remove(_) | Change::Import { .. }) => {
                 self.session.references_changed(&state.board, &state.pins)
             }
             _ => self.session.install(&state.board),
@@ -376,6 +463,12 @@ impl Home {
                     Err(error) => error.to_string(),
                     _ => unreachable!(),
                 };
+                if let Action::Change(Change::Import {
+                    token: Some(token), ..
+                }) = &action
+                {
+                    self.native_results.push((*token, false));
+                }
                 if let Action::Change(Change::Relocate(changes)) = action {
                     self.relocations.reject(changes, error);
                     self.error = None;
@@ -389,6 +482,7 @@ impl Home {
         self.projects.tick(jobs);
         if !self.open {
             self.projects.previews.retire();
+            self.artwork.retire();
         }
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
@@ -446,6 +540,43 @@ fn save(path: &Path, change: Change) -> Result<State, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_artwork_keeps_source_references_and_independent_placement_through_moves() {
+        let mut state = super::State::default();
+        state
+            .apply(super::Change::Import {
+                pins: vec![
+                    super::Pin::new("/art/icon.svg".into(), false),
+                    super::Pin::new("/art/icon.svg".into(), false),
+                ],
+                point: [140.0, -80.0],
+                token: None,
+            })
+            .unwrap();
+        assert_eq!(state.pins.len(), 1);
+        assert_eq!(state.board.cards.len(), 2);
+        let id = state.pins[0].id;
+        assert_eq!(state.board.cards[0].rect, [-20.0, -200.0, 320.0, 240.0]);
+        assert_eq!(state.board.cards[1].rect, [4.0, -176.0, 320.0, 240.0]);
+        state
+            .relocate(
+                std::path::Path::new("/art"),
+                std::path::Path::new("/renamed"),
+            )
+            .unwrap();
+        assert_eq!(
+            state.pins[0].path,
+            std::path::Path::new("/renamed/icon.svg")
+        );
+        assert!(
+            state.board.cards.iter().all(
+                |card| matches!(card.content, super::Content::Artwork { pin, .. } if pin == id)
+            )
+        );
+        state.apply(super::Change::Remove(id)).unwrap();
+        assert!(state.board.cards.is_empty());
+        state.validate().unwrap();
+    }
     use super::*;
     #[test]
     fn updates_merge_and_duplicates_keep_identity_without_touching_targets() {

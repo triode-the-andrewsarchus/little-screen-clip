@@ -60,10 +60,10 @@ def drag(session, start, end):
         *map(str, (*start, *end))], env=session.env)
 
 
-def resize_handle(session, shot):
+def resize_handle(session, shot, maximum_x=1182):
     with Image.open(session.output / f"{shot}.png").convert("RGB") as picture:
         pixels = picture.load()
-        handle = [(x,y) for y in range(260,736) for x in range(320,1182)
+        handle = [(x,y) for y in range(260,736) for x in range(320,maximum_x)
                   if all(abs(value-target) <= 2 for value,target in zip(pixels[x,y], (64,126,150)))]
     assert len(handle) > 6, "the selected live card must paint its real resize handle"
     return max(x for x,y in handle)-5, max(y for x,y in handle)-5
@@ -76,7 +76,8 @@ def artwork_target(session, shot, element, view):
     session.capture_text(shot, session.output / f"{shot}.png", [])
     with Image.open(session.output / f"{shot}.png").convert("RGB") as picture:
         pixels = picture.load()
-        background = Counter(picture.crop((100,175,1180,720)).getdata()).most_common(1)[0][0]
+        background_crop = picture.crop((100,175,1180,720))
+        background = Counter(getattr(background_crop, "get_flattened_data", background_crop.getdata)()).most_common(1)[0][0]
         near_background = lambda color: max(abs(a-b) for a,b in zip(color,background)) < 3
         rows = [y for y in range(140, 740) if sum(near_background(pixels[x,y]) for x in range(96,1184)) > 900]
         if not rows: return None

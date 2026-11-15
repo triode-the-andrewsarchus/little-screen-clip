@@ -39,6 +39,7 @@ enum DropDestination {
     Directory(PathBuf),
     Bookmark,
     Pad(usize, bool),
+    Home([f64; 2]),
 }
 
 impl DropDestination {
@@ -48,6 +49,9 @@ impl DropDestination {
         point: egui::Pos2,
         append: bool,
     ) -> Option<Self> {
+        if browser.home_surface.open {
+            return browser.home_surface.drop_point(point).map(Self::Home);
+        }
         if let Some((_, index)) = pads.iter().find(|(rect, _)| rect.contains(point)) {
             return Some(Self::Pad(*index, append));
         }
@@ -63,6 +67,32 @@ impl DropDestination {
             .rev()
             .find(|(rect, _)| rect.contains(point))
             .map(|(_, path)| Self::Directory(path.clone()))
+    }
+}
+
+fn receive_native_files(
+    browser: &mut FileManager,
+    destination: Option<DropDestination>,
+    token: u64,
+    paths: Vec<PathBuf>,
+    moving: bool,
+    guards: std::collections::HashMap<PathBuf, super::search::SourceGuard>,
+    pads_visible: bool,
+) -> bool {
+    match destination {
+        Some(DropDestination::Home(point)) if !moving => {
+            browser
+                .home_surface
+                .import_artwork(paths, point, Some(token))
+        }
+        Some(DropDestination::Pad(index, append)) if !moving && pads_visible => browser
+            .constellation
+            .drop_on_pad(index, paths, append, Some(token)),
+        Some(DropDestination::Bookmark) if !moving => browser.bookmarks.add(paths, Some(token)),
+        Some(DropDestination::Directory(destination)) => {
+            browser.queue_native_drop(token, paths, destination, moving, guards)
+        }
+        _ => false,
     }
 }
 
@@ -184,8 +214,9 @@ impl FileManagerApp {
         let Some(native) = &mut self.native else {
             return;
         };
-        let pads_visible =
-            !self.viewers.active() && self.browser.view == super::BrowserView::Constellation;
+        let pads_visible = !self.viewers.active()
+            && !self.browser.home_surface.open
+            && self.browser.view == super::BrowserView::Constellation;
         let pad_targets = if pads_visible {
             self.browser.constellation.pad_drop_targets.clone()
         } else {
@@ -196,6 +227,11 @@ impl FileManagerApp {
             .bookmark_drop_rect
             .into_iter()
             .chain(pad_targets.iter().map(|(rect, _)| *rect))
+            .chain(
+                (self.browser.home_surface.open && !self.viewers.active())
+                    .then_some(self.browser.home_surface.drop_rect)
+                    .flatten(),
+            )
             .map(|rect| {
                 egui::Rect::from_min_max(rect.min * ctx.zoom_factor(), rect.max * ctx.zoom_factor())
             })
@@ -205,6 +241,9 @@ impl FileManagerApp {
             use super::native_drag::Event;
             match event {
                 Event::Drop(token, point) => {
+                    if self.viewers.active() {
+                        continue;
+                    }
                     let point = point / ctx.zoom_factor();
                     if let Some(destination) = DropDestination::at(
                         &self.browser,
@@ -216,23 +255,15 @@ impl FileManagerApp {
                     }
                 }
                 Event::Files(token, paths, moving, guards) => {
-                    let accepted = match self.drop_destinations.remove(&token) {
-                        Some(DropDestination::Pad(index, append)) if !moving && pads_visible => {
-                            self.browser.constellation.drop_on_pad(
-                                index,
-                                paths,
-                                append,
-                                Some(token),
-                            )
-                        }
-                        Some(DropDestination::Bookmark) if !moving => {
-                            self.browser.bookmarks.add(paths, Some(token))
-                        }
-                        Some(DropDestination::Directory(destination)) => self
-                            .browser
-                            .queue_native_drop(token, paths, destination, moving, guards),
-                        _ => false,
-                    };
+                    let accepted = receive_native_files(
+                        &mut self.browser,
+                        self.drop_destinations.remove(&token),
+                        token,
+                        paths,
+                        moving,
+                        guards,
+                        pads_visible,
+                    );
                     if !accepted {
                         native.finish(token, false);
                     }
@@ -264,6 +295,9 @@ impl FileManagerApp {
             native.finish(token, success);
         }
         for (token, success) in self.browser.bookmarks.native_results.drain(..) {
+            native.finish(token, success);
+        }
+        for (token, success) in self.browser.home_surface.native_results.drain(..) {
             native.finish(token, success);
         }
         for (token, success) in self.browser.transfers.native_results.drain(..) {

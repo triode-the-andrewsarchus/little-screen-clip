@@ -109,6 +109,12 @@ impl Canvas {
     pub fn view(&self) -> Option<ViewState> {
         self.editor.camera.view()
     }
+    /// Maps a point in the host's last canvas rectangle for deferred drop delivery.
+    /// Returns `None` outside that rectangle or before a finite camera is ready.
+    pub fn world_in(&self, rect: Rect, point: egui::Pos2) -> Option<[f64; 2]> {
+        (rect.contains(point) && self.view().is_some())
+            .then(|| self.editor.camera.world(point, rect))
+    }
     /// Restores a saved camera, returning false without changes for invalid input.
     pub fn restore_view(&mut self, view: ViewState) -> bool {
         self.editor.camera.restore(view)

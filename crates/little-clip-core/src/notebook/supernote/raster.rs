@@ -82,16 +82,7 @@ fn render_mode(
     let image = if background {
         image::DynamicImage::ImageRgb8(canvas)
     } else {
-        let rgba = image::RgbaImage::from_fn(canvas.width(), canvas.height(), |x, y| {
-            let rgb = canvas.get_pixel(x, y).0;
-            // White is the decoder's empty/erased layer value, matching compose.
-            if rgb == [255; 3] {
-                image::Rgba([0; 4])
-            } else {
-                image::Rgba([rgb[0], rgb[1], rgb[2], 255])
-            }
-        });
-        image::DynamicImage::ImageRgba8(rgba)
+        image::DynamicImage::ImageRgba8(ink_pixels(canvas))
     }
     .thumbnail(max_dim, max_dim);
     let (width, height) = (image.width(), image.height());
@@ -100,6 +91,18 @@ fn render_mode(
         .write_to(&mut png, image::ImageFormat::Png)
         .map_err(|error| error.to_string())?;
     Ok((png.into_inner(), width, height))
+}
+
+fn ink_pixels(canvas: RgbImage) -> image::RgbaImage {
+    image::RgbaImage::from_fn(canvas.width(), canvas.height(), |x, y| {
+        let rgb = canvas.get_pixel(x, y).0;
+        // White is the decoder's empty/erased layer value, matching compose.
+        if rgb == [255; 3] {
+            image::Rgba([0; 4])
+        } else {
+            image::Rgba([rgb[0], rgb[1], rgb[2], 255])
+        }
+    })
 }
 
 fn compose<R: Read + Seek>(

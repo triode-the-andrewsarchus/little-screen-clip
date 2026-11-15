@@ -89,7 +89,7 @@ fn relocated_application_uses_its_bundled_goat_companion() {
             .arg("--internal-diagram-worker")
             .stdin_bytes(
                 serde_json::to_vec(
-                    &serde_json::json!({"format":"goat","source":".----.\n| hi |\n'----'"}),
+                    &serde_json::json!({"target":{"Diagram":{"format":"goat","foreground":null}},"source":".----.\n| hi |\n'----'"}),
                 )
                 .unwrap(),
             )
@@ -130,7 +130,7 @@ fn diagram_worker_bounds_plantuml_preprocessor_execution() {
     let started = std::time::Instant::now();
     let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
         .arg("--internal-diagram-worker")
-        .stdin_bytes(serde_json::to_vec(&serde_json::json!({"format":"plantuml", "source":"@startuml\n!while 1\n!endwhile\nAlice -> Bob\n@enduml"})).unwrap())
+        .stdin_bytes(serde_json::to_vec(&serde_json::json!({"target":{"Diagram":{"format":"plantuml","foreground":null}}, "source":"@startuml\n!while 1\n!endwhile\nAlice -> Bob\n@enduml"})).unwrap())
         .resource_limit(rustix::process::Resource::As, 2 * 1024 * 1024 * 1024)
         .resource_limit(rustix::process::Resource::Cpu, 6)
         .timeout(Duration::from_secs(8))

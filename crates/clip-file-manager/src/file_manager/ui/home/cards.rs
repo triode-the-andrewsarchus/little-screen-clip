@@ -15,6 +15,7 @@ pub(super) enum Action {
     Unpin(Uuid),
     OpenDocument(std::path::PathBuf),
     OpenFolder(std::path::PathBuf),
+    ReloadArtwork(Uuid),
 }
 pub(super) struct Renderer<'a, 'camera> {
     pub viewport: Viewport<'camera>,
@@ -25,6 +26,43 @@ pub(super) struct Renderer<'a, 'camera> {
     pub unpin: bool,
 }
 impl Renderer<'_, '_> {
+    pub fn cards(
+        &self,
+        ui: &mut Ui,
+        cards: &[Card],
+        projects: &mut crate::file_manager::home::projects::Projects,
+        artwork: &mut crate::file_manager::home::artwork::Assets,
+        palette: &AppPalette,
+        actions: &mut Vec<Action>,
+    ) {
+        for card in cards
+            .iter()
+            .filter(|card| matches!(card.content, Content::Section { .. }))
+        {
+            self.card(ui, card, actions);
+        }
+        for card in cards
+            .iter()
+            .filter(|card| !matches!(card.content, Content::Section { .. }))
+        {
+            if let Content::Artwork { pin, .. } = card.content
+                && let Some(source) = self.pins.iter().find(|source| source.id == pin)
+                && self
+                    .viewport
+                    .bounds(card.bounds())
+                    .intersects(self.viewport.rect)
+            {
+                artwork.paint(ui, self.viewport.bounds(card.bounds()), source, palette);
+            }
+            self.card(ui, card, actions);
+            if matches!(
+                card.content,
+                Content::Projects { .. } | Content::Project { .. }
+            ) {
+                self.project_area(ui, card, projects, actions);
+            }
+        }
+    }
     pub fn card(&self, ui: &mut Ui, card: &Card, actions: &mut Vec<Action>) {
         let rect = self.viewport.bounds(card.bounds());
         if !rect.intersects(self.viewport.rect) {
@@ -32,6 +70,7 @@ impl Renderer<'_, '_> {
         }
         let scale = self.viewport.scale() as f32;
         match &card.content {
+            Content::Artwork { .. } => {}
             Content::Section { title, color } => self.section(ui, card, rect, title, *color),
             Content::Projects { title } | Content::Project { title, .. } => {
                 ui.painter()
@@ -93,6 +132,16 @@ impl Renderer<'_, '_> {
     }
     fn menu(&self, response: &egui::Response, card: &Card, actions: &mut Vec<Action>) {
         response.context_menu(|ui| {
+            if let Content::Artwork { pin, .. } = card.content {
+                if ui.button("Open source").clicked() {
+                    actions.push(Action::Open(pin));
+                    ui.close_menu();
+                }
+                if ui.button("Reload artwork").clicked() {
+                    actions.push(Action::ReloadArtwork(pin));
+                    ui.close_menu();
+                }
+            }
             if let Content::Shortcut { pin, .. } = card.content {
                 if ui.button("Open").clicked() {
                     actions.push(Action::Open(pin));
@@ -126,10 +175,9 @@ impl Renderer<'_, '_> {
                 9.0,
                 egui::Stroke::new(1.8_f32, Color32::from_rgb(64, 126, 150)),
             );
-            let handle = Rect::from_min_size(
-                rect.right_bottom() - vec2(16.0, 16.0) * scale,
-                vec2(16.0, 16.0) * scale,
-            );
+            let edge = (16.0 * scale).clamp(8.0, 20.0);
+            let handle =
+                Rect::from_min_size(rect.right_bottom() - vec2(edge, edge), vec2(edge, edge));
             ui.painter()
                 .rect_filled(handle.shrink(2.0), 3.0, Color32::from_rgb(64, 126, 150));
             let response = ui.interact(
@@ -235,7 +283,7 @@ fn card_label(card: &Card, pins: &[Pin]) -> String {
         Content::Section { title, .. }
         | Content::Projects { title }
         | Content::Project { title, .. } => title.clone(),
-        Content::Shortcut { pin, label } => {
+        Content::Shortcut { pin, label } | Content::Artwork { pin, label } => {
             if label.is_empty() {
                 pins.iter()
                     .find(|p| p.id == *pin)

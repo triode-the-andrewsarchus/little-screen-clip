@@ -119,6 +119,7 @@ impl FileManager {
             && !self.filesystem_busy();
         ui.menu_button("Add", |ui| {
             ui.set_min_width(420.0);
+            self.home_artwork_add(ui, &selected, can_pin);
             self.home_project_add_actions(ui, can_pin);
             if ui
                 .add_enabled(can_pin, egui::Button::new("Pin current folder"))
@@ -174,6 +175,28 @@ impl FileManager {
                 }
             });
         });
+    }
+    fn home_artwork_add(&mut self, ui: &mut Ui, selected: &[PathBuf], can_pin: bool) {
+        ui.weak("Drop SVG or .note artwork onto the desk.");
+        if ui
+            .add_enabled(
+                can_pin
+                    && !selected.is_empty()
+                    && selected.len() <= 32
+                    && selected
+                        .iter()
+                        .all(|path| crate::file_manager::home::artwork::supported(path)),
+                egui::Button::new("Place selected artwork"),
+            )
+            .clicked()
+        {
+            self.home_surface.import_artwork(
+                selected.to_vec(),
+                self.home_surface.session.spawn,
+                None,
+            );
+            ui.close_menu();
+        }
     }
     fn home_recovery(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let session = &mut self.home_surface.session;
@@ -231,7 +254,7 @@ impl FileManager {
     }
     fn home_inspector(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let editable = self.home_surface.editing_allowed();
-        let (pins, session, _) = self.home_surface.canvas_parts();
+        let (pins, session, _, _) = self.home_surface.canvas_parts();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if session.selected.is_some() {
@@ -334,8 +357,10 @@ impl FileManager {
     fn home_canvas(&mut self, ui: &mut Ui, palette: &AppPalette) -> Vec<Action> {
         let enabled = self.home_surface.editing_allowed();
         let unpin = self.home_surface.ready();
-        let (pins, session, projects) = self.home_surface.canvas_parts();
+        let (pins, session, projects, artwork) = self.home_surface.canvas_parts();
         projects.previews.begin();
+        artwork.begin();
+        let mut surface_rect = None;
         let mut actions = Vec::new();
         let excluded = exclusions(&session.board, session.selected, session.arrange);
         let extent = board_extent(&session.board);
@@ -354,6 +379,7 @@ impl FileManager {
             palette,
             options,
             |ui, viewport| {
+                surface_rect = Some(viewport.rect);
                 spawn = viewport.world(viewport.rect.center());
                 paper_pressed = ui.input(|input| input.pointer.primary_pressed())
                     && ui
@@ -376,7 +402,7 @@ impl FileManager {
                     ui.painter().text(
                         center + vec2(0.0, 20.0),
                         egui::Align2::CENTER_CENTER,
-                        "Place artwork, projects and live folders.",
+                        "Drop artwork here. Place projects and shortcuts.",
                         FontId::proportional(16.0),
                         ui.visuals().weak_text_color(),
                     );
@@ -389,31 +415,18 @@ impl FileManager {
                     selected: session.selected,
                     unpin,
                 };
-                for card in session
-                    .board
-                    .cards
-                    .iter()
-                    .filter(|card| matches!(card.content, Content::Section { .. }))
-                {
-                    renderer.card(ui, card, &mut actions);
-                }
-                for card in session
-                    .board
-                    .cards
-                    .iter()
-                    .filter(|card| !matches!(card.content, Content::Section { .. }))
-                {
-                    renderer.card(ui, card, &mut actions);
-                    if matches!(
-                        card.content,
-                        Content::Projects { .. } | Content::Project { .. }
-                    ) {
-                        renderer.project_area(ui, card, projects, &mut actions);
-                    }
-                }
+                renderer.cards(
+                    ui,
+                    &session.board.cards,
+                    projects,
+                    artwork,
+                    palette,
+                    &mut actions,
+                );
             },
         );
         projects.previews.end();
+        artwork.end();
         session.spawn = spawn;
         if enabled {
             session.retain_view();
@@ -436,6 +449,7 @@ impl FileManager {
         if !ui.input(|input| input.pointer.any_down()) {
             session.end_drag();
         }
+        self.home_surface.drop_rect = surface_rect;
         actions
     }
     fn home_actions(&mut self, actions: Vec<Action>) {
@@ -467,6 +481,7 @@ impl FileManager {
                     self.home_surface.session.drag(id, delta, resize)
                 }
                 Action::End => self.home_surface.session.end_drag(),
+                Action::ReloadArtwork(pin) => self.home_surface.artwork.reload(pin),
                 Action::Remove(id) => {
                     self.home_surface.session.select(id);
                     self.home_surface.session.remove_selected();

@@ -11,13 +11,13 @@ import ui_acceptance_capture as private
 from file_manager_acceptance import Session, wait_for, isolated_runner, finish_run
 
 
-def position(session, name, word, left):
+def position(session, name, word, left, minimum_y=230):
     data = private.run_checked(["tesseract", str(session.output / f"{name}-ocr.png"), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0"], env=session.env)
     for item in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE):
-        if item["text"].lower() != word.lower():
+        if item["text"].lower().replace(".", "") != word.lower().replace(".", ""):
             continue
         x, y = int(item["left"]) // 3, int(item["top"]) // 3
-        if (250 < x < 630 if left else 890 < x < 1270) and y > 230:
+        if (250 < x < 630 if left else 890 < x < 1270) and y > minimum_y:
             return x + 12, y + int(item["height"]) // 6
     raise RuntimeError(f"{word}: no {'left' if left else 'right'} file row")
 

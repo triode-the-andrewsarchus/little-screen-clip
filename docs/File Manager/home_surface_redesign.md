@@ -107,8 +107,8 @@ The shared native SVG scene classifies eligible near-neutral single-color ink on
 its preparation worker. Home can invert its HSL lightness per frame, retaining hue,
 saturation and alpha, without rewriting source colors or scheduling a theme-change
 decode. Images, gradients, multiple colors, masks/effects and recognized opaque
-backdrops are conservative exclusions. This is the rendering foundation; importing
-SVG/notebook assets as independent movable objects remains outstanding.
+backdrops are conservative exclusions. The initial SVG/Supernote placement delivery is recorded below; additional
+handwritten/vector formats and legacy-area migration remain outstanding.
 
 - Native review passes nine observations in each appearance:
   `/tmp/home-redesign-surface-dark-02/report.json` and
@@ -131,8 +131,8 @@ SVG/notebook assets as independent movable objects remains outstanding.
   function remains. The diff-aware tool still flags short existing/test clones;
   lifecycle, renderer, camera and protocol owners remain shared.
 
-Remaining work is the unchecked revised scope above, including asset placement,
-legacy-area migration, tablet input/ink, arbitrary click regions/action manager
+Remaining work is the unchecked revised scope above, including additional asset
+formats, legacy-area migration, tablet input/ink, arbitrary click regions/action manager
 and live folder panes/filters. None is implied complete by these foundation checks.
 
 Affected-library gate: 2076 passed, zero failed, 19 ignored across file manager, studios, UI and render (`/tmp/home-redesign-all-affected-tests.log`). Final shared strict Clippy, build, formatting and diff checks passed. The redesigned scope remains active; this is a committed foundation, not its completion.
@@ -144,8 +144,9 @@ It excludes the background/template layer and makes the decoder's white/erased
 pixels transparent. Ordinary notebook rendering retains its original paper and
 template behavior. Legacy flattened pages cannot separate nonwhite template
 pixels from ink, and bitmap resolution is retained rather than traced into fake
-vector detail. The Home importer prepares grayscale light/dark variants on its
-worker; changing themes does not parse the notebook again.
+vector detail. The Home importer converts grayscale pigment coverage to a single alpha-mask
+texture on its worker and tints it with the current theme. Theme switching neither
+parses the notebook again nor uploads another bitmap. Colored ink keeps its colors.
 
 All eight Supernote decoder tests pass, including unchanged canonical reference
 exports and the new alpha/paper regression (`/tmp/home-redesign-note-tests.log`).
@@ -153,3 +154,72 @@ The real subprocess notebook acceptance also passes, including new transparent
 ink output, dimensions, source guards, cancellation and existing Xournal and
 reMarkable behavior (`/tmp/home-redesign-note-worker-tests.log`).
 Strict core all-target Clippy passed (`/tmp/home-redesign-note-clippy.log`).
+
+
+## Initial artwork placement delivery and review checkpoint
+
+Home accepts SVG and Supernote `.note` references through a Copy-only native drop,
+or Add → Place selected artwork after selecting files in the browser. Sources stay
+linked at their original locations; importing never rewrites/removes them or
+copies them into the folder previously being browsed. Repeated imports can place
+separate instances of the same source. Browser-confirmed renames/moves retarget
+that shared reference. Explicit Reload artwork refreshes changed source content.
+
+SVG text is outlined with the shared fonts on the existing bounded document helper,
+and its retained paths paint directly through the existing native vector renderer.
+There is no permanent artwork border/background. Arrange shows selection handles;
+primary drag moves artwork and corner dragging resizes uniformly. Handles retain
+usable screen dimensions across zoom. The shared camera supplies drop coordinates
+and middle-button pan. Placement/history is saved independently of source content.
+
+Supernote imports use the first page's transparent ink at native bitmap density,
+with grayscale coverage tinted for either appearance. These are bitmap recordings,
+not vectors; magnification cannot invent stroke detail. Layered templates are
+excluded, while legacy flattened nonwhite template pixels cannot be separated.
+SVG normalization retains the shared embedded-image/resource policy. Unsupported
+native vector effects show an explicit unavailable result.
+
+Preparation owns two bounded workers, at most two pending reads, 128 visible
+references and a conservative 128 MiB retained-artwork budget. Reads validate the
+pinned source before publication and retire when hidden. Accepted Home metadata
+writes retain close protection and native-drop completion ownership. No second
+renderer, camera, file manager, mutation writer or GL context was introduced.
+
+Native SVG acceptance passes in dark and light appearances:
+`/tmp/home-redesign-import-dark-06/report.json` and
+`/tmp/home-redesign-import-light-06/report.json`. Real client-to-client drops,
+source preservation, transparent theme-adapted ink with retained warm hue, actual
+move/resize input and restart persistence are exercised, not mocked events.
+
+This is a review checkpoint. Tablet drawing, arbitrary click regions/actions and
+their manager, live folder panes/filters and further asset formats remain pending.
+Existing aggregate project areas remain readable until their migration is finished.
+
+Supernote native acceptance also passes in both appearances:
+`/tmp/home-redesign-import-note-dark-01/report.json` and
+`/tmp/home-redesign-import-note-light-01/report.json`, using the real bundled
+notebook fixture. Its ink remains transparent and readable after placement,
+uniform resizing and restart, while source bytes remain unchanged.
+
+The architecture comparison against the redesign baseline retains average/max
+CCN, lowers duplication from 7.24% to 7.23%, and leaves dependency-cycle count
+unchanged. It still classifies the change as a regression for two additional short
+clone groups. Inspection found shared worker/admission boilerplate and test setup,
+not duplicated renderer or persistence owners. The renamed Supernote render body
+is reported as a new CCN-16 function; it carries forward the existing decoder's
+fallible parsing and adds the explicit paper/ink choice. The native pointer test
+helper has three additional branches to support real middle-button input. These
+remaining diagnostics are recorded rather than claimed clean.
+
+The review gate passes 2,081 affected library tests (19 ignored) across file
+manager, studios, shared UI and render, with one test thread so bounded shared
+worker queues are not overloaded by unrelated test cases:
+`/tmp/home-redesign-import-affected-serial-tests.log`. The initial default-parallel
+run saturated those queues and failed studio tests; the serial rerun is clean.
+The current debug file-manager binary is built. Formatting and staged diff checks
+pass. Strict all-target file-manager/render Clippy passes on the final source
+(`/tmp/home-redesign-import-clippy-final.log`). The real diagram-helper integration gate passes all
+four cases, including deployment/preprocessor guards.
+
+The final eight Supernote decoder tests also pass after separating ink-pixel
+conversion (`/tmp/home-redesign-import-note-tests.log`).

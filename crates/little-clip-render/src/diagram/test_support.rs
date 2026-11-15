@@ -206,7 +206,13 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("pikchr", "box at invalid nonsense", false),
         ("mermaid", "flowchart LR\nA[", false),
     ] {
-        let request = serde_json::json!({ "format": format, "source": source });
+        let request = super::Request {
+            target: super::RenderTarget::Diagram {
+                format: serde_json::from_value(serde_json::json!(format)).unwrap(),
+                foreground: None,
+            },
+            source: source.to_owned(),
+        };
         let output = CommandRequest::new(executable.as_ref())
             .arg(WORKER_FLAG)
             .resource_limit(rustix::process::Resource::As, MEMORY_LIMIT)

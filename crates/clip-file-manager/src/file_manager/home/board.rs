@@ -42,6 +42,7 @@ pub(in crate::file_manager) struct Card {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::file_manager) enum Content {
     Shortcut { pin: Uuid, label: String },
+    Artwork { pin: Uuid, label: String },
     Section { title: String, color: [u8; 3] },
     Projects { title: String },
     Project { project: Uuid, title: String },
@@ -96,7 +97,7 @@ impl Board {
         replacements: &std::collections::BTreeMap<Uuid, Uuid>,
     ) {
         for card in &mut self.cards {
-            if let Content::Shortcut { pin, .. } = &mut card.content
+            if let Content::Shortcut { pin, .. } | Content::Artwork { pin, .. } = &mut card.content
                 && let Some(replacement) = replacements.get(pin)
             {
                 *pin = *replacement;
@@ -108,13 +109,13 @@ impl Board {
             }
         }
         self.cards.retain(
-            |card| !matches!(card.content,Content::Shortcut {pin,..} if !valid.contains(&pin)),
+            |card| !matches!(card.content,Content::Shortcut {pin,..} | Content::Artwork {pin,..} if !valid.contains(&pin)),
         );
         self.bindings.retain(|binding| valid.contains(&binding.pin));
     }
     pub fn remove_pin(&mut self, pin: Uuid) {
         self.cards
-            .retain(|card| !matches!(card.content, Content::Shortcut { pin: id, .. } if id == pin));
+            .retain(|card| !matches!(card.content, Content::Shortcut { pin: id, .. } | Content::Artwork { pin: id, .. } if id == pin));
         self.bindings.retain(|binding| binding.pin != pin);
     }
     pub fn retain_artwork_bindings(&mut self) -> Result<(), String> {
@@ -164,14 +165,21 @@ impl Board {
 
 impl Card {
     fn validate(&self, pin_ids: &BTreeSet<Uuid>) -> Result<(), String> {
+        let minimum = if matches!(self.content, Content::Artwork { .. }) {
+            [8.0, 8.0]
+        } else {
+            [40.0, 30.0]
+        };
         if !self.bounds().valid()
-            || !(40.0..=8000.0).contains(&self.rect[2])
-            || !(30.0..=8000.0).contains(&self.rect[3])
+            || !(minimum[0]..=8000.0).contains(&self.rect[2])
+            || !(minimum[1]..=8000.0).contains(&self.rect[3])
         {
             return Err("Invalid Home card geometry".into());
         }
         match &self.content {
-            Content::Shortcut { pin, label } if !pin_ids.contains(pin) || label.len() > 256 => {
+            Content::Shortcut { pin, label } | Content::Artwork { pin, label }
+                if !pin_ids.contains(pin) || label.len() > 256 =>
+            {
                 Err("Invalid Home shortcut reference".into())
             }
             Content::Project { project, .. } if project.is_nil() => {
