@@ -51,9 +51,7 @@ if __name__ == "__main__":
         saved = json.loads(home.read_text())
         card = next(card for card in saved["board"]["cards"] if card["content"]["kind"] == "artwork")
         assert next(pin for pin in saved["pins"] if pin["id"] == card["content"]["pin"])["path"] == str(icon)
-        if not click_cropped_word(session, "imported", "Arrange", (894,78,982,112), 65, 125):
-            session.click(936, 94)
-        session.observe("arranging", ["Pinned references: 1"])
+        # Artwork moves/resizes directly, without requiring Arrange mode.
         before = card["rect"][:]
         drag(session, (970,470), (1010,490))
         wait_for(lambda: json.loads(home.read_text())["board"]["cards"][0]["rect"][0] > before[0]+5, "actual artwork moved")

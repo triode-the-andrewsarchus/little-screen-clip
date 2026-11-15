@@ -223,3 +223,16 @@ four cases, including deployment/preprocessor guards.
 
 The final eight Supernote decoder tests also pass after separating ink-pixel
 conversion (`/tmp/home-redesign-import-note-tests.log`).
+
+
+## Review feedback: direct artwork placement
+
+Imported artwork is selectable, draggable and resizable without entering Arrange.
+Clicking exposes its resize handle; hover explains movement and the handle uses a
+resize cursor. Arrange remains available for arranging live panels and labels.
+Ordinary shortcuts retain click-to-open behavior. This removes the hidden mode
+prerequisite discovered in the first check-in review.
+
+Validation: 42 Home tests and strict file-manager Clippy pass. The real native
+artwork workflow now moves/resizes without clicking Arrange and passes in dark
+mode (`/tmp/home-feedback-direct-dark-01/report.json`).

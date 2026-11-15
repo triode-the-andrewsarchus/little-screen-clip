@@ -104,8 +104,12 @@ impl Renderer<'_, '_> {
     }
     fn input(&self, ui: &Ui, response: &egui::Response, card: &Card, actions: &mut Vec<Action>) {
         if self.enabled {
-            if self.arrange {
-                response.clone().on_hover_cursor(egui::CursorIcon::Grab);
+            let movable = self.arrange || matches!(card.content, Content::Artwork { .. });
+            if movable {
+                response
+                    .clone()
+                    .on_hover_cursor(egui::CursorIcon::Grab)
+                    .on_hover_text("Drag to move · click to show the resize handle");
             } else if matches!(card.content, Content::Shortcut { .. }) {
                 response
                     .clone()
@@ -113,7 +117,7 @@ impl Renderer<'_, '_> {
             }
             if response.clicked() {
                 response.request_focus();
-                if self.arrange {
+                if movable {
                     actions.push(Action::Select(card.id));
                 } else if let Content::Shortcut { pin, .. } = card.content {
                     actions.push(Action::Open(pin));
@@ -125,7 +129,7 @@ impl Renderer<'_, '_> {
             {
                 actions.push(Action::Open(pin));
             }
-            if self.arrange {
+            if movable {
                 self.drag(ui, response, card.id, false, actions);
             }
         }
@@ -157,7 +161,8 @@ impl Renderer<'_, '_> {
             }
             if ui
                 .add_enabled(
-                    self.enabled && self.arrange,
+                    self.enabled
+                        && (self.arrange || matches!(card.content, Content::Artwork { .. })),
                     egui::Button::new("Remove from desk"),
                 )
                 .clicked()
@@ -169,7 +174,9 @@ impl Renderer<'_, '_> {
     }
     fn resize(&self, ui: &Ui, rect: Rect, card: &Card, actions: &mut Vec<Action>) {
         let scale = self.viewport.scale() as f32;
-        if self.selected == Some(card.id) && self.arrange {
+        if self.selected == Some(card.id)
+            && (self.arrange || matches!(card.content, Content::Artwork { .. }))
+        {
             ui.painter().rect_stroke(
                 rect,
                 9.0,
@@ -180,11 +187,14 @@ impl Renderer<'_, '_> {
                 Rect::from_min_size(rect.right_bottom() - vec2(edge, edge), vec2(edge, edge));
             ui.painter()
                 .rect_filled(handle.shrink(2.0), 3.0, Color32::from_rgb(64, 126, 150));
-            let response = ui.interact(
-                handle.intersect(ui.clip_rect()),
-                Id::new(("home_resize", card.id)),
-                Sense::drag(),
-            );
+            let response = ui
+                .interact(
+                    handle.intersect(ui.clip_rect()),
+                    Id::new(("home_resize", card.id)),
+                    Sense::drag(),
+                )
+                .on_hover_cursor(egui::CursorIcon::ResizeNwSe)
+                .on_hover_text("Drag to resize");
             if self.enabled {
                 self.drag(ui, &response, card.id, true, actions);
             }
