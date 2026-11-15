@@ -34,7 +34,7 @@ def click_word(session, shot, word, *, minimum_y=85, maximum_y=None, control_bou
                 session.click(point[0] + 5, point[1]); return
         if minimum_y < 145 and click_cropped_word(session, shot, word, (96,96,900,140), minimum_y, maximum_y):
             return
-        controls = {"Arrange":(400,104,462,131), "Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
+        controls = {"Objects":(400,104,462,131), "Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
         bounds = control_bounds or controls.get(word)
         if bounds is not None and (control_bounds is not None or minimum_y < 145):
             if click_cropped_word(session, shot, word, bounds, minimum_y, maximum_y):
@@ -111,15 +111,15 @@ def exercise(session, root, binary):
     x, y = session.word("selected-file", "note.txt", minimum_y=240)
     session.click(x + 10, y)
     enter_home(session, "selected-file")
-    session.observe("empty-desk", ["Home", "Arrange", "Make this place yours"])
+    session.observe("empty-desk", ["Home", "Objects", "Make this place yours"])
     add(session, "empty-desk", "selection", "add-file")
     wait_for(lambda: len(saved()["pins"]) == 1, "selected file reference saved")
     session.observe("file-pin", ["note.txt", "Home"])
     add(session, "file-pin", "current", "add-folder")
     wait_for(lambda: len(saved()["pins"]) == 2, "folder reference saved")
-    session.observe("two-pins", ["note.txt", "fixture", "Arrange"])
+    session.observe("two-pins", ["note.txt", "fixture", "Objects"])
     ids = [pin["id"] for pin in saved()["pins"]]
-    click_word(session, "two-pins", "Arrange", minimum_y=90, maximum_y=145)
+    click_word(session, "two-pins", "Objects", minimum_y=90, maximum_y=145)
     session.observe("arrange", ["note.txt", "Add", "Fit"])
     add(session, "arrange", "Named", "add-section")
     session.observe("new-section", ["A new corner", "Label"])
@@ -175,7 +175,7 @@ def exercise(session, root, binary):
     session.observe("unapplied-close", ["Unapplied drawing text", "Discard unapplied text"])
     click_word(session, "unapplied-close", "Discard", minimum_y=170, maximum_y=210)
     session.observe("draft-discarded", ["Projects", "note.txt"])
-    click_word(session, "draft-discarded", "Arrange", minimum_y=90, maximum_y=145)
+    click_word(session, "draft-discarded", "Objects", minimum_y=90, maximum_y=145)
     session.observe("browse-before-pan", ["Projects", "note.txt"])
     drag(session, (1100,650), (1130,630))
     private.run_checked([str(session.pointer), "scroll", *map(str, session.logical_size), "1100", "650", "40"], env=session.env)

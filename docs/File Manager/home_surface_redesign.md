@@ -612,3 +612,15 @@ committed native acceptance scripts reproduce these checks on private desktops.
   while zoomed out. The camera center stays bounded to the workspace so the desk
   cannot be lost entirely. The regression covers a wide 2048×1080 viewport and
   preserves a deliberately zoomed-out, off-center view.
+
+## Default object lock
+
+- [x] Replace Arrange with a global **Objects locked** toggle, enabled at startup.
+  Unlocking enables object selection, movement, resizing, renaming and Delete.
+  Relocking clears selection and hides placement handles and properties. Folder
+  controls and click-region actions remain interactive; locked shortcuts open on
+  a single click. Undo remains available while locked.
+- [x] Adding a named section does not silently unlock the desk. Placement state
+  stays separate from saved content; restarting starts locked again.
+- [x] The keyboard regression verifies default locking, guarded Delete and Undo.
+  Six Home UI tests pass; strict all-target file-manager/studio Clippy is clean.

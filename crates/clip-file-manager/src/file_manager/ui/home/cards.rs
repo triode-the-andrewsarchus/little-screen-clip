@@ -134,6 +134,14 @@ impl Renderer<'_, '_> {
         if !self.enabled {
             return;
         }
+        if !self.arrange {
+            if response.clicked()
+                && let Content::Shortcut { pin, .. } = card.content
+            {
+                actions.push(Action::Open(pin));
+            }
+            return;
+        }
         response
             .clone()
             .on_hover_cursor(egui::CursorIcon::Grab)
@@ -188,7 +196,7 @@ impl Renderer<'_, '_> {
     }
     fn resize(&self, ui: &Ui, rect: Rect, card: &Card, actions: &mut Vec<Action>) {
         let scale = self.viewport.scale() as f32;
-        if self.selected == Some(card.id) {
+        if self.arrange && self.selected == Some(card.id) {
             ui.painter().rect_stroke(
                 rect,
                 9.0,
@@ -254,7 +262,7 @@ impl Renderer<'_, '_> {
             FontId::proportional((22.0 * self.viewport.scale() as f32).clamp(6.0, 64.0)),
             ui.visuals().text_color(),
         );
-        if self.selected == Some(card.id) {
+        if self.arrange && self.selected == Some(card.id) {
             painter.line_segment(
                 [rect.left_bottom(), rect.right_bottom()],
                 egui::Stroke::new(2.0_f32, ink),

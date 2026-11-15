@@ -119,9 +119,11 @@ def exercise(session,root,binary):
     session.observe("second-filtered",["Extensions"])
     pane_control(session,"second-filtered","Filter")
     session.observe("second-photo",["photo.png"])
+    click_word(session,"second-photo","Objects",minimum_y=90,maximum_y=145)
+    session.observe("unlocked-pane",["photo.png"])
     before=read()["board"]["cards"][1]["rect"][:]
     private.run_checked([str(session.pointer),"drag",*map(str,session.logical_size),"640","298","1000","298"],env=session.env)
-    wait_for(lambda:read()["board"]["cards"][1]["rect"][0]>before[0]+100,"live pane moved without Arrange")
+    wait_for(lambda:read()["board"]["cards"][1]["rect"][0]>before[0]+100,"live pane moved with objects unlocked")
     session.observe("two-live-panes",["recent.wav","photo.png"])
     wait_for(photo_pixels,"photo preview survives alongside the other pane")
     wait_for(waveform_pixels,"waveform preview survives alongside the other pane")

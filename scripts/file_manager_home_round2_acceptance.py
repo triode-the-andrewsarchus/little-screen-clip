@@ -2,6 +2,7 @@
 """Exercise the second Home review fixes in a private native desktop."""
 import csv,io,json,uuid
 from pathlib import Path
+from collections import Counter
 from PIL import Image,ImageOps
 from file_manager_acceptance import application_arguments,media_fixture_directory,run_application_acceptance,wait_for
 from file_manager_home_acceptance import click_word,drag
@@ -38,19 +39,27 @@ def exercise(session,root,binary):
     find=lambda identifier:next(c for c in read()["cards"] if c["id"]==identifier)
     session.restart(binary)
     session.observe("restored",["Garden","Livefiles","Portal"])
-    click_word(session,"restored","Arrange",minimum_y=90,maximum_y=145)
+    initial=find(section)["rect"]
+    point=session.word("restored","Garden",tree=True,minimum_y=180)
+    drag(session,point,(point[0]+50,point[1]+30))
+    session.observe("locked-drag",["Garden"])
+    assert find(section)["rect"]==initial,"objects start locked against accidental dragging"
+    assert "Label" not in (session.output/"locked-drag.txt").read_text(),"locked click must not select objects"
+    click_word(session,"restored","Objects",minimum_y=90,maximum_y=145)
     session.observe("arrange",["Icons","Filter"])
     click_word(session,"arrange","Icons",minimum_y=180,maximum_y=400)
-    wait_for(lambda:find(pane)["content"]["options"]["presentation"]=="icons","pane controls work during Arrange")
+    wait_for(lambda:find(pane)["content"]["options"]["presentation"]=="icons","pane controls work with objects unlocked")
     session.observe("icons",["Filter"])
     click_word(session,"icons","Filter",minimum_y=180,maximum_y=400)
     session.observe("filter",["Name contains"])
-    click_word(session,"filter","Arrange",minimum_y=90,maximum_y=145,control_bounds=(485,102,560,136))
+    click_word(session,"filter","Objects",minimum_y=90,maximum_y=145,control_bounds=(485,102,560,136))
+    session.observe("locked-again",["Garden"])
+    click_word(session,"locked-again","Objects",minimum_y=90,maximum_y=145)
     session.observe("browse",["Garden"])
     click_word(session,"browse","Garden",minimum_y=180,maximum_y=350)
     session.observe("selected",["Label"])
     session.key("Delete")
-    wait_for(lambda:all(c["id"]!=section for c in read()["cards"]),"Delete removes selected section outside Arrange")
+    wait_for(lambda:all(c["id"]!=section for c in read()["cards"]),"Delete removes selected section with objects unlocked")
     session.key("z","ctrl")
     wait_for(lambda:any(c["id"]==section for c in read()["cards"]),"Ctrl+Z restores section")
     session.observe("undo",["Garden"])
@@ -74,7 +83,9 @@ def exercise(session,root,binary):
     assert len(edits)==2 and max(x for x,y in edits)-min(x for x,y in edits)<3 and all(x<500 for x,y in edits),edits
     session.close();session.restart(binary)
     session.observe("final-restart",["Garden corner","Livefiles","Portal"])
-    click_word(session,"final-restart","Portal",minimum_y=350)
+    click_word(session,"final-restart","Objects",minimum_y=90,maximum_y=145)
+    session.observe("unlocked-restart",["Portal"])
+    click_word(session,"unlocked-restart","Portal",minimum_y=350)
     session.key("Delete")
     wait_for(lambda:all(c["id"]!=shortcut for c in read()["cards"]),"restored folder shortcut can be selected and removed")
     session.key("z","ctrl")
@@ -83,11 +94,17 @@ def exercise(session,root,binary):
     point=session.word("restored-shortcut","Portal",tree=True,minimum_y=350)
     before=find(shortcut)["rect"]
     drag(session,point,(point[0]+45,point[1]+25))
-    wait_for(lambda:find(shortcut)["rect"]!=before,"restored folder shortcut can move outside Arrange")
+    wait_for(lambda:find(shortcut)["rect"]!=before,"restored folder shortcut can move with objects unlocked")
+    session.scroll(640,700,-2400)
+    wait_for(lambda:read()["view"]["scale"]<0.3,"zoom-out has breathing room")
+    session.observe("zoomed-out",[])
+    with Image.open(session.output/"zoomed-out.png").convert("RGB") as picture:
+        backgrounds=[Counter(picture.crop(bounds).getdata()).most_common(1)[0][0] for bounds in [(105,680,135,720),(625,680,655,720),(1145,680,1175,720)]]
+    assert backgrounds[0]==backgrounds[1]==backgrounds[2],"canvas must fill both sides without gutters"
     assert (folder/"one.txt").read_text()=="Live preview"
 
 
 if __name__=="__main__":
     args=application_arguments(__doc__,Path("target/debug/clip-file-manager"));output,root=media_fixture_directory(args)
     raise SystemExit(run_application_acceptance(args,output,root,lambda session,root:exercise(session,root,args.binary),
-        "Restored object editing, Delete/Undo, folder controls in Arrange, persistent color popup and aligned left regions"))
+        "Restored object editing, Delete/Undo, folder controls with objects unlocked, persistent color popup and aligned left regions"))

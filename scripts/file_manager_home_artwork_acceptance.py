@@ -46,7 +46,7 @@ if __name__ == "__main__":
         if not click_cropped_word(session, "two-clients", "Home", (1058,78,1123,110), 65, 120):
             # Observed native 640px client geometry; dark bordered text can be omitted by OCR.
             session.click(1090, 94)
-        session.observe("home", [icon.stem, "Arrange"])
+        session.observe("home", [icon.stem, "Objects"])
         drag(session, position(session, "home", icon.name, True), (970, 450))
         home = Path(env["XDG_STATE_HOME"]) / "little-screen-clip/home.json"
         wait_for(lambda: home.exists() and any(card["content"]["kind"] == "artwork" for card in json.loads(home.read_text())["board"]["cards"]), "native Home artwork import committed")
@@ -64,7 +64,8 @@ if __name__ == "__main__":
         saved = json.loads(home.read_text())
         card = next(card for card in saved["board"]["cards"] if card["content"]["kind"] == "artwork")
         assert next(pin for pin in saved["pins"] if pin["id"] == card["content"]["pin"])["path"] == str(icon)
-        # Artwork moves/resizes directly, without requiring Arrange mode.
+        # Placement is protected until the global object lock is released.
+        if not click_cropped_word(session,"painted","Objects",(930,76,1080,114),70,120):session.click(998,94)
         before = card["rect"][:]
         drag(session, (970,470), (1010,490))
         wait_for(lambda: json.loads(home.read_text())["board"]["cards"][0]["rect"][0] > before[0]+5, "actual artwork moved")

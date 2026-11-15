@@ -33,7 +33,7 @@ impl FileManager {
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if self.home_surface.session.arrange || self.home_surface.session.selected.is_some() {
+        if self.home_surface.session.arrange {
             self.home_inspector(ui, palette);
         }
         ui.separator();
@@ -66,11 +66,11 @@ impl FileManager {
             ui.add_enabled_ui(editing, |ui| {
                 if ui
                     .add(clip_ui::ui_ext::mode_tab_button(
-                        "Arrange",
-                        self.home_surface.session.arrange,
+                        "Objects locked",
+                        !self.home_surface.session.arrange,
                         palette,
                     ))
-                    .on_hover_text("Place and resize objects on your desk")
+                    .on_hover_text("Toggle the global lock: unlock to select, move, resize or rename desk objects")
                     .clicked()
                 {
                     let session = &mut self.home_surface.session;
@@ -165,7 +165,6 @@ impl FileManager {
             }
             if ui.button("Named section").clicked() {
                 let session = &mut self.home_surface.session;
-                session.arrange = true;
                 session.section();
                 ui.close_menu();
             }
@@ -483,7 +482,7 @@ impl FileManager {
                     pins,
                     arrange: session.arrange,
                     enabled,
-                    selected: session.selected,
+                    selected: session.selected.filter(|_| session.arrange),
                     unpin,
                     palette,
                 };
@@ -666,7 +665,7 @@ fn home_edit_keys(ctx: &egui::Context, session: &mut crate::file_manager::home::
     } else if key(ctx, Modifiers::CTRL, Key::Z) {
         session.undo();
     }
-    if session.selected.is_some() && key(ctx, Modifiers::NONE, Key::Delete) {
+    if session.arrange && session.selected.is_some() && key(ctx, Modifiers::NONE, Key::Delete) {
         session.remove_selected();
     }
 }
@@ -703,13 +702,13 @@ fn board_extent(board: &Board) -> Bounds {
         angle: 0.0,
     }
 }
-fn exclusions(board: &Board, selected: Option<Uuid>, _arrange: bool) -> Vec<Bounds> {
+fn exclusions(board: &Board, selected: Option<Uuid>, arrange: bool) -> Vec<Bounds> {
     let mut bounds = Vec::new();
     for card in &board.cards {
         let mut bound = card.bounds();
         if matches!(card.content, Content::Section { .. }) {
             bound.height = 40.0;
-            if selected == Some(card.id) {
+            if arrange && selected == Some(card.id) {
                 bounds.push(Bounds {
                     x: card.rect[0] + card.rect[2] - 16.0,
                     y: card.rect[1] + card.rect[3] - 16.0,
@@ -760,6 +759,35 @@ mod tests {
                 .any(|text| text.contains("Reload task previews"))
         );
         assert!(browser.home_surface.projects.previews.write_error.is_some());
+    }
+
+    #[test]
+    fn objects_start_locked_and_delete_requires_unlocking() {
+        let mut session = crate::file_manager::home::Session::default();
+        assert!(!session.arrange);
+        session.section();
+        let count = session.board.cards.len();
+        let ctx = egui::Context::default();
+        for unlocked in [false, true] {
+            session.arrange = unlocked;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: Key::Delete,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| home_edit_keys(ctx, &mut session),
+            );
+            assert_eq!(session.board.cards.len(), count - usize::from(unlocked));
+        }
+        session.arrange = false;
+        session.undo();
+        assert_eq!(session.board.cards.len(), count);
     }
 
     #[test]

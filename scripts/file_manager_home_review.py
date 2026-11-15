@@ -94,7 +94,7 @@ def create(root, *, state_home=None):
         (root / "README.md").write_text("# Phase 8 review desk\n\nRun `./open-review.sh` to open an isolated Home. "
             "Your normal Home, bookmarks and configuration are untouched.\n\n"
             "Click the notebook, star or their labels. Check a project task, then inspect "
-            "its `projects/*/TODO.md`: only that real source changes. Use Arrange to place and resize content, "
+            "its `projects/*/TODO.md`: only that real source changes. Unlock objects to place and resize content, "
             "move each project panel or rename the desk. Pan/zoom, quit and reopen.\n\n"
             "In notes, Rules off reveals scratch.tmp; Rules on deliberately reveals .field-notes.md. "
             "Session marks and Sets are independent controls in the browser.\n\n"
