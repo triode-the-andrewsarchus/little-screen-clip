@@ -23,6 +23,13 @@ impl FileManager {
                 .directory
                 .as_ref()
                 .is_some_and(|directory| !directory.system);
+        ui.separator();
+        ui.strong("Project destination");
+        ui.add(
+            egui::Label::new(egui::RichText::new(self.path().display().to_string()).monospace())
+                .wrap(true),
+        );
+        ui.weak("Create or register the folder shown above.");
         if ui
             .add_enabled(
                 can_project,
