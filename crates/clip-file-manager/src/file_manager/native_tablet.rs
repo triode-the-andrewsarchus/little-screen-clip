@@ -167,7 +167,10 @@ impl NativeTablet {
         }
         self.available = self.manager.tools().iter().any(pressure_pen);
         self.connected = !self.manager.tablets().is_empty();
-        self.proximity = self.tools.values().any(|tool| tool.proximity);
+        self.proximity = self
+            .tools
+            .values()
+            .any(|tool| tool.proximity || tool.pulse.contact);
         Ok(frames)
     }
 }

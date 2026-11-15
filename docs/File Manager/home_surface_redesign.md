@@ -512,3 +512,7 @@ and feel; native mouse automation does not establish that result.
 - [x] Pen taps on pinned file/folder shortcuts operate their controls instead of
   starting ink. Artwork remains a pen-drawing surface outside Arrange. All five
   ink-model/routing tests pass (`/tmp/home-ink-shortcut-tests.log`).
+- [x] Active pen contact retains the fast polling cadence even if a backend does
+  not deliver a distinct proximity event first. All three tablet-frame/routing
+  tests pass (`/tmp/home-tablet-contact-tests.log`). Physical hardware remains
+  explicitly unverified.
