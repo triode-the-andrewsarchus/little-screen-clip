@@ -12,6 +12,7 @@ pub(in crate::file_manager) struct Session {
     pub board: Board,
     pub canvas: Canvas,
     pub arrange: bool,
+    pub leave_notice: bool,
     pub selected: Option<Uuid>,
     pub label_draft: String,
     pub title_draft: String,
@@ -146,6 +147,25 @@ impl Session {
             self.board.view = Some(view);
             self.touch();
         }
+    }
+    pub fn commit_labels(&mut self) {
+        if !self.arrange {
+            return;
+        }
+        let title = self.title_draft.trim().to_owned();
+        if !title.is_empty() && title.len() <= 256 {
+            self.edit(|board| board.title = title);
+        }
+        self.rename_selected();
+    }
+    pub fn allow_leave(&mut self) -> bool {
+        if self.canvas.has_unapplied_text() {
+            self.leave_notice = true;
+            self.arrange = true;
+            return false;
+        }
+        self.leave_notice = false;
+        true
     }
     pub fn select(&mut self, id: Uuid) {
         if self.selected != Some(id) {
@@ -282,6 +302,25 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn closing_commits_unfocused_title_and_card_label_drafts() {
+        let mut session = super::Session::default();
+        let pin = uuid::Uuid::new_v4();
+        let mut board = super::Board::default();
+        board.add_shortcut(pin);
+        session.install(&board);
+        session.arrange = true;
+        session.select(board.cards[0].id);
+        session.title_draft = " My desk ".into();
+        session.label_draft = " Current work ".into();
+        session.commit_labels();
+        assert_eq!(session.board.title, "My desk");
+        assert!(
+            matches!(&session.board.cards[0].content, super::Content::Shortcut { label, .. } if label == "Current work")
+        );
+        assert!(session.dirty());
+        assert!(session.allow_leave());
+    }
     #[test]
     fn persisted_camera_restores_and_layout_undo_keeps_the_new_view() {
         use clip_studios::drawing_canvas::ViewState;

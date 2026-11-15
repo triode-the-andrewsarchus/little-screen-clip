@@ -31,7 +31,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
 
 - [x] C1. Expose the existing native drawing surface for host-managed live overlays
       and clickable artwork without copying its renderer/editor.
-- [ ] C2. Home canvas: migration, free arrangement, artwork shortcuts, named
+- [x] C2. Home canvas: migration, free arrangement, artwork shortcuts, named
       sections, live card placement, view state, undo/redo and deliberate editing.
 - [ ] C3. Versioned `.fmproject`, safe create/register workflow, no-overwrite
       README/TODO defaults and local global project registry.
@@ -98,9 +98,8 @@ engine, GL context or preview cache was introduced.
   Log: `/tmp/phase8-canvas-clippy.log`.
 - The API has Rust documentation for interaction and host source/save ownership.
 
-C2 is in progress: versioned board migration and stale-layout write protection
-are being added before replacing the static Home presentation. C1 is an embedding
-foundation, not evidence that the requested Home canvas is already delivered.
+C2 now has committed board migration, stale-layout write protection and an
+interactive Home presentation. The evidence below records those deliveries.
 
 C2 storage foundation: Home v2 adds bounded native artwork, movable card/section
 records and artwork-to-pin bindings. Legacy v1 pins migrate without changing pin
@@ -129,9 +128,8 @@ geometry, unknown future schemas and oversized input remain explicit failures.
   The new fixture deliberately asserts hit/mapping behavior independently of
   the original drawing tests. There is no second renderer or persistence path.
 
-C2 remains unchecked: the interactive Home presentation is implemented below,
-but persisted camera state and the remaining editing/close behavior still need
-completion. No live project task UI is claimed yet.
+The interactive presentation, persisted camera and leave/close behavior are
+delivered below. Live project task content remains C3/C4 work.
 
 ### C1 follow-up: same-frame pan alignment
 
@@ -173,8 +171,9 @@ Rejected writes retain the draft with explicit retry/discard controls.
   renderer, camera and guarded persistence transport remain shared. Overall
   duplication percentage decreased by 0.02 points; maximum complexity is unchanged.
 
-This delivery does not complete C2 or Phase 8: camera persistence, draft-close
-handling, live projects/tasks and the other organization/history work remain.
+At this delivery point camera persistence and draft-close handling were pending;
+the follow-up deliveries below resolve them. Live projects/tasks and the other
+organization/history work still remain before Phase 8 is complete.
 
 ### C2 persisted camera
 
@@ -185,4 +184,37 @@ The existing shared camera owns mapping and validation; Home does not introduce
 a second transform. Home tests pass (21), shared camera tests pass (4), and strict
 combined Clippy passes. Logs: `/tmp/phase8-view-{tests,camera-tests,clippy}.log`.
 Native acceptance now projects observed ink through the saved camera and asserts
-that restart leaves that camera unchanged. Draft-close behavior remains pending.
+that restart leaves that camera unchanged. Draft-close behavior is delivered
+in the following fix.
+
+### C2 leave/close draft ownership
+
+Leaving Home or toggling Browse refuses to discard unapplied drawing text.
+An inline notice offers Keep editing and Discard unapplied text; the existing
+Apply text control submits it through the drawing transaction owner. Application
+close checks the same condition and returns to Home when a decision is needed.
+Unchanged selected text does not block leaving. Discard never cancels an accepted
+edit. Title and card-label fields are explicitly committed before closing, so a
+still-focused input does not rely on a later focus-loss frame to become durable.
+
+- Home tests: 22 passed (`/tmp/phase8-drafts-home-tests.log`).
+- Drawing tests: 18 passed (`/tmp/phase8-drafts-studios-tests.log`).
+- Close persistence tests: 2 passed (`/tmp/phase8-drafts-close-tests.log`).
+- Strict combined Clippy and workspace formatting passed
+  (`/tmp/phase8-drafts-{clippy,format}.log`).
+- Architecture comparison still has no new excessive-complexity function and
+  the same three short additional clone groups documented above; shared camera,
+  source transaction and persistence owners remain in use.
+
+- Final native workflow passed all 33 observations in both appearances:
+  `/tmp/phase8-desk-drafts-dark-03/report.json` and
+  `/tmp/phase8-desk-drafts-light/report.json`. The test performs primary-drag pan
+  and wheel zoom, checks the saved transform survives restart, verifies actual
+  painted artwork remains clickable under that transform, and verifies Ctrl+Q
+  leaves an unapplied text draft alive until an explicit discard. Restored desks
+  and the inline close notice were visually inspected. Earlier native failures
+  exposed OCR label boxes crossing input bounds or matching explanatory prose;
+  the driver now restricts those targets to their observed control interiors.
+
+C2 is complete. C3–C9 remain open: this is an editable personal desk with ordinary
+file/folder references, not yet the project/TODO or organization delivery.

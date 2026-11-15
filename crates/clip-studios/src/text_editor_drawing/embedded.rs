@@ -73,6 +73,32 @@ pub struct Canvas {
     preview: Preview,
 }
 impl Canvas {
+    /// Reports drawing text that has not been submitted through Apply text.
+    pub fn has_unapplied_text(&self) -> bool {
+        if self.editor.busy() {
+            return false;
+        }
+        self.editor
+            .text_draft
+            .as_ref()
+            .is_some_and(|draft| match &draft.target {
+                text::TextTarget::New { .. } => true,
+                text::TextTarget::Existing(id) => self
+                    .editor
+                    .model
+                    .as_ref()
+                    .and_then(|model| model.text_info(id).ok().flatten())
+                    .is_none_or(|info| info.text != draft.value),
+            })
+    }
+    /// Discards only unsubmitted text; accepted drawing transactions retain ownership.
+    pub fn discard_text(&mut self) {
+        if !self.editor.busy() {
+            self.editor.text_draft = None;
+            self.editor.tool = None;
+            self.editor.text_focus = false;
+        }
+    }
     /// Returns the current finite camera after its first completed Fit.
     pub fn view(&self) -> Option<ViewState> {
         self.editor.camera.view()
@@ -222,6 +248,48 @@ pub(super) fn pointer_blocked(
 mod tests {
     use super::*;
     use little_clip_render::diagram::DrawingLayout;
+
+    #[test]
+    fn only_changed_unsubmitted_text_requires_a_leave_decision() {
+        let source = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
+        let model = Scene::parse(source).unwrap();
+        let original = model.text_info("capture-label").unwrap().unwrap().text;
+        let mut canvas = Canvas::default();
+        canvas.editor.model = Some(Arc::new(model));
+        canvas.editor.text_draft = Some(TextDraft {
+            target: text::TextTarget::Existing("capture-label".into()),
+            value: original,
+        });
+        assert!(!canvas.has_unapplied_text());
+        canvas
+            .editor
+            .text_draft
+            .as_mut()
+            .unwrap()
+            .value
+            .push_str(" changed");
+        assert!(canvas.has_unapplied_text());
+        canvas.discard_text();
+        assert!(canvas.editor.text_draft.is_none());
+        canvas.editor.text_draft = Some(TextDraft {
+            target: text::TextTarget::New {
+                id: "new-label".into(),
+                at: [10.0, 20.0],
+                container: None,
+                style: Style::default(),
+            },
+            value: "Unsubmitted".into(),
+        });
+        assert!(canvas.has_unapplied_text());
+        canvas.editor.queued = Some(PendingEdit {
+            change: Action::Text(canvas.editor.text_draft.clone().unwrap()),
+            started: Instant::now(),
+        });
+        assert!(!canvas.has_unapplied_text());
+        canvas.discard_text();
+        assert!(canvas.editor.queued.is_some());
+        assert!(canvas.editor.text_draft.is_some());
+    }
 
     #[test]
     fn live_extent_participates_in_fit_and_overlay_mapping_survives_zoom_and_pan() {

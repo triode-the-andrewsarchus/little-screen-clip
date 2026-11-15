@@ -21,7 +21,8 @@ impl FileManager {
     }
     pub(super) fn home_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let back = self.home_header(ui, palette);
-        if back || self.home_keys(ui) {
+        if (back || self.home_keys(ui)) && self.home_surface.session.allow_leave() {
+            self.home_surface.session.commit_labels();
             self.home_surface.open = false;
             self.home_surface.session.canvas.suspend();
             self.focus_list = true;
@@ -67,9 +68,12 @@ impl FileManager {
                     .clicked()
                 {
                     let session = &mut self.home_surface.session;
-                    session.arrange = !session.arrange;
-                    session.selected = None;
-                    session.canvas.cancel();
+                    if session.allow_leave() {
+                        session.commit_labels();
+                        session.arrange = !session.arrange;
+                        session.selected = None;
+                        session.canvas.cancel();
+                    }
                 }
                 self.home_add_menu(ui);
             });
@@ -170,6 +174,28 @@ impl FileManager {
         });
     }
     fn home_recovery(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let session = &mut self.home_surface.session;
+        if session.leave_notice && session.canvas.has_unapplied_text() {
+            ui.label("Unapplied drawing text. Apply it in the drawing panel, or discard it before leaving.");
+            ui.horizontal(|ui| {
+                if ui
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button("Keep editing", palette))
+                    .clicked()
+                {
+                    session.leave_notice = false;
+                }
+                if ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Destructive
+                            .button("Discard unapplied text", palette),
+                    )
+                    .clicked()
+                {
+                    session.canvas.discard_text();
+                    session.leave_notice = false;
+                }
+            });
+        }
         if let Some(error) = self.home_surface.error.clone() {
             ui.colored_label(ui.visuals().error_fg_color, format!("Home: {error}"));
             ui.horizontal_wrapped(|ui| {

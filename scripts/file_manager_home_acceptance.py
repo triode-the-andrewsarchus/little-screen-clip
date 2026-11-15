@@ -28,7 +28,7 @@ def click_word(session, shot, word, *, minimum_y=85, maximum_y=None):
                 point = session.word(name, word, tree=tree, required=False, minimum_y=minimum_y)
                 if point and (maximum_y is None or point[1] < maximum_y):
                     session.click(point[0] + 5, point[1]); return
-        controls = {"Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
+        controls = {"Arrange":(400,104,462,131), "Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
         if minimum_y < 145 and word in controls:
             name = shot + "-control"
             bounds = controls[word]
@@ -68,9 +68,9 @@ def resize_handle(session, shot):
     return max(x for x,y in handle)-5, max(y for x,y in handle)-5
 
 
-def artwork_target(session, shot, element):
+def artwork_target(session, shot, element, view):
     # Find the actual white paper in the captured frame, then verify native ink
-    # at the authored source point under the documented Fit transform. This
+    # at the authored source point under the persisted camera transform. This
     # avoids targeting another similarly named live card or a source text field.
     session.capture_text(shot, session.output / f"{shot}.png", [])
     with Image.open(session.output / f"{shot}.png").convert("RGB") as picture:
@@ -80,10 +80,11 @@ def artwork_target(session, shot, element):
         top, bottom = min(rows), max(rows) + 1
         white = [x for x in range(96,1184) if min(pixels[x,top+8]) > 253]
         left, right = min(white), max(white) + 1
-        scale = min((right-left)/1000, (bottom-top)/700) * .92
+        scale = view["scale"]
+        cx, cy = view["center"]
         point = element["points"][len(element["points"])//2]
-        x = round((left+right)/2 + (element["x"]+point[0]-500)*scale)
-        y = round((top+bottom)/2 + (element["y"]+point[1]-350)*scale)
+        x = round((left+right)/2 + (element["x"]+point[0]-cx)*scale)
+        y = round((top+bottom)/2 + (element["y"]+point[1]-cy)*scale)
         ink = [(px,py) for py in range(y-6,y+7) for px in range(x-6,x+7) if max(pixels[px,py]) < 120]
         return min(ink, key=lambda p: (p[0]-x)**2+(p[1]-y)**2) if ink else None
 
@@ -120,7 +121,9 @@ def exercise(session, root, binary):
     session.observe("new-section", ["A new corner", "Label"])
     # Resolve the inspector from its observed label, not the artwork below it.
     lx, ly = session.word("new-section", "Label", tree=True, minimum_y=130)
-    session.click(lx + 90, ly)
+    # OCR sometimes merges the label with the separator above it. The captured
+    # inspector field occupies y=148..172; use its interior rather than that box.
+    session.click(lx + 90, max(156, ly))
     session.key("a", "ctrl")
     private.run_checked(["wtype", "Projects"], env=session.env)
     session.key("Return")
@@ -156,6 +159,25 @@ def exercise(session, root, binary):
     session.observe("link-menu", ["note.txt", "fixture"])
     click_word(session, "link-menu", "note.txt", minimum_y=160, maximum_y=300)
     wait_for(lambda: any(b["pin"] == ids[0] for b in saved()["board"]["bindings"]), "drawing shortcut binding saved")
+    view = saved()["board"]["view"]
+    assert view and view["scale"] > 0
+    session.click(1100, 650)
+    session.key("t")
+    session.click(1050, 620)
+    session.observe("unsubmitted-text", ["Apply text", "Cancel"])
+    private.run_checked(["wtype", "Keep this draft"], env=session.env)
+    session.key("q", "ctrl")
+    assert session.process.poll() is None, "closing must preserve an unapplied text draft"
+    session.observe("unapplied-close", ["Unapplied drawing text", "Discard unapplied text"])
+    click_word(session, "unapplied-close", "Discard", minimum_y=170, maximum_y=210)
+    session.observe("draft-discarded", ["Projects", "note.txt"])
+    click_word(session, "draft-discarded", "Arrange", minimum_y=90, maximum_y=145)
+    session.observe("browse-before-pan", ["Projects", "note.txt"])
+    drag(session, (1100,650), (1130,630))
+    private.run_checked([str(session.pointer), "scroll", *map(str, session.logical_size), "1100", "650", "40"], env=session.env)
+    wait_for(lambda: saved()["board"]["view"] != view and saved()["board"]["view"]["scale"] != view["scale"], "panned and zoomed camera saved")
+    view = saved()["board"]["view"]
+    session.observe("camera-changed", ["Projects", "note.txt"])
     session.close()
     session.restart(binary, root)
     session.observe("restarted-folder", ["note.txt", "Home"])
@@ -163,11 +185,12 @@ def exercise(session, root, binary):
     session.observe("restored-desk", ["Projects", "note.txt", "fixture"])
     assert [pin["id"] for pin in saved()["pins"]] == ids
     assert note_card()["rect"] == moved
+    assert saved()["board"]["view"] == view, "restart must retain the authored camera, not fit again"
     assert any(e.get("type") == "freedraw" for e in json.loads(saved()["board"]["drawing"])["elements"])
     stroke = next(e for e in json.loads(saved()["board"]["drawing"])["elements"] if e.get("type") == "freedraw")
     target = []
     def painted_ink():
-        point = artwork_target(session, "shortcut-ink", stroke)
+        point = artwork_target(session, "shortcut-ink", stroke, view)
         if point: target[:] = point
         return point
     wait_for(painted_ink, "current native pencil ink under the browse camera")

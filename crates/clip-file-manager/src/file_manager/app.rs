@@ -632,6 +632,10 @@ impl FileManagerApp {
     }
 
     fn request_app_close(&mut self, ctx: &egui::Context) {
+        if !self.browser.home_surface.prepare_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         if self.viewers.active() && !self.viewers.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;

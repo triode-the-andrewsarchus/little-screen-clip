@@ -222,6 +222,16 @@ impl Home {
     pub fn poll_canvas(&mut self, ctx: &egui::Context) {
         self.session.poll(ctx);
     }
+    pub fn prepare_close(&mut self) -> bool {
+        if self.editing_allowed() {
+            self.session.commit_labels();
+        }
+        if !self.session.allow_leave() {
+            self.open = true;
+            return false;
+        }
+        true
+    }
     pub fn retry_board(&mut self) {
         if self.session.dirty() {
             self.error = None;
@@ -484,7 +494,9 @@ mod session_delivery_tests {
         let jobs = BackgroundJobs::new(1, 2);
         let mut home = Home::new(path.clone());
         await_state(&mut home, &jobs, Home::ready);
-        home.session.edit(|board| board.title = "My desk".into());
+        home.session.arrange = true;
+        home.session.title_draft = "My desk".into();
+        assert!(home.prepare_close());
         assert!(
             home.writing(),
             "debounce cannot release the write/close owner"
