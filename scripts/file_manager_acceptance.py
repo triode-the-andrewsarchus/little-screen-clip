@@ -86,6 +86,10 @@ class Session:
         private.run_checked([str(self.niri), "msg", "action", "focus-window", "--id", str(windows[0]["id"])], env=self.env)
         wait_for(lambda: any(window.get("is_focused") for window in private.own_windows(
             self.niri, self.env, {self.process.pid})), "restarted client keyboard focus")
+        # Virtual-keyboard maps can outlive the previous client. A modifier-only
+        # map round trip primes the restarted client's input without typing or
+        # firing an application command; an identical first chord can be dropped.
+        private.run_checked(["wtype", "-M", "shift", "-m", "shift"], env=self.env)
 
     def address(self, path):
         self.key("l", "ctrl")

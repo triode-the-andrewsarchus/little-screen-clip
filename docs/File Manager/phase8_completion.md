@@ -317,3 +317,15 @@ even if the live area was removed, with explicit Reload task previews.
   duplication percentage is down 0.03 points from the original baseline.
 
 C4 is complete. C5–C9 remain open; the full Phase 8 goal is not complete.
+
+### Native restart input harness follow-up
+
+- [x] Prime the private virtual keyboard after restarting a client. A small
+  close/restart probe showed the second identical Ctrl+Q chord never reached the
+  restarted application's raw input, while the focused application was idle and
+  had no pending writes. A modifier-only keymap round trip restores delivery
+  without typing text, cancelling a load or firing a command. Failing probe:
+  `/tmp/phase8-close-probe/report.json`; passing probe:
+  `/tmp/phase8-close-probe-modifier/report.json`. Temporary close/input tracing
+  was removed from the application. This changes test setup, not production
+  keyboard or application close behavior.
