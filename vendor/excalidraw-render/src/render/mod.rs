@@ -2,8 +2,10 @@ mod accounting;
 mod asset;
 #[cfg(feature = "svg-source-groups")]
 pub(crate) mod interactive;
+#[cfg(feature = "svg-source-groups")]
+pub(crate) mod interactive_ink;
 #[cfg(test)]
-pub(crate) use asset::{with_cms_failure, with_cms_failure_after, CmsSite};
+pub(crate) use asset::{CmsSite, with_cms_failure, with_cms_failure_after};
 #[cfg(test)]
 pub(crate) fn stage4_render_trace(
     scene: &crate::SceneDocument,
@@ -47,7 +49,7 @@ mod geometry;
 mod image;
 mod metadata;
 #[cfg(test)]
-pub(crate) use metadata::{test_faults, Stage as MetadataStage};
+pub(crate) use metadata::{Stage as MetadataStage, test_faults};
 mod notices;
 mod number_format;
 #[cfg(feature = "pdf")]
@@ -109,7 +111,7 @@ use crate::{
 };
 
 use self::frame_target::FrameTarget;
-use self::resolve::{logical_aligned_bytes, ResolvedScene, SemanticWorkingRecord};
+use self::resolve::{ResolvedScene, SemanticWorkingRecord, logical_aligned_bytes};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FontUnavailable {

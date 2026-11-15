@@ -225,3 +225,8 @@ chunks_exact_to_as_chunks = "allow"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[[test]]
+name = "interactive_ink"
+path = "tests/interactive_ink.rs"
+required-features = ["svg-source-groups"]
