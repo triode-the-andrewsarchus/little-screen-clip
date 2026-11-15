@@ -81,6 +81,7 @@ impl FileManager {
             }
             self.transfer_toolbar(ui, palette);
             self.organization_menu(ui);
+            self.sorting_sets_menu(ui);
             if self.view == super::super::BrowserView::List {
                 self.containers.settings(ui);
             }

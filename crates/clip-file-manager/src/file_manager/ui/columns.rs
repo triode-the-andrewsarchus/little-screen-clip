@@ -370,6 +370,12 @@ impl FileManager {
                     &self.organization.snapshot,
                     true,
                 );
+                super::sorting_sets::paint_set(
+                    ui,
+                    response.rect,
+                    entry,
+                    &self.organization.snapshot,
+                );
                 if restore && on_route {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }

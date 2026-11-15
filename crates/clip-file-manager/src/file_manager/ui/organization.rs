@@ -202,6 +202,7 @@ impl FileManager {
         });
     }
     pub(super) fn organization_feedback(&mut self, ui: &mut Ui) {
+        self.sorting_set_editor(ui);
         if let Some(error) = self.organization.error.clone() {
             ui.colored_label(
                 ui.visuals().error_fg_color,

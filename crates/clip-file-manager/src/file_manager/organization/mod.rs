@@ -1,9 +1,11 @@
 //! Shared local organization owner, using the existing guarded state worker.
 mod model;
+mod sets;
 use super::local_state;
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
 pub(in crate::file_manager) use model::{Action, Color, Definitions, Observation, Snapshot};
 use model::{Change, DefinitionEdit, LIMIT, State};
+pub(in crate::file_manager) use sets::{Filter, Group, SetChange};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -28,6 +30,8 @@ pub(super) struct Organization {
     queued: Option<Arc<Change>>,
     pending: Option<Pending>,
     pub draft: Option<Definitions>,
+    pub filter: Filter,
+    pub set_editor: Option<(Option<Group>, Group)>,
     pub error: Option<String>,
 }
 impl Organization {
@@ -98,6 +102,10 @@ impl Organization {
         }
     }
     pub fn prepare_close(&mut self) -> bool {
+        if self.set_editor.is_some() {
+            self.error = Some("Save or discard the sorting-set draft before closing".into());
+            return false;
+        }
         if self
             .draft
             .as_ref()
@@ -121,7 +129,16 @@ impl Organization {
                     Request::Change(change) => self.queued = Some(change),
                 },
                 Ok(Ok(snapshot)) => {
+                    if matches!(pending.request, Request::Change(ref change) if matches!(change.action, Action::Sets(SetChange::Create(_) | SetChange::Edit { .. })))
+                    {
+                        self.set_editor = None;
+                    }
                     self.snapshot = Arc::new(snapshot);
+                    if let Filter::Group(id) = self.filter
+                        && self.snapshot.sets.group(id).is_none()
+                    {
+                        self.filter = Filter::All;
+                    }
                     self.loaded = true;
                     self.draft = None;
                     self.error = None;
@@ -163,6 +180,17 @@ impl Organization {
     }
 }
 
+// Publication can change both classification badges and which files are visible.
+impl super::FileManager {
+    pub(super) fn tick_organization(&mut self) {
+        let previous = self.organization.snapshot.clone();
+        self.organization.tick(&local_state::IO);
+        if !Arc::ptr_eq(&previous, &self.organization.snapshot) {
+            self.rebuild_visible();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +204,111 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn set_filters_keep_folder_routes_and_reconcile_hidden_selection() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["keep.txt", "other.txt"] {
+            std::fs::write(root.path().join(name), name).unwrap();
+        }
+        std::fs::create_dir(root.path().join("folder")).unwrap();
+        let mut browser = super::super::FileManager::new(root.path().into());
+        let jobs = BackgroundJobs::new(2, 16);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while browser.location().is_none() {
+            browser.tick(&jobs);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "initial directory did not load"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        browser.select(root.path().join("other.txt"));
+        let mut state = State::default();
+        let group = uuid::Uuid::from_u128(1);
+        state
+            .apply(Change {
+                definitions: None,
+                action: Action::Sets(SetChange::Assign {
+                    paths: vec![root.path().join("keep.txt")],
+                    group: Some(group),
+                }),
+            })
+            .unwrap();
+        browser.organization.snapshot = Arc::new(Snapshot::new(state));
+        browser.organization.filter = Filter::Group(group);
+        browser.rebuild_visible();
+        let names: Vec<_> = browser
+            .displayed_entries()
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(names, vec!["folder", "keep.txt"]);
+        assert!(
+            !browser
+                .location()
+                .unwrap()
+                .selection
+                .contains(&root.path().join("other.txt"))
+        );
+        browser.organization.filter = Filter::Unassigned;
+        browser.rebuild_visible();
+        let names: Vec<_> = browser
+            .displayed_entries()
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(names, vec!["folder", "other.txt"]);
+    }
+    #[test]
+    fn sorting_sets_merge_assignments_preserve_unsubmitted_drafts_and_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("organization.json");
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut first = Organization::new(path.clone());
+        let mut second = Organization::new(path.clone());
+        settle(&mut first, &jobs);
+        settle(&mut second, &jobs);
+        let a = first.snapshot.sets.groups[0].id;
+        let b = first.snapshot.sets.groups[1].id;
+        first.set_editor = Some((None, Group::new("Draft", None)));
+        first.change(Action::Sets(SetChange::Assign {
+            paths: vec!["/first".into()],
+            group: Some(a),
+        }));
+        settle(&mut first, &jobs);
+        assert!(
+            first.set_editor.is_some(),
+            "assigning files must not discard an unapplied group draft"
+        );
+        assert!(!first.prepare_close());
+        first.set_editor = None;
+        second.change(Action::Sets(SetChange::Assign {
+            paths: vec!["/second".into()],
+            group: Some(b),
+        }));
+        settle(&mut second, &jobs);
+        let mut reopened = Organization::new(path);
+        settle(&mut reopened, &jobs);
+        assert!(
+            reopened
+                .snapshot
+                .sets
+                .matches(Path::new("/first"), Filter::Group(a))
+        );
+        assert!(
+            reopened
+                .snapshot
+                .sets
+                .matches(Path::new("/second"), Filter::Group(b))
+        );
+        let child = Group::new("Keep", Some(a));
+        let id = child.id;
+        reopened.set_editor = Some((None, child.clone()));
+        reopened.change(Action::Sets(SetChange::Create(child)));
+        settle(&mut reopened, &jobs);
+        assert!(reopened.set_editor.is_none());
+        assert_eq!(reopened.snapshot.sets.label(id), "A / Keep");
     }
     #[test]
     fn accepted_marks_merge_across_windows_and_definition_close_retains_ownership() {

@@ -16,6 +16,7 @@ mod list;
 mod mounts;
 pub(super) mod music;
 mod organization;
+mod sorting_sets;
 mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
@@ -761,6 +762,7 @@ impl FileManager {
 
     fn apply_list_actions(&mut self, actions: ListActions) {
         self.apply_session_action(actions.session_mark);
+        self.apply_set_action(actions.set_assignment);
         if actions.selection.is_some() || actions.clear {
             self.type_navigation.clear();
         }
@@ -1608,6 +1610,8 @@ enum TreeAction {
 struct ListActions {
     organization: std::sync::Arc<super::organization::Snapshot>,
     organization_ready: bool,
+    set_assignment: Option<(PathBuf, bool, Option<uuid::Uuid>)>,
+    set_name_end: Option<f32>,
     session_mark: Option<(
         super::organization::Observation,
         bool,
@@ -1735,6 +1739,11 @@ impl ListActions {
         let marked = self.row_selection(ui, response, entry, selected);
         if !self.metadata_only {
             organization::paint_session(ui, response.rect, entry, &self.organization, false);
+            let mut badge_rect = response.rect;
+            if let Some(end) = self.set_name_end {
+                badge_rect.max.x = end;
+            }
+            sorting_sets::paint_set(ui, badge_rect, entry, &self.organization);
             if let Some(color) = self.organization.color(entry) {
                 response.clone().on_hover_text(format!(
                     "Session: {}",
@@ -1789,6 +1798,7 @@ impl ListActions {
     ) {
         response.context_menu(|ui| {
             self.session_mark_menu(ui, entry, marked);
+            self.sorting_set_context(ui, entry, marked);
             if let Some(path) = inspection_button(ui, entry) {
                 self.inspect = Some(path);
                 ui.close_menu();

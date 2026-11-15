@@ -122,12 +122,15 @@ impl Session {
 pub(super) struct State {
     version: u32,
     session: Session,
+    #[serde(default)]
+    sets: super::sets::Sets,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             session: Session::default(),
+            sets: super::sets::Sets::default(),
         }
     }
 }
@@ -140,6 +143,7 @@ pub(in crate::file_manager) enum Action {
     Restore(u64),
     ForgetClear(u64),
     Definitions,
+    Sets(super::sets::SetChange),
 }
 #[derive(Clone)]
 pub(super) struct Change {
@@ -180,9 +184,10 @@ fn merge_definition(current: &mut String, base: &str, next: &str) -> Result<(), 
 }
 impl State {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if !matches!(self.version, 1 | 2) {
             return Err("Unsupported organization version; file left unchanged".into());
         }
+        self.sets.validate()?;
         self.session.definitions.validate()?;
         for marks in [&self.session.marks, &self.session.previous] {
             if marks.len() > MARKS {
@@ -202,7 +207,9 @@ impl State {
         if let Some(definitions) = change.definitions {
             definitions.apply(&mut self.session.definitions)?;
         }
+        self.version = 2;
         match change.action {
+            Action::Sets(change) => self.sets.apply(change)?,
             Action::Enable(enabled) => self.session.enabled = enabled,
             Action::Assign(targets, color) => {
                 if !self.session.enabled {
@@ -245,7 +252,7 @@ impl State {
         self.validate()
     }
 }
-fn validate_path(path: &Path) -> Result<(), String> {
+pub(super) fn validate_path(path: &Path) -> Result<(), String> {
     if !path.is_absolute()
         || path.as_os_str().as_bytes().len() > 4096
         || path.as_os_str().as_bytes().contains(&0)
@@ -261,6 +268,7 @@ fn validate_path(path: &Path) -> Result<(), String> {
 pub(in crate::file_manager) struct Snapshot {
     state: State,
     marks: BTreeMap<PathBuf, (Identity, Color)>,
+    pub sets: super::sets::Index,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -275,7 +283,8 @@ impl Snapshot {
             .iter()
             .map(|mark| (mark.target.path.clone(), (mark.target.identity, mark.color)))
             .collect();
-        Self { state, marks }
+        let sets = state.sets.index();
+        Self { state, marks, sets }
     }
     pub fn enabled(&self) -> bool {
         self.state.session.enabled
@@ -304,6 +313,28 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn version_one_migrates_sets_without_losing_session_labels_or_marks() {
+        let mut value = serde_json::to_value(State::default()).unwrap();
+        value["version"] = serde_json::json!(1);
+        value.as_object_mut().unwrap().remove("sets");
+        value["session"]["definitions"]["name"] = serde_json::json!("My review");
+        let mut state: State = serde_json::from_value(value).unwrap();
+        state.validate().unwrap();
+        assert_eq!(state.sets.index().groups.len(), 2);
+        state
+            .apply(Change {
+                definitions: None,
+                action: Action::Sets(super::super::sets::SetChange::Assign {
+                    paths: vec!["/file".into()],
+                    group: Some(uuid::Uuid::from_u128(1)),
+                }),
+            })
+            .unwrap();
+        assert_eq!(state.version, 2);
+        assert_eq!(state.session.definitions.name, "My review");
+        assert!(state.session.marks.is_empty());
+    }
     #[test]
     fn non_utf8_reference_names_round_trip_losslessly() {
         use std::os::unix::ffi::OsStringExt;

@@ -34,7 +34,7 @@ impl Previews {
             let direct = root
                 .children
                 .iter()
-                .filter(|child| visible(child, hidden))
+                .filter(|child| visible(child, hidden) && self.set_visible(child))
                 .count();
             let mut spare = (width - direct as f32 * (edge(0) + GAP)).max(0.0);
             let mut queue = VecDeque::new();
@@ -59,7 +59,7 @@ impl Previews {
                 let count = ready
                     .children
                     .iter()
-                    .filter(|child| visible(child, hidden))
+                    .filter(|child| visible(child, hidden) && self.set_visible(child))
                     .count();
                 let needed = count as f32 * (edge(level) + GAP);
                 if count > 0 && needed <= spare {
@@ -100,7 +100,11 @@ impl Previews {
         else {
             return;
         };
-        for child in ready.children.iter().filter(|child| visible(child, hidden)) {
+        for child in ready
+            .children
+            .iter()
+            .filter(|child| visible(child, hidden) && self.set_visible(child))
+        {
             output.push(Tile {
                 child: child.clone(),
                 container: container.clone(),
@@ -219,7 +223,7 @@ impl Previews {
                             Child::Member { ordinal, .. } => interact(ui, &tile.container, Target::Member(&response, *ordinal)),
                         }
                     }
-                    if tiles.is_empty() { ui.label(if ready.complete { "Empty" } else { "No previewable entries" }); }
+                    if tiles.is_empty() { ui.label(if self.set_filter != super::super::organization::Filter::All { "No matching previews" } else if ready.complete { "Empty" } else { "No previewable entries" }); }
                     if ready.omitted > 0 { ui.label(format!("{} omitted", ready.omitted)); }
                     if !ready.complete { ui.label("More inside").on_hover_text(ready.notice.as_deref().unwrap_or("Open the folder to see more contents")); }
                 });

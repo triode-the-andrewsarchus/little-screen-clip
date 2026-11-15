@@ -375,3 +375,41 @@ content is read or written to assign a mark.
   domain-specific sequences. No C5 function introduces excessive complexity.
 
 C5 is complete. C6–C9 remain open; Phase 8 is not complete.
+
+### C6 sorting sets — implementation checkpoint, acceptance pending
+
+Configurable A/B groups now have stable IDs, editable names/colors and nested
+subdivisions. Parent filters include all descendant assignments. Unassigned and
+All files filters remain available; folders stay visible for navigation.
+Classification does not modify file content. Membership badges are separate from
+session underlines, and session clear/disable does not change sets. Ordinary
+folder previews and keyboard selection share the file filter. Bounded pickers
+support the complete 256-group budget. Inline group drafts must be saved or
+discarded before closing and are not lost when assigning files.
+
+Organization v1 migrates to v2 on an accepted change, retaining session data and
+adding initial A/B groups. The existing guarded worker merges assignments and
+rejects stale group edits; deletion checks current assignments/children before
+removing an empty group. Bounds, path-reference semantics and hierarchy behavior
+are documented in `organization.md`.
+
+- Targeted organization tests: 11 passed
+  (`/tmp/phase8-sets-targeted-tests.log`). Covers hierarchy and ancestor filters,
+  unassigned files, missing parents, cycles/depth limits, names, stale edits,
+  lossless non-UTF-8 memberships, v1 migration, concurrent assignments, restart,
+  draft ownership and browser selection reconciliation.
+- Full suite, final strict Clippy/build and native acceptance are still being
+  finalized; C6 remains unchecked until their results have been inspected.
+- The first native attempts exposed OCR failing on highlighted/one-letter filter
+  labels and choosing an identically named parent filter instead of the
+  assignment submenu. The driver now uses the observed native submenu geometry,
+  with saved membership independently asserted after every assignment. A narrow
+  popup OCR region preserves readable evidence. These earlier reports remain
+  under `/tmp/phase8-sets-*` rather than being treated as passing evidence.
+- Architecture comparison has no new excessive-complexity function. Whole-goal
+  duplication is down 0.05 percentage points with unchanged average/maximum
+  complexity. Aggregate short clone groups are up ten across C1–C6; C6 continues
+  to use the same worker, state transaction, path validator and row presentation
+  rather than adding another persistence or inventory system.
+
+C6 is in progress. C7–C9 remain open. Phase 8 is not complete.

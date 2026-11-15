@@ -58,6 +58,8 @@ pub(super) struct Previews {
     protected: BTreeSet<PathBuf>,
     frame_paths: BTreeSet<PathBuf>,
     sequence: u64,
+    pub organization: Arc<super::organization::Snapshot>,
+    pub set_filter: super::organization::Filter,
 }
 struct Node {
     revision: u64,
@@ -208,6 +210,14 @@ impl Previews {
                 .and_then(|node| node.ready.as_ref())
                 .is_none_or(|ready| !ready.complete)
     }
+    fn set_visible(&self, child: &Child) -> bool {
+        match child {
+            Child::File(entry) => {
+                entry.directory || self.organization.sets.matches(&entry.path, self.set_filter)
+            }
+            Child::Member { .. } => true,
+        }
+    }
     fn direct_children<'a>(&'a self, entry: &Entry, hidden: bool) -> Vec<&'a Entry> {
         self.nodes
             .get(&entry.path)
@@ -216,7 +226,9 @@ impl Previews {
             .into_iter()
             .flat_map(|ready| &ready.children)
             .filter_map(|child| match child {
-                Child::File(entry) if hidden || !entry.hidden => Some(entry.as_ref()),
+                Child::File(entry) if (hidden || !entry.hidden) && self.set_visible(child) => {
+                    Some(entry.as_ref())
+                }
                 _ => None,
             })
             .collect()

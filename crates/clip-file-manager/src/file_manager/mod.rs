@@ -573,7 +573,7 @@ impl FileManager {
         }
         self.tick_view_preferences(&local_state::IO);
         self.home_surface.tick(&local_state::IO);
-        self.organization.tick(&local_state::IO);
+        self.tick_organization();
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
@@ -845,6 +845,8 @@ impl FileManager {
     }
 
     fn rebuild_visible(&mut self) {
+        self.containers.organization = self.organization.snapshot.clone();
+        self.containers.set_filter = self.organization.filter;
         self.single_family = None;
         self.visible = self
             .directory
@@ -855,6 +857,14 @@ impl FileManager {
                     .iter()
                     .enumerate()
                     .filter(|(_, entry)| self.show_hidden || !entry.hidden)
+                    .filter(|(_, entry)| {
+                        entry.directory
+                            || self
+                                .organization
+                                .snapshot
+                                .sets
+                                .matches(&entry.path, self.organization.filter)
+                    })
                     .map(|(i, _)| i)
                     .collect()
             })

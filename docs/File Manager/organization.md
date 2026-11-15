@@ -74,5 +74,46 @@ delivery is unbounded; only queue admission is retried automatically. Commands
 and published indexes use shared immutable ownership so ordinary frames do not
 clone the full mark list. File content is never read or written by assignment.
 
-Sorting sets and visibility rules remain subsequent Phase 8 deliveries; they are
-not represented by session colors or inferred from these marks.
+Sorting sets use the separate model described below. Visibility rules remain a
+subsequent Phase 8 delivery; neither is inferred from session colors.
+
+## Sorting sets (current implementation under validation)
+
+Sets classify path references independently from session review marks. A/B are
+the initial root groups. Each group has a stable UUID, name, RGB border color and
+optional parent. Choose a group filter, then Subdivide this set to add children;
+repeat to refine a classification. Assigning an item to a child replaces its
+previous membership, and every ancestor filter includes that child. Direct parent
+assignments remain in the parent until deliberately reassigned. Groups can be
+renamed and recolored. Deletion is allowed only after removing direct assignments
+and child groups, so concurrent assignments cannot silently disappear.
+
+All files, Unassigned files and any group are available as filters. Filters apply
+to file rows and ordinary folder-preview children. Folders remain available for
+navigation, including folders outside the chosen set; no recursive filesystem
+scan is implied by filtering. Archive member previews describe the archive payload,
+not independently classifiable ordinary paths. Filtering does not move, rename or
+copy files. Selection is reconciled with the filtered listing. Filter choice is
+local to this viewing session and starts at All files after restart; definitions
+and assignments persist across folders and restarts.
+
+A small bordered name badge distinguishes set membership from session underlines.
+Its full hierarchy is available on hover. Context menus and the Sets toolbar menu
+both support assignment/removal of the current selection. An inline editor owns
+name/color drafts; Save set and Discard set edits are explicit. Closing with an
+unapplied draft returns to this editor rather than silently discarding it.
+
+Organization schema version 2 adds `sets`, containing `groups` (`id`, `parent`,
+`name`, `color`) and `members` (`path`, `group`). Version 1 migrates by supplying
+initial A/B groups without changing existing session data. Future versions remain
+errors and are preserved. Limits are 256 groups, 16 hierarchy levels and 16,384
+memberships within the existing 8 MiB state budget. Cycles, missing parents/groups,
+nil/duplicate IDs, duplicate sibling names and duplicate paths are invalid.
+
+Set membership follows a path reference through ordinary content edits; it does
+not assert that a replacement at that path is the previously observed object.
+Session marks continue to require their full observed metadata revision. External
+moves are not guessed. Browser-managed moves/renames remain part of C8. Concurrent
+assignments merge against the latest state. A stale group edit fails rather than
+replacing a newer definition; empty-set deletion checks the latest memberships
+and hierarchy inside the guarded transaction.

@@ -450,7 +450,9 @@ impl FileManager {
                 } else if search.is_offline(&entry.path) {
                     actions.unavailable_row(ui, &response, entry, selected);
                 } else {
+                    actions.set_name_end = Some(columns.name_end());
                     actions.row(ui, &response, entry, selected, can_edit, selection_count);
+                    actions.set_name_end = None;
                 }
                 clicked
             },
