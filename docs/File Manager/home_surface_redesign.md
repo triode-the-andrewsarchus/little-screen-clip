@@ -12,11 +12,11 @@ it must not force the user to design their space from a small shape toolbox.
 
 - [x] Show the actual project destination before Create/Register, including in
   the Add menu. Keep the existing source-preserving project creation contract.
-- [ ] Replace Home's drawing-editor toolbar/property panel with a composition
+- [x] Replace Home's drawing-editor toolbar/property panel with a composition
   surface. Import SVG and supported handwritten/vector documents, retain alpha,
   draw vectors directly and permit placement/resizing without decorative borders.
   Keep existing Home data recoverable during migration.
-- [ ] Use a theme-aware dark/light grid. For transparent monochrome near-neutral
+- [x] Use a theme-aware dark/light grid. For transparent monochrome near-neutral
   artwork, adapt lightness for contrast while retaining chroma and alpha. Preserve
   multicolor artwork and opaque backgrounds; theme switching is non-destructive.
 - [ ] Support immediate pressure-sensitive tablet ink with a few brushes/colors.
@@ -480,3 +480,28 @@ complexity and dependency owners remain stable, and duplication percentage drops
 fixtures and dependency declarations. Ink reuses worker admission, native vector
 painting, layout history and atomic persistence; the native input owner is the
 necessary new hardware boundary.
+
+
+## Drawing artwork adapter and broad validation
+
+Linked `.excalidraw` files now use the existing transparent drawing exporter,
+source guard, retained SVG preparation, memory budget and native scene painter.
+They import through the same Add/drop path as SVG and `.note`, without another
+parser or renderer. Generic `.json` is deliberately not claimed. The current
+import set is SVG, `.excalidraw` and first-page Supernote bitmap ink; further
+format adapters are follow-up work, not a claim that bitmap notebooks are vectors.
+
+Three artwork tests pass, including case-insensitive distinct-extension admission.
+Real two-client Copy-only drops pass in both appearances, with pixel checks for
+transparent ink, direct move/resize, restored placement, preserved hue and unchanged
+source bytes. The authored red document paper remains in the ordinary file preview
+and source, and is excluded from the Home artwork:
+`/tmp/home-drawing-artwork-dark-02/report.json` and
+`/tmp/home-drawing-artwork-light-01/report.json`.
+
+The full workspace test gate passes 3,407 tests (36 ignored), including doctests,
+with zero compiler warnings (`/tmp/home-redesign-workspace-tests.log`). Strict
+workspace all-target Clippy also passes with warnings denied
+(`/tmp/home-redesign-workspace-clippy.log`). Disk availability remains roughly
+77–79 GiB. The remaining unchecked delivery validation is physical tablet input
+and feel; native mouse automation does not establish that result.

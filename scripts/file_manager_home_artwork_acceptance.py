@@ -10,8 +10,14 @@ from file_manager_home_acceptance import click_cropped_word, resize_handle
 import ui_acceptance_capture as private
 
 
+def artwork_options(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--note", action="store_true")
+    group.add_argument("--drawing", action="store_true")
+
+
 if __name__ == "__main__":
-    args = application_arguments(__doc__, Path("target/debug/clip-file-manager"), lambda parser: parser.add_argument("--note", action="store_true"))
+    args = application_arguments(__doc__, Path("target/debug/clip-file-manager"), artwork_options)
     output = args.output_dir.resolve()
     output.mkdir(mode=0o700)
     children = private.ChildProcesses()
@@ -20,20 +26,27 @@ if __name__ == "__main__":
         source = output / "SOURCE"
         target = output / "DESTINATION"
         source.mkdir(); target.mkdir()
-        icon = source / ("neutral.note" if args.note else "neutral.svg")
+        icon = source / ("neutral.note" if args.note else "art.excalidraw" if args.drawing else "neutral.svg")
         color = "#181008" if args.appearance == "dark" else "#f7efe7"
         original = f'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><path d="M10 50L90 50" fill="none" stroke="{color}" stroke-width="5"/></svg>'.encode()
         if args.note:
             original = (Path(__file__).resolve().parents[1] / "docs/examples/notebooks/supernote/demo-a5x-20230015-1to10.note").read_bytes()
+        if args.drawing:
+            original = json.dumps({"type":"excalidraw","version":2,"elements":[{
+                "id":"ink","type":"line","x":10,"y":50,"width":80,"height":0,
+                "points":[[0,0],[80,0]],"strokeColor":color,"strokeWidth":5,
+                "backgroundColor":"transparent","fillStyle":"solid","roughness":0,
+                "seed":42,"opacity":100,"angle":0}],
+                "appState":{"viewBackgroundColor":"#ff0000"},"files":{}}).encode()
         icon.write_bytes(original)
         config, env, apps = start_two_clients(output, args.appearance, args.binary, [source, target], children)
         session = Session(output, env, config["niri_bin"], apps[1], children)
         session.ocr_regions = [("home-right-controls-ocr.png", (650,78,1270,136))]
-        session.observe("two-clients", ["neutral"])
+        session.observe("two-clients", [icon.stem])
         if not click_cropped_word(session, "two-clients", "Home", (1058,78,1123,110), 65, 120):
             # Observed native 640px client geometry; dark bordered text can be omitted by OCR.
             session.click(1090, 94)
-        session.observe("home", ["neutral", "Arrange"])
+        session.observe("home", [icon.stem, "Arrange"])
         drag(session, position(session, "home", icon.name, True), (970, 450))
         home = Path(env["XDG_STATE_HOME"]) / "little-screen-clip/home.json"
         wait_for(lambda: home.exists() and any(card["content"]["kind"] == "artwork" for card in json.loads(home.read_text())["board"]["cards"]), "native Home artwork import committed")

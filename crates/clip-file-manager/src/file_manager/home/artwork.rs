@@ -13,11 +13,13 @@ use uuid::Uuid;
 pub(super) static READS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 2));
 const CAPACITY: usize = 128;
 const MEMORY: usize = 128 * 1024 * 1024;
-const SVG_BYTES: usize = 2 * 1024 * 1024;
+const VECTOR_BYTES: usize = 2 * 1024 * 1024;
 
 pub(in crate::file_manager) fn supported(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("svg") || extension.eq_ignore_ascii_case("note")
+        ["svg", "note", "excalidraw"]
+            .iter()
+            .any(|kind| extension.eq_ignore_ascii_case(kind))
     })
 }
 
@@ -40,20 +42,28 @@ impl Prepared {
 
 fn prepare(path: &Path, cancel: &AtomicBool) -> Result<Prepared, String> {
     let (mut file, source) = ReadCheck::default().open(path, None, cancel)?;
-    let prepared = if path
+    let drawing = path
         .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("excalidraw"));
+    let prepared = if drawing
+        || path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
     {
         let mut bytes = Vec::new();
         file.by_ref()
-            .take(SVG_BYTES as u64 + 1)
+            .take(VECTOR_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        if bytes.len() > SVG_BYTES {
-            return Err("Home SVG exceeds 2 MiB".into());
+        if bytes.len() > VECTOR_BYTES {
+            return Err("Home vector artwork exceeds 2 MiB".into());
         }
         let text = std::str::from_utf8(&bytes).map_err(|error| error.to_string())?;
-        let rendered = little_clip_render::diagram::render_svg_artwork(text, cancel)?;
+        let rendered = if drawing {
+            little_clip_render::diagram::render_drawing_artwork(text, cancel)?
+        } else {
+            little_clip_render::diagram::render_svg_artwork(text, cancel)?
+        };
         let svg = little_clip_render::diagram::retained::prepare_preview(&rendered.svg)?;
         // XML overestimates ordinary retained path storage; embedded pixel
         // allocations are charged separately, including their GPU texture.
@@ -291,6 +301,15 @@ impl Assets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn artwork_admission_uses_distinct_extensions_without_claiming_generic_json() {
+        for name in ["one.svg", "two.NOTE", "three.excalidraw", "four.EXCALIDRAW"] {
+            assert!(supported(Path::new(name)));
+        }
+        for name in ["data.json", "ordinary.txt", "document.pdf", "unknown"] {
+            assert!(!supported(Path::new(name)));
+        }
+    }
     #[test]
     fn grayscale_ink_mask_reproduces_original_tones_on_white_and_keeps_empty_pixels_clear() {
         let image =

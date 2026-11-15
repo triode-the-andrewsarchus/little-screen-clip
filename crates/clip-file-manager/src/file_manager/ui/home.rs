@@ -226,7 +226,7 @@ impl FileManager {
         });
     }
     fn home_artwork_add(&mut self, ui: &mut Ui, selected: &[PathBuf], can_pin: bool) {
-        ui.weak("Drop SVG or .note artwork onto the desk.");
+        ui.weak("Drop SVG, .excalidraw or .note artwork onto the desk.");
         if ui
             .add_enabled(
                 can_pin
