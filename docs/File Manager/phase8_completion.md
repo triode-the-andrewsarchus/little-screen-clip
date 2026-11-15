@@ -41,7 +41,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       underlines, persistence and clearing/recovery.
 - [x] C6. Configurable A/B/... sets, membership/filtering and repeated subdivision;
       independent from session state and visibility.
-- [ ] C7. `.hide`/`.show` syntax, precedence/inheritance, selective dotfile reveal,
+- [x] C7. `.hide`/`.show` syntax, precedence/inheritance, selective dotfile reveal,
       labeled solid backgrounds and an obvious recovery/ignore-rules control.
 - [ ] C8. Home browser history/startup behavior; defined/tested rename/move/restart
       handling for pins, marks, sets and project identities.
@@ -488,3 +488,21 @@ still require accepted, queued semantic retargeting through their existing owner
 a read-style refresh must not replace those writes or drop events while busy.
 Copy results must not retarget references. Home also remains a separate open flag,
 so virtual history/startup integration still needs implementation and tests.
+
+
+### C7 native acceptance completed
+
+Both final native workflows passed all ten observations:
+`/tmp/phase8-rules-dark-04/report.json` and
+`/tmp/phase8-rules-light-04/report.json`. They verify selective dotfiles, normal
+hidden-file exclusion, labeled solid row colors using independent pixel counts,
+reveal-all recovery including the rule files, restart with policy restored,
+future-version preservation and visible fail-open error, source repair/refresh,
+and child-folder local overrides. Source bytes remain unchanged after repair.
+Both themes, the error presentation and child-folder previews were visually
+inspected. Filename OCR uses basename fragments where leading dots are omitted;
+unit tests check exact paths and source bytes. Prior failed captures remain as
+recorded and do not count toward acceptance. Formatting also passed
+(`/tmp/phase8-rules-format.log`).
+
+C7 is complete. C8/C9 remain required before Phase 8 is complete.

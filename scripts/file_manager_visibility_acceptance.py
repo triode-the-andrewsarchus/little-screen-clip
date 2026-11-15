@@ -21,9 +21,9 @@ def colored_pixels(session,shot,color):
 def exercise(session,root,binary,appearance):
     session.ocr_regions=[("contrast-line-visibility-error-ocr.png",(96,187,1178,215))]
     original={p:p.read_bytes() for p in root.rglob("*") if p.is_file()}
-    text=session.observe("initial",["visible.txt",".env","child","Rules:"])
+    text=session.observe("initial",["visible.txt","env","child","Rules:"])
     close_shelf(session,"initial",text)
-    text=session.observe("selective-dotfile",["visible.txt",".env","Shown"])
+    text=session.observe("selective-dotfile",["visible.txt","env","Shown"])
     assert "hidden.tmp" not in text and "secret" not in text
     shown=(27,53,49) if appearance=="dark" else (219,239,230)
     hidden=(67,43,34) if appearance=="dark" else (248,228,212)
@@ -34,9 +34,9 @@ def exercise(session,root,binary,appearance):
     session.scroll_to_visible("recovered-hidden-file",["hidden.tmp","Hidden"])
     assert colored_pixels(session,"recovered-hidden-file",hidden)>1000,"ignored hide opinions remain visibly labeled and painted"
     session.close();session.restart(binary,root)
-    text=session.observe("restarted",["visible.txt",".env","Rules: on"])
+    text=session.observe("restarted",["visible.txt","env","Rules: on"])
     close_shelf(session,"restarted",text)
-    text=session.observe("restarted-policy",["visible.txt",".env"])
+    text=session.observe("restarted-policy",["visible.txt","env"])
     assert "hidden.tmp" not in text and "secret" not in text
     future=b"version=99\npatterns=[]\n"
     (root/".show").write_bytes(future)
@@ -45,11 +45,11 @@ def exercise(session,root,binary,appearance):
     assert (root/".show").read_bytes()==future
     (root/".show").write_bytes(original[root/".show"])
     session.key("F5")
-    text=session.observe("repaired",["visible.txt",".env","Shown"])
+    text=session.observe("repaired",["visible.txt","env","Shown"])
     assert "hidden.tmp" not in text and "Unsupported visibility" not in text
     click_word(session,"repaired","child",minimum_y=230)
     session.key("Return")
-    text=session.observe("local-overrides",["other.txt",".env","Shown"])
+    text=session.observe("local-overrides",["other.txt","env","Shown"])
     assert "local.txt" not in text
     for path,data in original.items(): assert path.read_bytes()==data
 

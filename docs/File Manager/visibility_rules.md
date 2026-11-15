@@ -1,7 +1,7 @@
 # Folder visibility rules
 
-This is the C7 implementation contract. Final native acceptance is still pending
-in `phase8_completion.md`.
+This is the C7 implementation contract. Validation evidence is recorded in
+`phase8_completion.md`.
 
 `.hide` and `.show` are folder-owned UTF-8 TOML documents. They never change file
 permissions, content or search indexing policy. Each file must declare version 1;
