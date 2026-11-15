@@ -560,5 +560,7 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   requests Fit; the existing view remains intact and drop coordinates stay exact.
 - [ ] Bound Home zoom/pan and its grid to a useful workspace.
 - [ ] Offer project versus folder-preview choices for folder drops.
-- [ ] Dock click-region controls on the left and align their actions.
+- [x] Dock click-region controls on the left and align their actions. Names and
+  wrapped destinations sit above a consistent action row in a resizable sidebar;
+  freehand tracing does not open a panel midway through the gesture.
 - [ ] Expand `~/` in click-region targets without shell evaluation.

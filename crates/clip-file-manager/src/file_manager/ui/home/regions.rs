@@ -13,6 +13,27 @@ pub(super) enum Activation {
 
 impl FileManager {
     pub(super) fn home_region_panel(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let interaction = &self.home_surface.region_ui;
+        if !(interaction.open
+            || interaction.draft.is_some()
+            || !interaction.chooser.is_empty()
+            || interaction.error.is_some())
+        {
+            return;
+        }
+        egui::SidePanel::left("home_click_regions_panel")
+            .default_width(400.)
+            .width_range(360.0..=620.0)
+            .resizable(true)
+            .show_inside(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                egui::ScrollArea::vertical()
+                    .id_source("home_region_sidebar_scroll")
+                    .min_scrolled_height(0.)
+                    .show(ui, |ui| self.home_region_contents(ui, palette));
+            });
+    }
+    fn home_region_contents(&mut self, ui: &mut Ui, palette: &AppPalette) {
         if self.home_surface.recipes.writing() {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -73,7 +94,7 @@ impl FileManager {
         let mut cancel = false;
         ui.group(|ui| {
                 ui.label("Click region · choose an action");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Name");
                     ui.add(egui::TextEdit::singleline(&mut draft.region.label).desired_width(240.0).char_limit(64));
                     ui.checkbox(&mut draft.region.enabled, "Enabled");
@@ -163,7 +184,7 @@ impl FileManager {
             let edited = ui
                 .add(
                     egui::TextEdit::singleline(&mut draft.path)
-                        .desired_width(400.0)
+                        .desired_width(ui.available_width().min(400.0))
                         .hint_text("Absolute file or folder path"),
                 )
                 .changed();
@@ -296,10 +317,10 @@ impl FileManager {
             }
             egui::ScrollArea::vertical()
                 .id_source("home_region_manager")
-                .max_height(190.0)
+                .max_height(ui.available_height())
                 .show(ui, |ui| {
                     for (index, region) in regions.iter().enumerate().rev() {
-                        ui.horizontal_wrapped(|ui| {
+                        ui.vertical(|ui| {
                             let mut active = region.enabled;
                             if ui
                                 .add_enabled(
@@ -312,48 +333,56 @@ impl FileManager {
                                     .session
                                     .edit(|board| board.regions[index].enabled = active);
                             }
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("Edit action"))
-                                .clicked()
-                            {
-                                interaction.draft = Some(Draft::from_region(
-                                    region.clone(),
-                                    self.home_surface.pins(),
-                                    Some(region.clone()),
-                                ));
-                            }
-                            if ui
-                                .add_enabled(
-                                    enabled && index + 1 < regions.len(),
-                                    egui::Button::new("Raise"),
-                                )
-                                .clicked()
-                            {
-                                self.home_surface
-                                    .session
-                                    .edit(|board| board.regions.swap(index, index + 1));
-                            }
-                            if ui
-                                .add_enabled(enabled && index > 0, egui::Button::new("Lower"))
-                                .clicked()
-                            {
-                                self.home_surface
-                                    .session
-                                    .edit(|board| board.regions.swap(index, index - 1));
-                            }
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("Delete region"))
-                                .clicked()
-                            {
-                                self.home_surface
-                                    .session
-                                    .edit(|board| board.regions.retain(|old| old.id != region.id));
-                            }
                             if let Some(action) = &region.action {
-                                ui.weak(action_label(action, self.home_surface.pins()));
-                            } else {
-                                ui.weak("No target · choose an action");
+                                ui.add(
+                                    egui::Label::new(action_label(
+                                        action,
+                                        self.home_surface.pins(),
+                                    ))
+                                    .wrap(true),
+                                );
                             }
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(enabled, egui::Button::new("Edit action"))
+                                    .clicked()
+                                {
+                                    interaction.open = false;
+                                    interaction.draft = Some(Draft::from_region(
+                                        region.clone(),
+                                        self.home_surface.pins(),
+                                        Some(region.clone()),
+                                    ));
+                                }
+                                if ui
+                                    .add_enabled(
+                                        enabled && index + 1 < regions.len(),
+                                        egui::Button::new("Raise"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.home_surface
+                                        .session
+                                        .edit(|board| board.regions.swap(index, index + 1));
+                                }
+                                if ui
+                                    .add_enabled(enabled && index > 0, egui::Button::new("Lower"))
+                                    .clicked()
+                                {
+                                    self.home_surface
+                                        .session
+                                        .edit(|board| board.regions.swap(index, index - 1));
+                                }
+                                if ui
+                                    .add_enabled(enabled, egui::Button::new("Delete region"))
+                                    .clicked()
+                                {
+                                    self.home_surface.session.edit(|board| {
+                                        board.regions.retain(|old| old.id != region.id)
+                                    });
+                                }
+                            });
+                            ui.separator();
                         });
                     }
                 });
