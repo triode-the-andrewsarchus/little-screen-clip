@@ -476,11 +476,11 @@ impl FileManager {
     }
 }
 fn home_edit_keys(ctx: &egui::Context, session: &mut crate::file_manager::home::Session) {
-    if key(ctx, Modifiers::CTRL, Key::Z) {
-        session.undo();
-    }
+    // egui's logical matching permits extra Shift; consume the specific chord first.
     if key(ctx, Modifiers::CTRL | Modifiers::SHIFT, Key::Z) {
         session.redo();
+    } else if key(ctx, Modifiers::CTRL, Key::Z) {
+        session.undo();
     }
     if session.selected.is_some() && key(ctx, Modifiers::NONE, Key::Delete) {
         session.remove_selected();
@@ -530,6 +530,36 @@ mod tests {
     use super::*;
     use crate::file_manager::filesystem;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn shifted_redo_is_not_consumed_as_plain_undo() {
+        let mut session = crate::file_manager::home::Session::default();
+        session.edit(|board| board.title = "My desk".into());
+        session.undo();
+        let ctx = egui::Context::default();
+        for (modifiers, title) in [
+            (Modifiers::CTRL | Modifiers::SHIFT, "My desk"),
+            (Modifiers::CTRL, "Home"),
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key: Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| home_edit_keys(ctx, &mut session),
+            );
+            assert_eq!(session.board.title, title);
+        }
+    }
+
+
 
     #[test]
     fn home_suspends_folder_shortcuts_and_resumes_selection_without_a_fake_path() {

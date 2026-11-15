@@ -257,3 +257,12 @@ rejected without replacing the original input.
 
 C3 is complete. Live project content/checkboxes are still C4, rather than being
 claimed from the project menu or manifest foundation.
+
+### Home shortcut follow-up
+
+- [x] Ctrl+Shift+Z now reaches redo instead of being consumed by plain undo.
+  egui logical matching allows extra Shift, so the more specific chord must be
+  consumed first. A regression demonstrated the wrong title before the fix and
+  passes afterward. Logs: `/tmp/phase8-redo-before.log` and
+  `/tmp/phase8-redo-after.log`. The live project native workflow exposed this
+  while checking that layout undo leaves independently saved TODO content alone.
