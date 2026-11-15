@@ -9,6 +9,7 @@ use std::time::Duration;
 pub use ui_ext::*;
 
 pub mod ansi;
+pub mod appearance_sync;
 pub mod audio_preview;
 pub mod barcode_worker;
 pub mod binary_diff_view;

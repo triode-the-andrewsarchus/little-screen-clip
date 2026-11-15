@@ -102,6 +102,7 @@ struct FileManagerApp {
     viewers: super::viewers::Viewers,
     external: super::external::Launcher,
     palette: AppPalette,
+    appearance_sync: clip_studios::appearance_sync::AppearanceSync,
     native: Option<super::native_drag::NativeDrag>,
     tablet: Option<super::native_tablet::NativeTablet>,
     drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
@@ -175,6 +176,7 @@ impl FileManagerApp {
             closing: false,
             external: Default::default(),
             palette,
+            appearance_sync: Default::default(),
             native: super::native_drag::NativeDrag::new(cc),
             tablet: super::native_tablet::NativeTablet::new(cc),
             drop_destinations: Default::default(),
@@ -401,11 +403,15 @@ impl FileManagerApp {
                     )
                     .clicked()
                 {
+                    self.appearance_sync.clear();
                     self.palette = ui_appearance::palette(appearance);
                     ui_appearance::apply_visuals(ui.ctx(), &self.palette);
                     self.viewers.set_appearance(appearance);
-                    if let Err(error) = AppConfig::save_workbench_appearance_to_file(appearance) {
-                        self.browser.error = Some(format!("Could not save appearance: {error}"));
+                    match AppConfig::save_workbench_appearance_to_file(appearance) {
+                        Ok(()) => self.appearance_sync.begin(),
+                        Err(error) => self
+                            .appearance_sync
+                            .set_error(format!("Could not save appearance: {error}")),
                     }
                     ui.ctx().request_repaint();
                     ui.close_menu();
@@ -531,6 +537,7 @@ impl FileManagerApp {
                         }
                     });
                 });
+                self.appearance_sync.render_inline(ui, &self.palette);
             });
         }
     }
@@ -816,12 +823,13 @@ impl FileManagerApp {
         }
     }
     fn finish_app_close(&mut self, ctx: &egui::Context) {
-        let ready = self
-            .browser
-            .search
-            .service
-            .as_mut()
-            .is_none_or(|service| service.allow_close());
+        let ready = !self.appearance_sync.busy()
+            && self
+                .browser
+                .search
+                .service
+                .as_mut()
+                .is_none_or(|service| service.allow_close());
         if ready {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
@@ -850,6 +858,7 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.appearance_sync.poll(ctx);
         if self.closing {
             central_panel(ctx, |ui| {
                 ui.spinner();
@@ -1021,6 +1030,7 @@ mod media_view_removal_tests {
             viewers: super::super::viewers::Viewers::default(),
             external: Default::default(),
             palette: Default::default(),
+            appearance_sync: Default::default(),
             native: None,
             tablet: None,
             drop_destinations: Default::default(),

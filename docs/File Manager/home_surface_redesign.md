@@ -1,6 +1,7 @@
 # Home surface redesign
 
-Status: active. This supersedes the previous drawing-editor presentation of
+Status: active; implementation is ready for review, with physical tablet input
+still unverified. This supersedes the previous drawing-editor presentation of
 Home. Phase 8's old closeout records that delivery, not completion of this revised
 experience. Baseline: `before-home-surface-redesign` (`ff108d5a`).
 
@@ -516,3 +517,29 @@ and feel; native mouse automation does not establish that result.
   not deliver a distinct proximity event first. All three tablet-frame/routing
   tests pass (`/tmp/home-tablet-contact-tests.log`). Physical hardware remains
   explicitly unverified.
+
+
+## View appearance daemon parity
+
+- [x] Successful View-menu appearance saves now apply to the little-screen daemon,
+  using the same coalescing completion owner as the workbench. That owner lives in
+  `clip-studios`, with a workbench compatibility import; hosts remain independent.
+  File manager displays failures inline and retains close ownership until reload
+  completion. Success adds no message. The workbench keeps its existing feedback.
+
+The moved controller's completion/coalescing/error tests pass, and strict workspace
+all-target Clippy, formatting and a full warning-free workspace build pass. The
+workspace rerun passes 3,407 tests (36 ignored, zero compiler warnings):
+`/tmp/home-redesign-workspace-tests-final.log`. The subsequent small pen-routing
+fixes have the targeted tests recorded above. The native appearance workflow
+passes 11 observations, including both transitions, restart, exact daemon reloads,
+failure without automatic resend and inline dismissal:
+`/tmp/files-appearance-daemon-dark-02/report.json`.
+
+The final built ink view also passes its seven native observations after the
+palette and routing fixes: `/tmp/home-ink-final-dark-01/report.json`. This remains
+paint/history/mouse-isolation evidence, not a physical tablet test. Architecture
+comparison keeps average/max complexity and duplication percentage unchanged;
+flags concern moved existing controller snippets, host lifecycle wiring and
+reordered cycle members in untouched files. There is no second synchronization
+controller or new dependency. Approximately 74 GiB of disk space remains free.
