@@ -496,7 +496,11 @@ pub(super) fn rename_file(
 // Path::strip_prefix compares components, so renaming "a" never rewrites "ab".
 fn relocate(path: &mut PathBuf, source: &Path, destination: &Path) -> bool {
     if let Ok(suffix) = path.strip_prefix(source) {
-        *path = destination.join(suffix);
+        *path = if suffix.as_os_str().is_empty() {
+            destination.to_path_buf()
+        } else {
+            destination.join(suffix)
+        };
         true
     } else {
         false
@@ -685,5 +689,24 @@ mod tests {
         assert!(operation.execute().is_err());
         assert!(!root.path().join("renamed").exists());
         assert_eq!(std::fs::read(source.join("ordinary")).unwrap(), b"kept");
+    }
+}
+
+#[cfg(test)]
+mod relocation_path_tests {
+    #[test]
+    fn exact_file_relocation_keeps_raw_path_bytes_and_opens_the_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("old.txt");
+        let destination = root.path().join("new.txt");
+        std::fs::write(&destination, b"content").unwrap();
+        let mut path = source.clone();
+        assert!(super::relocate(&mut path, &source, &destination));
+        assert_eq!(path.as_os_str(), destination.as_os_str());
+        assert_eq!(std::fs::read(&path).unwrap(), b"content");
+        let mut sibling = root.path().join("old.txt.other");
+        let before = sibling.clone();
+        assert!(!super::relocate(&mut sibling, &source, &destination));
+        assert_eq!(sibling, before);
     }
 }

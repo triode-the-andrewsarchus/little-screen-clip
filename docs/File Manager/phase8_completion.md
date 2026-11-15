@@ -547,3 +547,13 @@ checking resumed keyboard selection.
 The history/startup part of C8 is delivered. Confirmed rename/move retargeting of
 Home pins, organization and project references remains outstanding, as does C9.
 Phase 8 is not complete.
+
+### C8 exact file-path relocation fix
+
+- [x] Preserve exact destination bytes when retargeting a file. The shared
+  `destination.join(empty_suffix)` added a trailing slash, which Path equality
+  concealed but ordinary file opening rejected. The regression checks raw path
+  bytes, opens the target and checks a similarly prefixed sibling stays unchanged.
+  It failed before the fix (`/tmp/phase8-relocation-path-before.log`) and passes
+  afterward (`/tmp/phase8-relocation-path-after.log`). This fix is committed
+  separately from the reference-update feature.
