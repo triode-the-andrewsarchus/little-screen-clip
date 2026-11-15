@@ -112,23 +112,12 @@ impl DrawingEditor {
         if response.has_focus() || escaped_focus {
             // Ghost/retained pixels belong to accepted edits, not a cancellable
             // interaction. Text-selection IDs can also outlive a closed draft.
-            let cancellable = self.gesture.is_some()
-                || !self.selected.is_empty()
-                || self.tool.is_some()
-                || self.panning
-                || self.text_draft.is_some();
-            if cancellable
-                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            if ui.input(|input| {
+                input.modifiers == egui::Modifiers::NONE && input.key_pressed(egui::Key::Escape)
+            }) && self.cancel_interaction()
             {
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                 response.request_focus();
-                self.gesture = None;
-                self.ghost = None;
-                self.retained_move = None;
-                self.selected.clear();
-                self.tool = None;
-                self.panning = false;
-                self.text_draft = None;
-                self.text_selection = None;
             }
             for (key, tool, pan) in [
                 (egui::Key::H, None, true),
@@ -157,6 +146,24 @@ impl DrawingEditor {
                 });
             }
         }
+    }
+    pub(super) fn cancel_interaction(&mut self) -> bool {
+        let cancellable = self.gesture.is_some()
+            || !self.selected.is_empty()
+            || self.tool.is_some()
+            || self.panning
+            || self.text_draft.is_some();
+        if cancellable {
+            self.gesture = None;
+            self.ghost = None;
+            self.retained_move = None;
+            self.selected.clear();
+            self.tool = None;
+            self.panning = false;
+            self.text_draft = None;
+            self.text_selection = None;
+        }
+        cancellable
     }
     fn begin(&mut self, model: &Scene, point: [f64; 2], shift: bool) {
         if let Some((id, original, corner, proportional)) = self.resize_handle(model, point) {

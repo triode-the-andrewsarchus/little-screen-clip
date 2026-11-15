@@ -9,6 +9,8 @@ use super::*;
 pub struct Options<'a> {
     /// Enables drawing tools and properties rather than shortcut browsing.
     pub editable: bool,
+    /// Temporarily disables edits without hiding or moving their controls.
+    pub enabled: bool,
     /// Prevents drawing or shortcut activation through these widget bounds.
     pub excluded: &'a [Bounds],
     /// Includes live content in Fit without creating artificial drawing shapes.
@@ -19,6 +21,7 @@ impl Options<'_> {
     pub fn editing() -> Self {
         Self {
             editable: true,
+            enabled: true,
             excluded: &[],
             extent: None,
         }
@@ -81,6 +84,10 @@ impl Canvas {
     pub fn error(&self) -> Option<&str> {
         self.editor.parse_error.as_deref().or(self.editor.error())
     }
+    /// Cancels an active gesture, tool, selection or text draft without cancelling accepted edits.
+    pub fn cancel(&mut self) -> bool {
+        self.editor.cancel_interaction()
+    }
     /// Requests Fit once current artwork is ready.
     pub fn fit(&mut self) {
         self.editor.camera.fitted = false;
@@ -116,7 +123,7 @@ impl Canvas {
         let current = changed.as_deref().unwrap_or(source);
         self.editor.prepare_model(current);
         if options.editable {
-            self.editor.toolbar(ui, palette);
+            ui.add_enabled_ui(options.enabled, |ui| self.editor.toolbar(ui, palette));
         }
         let size = ui.available_size().max(Vec2::splat(1.0));
         let (_, activated) = ui
@@ -132,8 +139,10 @@ impl Canvas {
                                 .min_scrolled_height(0.0)
                                 .max_height(size.y)
                                 .show(ui, |ui| {
-                                    self.editor.text_controls(ui);
-                                    self.editor.properties(ui, palette);
+                                    ui.add_enabled_ui(options.enabled, |ui| {
+                                        self.editor.text_controls(ui);
+                                        self.editor.properties(ui, palette);
+                                    });
                                 });
                         },
                     );
@@ -258,7 +267,7 @@ mod tests {
             preview: Preview::drawing_fixture(&ctx, &source),
         };
         let mut point = egui::Pos2::ZERO;
-        let mut frame = |canvas: &mut Canvas, events, editable, excluded: &[Bounds]| {
+        let mut frame = |canvas: &mut Canvas, events, editable, enabled, excluded: &[Bounds]| {
             let mut response = Response::default();
             let _ = ctx.run(
                 egui::RawInput {
@@ -277,6 +286,7 @@ mod tests {
                             &AppPalette::default(),
                             Options {
                                 editable,
+                                enabled,
                                 excluded,
                                 extent: None,
                             },
@@ -289,7 +299,7 @@ mod tests {
             );
             (response, point)
         };
-        let (_, point) = frame(&mut canvas, vec![], false, &[]);
+        let (_, point) = frame(&mut canvas, vec![], false, true, &[]);
         let pointer = |pressed| {
             vec![
                 egui::Event::PointerMoved(point),
@@ -301,8 +311,8 @@ mod tests {
                 },
             ]
         };
-        let _ = frame(&mut canvas, pointer(true), false, &[]);
-        let (clicked, _) = frame(&mut canvas, pointer(false), false, &[]);
+        let _ = frame(&mut canvas, pointer(true), false, true, &[]);
+        let (clicked, _) = frame(&mut canvas, pointer(false), false, true, &[]);
         assert_eq!(clicked.activated.as_deref(), Some("shortcut"));
         assert!(!canvas.busy());
         let block = Bounds {
@@ -312,10 +322,35 @@ mod tests {
             height: 100.0,
             angle: 0.0,
         };
-        let _ = frame(&mut canvas, pointer(true), false, &[block]);
-        let (blocked, _) = frame(&mut canvas, pointer(false), false, &[block]);
+        let _ = frame(&mut canvas, pointer(true), false, true, &[block]);
+        let (blocked, _) = frame(&mut canvas, pointer(false), false, true, &[block]);
         assert!(blocked.activated.is_none());
         assert!(canvas.editor.gesture.is_none());
+        let (_, interactive) = frame(&mut canvas, vec![], true, true, &[]);
+        let (_, disabled) = frame(&mut canvas, vec![], true, false, &[]);
+        assert_eq!(
+            interactive, disabled,
+            "temporarily disabling edits must keep the canvas mapping stable"
+        );
+        for pressed in [true, false] {
+            let _ = frame(
+                &mut canvas,
+                vec![
+                    egui::Event::PointerMoved(disabled),
+                    egui::Event::PointerButton {
+                        pos: disabled,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                true,
+                false,
+                &[],
+            );
+        }
+        assert!(canvas.editor.gesture.is_none());
+        assert!(!canvas.busy());
         assert_eq!(canvas.editor.model.as_ref().unwrap().source(), source);
     }
 }

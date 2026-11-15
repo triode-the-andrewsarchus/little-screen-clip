@@ -343,7 +343,7 @@ impl DrawingEditor {
                 self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
             }
         }
-        if options.editable {
+        if options.editable && options.enabled {
             self.keyboard(ui, &response);
         }
         (rect, activated)
@@ -357,6 +357,9 @@ impl DrawingEditor {
         ready: bool,
         options: embedded::Options<'_>,
     ) -> Option<String> {
+        if !options.enabled {
+            return None;
+        }
         let blocked = embedded::pointer_blocked(ui, &self.camera, rect, options.excluded);
         let activated = if !options.editable && ready && response.clicked() && !blocked {
             self.artwork_at(ui, rect)
