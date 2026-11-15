@@ -572,3 +572,8 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   freehand tracing does not open a panel midway through the gesture.
 - [x] Expand `~/` in click-region targets without shell evaluation, using the
   browser's existing path-address decoder and showing the resolved destination.
+
+- [x] Retain accepted folder-drop work through close. Classification and accepted
+  preview/project installations finish before the Copy-only handoff is retired;
+  unaccepted choices may cancel. The placement regression now exercises close
+  during classification and queued installation.

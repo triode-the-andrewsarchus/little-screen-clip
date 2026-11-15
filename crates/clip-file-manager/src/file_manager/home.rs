@@ -1058,6 +1058,7 @@ mod session_delivery_tests {
         home.open = true;
         await_state(&mut home, &jobs, Home::ready);
         assert!(home.receive_drop(vec![folder.clone()], [900., 600.], 71, Default::default()));
+        assert!(!home.prepare_close());
         await_state(&mut home, &jobs, |home| !home.drops.items.is_empty());
         assert!(home.session.board.cards.is_empty());
         assert!(!folder.join(".fmproject").exists());
@@ -1066,6 +1067,7 @@ mod session_delivery_tests {
         };
         assert!(!manifest);
         home.add_folder(path, home.drops.point);
+        assert!(!home.prepare_close());
         await_state(&mut home, &jobs, |home| {
             home.ready() && !home.session.board.cards.is_empty()
         });
