@@ -448,7 +448,8 @@ impl FileManager {
             |ui, viewport| {
                 surface_rect = Some(viewport.rect);
                 spawn = viewport.world(viewport.rect.center());
-                paper_pressed = ui.input(|input| input.pointer.primary_pressed())
+                paper_pressed = !ui.memory(|memory| memory.any_popup_open())
+                    && ui.input(|input| input.pointer.primary_pressed())
                     && ui
                         .input(|input| input.pointer.interact_pos())
                         .is_some_and(|point| {

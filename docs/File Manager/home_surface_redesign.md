@@ -543,3 +543,17 @@ comparison keeps average/max complexity and duplication percentage unchanged;
 flags concern moved existing controller snippets, host lifecycle wiring and
 reordered cycle members in untouched files. There is no second synchronization
 controller or new dependency. Approximately 74 GiB of disk space remains free.
+
+
+## Second review fixes
+
+- [x] Keep section color popups open through repeated color changes. Canvas
+  deselection ignores clicks captured by a popup; picking a color no longer
+  removes the selected section and its picker. Native checks follow below.
+- [ ] Enable folder-pane controls while arranging.
+- [ ] Support Delete/Undo and direct editing after reopening.
+- [ ] Preserve the camera when adding placements.
+- [ ] Bound Home zoom/pan and its grid to a useful workspace.
+- [ ] Offer project versus folder-preview choices for folder drops.
+- [ ] Dock click-region controls on the left and align their actions.
+- [ ] Expand `~/` in click-region targets without shell evaluation.
