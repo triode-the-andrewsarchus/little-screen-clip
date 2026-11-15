@@ -398,8 +398,10 @@ are documented in `organization.md`.
   unassigned files, missing parents, cycles/depth limits, names, stale edits,
   lossless non-UTF-8 memberships, v1 migration, concurrent assignments, restart,
   draft ownership and browser selection reconciliation.
-- Full suite, final strict Clippy/build and native acceptance are still being
-  finalized; C6 remains unchecked until their results have been inspected.
+- Final full file-manager suite: 1,006 passed, zero failed, 6 ignored
+  (`/tmp/phase8-sets-all-tests.log`). Strict file-manager Clippy and debug build
+  passed (`/tmp/phase8-sets-{clippy,build}.log`). Native acceptance is still being
+  finalized; C6 remains unchecked until both appearances have been inspected.
 - The first native attempts exposed OCR failing on highlighted/one-letter filter
   labels and choosing an identically named parent filter instead of the
   assignment submenu. The driver now uses the observed native submenu geometry,

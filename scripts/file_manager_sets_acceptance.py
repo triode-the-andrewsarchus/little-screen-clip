@@ -10,7 +10,7 @@ from file_manager_session_acceptance import close_shelf
 
 def menu(session,shot,name,filtered=False):
     click_word(session,shot,"Sets:" if filtered else "Sets",minimum_y=140,maximum_y=200)
-    return session.observe(name,["Unassigned files","Assign selection to set","New root set"])
+    return session.observe(name,["Unassigned files","New root set"])
 
 
 def exercise(session,root,binary):
@@ -56,7 +56,7 @@ def exercise(session,root,binary):
     menu(session,"subset-selected","subset-assign-menu",True)
     click_word(session,"subset-assign-menu","Assign",minimum_y=200)
     session.observe("subset-choice",["Keep"])
-    click_word(session,"subset-choice","Keep",minimum_y=200)
+    click_word(session,"subset-choice","Keep",minimum_y=500)
     keep=next(g["id"] for g in saved()["groups"] if g["name"]=="Keep")
     wait_for(lambda:any(m["path"]==str(root/"alpha.txt") and m["group"]==keep for m in saved()["members"]),"subdivision membership saved")
     session.key("Escape")
