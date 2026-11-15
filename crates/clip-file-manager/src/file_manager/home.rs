@@ -1,5 +1,8 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
+mod board;
 use super::local_state;
+use board::Board;
+const STATE_LIMIT: usize = 2 * 1024 * 1024;
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -32,18 +35,21 @@ impl Pin {
 struct State {
     version: u32,
     pins: Vec<Pin>,
+    #[serde(default)]
+    board: Board,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             pins: Vec::new(),
+            board: Board::default(),
         }
     }
 }
 impl State {
     fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if ![1, 2].contains(&self.version) {
             return Err("Unsupported Home version; file left unchanged".into());
         }
         if self.pins.len() > 512 {
@@ -67,25 +73,54 @@ impl State {
                 return Err("Invalid or duplicate Home pin".into());
             }
         }
-        Ok(())
+        self.board.validate(&self.pins)
     }
-    fn apply(&mut self, change: Change) {
+    fn apply(&mut self, change: Change) -> Result<(), String> {
+        if self.version == 1 {
+            for pin in &self.pins {
+                self.board.add_shortcut(pin.id);
+            }
+            self.version = 2;
+        }
+        let previous = self.board.clone();
         match change {
             Change::Add(pins) => {
                 for pin in pins {
                     if !self.pins.iter().any(|p| p.path == pin.path) {
+                        self.board.add_shortcut(pin.id);
                         self.pins.push(pin);
                     }
                 }
             }
-            Change::Remove(id) => self.pins.retain(|p| p.id != id),
+            Change::Remove(id) => {
+                self.pins.retain(|p| p.id != id);
+                self.board.remove_pin(id);
+            }
+            Change::Board {
+                expected,
+                mut board,
+            } => {
+                if expected != self.board.revision {
+                    return Err(
+                        "Home was rearranged in another window; reload before replacing its layout"
+                            .into(),
+                    );
+                }
+                board.retain_artwork_bindings()?;
+                self.board = board;
+            }
         }
+        if previous != self.board {
+            self.board.revision = previous.revision + 1;
+        }
+        Ok(())
     }
 }
 #[derive(Clone)]
 enum Change {
     Add(Vec<Pin>),
     Remove(Uuid),
+    Board { expected: u64, board: Board },
 }
 #[derive(Clone)]
 enum Action {
@@ -164,6 +199,16 @@ impl Home {
                     Action::Change(change) => self.queued = Some(change),
                 },
                 Ok(Ok(state)) => {
+                    if state.version == 1 {
+                        let mut board = state.board.clone();
+                        for pin in &state.pins {
+                            board.add_shortcut(pin.id);
+                        }
+                        self.queued = Some(Change::Board {
+                            expected: state.board.revision,
+                            board,
+                        });
+                    }
                     self.state = state;
                     self.loaded = true;
                     self.error = None;
@@ -188,7 +233,7 @@ impl Home {
             if let Some(action) = action {
                 let task = match action.clone() {
                     Action::Load => Task::start(jobs, Duration::from_secs(10), move |_| {
-                        let (state, _) = local_state::read::<State>(&path)?;
+                        let (state, _) = local_state::read::<State>(&path, STATE_LIMIT)?;
                         state.validate()?;
                         Ok(state)
                     })
@@ -203,7 +248,7 @@ impl Home {
     }
 }
 fn save(path: &Path, change: Change) -> Result<State, String> {
-    local_state::update(path, ".home.lock", State::validate, |state| {
+    local_state::update(path, ".home.lock", STATE_LIMIT, State::validate, |state| {
         state.apply(change)
     })
 }
@@ -236,8 +281,8 @@ mod tests {
         let path = root.path().join("home.json");
         for bytes in [
             b"bad json".to_vec(),
-            br#"{"version":2,"pins":[]}"#.to_vec(),
-            vec![b' '; 1024 * 1024 + 1],
+            br#"{"version":999,"pins":[]}"#.to_vec(),
+            vec![b' '; STATE_LIMIT + 1],
         ] {
             std::fs::write(&path, &bytes).unwrap();
             assert!(save(&path, Change::Add(vec![Pin::new("/example".into(), true)])).is_err());
@@ -264,7 +309,76 @@ mod tests {
         let lock = local_state::lock(&directory, ".home.lock").unwrap();
         assert!(save(&path, Change::Remove(pin.id)).is_err());
         drop(lock);
-        let (state, _) = local_state::read::<State>(&path).unwrap();
+        let (state, _) = local_state::read::<State>(&path, STATE_LIMIT).unwrap();
         assert_eq!(state.pins[0].path, target);
+    }
+}
+
+#[cfg(test)]
+mod board_persistence_tests {
+    use super::*;
+    #[test]
+    fn old_pins_migrate_into_layout_without_replacing_identity_or_target_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("home.json");
+        let pin = Pin::new(root.path().join("outside-folder"), true);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"version":1,"pins":[pin]})).unwrap(),
+        )
+        .unwrap();
+        let state = save(&path, Change::Add(vec![pin.clone()])).unwrap();
+        assert_eq!(state.version, 2);
+        assert_eq!(state.pins[0].id, pin.id);
+        assert_eq!(state.pins[0].path, pin.path);
+        assert_eq!(state.board.cards.len(), 1);
+        state.validate().unwrap();
+        assert!(!pin.path.exists());
+    }
+    #[test]
+    fn migration_has_room_for_layout_without_stranding_a_valid_near_limit_legacy_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("home.json");
+        let pins: Vec<_> = (0..512)
+            .map(|index| Pin::new(format!("/{}-{index}", "p".repeat(1800)).into(), false))
+            .collect();
+        let bytes = serde_json::to_vec(&serde_json::json!({"version":1,"pins":pins})).unwrap();
+        assert!((900_000..1024 * 1024).contains(&bytes.len()));
+        std::fs::write(&path, bytes).unwrap();
+        let state = save(&path, Change::Add(vec![pins[0].clone()])).unwrap();
+        assert_eq!(state.board.cards.len(), 512);
+        assert_eq!(state.pins.last().unwrap().id, pins.last().unwrap().id);
+        assert!(std::fs::metadata(&path).unwrap().len() <= STATE_LIMIT as u64);
+    }
+    #[test]
+    fn stale_layout_write_is_rejected_without_losing_the_other_windows_arrangement() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("home.json");
+        let initial = save(&path, Change::Add(vec![Pin::new("/target".into(), false)])).unwrap();
+        let mut first = initial.board.clone();
+        first.title = "Window one".into();
+        save(
+            &path,
+            Change::Board {
+                expected: initial.board.revision,
+                board: first,
+            },
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut second = initial.board.clone();
+        second.title = "Stale window".into();
+        assert!(
+            save(
+                &path,
+                Change::Board {
+                    expected: initial.board.revision,
+                    board: second
+                }
+            )
+            .unwrap_err()
+            .contains("another window")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 }

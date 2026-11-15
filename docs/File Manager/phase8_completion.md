@@ -101,3 +101,33 @@ engine, GL context or preview cache was introduced.
 C2 is in progress: versioned board migration and stale-layout write protection
 are being added before replacing the static Home presentation. C1 is an embedding
 foundation, not evidence that the requested Home canvas is already delivered.
+
+C2 storage foundation: Home v2 adds bounded native artwork, movable card/section
+records and artwork-to-pin bindings. Legacy v1 pins migrate without changing pin
+IDs or target paths. Layout writes compare the board revision under the shared
+writer lock; a stale window gets an explicit failure and the latest file remains
+byte-for-byte unchanged. Pin removal retires its cards/bindings without touching
+the referenced content. Deleting artwork retires dangling shape bindings.
+
+The local-state transaction callback can now reject a semantic change before
+installation. Each schema supplies its byte budget: folder preferences retain
+1 MiB; Home v2 allows 2 MiB so near-limit valid v1 pins have room for their migrated
+layout. Artwork itself is limited to 384 KiB, 1,024 live cards and 2,048 bindings;
+core drawing validation retains its existing element/geometry budgets. Invalid
+geometry, unknown future schemas and oversized input remain explicit failures.
+
+- `cargo test -p clip-file-manager --lib -j4 -- --test-threads=1`: 971 passed,
+  zero failed, 6 ignored, including migration near the old byte limit, stale
+  layout rejection and existing folder-preference safety tests.
+  Log: `/tmp/phase8-board-model-tests.log`.
+- `cargo clippy -p clip-file-manager --all-targets -j4 -- -D warnings`: passed.
+  Log: `/tmp/phase8-board-clippy.log`. Owned formatting and diff checks pass.
+- Architecture comparison reports no new excessive-complexity function after
+  separating card geometry/content validation from board identity/reference
+  validation. The aggregate result still flags one additional short test clone;
+  old controller/renderer matches are also repeated in the diff-aware report.
+  The new fixture deliberately asserts hit/mapping behavior independently of
+  the original drawing tests. There is no second renderer or persistence path.
+
+C2 remains unchecked: its interactive Home presentation, arrangement/undo and
+native review still need implementation. No live project task UI is claimed yet.

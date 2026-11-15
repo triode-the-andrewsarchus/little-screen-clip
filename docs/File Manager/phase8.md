@@ -53,6 +53,9 @@ project task views specified in `phase8_completion.md`.
 
 ## Delivered initial slice
 
+This section records the original v1 delivery. The current v2 migration and
+completion work are tracked in `phase8_completion.md`.
+
 The toolbar Home button opens a separate virtual surface, retaining the last
 folder selection/view/scroll without inventing a directory path. Pin current
 folder and Pin selection deliberately collect references from the ordinary

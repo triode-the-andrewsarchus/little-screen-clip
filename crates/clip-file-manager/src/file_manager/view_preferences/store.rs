@@ -10,7 +10,7 @@ use std::{
 const FOLDERS: usize = 4096;
 
 pub(super) fn read(path: &Path) -> Result<(State, Option<FileSource>), String> {
-    let (mut state, source) = local_state::read::<State>(path)?;
+    let (mut state, source) = local_state::read::<State>(path, 1024 * 1024)?;
     validate(&state)?;
     state.folders.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((state, source))
@@ -42,7 +42,14 @@ pub(super) fn lock(directory: &std::fs::File) -> Result<std::fs::File, String> {
     local_state::lock(directory, ".folder-views.lock")
 }
 pub(super) fn save(path: &Path, change: &Change) -> Result<State, String> {
-    local_state::update(path, ".folder-views.lock", validate, |state: &mut State| {
-        state.update(&change.path, change.preference);
-    })
+    local_state::update(
+        path,
+        ".folder-views.lock",
+        1024 * 1024,
+        validate,
+        |state: &mut State| {
+            state.update(&change.path, change.preference);
+            Ok(())
+        },
+    )
 }

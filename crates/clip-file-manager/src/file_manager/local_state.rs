@@ -17,10 +17,9 @@ use std::{
 // accepted writes never consume or block browser/navigation admission.
 pub(super) static IO: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
 
-const LIMIT: usize = 1024 * 1024;
-
 pub(super) fn read<T: Default + DeserializeOwned>(
     path: &Path,
+    limit: usize,
 ) -> Result<(T, Option<FileSource>), String> {
     let mut input = match file_source::open_regular_file(path, false) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -32,11 +31,11 @@ pub(super) fn read<T: Default + DeserializeOwned>(
     let mut bytes = Vec::new();
     input
         .by_ref()
-        .take(LIMIT as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() > LIMIT {
-        return Err("Local state exceeds 1 MiB".into());
+    if bytes.len() > limit {
+        return Err(format!("Local state exceeds its {limit}-byte budget"));
     }
     source.check_file(&input)?;
     Ok((
@@ -65,8 +64,9 @@ pub(super) fn lock(directory: &File, name: &str) -> Result<File, String> {
 pub(super) fn update<T: Default + DeserializeOwned + Serialize>(
     path: &Path,
     lock_name: &str,
+    limit: usize,
     validate: impl Fn(&T) -> Result<(), String>,
-    change: impl FnOnce(&mut T),
+    change: impl FnOnce(&mut T) -> Result<(), String>,
 ) -> Result<T, String> {
     let parent = path.parent().ok_or("No local state directory")?;
     let directory =
@@ -74,13 +74,13 @@ pub(super) fn update<T: Default + DeserializeOwned + Serialize>(
     let _lock = lock(&directory, lock_name)?;
     let held = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     let target = held.join(path.file_name().ok_or("No state filename")?);
-    let (mut state, source) = read(&target)?;
+    let (mut state, source) = read(&target, limit)?;
     validate(&state)?;
-    change(&mut state);
+    change(&mut state)?;
     validate(&state)?;
     let bytes = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
-    if bytes.len() > LIMIT {
-        return Err("Local state exceeds 1 MiB".into());
+    if bytes.len() > limit {
+        return Err(format!("Local state exceeds its {limit}-byte budget"));
     }
     if let Some(source) = source {
         source.write_in(source.path(), &bytes, &directory)?;
