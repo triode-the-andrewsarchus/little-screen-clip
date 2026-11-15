@@ -280,6 +280,11 @@ impl FileManager {
     }
 
     pub(super) fn follow_rename(&mut self, source: &Path, destination: &Path) {
+        self.home_surface.follow_rename(source, destination);
+        self.home_surface
+            .projects
+            .follow_rename(source, destination);
+        self.organization.follow_rename(source, destination);
         for location in &mut self.history {
             relocate(&mut location.path, source, destination);
             for selection in std::iter::once(&mut location.selection).chain(
@@ -494,7 +499,7 @@ pub(super) fn rename_file(
 }
 
 // Path::strip_prefix compares components, so renaming "a" never rewrites "ab".
-fn relocate(path: &mut PathBuf, source: &Path, destination: &Path) -> bool {
+pub(super) fn relocate(path: &mut PathBuf, source: &Path, destination: &Path) -> bool {
     if let Ok(suffix) = path.strip_prefix(source) {
         *path = if suffix.as_os_str().is_empty() {
             destination.to_path_buf()
@@ -505,6 +510,32 @@ fn relocate(path: &mut PathBuf, source: &Path, destination: &Path) -> bool {
     } else {
         false
     }
+}
+
+// Move-derived annotations win an exact destination collision. Stationary
+// references survive elsewhere; path-prefix checks use components, not strings.
+pub(super) fn relocate_records<T>(
+    records: &mut Vec<T>,
+    source: &Path,
+    destination: &Path,
+    path: impl Fn(&mut T) -> &mut PathBuf,
+) -> bool {
+    let mut stationary = Vec::new();
+    let mut moved = Vec::new();
+    for mut record in std::mem::take(records) {
+        if relocate(path(&mut record), source, destination) {
+            moved.push(record);
+        } else {
+            stationary.push(record);
+        }
+    }
+    let changed = !moved.is_empty();
+    let mut records_by_path = std::collections::BTreeMap::new();
+    for mut record in stationary.into_iter().chain(moved) {
+        records_by_path.insert(path(&mut record).clone(), record);
+    }
+    *records = records_by_path.into_values().collect();
+    changed
 }
 
 #[cfg(test)]

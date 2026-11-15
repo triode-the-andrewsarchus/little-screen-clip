@@ -37,15 +37,15 @@ marks or forget another window's newer backup.
 ## References and revisions
 
 A session mark includes a lossless absolute path and the inventory entry's full
-metadata fingerprint. The underline is shown only for that observed revision.
-Editing/replacing a file, changing permissions or changing a folder's contents
+metadata fingerprint. Matching requires the observed object, size, mtime and mode; an expected rename ctime change is allowed.
+Editing/replacing a file, changing its mode or changing a folder's contents
 can make its old mark dormant. The reference is retained, not silently deleted;
 remarking updates it to the new observation. Counts are explicitly stored-mark
 counts, including dormant or unavailable references. An annotation is a personal
 note, not proof of target availability, content permission or device state.
 
-External moves do not guess new targets. Browser-managed rename/move retargeting
-is part of the remaining Phase 8 history/identity work. Refresh/F5 reloads local
+External moves do not guess new targets. Confirmed browser/studio rename and completed move results retarget references
+through their accepted state owners; details are in `reference_updates.md`. Refresh/F5 reloads local
 organization state when no definition draft would be lost, including changes
 saved by another window. Error recovery offers an explicit reload that discards
 definition drafts. Directory navigation and selection do not change annotations.
@@ -112,8 +112,8 @@ nil/duplicate IDs, duplicate sibling names and duplicate paths are invalid.
 
 Set membership follows a path reference through ordinary content edits; it does
 not assert that a replacement at that path is the previously observed object.
-Session marks continue to require their full observed metadata revision. External
-moves are not guessed. Browser-managed moves/renames remain part of C8. Concurrent
+Session marks continue to require the same observed object, size, mtime and mode, allowing the ctime change caused by a rename. External
+moves are not guessed. Confirmed browser-managed moves/renames retarget these references as described in `reference_updates.md`. Concurrent
 assignments merge against the latest state. A stale group edit fails rather than
 replacing a newer definition; empty-set deletion checks the latest memberships
 and hierarchy inside the guarded transaction.

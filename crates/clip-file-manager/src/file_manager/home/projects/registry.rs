@@ -142,6 +142,37 @@ pub(super) fn remove(path: &Path, id: Uuid) -> Result<State, String> {
     )
 }
 
+pub(super) fn relocate(
+    path: &Path,
+    changes: &[crate::file_manager::reference_updates::Relocation],
+) -> Result<State, String> {
+    local_state::update_when(
+        path,
+        ".projects.lock",
+        LIMIT,
+        State::validate,
+        |state: &mut State| {
+            let changed = state.projects.iter().any(|project| {
+                changes
+                    .iter()
+                    .any(|change| project.folder.starts_with(&change.source))
+            });
+            if changed {
+                for change in changes {
+                    for project in &mut state.projects {
+                        crate::file_manager::edits::relocate(
+                            &mut project.folder,
+                            &change.source,
+                            &change.destination,
+                        );
+                    }
+                }
+            }
+            Ok(changed)
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

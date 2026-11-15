@@ -170,6 +170,9 @@ impl FileManager {
         ui.collapsing("Session name and color meanings", |ui| {
             let ready = self.organization.ready();
             let organization = &mut self.organization;
+            organization
+                .draft_base
+                .get_or_insert_with(|| organization.snapshot.definitions().clone());
             let draft = organization
                 .draft
                 .get_or_insert_with(|| organization.snapshot.definitions().clone());
@@ -197,6 +200,7 @@ impl FileManager {
                 organization.change(Action::Definitions);
             } else if cancel {
                 organization.draft = None;
+                organization.draft_base = None;
                 organization.error = None;
             }
         });

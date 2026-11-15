@@ -23,11 +23,13 @@ enum Action {
         replace: Option<PathBuf>,
     },
     Remove(Uuid),
+    Relocate(Vec<crate::file_manager::reference_updates::Relocation>),
 }
 impl Action {
     fn run(self, path: &Path) -> Result<Outcome, String> {
         match self {
             Self::Load => registry::load(path).map(Outcome::State),
+            Self::Relocate(change) => registry::relocate(path, &change).map(Outcome::State),
             Self::Register {
                 folder,
                 title,
@@ -49,6 +51,7 @@ pub(in crate::file_manager) struct Projects {
     queued: Option<Action>,
     pending: Option<Pending>,
     pub error: Option<String>,
+    pub relocations: crate::file_manager::reference_updates::Deferred,
     pub conflict: Option<Conflict>,
     pub form: Option<(PathBuf, String)>,
     pub previews: previews::Previews,
@@ -68,10 +71,14 @@ impl Projects {
         (&self.state.projects, &mut self.previews)
     }
     pub fn busy(&self) -> bool {
-        self.queued.is_some() || self.pending.is_some() || self.previews.active()
+        self.relocations.active()
+            || self.queued.is_some()
+            || self.pending.is_some()
+            || self.previews.active()
     }
     pub fn writing(&self) -> bool {
-        self.previews.writing()
+        self.relocations.writing()
+            || self.previews.writing()
             || self
                 .queued
                 .as_ref()
@@ -83,11 +90,17 @@ impl Projects {
     }
     pub fn ready(&self) -> bool {
         self.loaded
+            && !self.relocations.writing()
             && self.queued.is_none()
             && self.pending.is_none()
             && !self.previews.writing()
             && self.error.is_none()
             && self.path.is_some()
+    }
+    pub fn follow_rename(&mut self, source: &Path, destination: &Path) {
+        if self.path.is_some() {
+            self.relocations.push(source, destination);
+        }
     }
     pub fn refresh(&mut self) {
         if self.path.is_some() && !self.busy() {
@@ -138,12 +151,28 @@ impl Projects {
                     self.error = None;
                 }
                 Ok(Ok(Outcome::Conflict(conflict))) => self.conflict = Some(conflict),
-                Ok(Err(error)) => self.error = Some(error),
-                Err(error) => self.error = Some(error.to_string()),
+                result => {
+                    let error = match result {
+                        Ok(Err(error)) => error,
+                        Err(error) => error.to_string(),
+                        _ => unreachable!(),
+                    };
+                    if let Action::Relocate(change) = pending.action {
+                        self.relocations.reject(change, error);
+                        self.error = None;
+                    } else {
+                        self.error = Some(error);
+                    }
+                }
             }
         }
         if self.pending.is_none()
-            && let (Some(path), Some(action)) = (self.path.clone(), self.queued.take())
+            && let (Some(path), Some(action)) = (
+                self.path.clone(),
+                self.queued
+                    .take()
+                    .or_else(|| self.relocations.next().map(Action::Relocate)),
+            )
         {
             let request = action.clone();
             let task = if matches!(action, Action::Load) {
@@ -171,6 +200,37 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(projects.error.is_none(), "{:?}", projects.error);
+    }
+    #[test]
+    fn confirmed_folder_move_retains_project_id_and_source_documents_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("old");
+        std::fs::create_dir(&old).unwrap();
+        let destination = root.path().join("new");
+        let path = root.path().join("projects.json");
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut projects = Projects::new(path.clone());
+        settle(&mut projects, &jobs);
+        projects.register(old.clone(), Some("Work".into()));
+        settle(&mut projects, &jobs);
+        let id = projects.records()[0].id;
+        let manifest = std::fs::read(old.join(".fmproject")).unwrap();
+        let todo = std::fs::read(old.join("TODO.md")).unwrap();
+        std::fs::rename(&old, &destination).unwrap();
+        projects.follow_rename(&old, &destination);
+        assert!(projects.writing());
+        settle(&mut projects, &jobs);
+        assert!(!projects.relocations.failed());
+        let mut reopened = Projects::new(path);
+        settle(&mut reopened, &jobs);
+        assert_eq!(reopened.records()[0].id, id);
+        assert_eq!(reopened.records()[0].folder, destination);
+        assert_eq!(
+            std::fs::read(destination.join(".fmproject")).unwrap(),
+            manifest
+        );
+        assert_eq!(std::fs::read(destination.join("TODO.md")).unwrap(), todo);
+        assert!(tasks::Snapshot::load(reopened.records()[0].clone()).is_ok());
     }
     #[test]
     fn accepted_creation_and_unregister_retain_close_ownership_without_deleting_content() {

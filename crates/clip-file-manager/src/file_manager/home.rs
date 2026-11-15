@@ -78,6 +78,27 @@ impl State {
         }
         self.board.validate(&self.pins)
     }
+    fn relocate(&mut self, source: &Path, destination: &Path) -> Result<(), String> {
+        let mut by_path = std::collections::BTreeMap::new();
+        let mut replacements = std::collections::BTreeMap::new();
+        for pin in &mut self.pins {
+            let moved = super::edits::relocate(&mut pin.path, source, destination);
+            if let Some((previous, previous_moved)) = by_path.get(&pin.path).copied() {
+                if previous_moved && !moved {
+                    replacements.insert(pin.id, previous);
+                } else {
+                    replacements.insert(previous, pin.id);
+                    by_path.insert(pin.path.clone(), (pin.id, moved));
+                }
+            } else {
+                by_path.insert(pin.path.clone(), (pin.id, moved));
+            }
+        }
+        self.pins.retain(|pin| !replacements.contains_key(&pin.id));
+        let valid = self.pins.iter().map(|pin| pin.id).collect();
+        self.board.retain_pin_refs(&valid, &replacements);
+        self.validate()
+    }
     fn apply(&mut self, change: Change) -> Result<(), String> {
         if self.version == 1 {
             for pin in &self.pins {
@@ -87,6 +108,11 @@ impl State {
         }
         let previous = self.board.clone();
         match change {
+            Change::Relocate(changes) => {
+                for change in changes {
+                    self.relocate(&change.source, &change.destination)?;
+                }
+            }
             Change::Add(pins) => {
                 for pin in pins {
                     if !self.pins.iter().any(|p| p.path == pin.path) {
@@ -115,7 +141,10 @@ impl State {
             }
         }
         if previous != self.board {
-            self.board.revision = previous.revision + 1;
+            self.board.revision = previous
+                .revision
+                .checked_add(1)
+                .ok_or("Home layout revision exhausted")?;
         }
         Ok(())
     }
@@ -124,6 +153,7 @@ impl State {
 enum Change {
     Add(Vec<Pin>),
     Remove(Uuid),
+    Relocate(Vec<super::reference_updates::Relocation>),
     Board {
         expected: u64,
         board: Board,
@@ -153,14 +183,11 @@ pub(super) struct Home {
     queued: Option<Change>,
     pending: Option<Pending>,
     pub error: Option<String>,
+    pub relocations: super::reference_updates::Deferred,
 }
 impl Home {
     pub fn for_user(home: &Path) -> Self {
-        let root = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home.join(".local/state"));
-        Self::new(root.join("little-screen-clip/home.json"))
+        Self::new(local_state::directory_for_user(home).join("home.json"))
     }
     fn new(path: PathBuf) -> Self {
         Self {
@@ -177,14 +204,16 @@ impl Home {
         &self.state.pins
     }
     pub fn busy(&self) -> bool {
-        self.reload
+        self.relocations.active()
+            || self.reload
             || self.pending.is_some()
             || self.queued.is_some()
             || self.session.canvas.busy()
             || (self.session.dirty() && self.error.is_none())
     }
     pub fn writing(&self) -> bool {
-        self.projects.writing()
+        self.relocations.writing()
+            || self.projects.writing()
             || self.session.dirty()
             || self.session.canvas.busy()
             || self.queued.is_some()
@@ -194,12 +223,22 @@ impl Home {
                 .is_some_and(|p| matches!(p.action, Action::Change(_)))
     }
     pub fn ready(&self) -> bool {
-        self.path.is_some() && self.loaded && !self.busy() && self.error.is_none()
+        self.path.is_some()
+            && self.loaded
+            && !self.busy()
+            && self.error.is_none()
+            && !self.relocations.failed()
     }
     pub fn reload(&mut self) {
         if !self.writing() {
             self.reload = self.path.is_some();
             self.projects.refresh();
+        }
+    }
+    pub fn follow_rename(&mut self, source: &Path, destination: &Path) {
+        if self.path.is_some() {
+            self.session.commit_labels();
+            self.relocations.push(source, destination);
         }
     }
     pub fn add(&mut self, pins: Vec<Pin>) {
@@ -214,6 +253,7 @@ impl Home {
     }
     pub fn editing_allowed(&self) -> bool {
         self.loaded
+            && !self.relocations.failed()
             && (self.error.is_none() || self.session.dirty())
             && !self.reload
             && self
@@ -257,6 +297,33 @@ impl Home {
                 generation: Some(generation),
                 ..
             }) => self.session.acknowledge(&state.board, generation),
+            Action::Change(Change::Relocate(change)) => {
+                let replacements = self
+                    .state
+                    .pins
+                    .iter()
+                    .filter_map(|old| {
+                        if state.pins.iter().any(|pin| pin.id == old.id) {
+                            return None;
+                        }
+                        let mut target = old.path.clone();
+                        for relocation in &change {
+                            super::edits::relocate(
+                                &mut target,
+                                &relocation.source,
+                                &relocation.destination,
+                            );
+                        }
+                        state
+                            .pins
+                            .iter()
+                            .find(|pin| pin.path == target)
+                            .map(|pin| (old.id, pin.id))
+                    })
+                    .collect();
+                self.session
+                    .references_relocated(&state.board, &state.pins, &replacements);
+            }
             Action::Change(Change::Add(_) | Change::Remove(_)) => {
                 self.session.references_changed(&state.board, &state.pins)
             }
@@ -292,6 +359,32 @@ impl Home {
             });
         }
     }
+    fn complete_request(
+        &mut self,
+        action: Action,
+        result: Result<Result<State, String>, JobError>,
+    ) {
+        match result {
+            Err(JobError::QueueFull) => match action {
+                Action::Load => self.reload = true,
+                Action::Change(change) => self.queued = Some(change),
+            },
+            Ok(Ok(state)) => self.accept(state, action),
+            result => {
+                let error = match result {
+                    Ok(Err(error)) => error,
+                    Err(error) => error.to_string(),
+                    _ => unreachable!(),
+                };
+                if let Action::Change(Change::Relocate(changes)) = action {
+                    self.relocations.reject(changes, error);
+                    self.error = None;
+                } else {
+                    self.error = Some(error);
+                }
+            }
+        }
+    }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         self.projects.tick(jobs);
         if !self.open {
@@ -299,20 +392,7 @@ impl Home {
         }
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
-            match result {
-                Err(JobError::QueueFull) => match pending.action {
-                    Action::Load => self.reload = true,
-                    Action::Change(change) => self.queued = Some(change),
-                },
-                Ok(Ok(state)) => self.accept(state, pending.action),
-                result => {
-                    self.error = Some(match result {
-                        Ok(Err(error)) => error,
-                        Err(error) => error.to_string(),
-                        _ => unreachable!(),
-                    })
-                }
-            }
+            self.complete_request(pending.action, result);
         }
         self.queue_draft();
         if self.pending.is_none()
@@ -322,6 +402,13 @@ impl Home {
                 .queued
                 .take()
                 .map(Action::Change)
+                .or_else(|| {
+                    self.session
+                        .settled_for_relocation()
+                        .then(|| self.relocations.next())
+                        .flatten()
+                        .map(|change| Action::Change(Change::Relocate(change)))
+                })
                 .or_else(|| std::mem::take(&mut self.reload).then_some(Action::Load));
             if let Some(action) = action {
                 let task = match action.clone() {
@@ -341,8 +428,19 @@ impl Home {
     }
 }
 fn save(path: &Path, change: Change) -> Result<State, String> {
-    local_state::update(path, ".home.lock", STATE_LIMIT, State::validate, |state| {
-        state.apply(change)
+    local_state::update_when(path, ".home.lock", STATE_LIMIT, State::validate, |state| {
+        let changed = match &change {
+            Change::Relocate(changes) => state.pins.iter().any(|pin| {
+                changes
+                    .iter()
+                    .any(|change| pin.path.starts_with(&change.source))
+            }),
+            _ => true,
+        };
+        if changed {
+            state.apply(change)?;
+        }
+        Ok(changed)
     })
 }
 
@@ -481,6 +579,90 @@ mod board_persistence_tests {
 #[cfg(test)]
 mod session_delivery_tests {
     use super::*;
+    #[test]
+    fn relocation_preserves_pending_layout_and_coalesces_pins_without_losing_cards_or_undo() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.txt");
+        let destination = root.path().join("destination.txt");
+        std::fs::write(&source, b"original").unwrap();
+        let path = root.path().join("home.json");
+        let source_pin = Pin::new(source.clone(), false);
+        let source_id = source_pin.id;
+        save(
+            &path,
+            Change::Add(vec![source_pin, Pin::new(destination.clone(), false)]),
+        )
+        .unwrap();
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut home = Home::new(path.clone());
+        await_state(&mut home, &jobs, |home| home.ready());
+        home.session.arrange = true;
+        home.session.title_draft = "Current work".into();
+        std::fs::rename(&source, &destination).unwrap();
+        home.follow_rename(&source, &destination);
+        assert!(home.writing());
+        await_state(&mut home, &jobs, |home| !home.busy() && !home.writing());
+        assert_eq!(home.pins().len(), 1);
+        assert_eq!(home.pins()[0].id, source_id);
+        assert_eq!(home.pins()[0].path, destination);
+        assert_eq!(home.session.board.title, "Current work");
+        assert_eq!(home.session.board.cards.len(), 2);
+        assert!(
+            home.session
+                .board
+                .cards
+                .iter()
+                .all(|card| matches!(card.content,Content::Shortcut {pin,..} if pin==source_id))
+        );
+        home.session.undo();
+        assert_eq!(home.session.board.title, "Home");
+        assert!(
+            home.session
+                .board
+                .cards
+                .iter()
+                .all(|card| matches!(card.content,Content::Shortcut {pin,..} if pin==source_id))
+        );
+        assert_eq!(std::fs::read(&home.pins()[0].path).unwrap(), b"original");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert!(!source.exists());
+        let (state, _) = local_state::read::<State>(&path, STATE_LIMIT).unwrap();
+        state.validate().unwrap();
+        assert_eq!(state.pins[0].path, destination);
+    }
+    #[test]
+    fn failed_reference_write_blocks_close_and_retries_only_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.txt");
+        let destination = root.path().join("destination.txt");
+        std::fs::write(&source, b"original").unwrap();
+        let path = root.path().join("home.json");
+        save(&path, Change::Add(vec![Pin::new(source.clone(), false)])).unwrap();
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut home = Home::new(path);
+        await_state(&mut home, &jobs, |home| home.ready());
+        let directory =
+            little_clip_core::kernel_interface::pin_content_directory(root.path()).unwrap();
+        let lock = local_state::lock(&directory, ".home.lock").unwrap();
+        std::fs::rename(&source, &destination).unwrap();
+        home.follow_rename(&source, &destination);
+        await_state(&mut home, &jobs, |home| home.relocations.failed());
+        let mut browser = super::super::FileManager {
+            home_surface: home,
+            ..Default::default()
+        };
+        assert!(!browser.prepare_presentation_close());
+        assert!(browser.presentation_writing());
+        drop(lock);
+        browser.home_surface.relocations.retry();
+        await_state(&mut browser.home_surface, &jobs, |home| {
+            !home.busy() && !home.writing()
+        });
+        assert!(browser.prepare_presentation_close());
+        assert_eq!(browser.home_surface.pins()[0].path, destination);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert!(!source.exists());
+    }
     fn await_state(home: &mut Home, jobs: &BackgroundJobs, predicate: impl Fn(&Home) -> bool) {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         loop {

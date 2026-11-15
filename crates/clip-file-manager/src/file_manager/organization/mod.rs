@@ -30,17 +30,15 @@ pub(super) struct Organization {
     queued: Option<Arc<Change>>,
     pending: Option<Pending>,
     pub draft: Option<Definitions>,
+    pub draft_base: Option<Definitions>,
     pub filter: Filter,
     pub set_editor: Option<(Option<Group>, Group)>,
     pub error: Option<String>,
+    pub relocations: super::reference_updates::Deferred,
 }
 impl Organization {
     pub fn for_user(home: &Path) -> Self {
-        let root = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .unwrap_or_else(|| home.join(".local/state"));
-        Self::new(root.join("little-screen-clip/organization.json"))
+        Self::new(local_state::directory_for_user(home).join("organization.json"))
     }
     fn new(path: PathBuf) -> Self {
         Self {
@@ -50,23 +48,30 @@ impl Organization {
         }
     }
     pub fn active(&self) -> bool {
-        self.reload || self.queued.is_some() || self.pending.is_some()
+        self.relocations.active() || self.reload || self.queued.is_some() || self.pending.is_some()
     }
     pub fn writing(&self) -> bool {
-        self.queued.is_some()
+        self.relocations.writing()
+            || self.queued.is_some()
             || self
                 .pending
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.request, Request::Change(_)))
     }
     pub fn ready(&self) -> bool {
-        self.loaded && self.path.is_some() && !self.active()
+        self.loaded && self.path.is_some() && !self.active() && !self.relocations.failed()
+    }
+    pub fn follow_rename(&mut self, source: &Path, destination: &Path) {
+        if self.path.is_some() {
+            self.relocations.push(source, destination);
+        }
     }
     pub fn reload(&mut self) {
         if !self.active() {
             self.reload = self.path.is_some();
             self.error = None;
             self.draft = None;
+            self.draft_base = None;
         }
     }
     pub fn refresh_if_clean(&mut self) {
@@ -93,7 +98,10 @@ impl Organization {
             }
             self.queued = Some(Arc::new(Change {
                 definitions: definitions.map(|next| DefinitionEdit {
-                    base: self.snapshot.definitions().clone(),
+                    base: self
+                        .draft_base
+                        .clone()
+                        .unwrap_or_else(|| self.snapshot.definitions().clone()),
                     next,
                 }),
                 action,
@@ -116,6 +124,45 @@ impl Organization {
         }
         true
     }
+    fn accept_snapshot(&mut self, snapshot: Snapshot, request: &Request) {
+        if matches!(*request, Request::Change(ref change) if matches!(change.action, Action::Sets(SetChange::Create(_) | SetChange::Edit { .. })))
+        {
+            self.set_editor = None;
+        }
+        let foreign = matches!(*request,Request::Change(ref change) if matches!(change.action,Action::Relocate(_)));
+        let dirty = self.draft.as_ref().is_some_and(|draft| {
+            draft
+                != self
+                    .draft_base
+                    .as_ref()
+                    .unwrap_or_else(|| self.snapshot.definitions())
+        });
+        if foreign && dirty && self.draft_base.is_none() {
+            self.draft_base = Some(self.snapshot.definitions().clone());
+        }
+        self.snapshot = Arc::new(snapshot);
+        if let Filter::Group(id) = self.filter
+            && self.snapshot.sets.group(id).is_none()
+        {
+            self.filter = Filter::All;
+        }
+        self.loaded = true;
+        if !foreign || !dirty {
+            self.draft = None;
+            self.draft_base = None;
+        }
+        self.error = None;
+    }
+    fn reject_request(&mut self, request: Request, error: String) {
+        if let Request::Change(change) = request
+            && let Action::Relocate(relocations) = &change.action
+        {
+            self.relocations.reject(relocations.clone(), error);
+            self.error = None;
+        } else {
+            self.error = Some(error);
+        }
+    }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         if let Some(result) = self
             .pending
@@ -128,23 +175,15 @@ impl Organization {
                     Request::Load => self.reload = true,
                     Request::Change(change) => self.queued = Some(change),
                 },
-                Ok(Ok(snapshot)) => {
-                    if matches!(pending.request, Request::Change(ref change) if matches!(change.action, Action::Sets(SetChange::Create(_) | SetChange::Edit { .. })))
-                    {
-                        self.set_editor = None;
-                    }
-                    self.snapshot = Arc::new(snapshot);
-                    if let Filter::Group(id) = self.filter
-                        && self.snapshot.sets.group(id).is_none()
-                    {
-                        self.filter = Filter::All;
-                    }
-                    self.loaded = true;
-                    self.draft = None;
-                    self.error = None;
+                Ok(Ok(snapshot)) => self.accept_snapshot(snapshot, &pending.request),
+                result => {
+                    let error = match result {
+                        Ok(Err(error)) => error,
+                        Err(error) => error.to_string(),
+                        _ => unreachable!(),
+                    };
+                    self.reject_request(pending.request, error);
                 }
-                Ok(Err(error)) => self.error = Some(error),
-                Err(error) => self.error = Some(error.to_string()),
             }
         }
         if self.pending.is_none()
@@ -154,6 +193,14 @@ impl Organization {
                 .queued
                 .take()
                 .map(Request::Change)
+                .or_else(|| {
+                    self.relocations.next().map(|change| {
+                        Request::Change(Arc::new(Change {
+                            definitions: None,
+                            action: Action::Relocate(change),
+                        }))
+                    })
+                })
                 .or_else(|| std::mem::take(&mut self.reload).then_some(Request::Load));
             if let Some(request) = request {
                 let task = match request.clone() {
@@ -163,21 +210,34 @@ impl Organization {
                         Ok(Snapshot::new(state))
                     })
                     .with_response_deadline(Duration::from_secs(10)),
-                    Request::Change(change) => Task::start_unbounded(jobs, move |_| {
-                        local_state::update(
-                            &path,
-                            ".organization.lock",
-                            LIMIT,
-                            State::validate,
-                            |state| state.apply((*change).clone()),
-                        )
-                        .map(Snapshot::new)
-                    }),
+                    Request::Change(change) => {
+                        Task::start_unbounded(jobs, move |_| save(&path, &change))
+                    }
                 };
                 self.pending = Some(Pending { request, task });
             }
         }
     }
+}
+
+fn save(path: &Path, change: &Change) -> Result<Snapshot, String> {
+    local_state::update_when(
+        path,
+        ".organization.lock",
+        LIMIT,
+        State::validate,
+        |state| {
+            let changed = match &change.action {
+                Action::Relocate(changes) => state.relocation_changes(changes),
+                _ => true,
+            };
+            if changed {
+                state.apply(change.clone())?;
+            }
+            Ok(changed)
+        },
+    )
+    .map(Snapshot::new)
 }
 
 // Publication can change both classification badges and which files are visible.
@@ -204,6 +264,83 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn renamed_marks_sets_and_recovery_follow_the_file_without_saving_definition_drafts() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("organization.json");
+        let old = root.path().join("old.txt");
+        let new = root.path().join("new.txt");
+        std::fs::write(&old, b"reviewed").unwrap();
+        let jobs = BackgroundJobs::new(1, 4);
+        let mut owner = Organization::new(path.clone());
+        settle(&mut owner, &jobs);
+        let entry = super::super::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.path == old)
+        .unwrap();
+        owner.change(Action::Enable(true));
+        settle(&mut owner, &jobs);
+        owner.change(Action::Assign(
+            vec![Observation::for_entry(&entry).unwrap()],
+            Some(Color::Green),
+        ));
+        settle(&mut owner, &jobs);
+        let group = owner.snapshot.sets.groups[0].id;
+        owner.change(Action::Sets(SetChange::Assign {
+            paths: vec![old.clone()],
+            group: Some(group),
+        }));
+        settle(&mut owner, &jobs);
+        owner.change(Action::Clear);
+        settle(&mut owner, &jobs);
+        owner.draft_base = Some(owner.snapshot.definitions().clone());
+        let mut draft = owner.snapshot.definitions().clone();
+        draft.meanings[0] = "My red".into();
+        owner.draft = Some(draft);
+        let mut other = Organization::new(path.clone());
+        settle(&mut other, &jobs);
+        let mut remote = other.snapshot.definitions().clone();
+        remote.name = "Remote name".into();
+        other.draft = Some(remote);
+        other.change(Action::Definitions);
+        settle(&mut other, &jobs);
+        std::fs::rename(&old, &new).unwrap();
+        owner.follow_rename(&old, &new);
+        assert!(owner.writing());
+        settle(&mut owner, &jobs);
+        assert!(!owner.relocations.failed());
+        assert_eq!(owner.draft.as_ref().unwrap().meanings[0], "My red");
+        assert_eq!(owner.snapshot.definitions().name, "Remote name");
+        assert!(owner.snapshot.sets.matches(&new, Filter::Group(group)));
+        assert!(!owner.snapshot.sets.matches(&old, Filter::Group(group)));
+        owner.change(Action::Restore(owner.snapshot.recovery_revision()));
+        settle(&mut owner, &jobs);
+        assert_eq!(
+            owner.snapshot.definitions().name,
+            "Remote name",
+            "unchanged draft fields must preserve remote labels"
+        );
+        assert_eq!(owner.snapshot.definitions().meanings[0], "My red");
+        let entry = super::super::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.path == new)
+        .unwrap();
+        assert_eq!(owner.snapshot.color(&entry), Some(Color::Green));
+        let mut reopened = Organization::new(path);
+        settle(&mut reopened, &jobs);
+        assert_eq!(reopened.snapshot.color(&entry), Some(Color::Green));
+        assert_eq!(std::fs::read(new).unwrap(), b"reviewed");
     }
     #[test]
     fn set_filters_keep_folder_routes_and_reconcile_hidden_selection() {

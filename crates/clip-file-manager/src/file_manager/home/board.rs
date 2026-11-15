@@ -89,6 +89,28 @@ impl Board {
             },
         });
     }
+    pub(super) fn retain_pin_refs(
+        &mut self,
+        valid: &BTreeSet<Uuid>,
+        replacements: &std::collections::BTreeMap<Uuid, Uuid>,
+    ) {
+        for card in &mut self.cards {
+            if let Content::Shortcut { pin, .. } = &mut card.content
+                && let Some(replacement) = replacements.get(pin)
+            {
+                *pin = *replacement;
+            }
+        }
+        for binding in &mut self.bindings {
+            if let Some(replacement) = replacements.get(&binding.pin) {
+                binding.pin = *replacement;
+            }
+        }
+        self.cards.retain(
+            |card| !matches!(card.content,Content::Shortcut {pin,..} if !valid.contains(&pin)),
+        );
+        self.bindings.retain(|binding| valid.contains(&binding.pin));
+    }
     pub fn remove_pin(&mut self, pin: Uuid) {
         self.cards
             .retain(|card| !matches!(card.content, Content::Shortcut { pin: id, .. } if id == pin));

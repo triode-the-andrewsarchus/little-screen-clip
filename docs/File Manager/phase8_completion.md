@@ -557,3 +557,49 @@ Phase 8 is not complete.
   It failed before the fix (`/tmp/phase8-relocation-path-before.log`) and passes
   afterward (`/tmp/phase8-relocation-path-after.log`). This fix is committed
   separately from the reference-update feature.
+
+### C8 confirmed-reference retargeting — native acceptance pending
+
+Confirmed naming results, completed move pairs and studio rename handoffs now
+queue semantic reference updates in the existing Home, organization and project
+owners. One shared deferred-intent type preserves ordering, batches up to 128
+mappings and retains failed work for explicit Retry/Skip. The original filesystem
+operation is never repeated. Accepted metadata writes remain unbounded delivery
+owners and prevent close; a global failure banner is available on both surfaces.
+Studio rename handoffs are drained before application close checks ownership.
+
+Home keeps moving pin IDs, retargets descendants and remaps exact-destination
+collisions without losing cards, artwork links or layout undo/redo. Dirty layout
+and label changes save before relocation; gestures/unapplied text must settle.
+Session marks, recovery and sets follow the mappings. Marks permit rename ctime
+changes while retaining object/size/mtime/mode matching; replaced/cross-filesystem
+objects can remain dormant. Recovery relocation advances its revision. Meaning
+and set drafts survive foreign acknowledgments and retain their comparison base.
+Registered project folders move while their stable UUID and portable manifests
+remain unchanged. The full behavior and failure/restart limits are described in
+`reference_updates.md`.
+
+The shared local-state transaction now supports semantic no-ops. Unaffected
+stores keep their original bytes/identity and absent no-op stores are not created.
+No new cache, content reader or persistence worker was added. Source payloads are
+not read or written by reference retargeting.
+
+- Full file-manager suite: 1,024 passed, zero failed, 6 ignored
+  (`/tmp/phase8-relocations-tests.log`). New regressions verify ordered bounded
+  batches/retry/skip, no-op bytes and identities, Home collision/undo/pending-label
+  preservation, forced lock failure and close ownership, metadata-only retry,
+  project UUID/document preservation across rename and restart, task-source loading
+  at the new location, mark/set/recovery retargeting and retained definition drafts
+  merged with another window's newer label.
+- Strict Clippy and debug build passed
+  (`/tmp/phase8-relocations-{clippy,build}.log`).
+- Architecture comparison reports no new excessive-complexity functions after
+  separating model operations from delivery/publication handling. Average/maximum
+  complexity is unchanged, duplication is down 0.06 points, and the existing eleven
+  aggregate short additional clone groups across the goal remain unchanged.
+- Native acceptance is running in both themes. Its workflow includes a real lock
+  failure after a completed rename, refused close, metadata retry, copy versus
+  cut/paste behavior, project-folder rename, opening updated shortcuts and restart.
+  C8 remains unchecked until these results are inspected.
+
+C8 native acceptance and C9 final integration/review fixtures remain open.

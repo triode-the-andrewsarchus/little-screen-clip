@@ -75,6 +75,19 @@ pub(in crate::file_manager) enum Filter {
     Group(Uuid),
 }
 impl Sets {
+    pub(super) fn has_relocation(&self, source: &Path) -> bool {
+        self.members
+            .iter()
+            .any(|member| member.path.starts_with(source))
+    }
+    pub(super) fn relocate(&mut self, source: &Path, destination: &Path) -> bool {
+        crate::file_manager::edits::relocate_records(
+            &mut self.members,
+            source,
+            destination,
+            |member| &mut member.path,
+        )
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.groups.len() > 256 || self.members.len() > 16_384 {
             return Err("Sorting sets exceed 256 groups or 16,384 references".into());

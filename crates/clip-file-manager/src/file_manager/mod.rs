@@ -38,6 +38,7 @@ mod music;
 mod native_drag;
 mod notebook;
 mod organization;
+mod reference_updates;
 mod visibility;
 use little_clip_core::path_serde;
 mod pdf_strip;
@@ -451,6 +452,12 @@ impl FileManager {
     }
     fn prepare_presentation_close(&mut self) -> bool {
         if !self.home_surface.prepare_close() {
+            return false;
+        }
+        if self.home_surface.relocations.failed()
+            || self.organization.relocations.failed()
+            || self.home_surface.projects.relocations.failed()
+        {
             return false;
         }
         if !self.organization.prepare_close() {

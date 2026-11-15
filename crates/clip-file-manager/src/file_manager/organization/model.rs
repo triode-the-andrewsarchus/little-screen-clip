@@ -144,6 +144,7 @@ pub(in crate::file_manager) enum Action {
     ForgetClear(u64),
     Definitions,
     Sets(super::sets::SetChange),
+    Relocate(Vec<super::super::reference_updates::Relocation>),
 }
 #[derive(Clone)]
 pub(super) struct Change {
@@ -203,6 +204,70 @@ impl State {
         }
         Ok(())
     }
+    pub fn relocation_changes(
+        &self,
+        changes: &[super::super::reference_updates::Relocation],
+    ) -> bool {
+        changes.iter().any(|change| {
+            self.session
+                .marks
+                .iter()
+                .chain(&self.session.previous)
+                .any(|mark| mark.target.path.starts_with(&change.source))
+                || self.sets.has_relocation(&change.source)
+        })
+    }
+    fn relocate(
+        &mut self,
+        changes: Vec<super::super::reference_updates::Relocation>,
+    ) -> Result<(), String> {
+        for change in changes {
+            validate_path(&change.source)?;
+            validate_path(&change.destination)?;
+            super::super::edits::relocate_records(
+                &mut self.session.marks,
+                &change.source,
+                &change.destination,
+                |mark| &mut mark.target.path,
+            );
+            if super::super::edits::relocate_records(
+                &mut self.session.previous,
+                &change.source,
+                &change.destination,
+                |mark| &mut mark.target.path,
+            ) {
+                self.session.recovery(self.session.recovery_revision)?;
+            }
+            self.sets.relocate(&change.source, &change.destination);
+        }
+        Ok(())
+    }
+    fn assign_marks(
+        &mut self,
+        targets: Vec<Observation>,
+        color: Option<Color>,
+    ) -> Result<(), String> {
+        if !self.session.enabled {
+            return Err("Enable the session before assigning marks".into());
+        }
+        if targets.len() > MARKS {
+            return Err("Choose at most 16,384 items to mark".into());
+        }
+        let mut marks: BTreeMap<_, _> = std::mem::take(&mut self.session.marks)
+            .into_iter()
+            .map(|mark| (mark.target.path.clone(), mark))
+            .collect();
+        for target in targets {
+            validate_path(&target.path)?;
+            if let Some(color) = color {
+                marks.insert(target.path.clone(), Mark { target, color });
+            } else {
+                marks.remove(&target.path);
+            }
+        }
+        self.session.marks = marks.into_values().collect();
+        Ok(())
+    }
     pub fn apply(&mut self, change: Change) -> Result<(), String> {
         if let Some(definitions) = change.definitions {
             definitions.apply(&mut self.session.definitions)?;
@@ -210,28 +275,9 @@ impl State {
         self.version = 2;
         match change.action {
             Action::Sets(change) => self.sets.apply(change)?,
+            Action::Relocate(changes) => self.relocate(changes)?,
             Action::Enable(enabled) => self.session.enabled = enabled,
-            Action::Assign(targets, color) => {
-                if !self.session.enabled {
-                    return Err("Enable the session before assigning marks".into());
-                }
-                if targets.len() > MARKS {
-                    return Err("Choose at most 16,384 items to mark".into());
-                }
-                let mut marks: BTreeMap<_, _> = std::mem::take(&mut self.session.marks)
-                    .into_iter()
-                    .map(|mark| (mark.target.path.clone(), mark))
-                    .collect();
-                for target in targets {
-                    validate_path(&target.path)?;
-                    if let Some(color) = color {
-                        marks.insert(target.path.clone(), Mark { target, color });
-                    } else {
-                        marks.remove(&target.path);
-                    }
-                }
-                self.session.marks = marks.into_values().collect();
-            }
+            Action::Assign(targets, color) => self.assign_marks(targets, color)?,
             Action::Clear if !self.session.marks.is_empty() => {
                 self.session.recovery(self.session.recovery_revision)?;
                 self.session.previous = std::mem::take(&mut self.session.marks)
@@ -306,7 +352,10 @@ impl Snapshot {
             return None;
         }
         let (identity, color) = self.marks.get(&entry.path)?;
-        (entry.identity == Some(*identity)).then_some(*color)
+        entry
+            .identity
+            .is_some_and(|actual| identity.after_rename_matches(actual))
+            .then_some(*color)
     }
 }
 

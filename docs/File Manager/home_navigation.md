@@ -33,6 +33,6 @@ Home preserves its camera and editor history independently from folder selection
 history. Folder-only shortcuts and drop targets remain inactive while Home is
 visible.
 
-C8 reference retargeting after confirmed mutations is a separate outstanding
-part of the completion ledger. This navigation delivery does not claim to update
-Home pins, sorting memberships or registered project paths after a move.
+Reference retargeting after confirmed mutations is described in
+`reference_updates.md`; its native acceptance remains tracked in the completion
+ledger. External moves are not inferred from a navigation history visit.

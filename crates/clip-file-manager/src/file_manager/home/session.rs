@@ -59,12 +59,7 @@ impl Session {
     }
     pub fn references_changed(&mut self, board: &Board, pins: &[Pin]) {
         let valid: BTreeSet<_> = pins.iter().map(|pin| pin.id).collect();
-        let prune = |snapshot: &mut Board| {
-            snapshot.cards.retain(|card| !matches!(card.content, Content::Shortcut { pin, .. } if !valid.contains(&pin)));
-            snapshot
-                .bindings
-                .retain(|binding| valid.contains(&binding.pin));
-        };
+        let prune = |snapshot: &mut Board| snapshot.retain_pin_refs(&valid, &Default::default());
         for snapshot in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             prune(snapshot);
             snapshot.revision = board.revision;
@@ -97,6 +92,29 @@ impl Session {
         if added {
             self.canvas.fit();
         }
+    }
+    pub fn settled_for_relocation(&self) -> bool {
+        !self.dirty()
+            && !self.canvas.busy()
+            && !self.canvas.has_unapplied_text()
+            && self.drag_before.is_none()
+    }
+    pub fn references_relocated(
+        &mut self,
+        board: &Board,
+        pins: &[Pin],
+        replacements: &std::collections::BTreeMap<Uuid, Uuid>,
+    ) {
+        let valid = pins.iter().map(|pin| pin.id).collect();
+        for snapshot in std::iter::once(&mut self.board)
+            .chain(self.undo.iter_mut())
+            .chain(self.redo.iter_mut())
+            .chain(self.drag_before.iter_mut())
+        {
+            snapshot.retain_pin_refs(&valid, replacements);
+            snapshot.revision = board.revision;
+        }
+        self.install(board);
     }
     fn remember(&mut self, previous: Board) {
         self.undo.push(previous);

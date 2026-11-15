@@ -16,6 +16,7 @@ mod list;
 mod mounts;
 pub(super) mod music;
 mod organization;
+mod reference_updates;
 mod sorting_sets;
 mod video;
 mod visibility;
@@ -54,6 +55,7 @@ impl FileManager {
         self.bookmark_drop_rect = None;
         self.home_surface.poll_canvas(ui.ctx());
         self.tick(super::BackgroundJobs::global());
+        self.reference_update_feedback(ui);
         if self.home_surface.open {
             ui.set_enabled(!self.browser_modal());
             self.home_ui(ui, palette);

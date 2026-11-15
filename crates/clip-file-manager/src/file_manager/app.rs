@@ -640,6 +640,7 @@ impl FileManagerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
+        self.follow_file_renames();
         if !self.browser.prepare_presentation_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
