@@ -550,7 +550,8 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
 - [x] Keep section color popups open through repeated color changes. Canvas
   deselection ignores clicks captured by a popup; picking a color no longer
   removes the selected section and its picker. Native checks follow below.
-- [ ] Enable folder-pane controls while arranging.
+- [x] Enable folder-pane controls while arranging. Their control row remains
+  interactive; the separate placement header still owns dragging.
 - [ ] Support Delete/Undo and direct editing after reopening.
 - [ ] Preserve the camera when adding placements.
 - [ ] Bound Home zoom/pan and its grid to a useful workspace.

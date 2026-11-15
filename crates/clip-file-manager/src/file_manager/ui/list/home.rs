@@ -139,7 +139,7 @@ impl<'a> Rows<'a> {
         options: &mut Options,
         actions: &mut Vec<Action>,
     ) {
-        ui.add_enabled_ui(self.enabled && !self.arrange, |ui| {
+        ui.add_enabled_ui(self.enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Open folder").clicked() {
                     actions.push(Action::Open(pin));
