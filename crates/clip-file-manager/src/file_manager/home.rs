@@ -1,6 +1,7 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
 pub(in crate::file_manager) mod artwork;
 mod board;
+pub(in crate::file_manager) mod folders;
 pub(in crate::file_manager) mod projects;
 pub(in crate::file_manager) mod regions;
 mod session;
@@ -178,6 +179,18 @@ impl State {
                 pin,
                 expected,
             } => self.install_region(region, pin, expected)?,
+            Change::Folder { pin, point } => {
+                let pin = self.reference(pin);
+                self.board.cards.push(Card {
+                    id: Uuid::new_v4(),
+                    rect: [point[0] - 300.0, point[1] - 220.0, 600.0, 440.0],
+                    content: Content::Folder {
+                        pin,
+                        label: String::new(),
+                        options: Default::default(),
+                    },
+                });
+            }
             Change::Remove(id) => {
                 self.pins.retain(|p| p.id != id);
                 self.board.remove_pin(id);
@@ -209,6 +222,10 @@ impl State {
 #[derive(Clone)]
 enum Change {
     Add(Vec<Pin>),
+    Folder {
+        pin: Pin,
+        point: [f64; 2],
+    },
     Import {
         pins: Vec<Pin>,
         point: [f64; 2],
@@ -244,6 +261,8 @@ pub(super) struct Home {
     pub projects: projects::Projects,
     pub opening: Option<PathBuf>,
     pub artwork: artwork::Assets,
+    pub folders: folders::Previews,
+    pub folder_filters: BTreeSet<Uuid>,
     pub drop_rect: Option<egui::Rect>,
     pub region_ui: regions::Interaction,
     pub native_results: Vec<(u64, bool)>,
@@ -275,12 +294,14 @@ impl Home {
         &mut Session,
         &mut projects::Projects,
         &mut artwork::Assets,
+        &mut folders::Previews,
     ) {
         (
             &self.state.pins,
             &mut self.session,
             &mut self.projects,
             &mut self.artwork,
+            &mut self.folders,
         )
     }
     pub fn pins(&self) -> &[Pin] {
@@ -373,6 +394,14 @@ impl Home {
         });
         true
     }
+    pub fn add_folder(&mut self, path: PathBuf) {
+        if self.ready() {
+            self.queued = Some(Change::Folder {
+                pin: Pin::new(path, true),
+                point: self.session.spawn,
+            });
+        }
+    }
     pub fn remove(&mut self, id: Uuid) {
         if self.ready() {
             self.queued = Some(Change::Remove(id));
@@ -461,7 +490,11 @@ impl Home {
                     .references_relocated(&state.board, &state.pins, &replacements);
             }
             Action::Change(
-                Change::Add(_) | Change::Remove(_) | Change::Import { .. } | Change::Region { .. },
+                Change::Add(_)
+                | Change::Remove(_)
+                | Change::Import { .. }
+                | Change::Region { .. }
+                | Change::Folder { .. },
             ) => self.session.references_changed(&state.board, &state.pins),
             _ => self.session.install(&state.board),
         }
@@ -532,6 +565,7 @@ impl Home {
         if !self.open {
             self.projects.previews.retire();
             self.artwork.retire();
+            self.folders.retire();
         }
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
@@ -589,6 +623,50 @@ fn save(path: &Path, change: Change) -> Result<State, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_folder_panes_share_a_source_but_keep_filters_and_layout_independent() {
+        let mut state = super::State::default();
+        let pin = super::Pin::new("/tmp/downloads".into(), true);
+        for point in [[0., 0.], [800., 0.]] {
+            state
+                .apply(super::Change::Folder {
+                    pin: pin.clone(),
+                    point,
+                })
+                .unwrap();
+        }
+        assert_eq!(state.pins.len(), 1);
+        assert_eq!(state.board.cards.len(), 2);
+        if let super::Content::Folder { options, .. } = &mut state.board.cards[0].content {
+            options.extensions = "wav".into();
+            options.recent_minutes = 60;
+            options.presentation = super::folders::Presentation::Icons;
+        } else {
+            panic!()
+        }
+        let super::Content::Folder { options, .. } = &state.board.cards[1].content else {
+            panic!()
+        };
+        assert_eq!(*options, super::folders::Options::default());
+        let restored: super::State =
+            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(state.board, restored.board);
+        state
+            .relocate(
+                std::path::Path::new("/tmp/downloads"),
+                std::path::Path::new("/tmp/inbox"),
+            )
+            .unwrap();
+        assert_eq!(state.pins[0].path, std::path::Path::new("/tmp/inbox"));
+        assert!(
+            state.board.cards.iter().all(
+                |card| matches!(card.content,super::Content::Folder {pin: id,..} if id==pin.id)
+            )
+        );
+        state.apply(super::Change::Remove(pin.id)).unwrap();
+        assert!(state.board.cards.is_empty());
+    }
     #[test]
     fn click_region_uses_stable_pin_through_rename_merge_unpin_and_layout_history() {
         let pin = super::Pin::new("/tmp/notes".into(), true);

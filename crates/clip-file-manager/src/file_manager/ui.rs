@@ -59,10 +59,15 @@ impl FileManager {
         if self.home_surface.open {
             ui.set_enabled(!self.browser_modal());
             self.home_ui(ui, palette);
+            let strip_focus = [
+                Some(music::waveform_id()),
+                Some(super::midi_strip::focus_id()),
+            ]
+            .contains(&ui.memory(|memory| memory.focused()));
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
                     egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
-                    false,
+                    strip_focus,
                 )
             });
             self.schedule_repaints(ui.ctx());
@@ -173,6 +178,19 @@ impl FileManager {
             })
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    fn handle_strip_copy_key(&mut self, ctx: &egui::Context) {
+        let focused = ctx.memory(|memory| memory.focused());
+        if [
+            Some(music::waveform_id()),
+            Some(super::midi_strip::focus_id()),
+        ]
+        .contains(&focused)
+            && key(ctx, Modifiers::CTRL, Key::C)
+        {
+            self.copy_strip_selection(ctx);
         }
     }
 
@@ -381,9 +399,7 @@ impl FileManager {
                 .into_iter()
                 .any(|id| memory.has_focus(id))
         }) {
-            if key(ctx, Modifiers::CTRL, Key::C) {
-                self.copy_strip_selection(ctx);
-            }
+            self.handle_strip_copy_key(ctx);
             if key(ctx, Modifiers::CTRL, Key::V) {
                 self.paste_files();
             }

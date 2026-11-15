@@ -37,10 +37,10 @@ it must not force the user to design their space from a small shape toolbox.
 - [ ] Let each project and its components, especially its live source-backed TODO,
   be placed/resized independently. The registry discovers projects; it does not
   dictate a single enclosing Projects box or copy tasks into Home state.
-- [ ] Add live folder panes using the existing file-preview row mechanisms and
+- [x] Add live folder panes using the existing file-preview row mechanisms and
   bounded worker/cache ownership. Provide list and basic icon-grid presentation.
   Do not allocate a second FileManager/application or studio per pane.
-- [ ] Give each pane its own persisted filter (type/name/relative age at minimum),
+- [x] Give each pane its own persisted filter (type/name/relative age at minimum),
   without editing folder-owned .hide/.show or ordinary browser preferences. The
   example “Downloads modified less than one hour ago” refreshes as time passes.
 - [ ] Verify vector/theme/placement, arbitrary regions and overlap choices,
@@ -303,3 +303,59 @@ The action picker currently opens files/folders/projects. There is no registered
 file-manager workflow runner to select; workflow actions remain explicitly pending,
 rather than accepting arbitrary shell strings. Tablet input, live folder previews,
 per-pane filters, remaining format imports and legacy-area migration remain active.
+
+
+## Live folder pane delivery
+
+Add → Live folder pane offers the current browser folder and saved folder
+references, showing the full source path. Saved references remain available after
+startup, when no browser directory has yet been loaded. Each placement has its own
+geometry, label, list/icon presentation, name/extension/relative-modification-age
+filters and hidden-file choice. The source pin and directory snapshot are shared
+between repeated placements. Filters never edit `.hide`, `.show` or browser
+preferences; inherited folder visibility rules still apply.
+
+List presentation calls the existing mixed list-row renderer for images, diagrams,
+text, audio, MIDI, video and other supported files. It borrows the browser's existing
+preview caches and one playback/export session. Visible paths are retained once
+across the whole composition, preserving previews in other panes. Media clipboard
+focus stays restricted to audio/MIDI strips; text controls keep ordinary clipboard
+handling. Home media routing no longer inherits an underlying Constellation view.
+Folder rows open the main browser rather than embedding another recursive browser
+and mutation surface. Icon presentation uses the shared file-type icons.
+
+Pane/project headers can be dragged directly, and selection exposes resize
+handles without requiring Arrange. Artwork remains borderless and directly movable.
+The composition keeps its existing painter order, exact camera and clipping; it
+never allocates a second FileManager, player, decoder family or GL context.
+
+Directory reads use the existing pinned inventory/visibility readers on two
+bounded workers. At most 16 source folders are retained, with 4,096 observed
+entries per folder and a five-second refresh interval. Source identity and mount
+identity are checked before publication. Relative-age filters reevaluate every
+second. Hidden panes retire reads, topmost visible panes get admission first, and
+partial inventories are labeled without claiming that an absent match proves
+there are none. Open folder provides the full browser. Accepted Home layout and
+filter writes retain the existing revision checks, history and close protection.
+
+Validation: the complete file-manager library gate passes 1,035 tests (6 ignored),
+and all 48 Home tests pass after the final source/mount checks. Tests cover
+independent pane filters/layout, persistence and source retargeting, inherited
+visibility rules without writes, and clock-based filter expiry. Native workflows
+pass in both themes, including actual painted image colors and waveform pixels,
+filtering, icon mode, external additions, restart, adding a second saved source
+from startup Home, independent filters and direct header dragging:
+`/tmp/home-folders-dark-07/report.json` and
+`/tmp/home-folders-light-02/report.json`. Strict all-target Clippy, formatting and
+the debug build pass. Disk availability remains approximately 80 GiB.
+
+Architecture review separates pane controls from content and shares the existing
+list-row dispatch, caches, camera and media owners. The added source snapshot
+queue is bounded once for Home, not instantiated per pane. The comparison against
+the review baseline retains maximum complexity and lowers duplication percentage
+by 0.01 points; it still flags new short clone groups in host resource wiring,
+reader/admission boilerplate and tests. That explicit wiring keeps the existing
+owners intact rather than hiding them in a second browser abstraction.
+
+Tablet pressure input, recipe actions, additional artwork import adapters and
+legacy aggregate-project migration remain active work.

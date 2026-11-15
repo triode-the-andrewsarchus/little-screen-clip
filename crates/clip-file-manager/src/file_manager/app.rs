@@ -650,7 +650,8 @@ impl FileManagerApp {
         }
     }
     fn play_space_selection(&mut self, ctx: &egui::Context) -> bool {
-        if self.browser.view == super::BrowserView::Constellation {
+        if !self.browser.home_surface.open && self.browser.view == super::BrowserView::Constellation
+        {
             let modifiers = ctx.input(|input| input.modifiers);
             if modifiers.ctrl
                 || modifiers.alt
@@ -670,10 +671,12 @@ impl FileManagerApp {
             self.browser.music.stop();
             return self.browser.midi.play_selection();
         }
-        if matches!(
-            self.browser.view,
-            super::BrowserView::List | super::BrowserView::Columns
-        ) && ctx.memory(|memory| memory.has_focus(super::ui::music::waveform_id()))
+        if (self.browser.home_surface.open
+            || matches!(
+                self.browser.view,
+                super::BrowserView::List | super::BrowserView::Columns
+            ))
+            && ctx.memory(|memory| memory.has_focus(super::ui::music::waveform_id()))
             && let Some(range) = self.browser.music_selection.clone()
         {
             self.browser.midi.stop();
@@ -794,7 +797,8 @@ impl eframe::App for FileManagerApp {
             .set_suspended(self.viewers.active());
         self.preview_keys(ctx);
         self.browser.retire_constellation_audition();
-        if self.browser.view == super::BrowserView::Constellation {
+        if !self.browser.home_surface.open && self.browser.view == super::BrowserView::Constellation
+        {
             let constellation = &mut self.browser.constellation;
             self.browser
                 .music

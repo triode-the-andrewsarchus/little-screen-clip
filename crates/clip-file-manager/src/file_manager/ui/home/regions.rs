@@ -433,7 +433,10 @@ impl Interaction {
 fn live_control(card: &Card, viewport: &Viewport<'_>, point: egui::Pos2) -> bool {
     matches!(
         card.content,
-        Content::Project { .. } | Content::Projects { .. } | Content::Shortcut { .. }
+        Content::Project { .. }
+            | Content::Projects { .. }
+            | Content::Shortcut { .. }
+            | Content::Folder { .. }
     ) && viewport.bounds(card.bounds()).contains(point)
 }
 fn outline(ui: &Ui, viewport: &Viewport<'_>, points: &[[f64; 2]], enabled: bool) {

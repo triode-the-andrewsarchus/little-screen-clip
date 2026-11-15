@@ -1,6 +1,7 @@
 //! Mixed List rows share image, text, music, video, MIDI, and PDF previews.
 use super::super::{filesystem::Entry, previews::EntryPreviews, video_timeline};
 use super::*;
+pub(super) mod home;
 
 struct ListPreviews<'a> {
     columns: ListColumns,
@@ -10,6 +11,7 @@ struct ListPreviews<'a> {
     child_targets: Vec<(Rect, PathBuf)>,
     containers: &'a mut super::super::container_preview::Previews,
     container_paths: std::collections::BTreeSet<PathBuf>,
+    inline_containers: bool,
     hidden: bool,
     metadata_only: bool,
     files: &'a mut EntryPreviews,
@@ -84,7 +86,10 @@ impl<'a> ListPreviews<'a> {
                 false,
             );
         }
-        if !actions.context.active() && super::super::container_preview::candidate(entry) {
+        if self.inline_containers
+            && !actions.context.active()
+            && super::super::container_preview::candidate(entry)
+        {
             return (
                 self.container_row(ui, rect, entry, marked, colors, palette, actions),
                 false,
@@ -374,6 +379,7 @@ impl FileManager {
             containers: &mut self.containers,
             container_paths: Default::default(),
             hidden: self.show_hidden,
+            inline_containers: true,
             columns,
             midi: &mut self.midi,
             metadata_only: self.search.has_offline_results(),
@@ -485,7 +491,7 @@ impl FileManager {
         }
     }
 
-    fn list_audio(&mut self, play: Option<(PathBuf, f32)>) {
+    pub(super) fn list_audio(&mut self, play: Option<(PathBuf, f32)>) {
         if std::mem::take(&mut self.previews.multisample.started) {
             self.music.stop();
             self.midi.stop();

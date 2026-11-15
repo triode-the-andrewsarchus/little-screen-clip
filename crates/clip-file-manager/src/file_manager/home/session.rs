@@ -194,9 +194,9 @@ impl Session {
                 .iter()
                 .find(|card| card.id == id)
                 .map(|card| match &card.content {
-                    Content::Shortcut { label, .. } | Content::Artwork { label, .. } => {
-                        label.clone()
-                    }
+                    Content::Shortcut { label, .. }
+                    | Content::Artwork { label, .. }
+                    | Content::Folder { label, .. } => label.clone(),
                     Content::Section { title, .. }
                     | Content::Projects { title }
                     | Content::Project { title, .. } => title.clone(),
@@ -235,9 +235,9 @@ impl Session {
                 .find(|card| Some(card.id) == selected)
             {
                 match &mut card.content {
-                    Content::Shortcut { label, .. } | Content::Artwork { label, .. } => {
-                        *label = title
-                    }
+                    Content::Shortcut { label, .. }
+                    | Content::Artwork { label, .. }
+                    | Content::Folder { label, .. } => *label = title,
                     Content::Section { title: label, .. }
                     | Content::Projects { title: label }
                     | Content::Project { title: label, .. }

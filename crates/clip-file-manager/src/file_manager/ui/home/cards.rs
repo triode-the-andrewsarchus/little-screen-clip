@@ -5,7 +5,7 @@ use clip_studios::drawing_canvas::Viewport;
 use uuid::Uuid;
 mod projects;
 
-pub(super) enum Action {
+pub(in crate::file_manager::ui) enum Action {
     Open(Uuid),
     Select(Uuid),
     Begin(Uuid),
@@ -16,14 +16,17 @@ pub(super) enum Action {
     OpenDocument(std::path::PathBuf),
     OpenFolder(std::path::PathBuf),
     ReloadArtwork(Uuid),
+    RefreshFolder(Uuid),
+    FolderOptions(Uuid, crate::file_manager::home::folders::Options),
 }
-pub(super) struct Renderer<'a, 'camera> {
+pub(in crate::file_manager::ui) struct Renderer<'a, 'camera> {
     pub viewport: Viewport<'camera>,
     pub pins: &'a [Pin],
     pub arrange: bool,
     pub enabled: bool,
     pub selected: Option<Uuid>,
     pub unpin: bool,
+    pub palette: &'a AppPalette,
 }
 impl Renderer<'_, '_> {
     pub fn cards(
@@ -32,8 +35,8 @@ impl Renderer<'_, '_> {
         cards: &[Card],
         projects: &mut crate::file_manager::home::projects::Projects,
         artwork: &mut crate::file_manager::home::artwork::Assets,
-        palette: &AppPalette,
         actions: &mut Vec<Action>,
+        mut folder: impl FnMut(&mut Ui, &Card, Rect, &mut Vec<Action>),
     ) {
         for card in cards
             .iter()
@@ -52,9 +55,17 @@ impl Renderer<'_, '_> {
                     .bounds(card.bounds())
                     .intersects(self.viewport.rect)
             {
-                artwork.paint(ui, self.viewport.bounds(card.bounds()), source, palette);
+                artwork.paint(
+                    ui,
+                    self.viewport.bounds(card.bounds()),
+                    source,
+                    self.palette,
+                );
             }
             self.card(ui, card, actions);
+            if matches!(card.content, Content::Folder { .. }) {
+                folder(ui, card, self.viewport.bounds(card.bounds()), actions);
+            }
             if matches!(
                 card.content,
                 Content::Projects { .. } | Content::Project { .. }
@@ -71,6 +82,19 @@ impl Renderer<'_, '_> {
         let scale = self.viewport.scale() as f32;
         match &card.content {
             Content::Artwork { .. } => {}
+            Content::Folder { pin, label, .. } => {
+                ui.painter()
+                    .rect_filled(rect, 12.0, ui.visuals().panel_fill);
+                let title = if label.is_empty() {
+                    self.pins
+                        .iter()
+                        .find(|p| p.id == *pin)
+                        .map_or_else(|| "Folder".into(), pin_name)
+                } else {
+                    label.clone()
+                };
+                self.section(ui, card, rect, &title, [69, 132, 134]);
+            }
             Content::Section { title, color } => self.section(ui, card, rect, title, *color),
             Content::Projects { title } | Content::Project { title, .. } => {
                 ui.painter()
@@ -85,7 +109,10 @@ impl Renderer<'_, '_> {
             }
         }
         let hit = match card.content {
-            Content::Section { .. } | Content::Projects { .. } | Content::Project { .. } => {
+            Content::Section { .. }
+            | Content::Projects { .. }
+            | Content::Project { .. }
+            | Content::Folder { .. } => {
                 Rect::from_min_size(rect.min, vec2(rect.width(), 40.0 * scale))
             }
             _ => rect,
@@ -102,9 +129,19 @@ impl Renderer<'_, '_> {
         self.menu(&response, card, actions);
         self.resize(ui, rect, card, actions);
     }
+    fn movable(&self, card: &Card) -> bool {
+        self.arrange
+            || matches!(
+                card.content,
+                Content::Artwork { .. }
+                    | Content::Folder { .. }
+                    | Content::Project { .. }
+                    | Content::Projects { .. }
+            )
+    }
     fn input(&self, ui: &Ui, response: &egui::Response, card: &Card, actions: &mut Vec<Action>) {
         if self.enabled {
-            let movable = self.arrange || matches!(card.content, Content::Artwork { .. });
+            let movable = self.movable(card);
             if movable {
                 response
                     .clone()
@@ -161,8 +198,7 @@ impl Renderer<'_, '_> {
             }
             if ui
                 .add_enabled(
-                    self.enabled
-                        && (self.arrange || matches!(card.content, Content::Artwork { .. })),
+                    self.enabled && self.movable(card),
                     egui::Button::new("Remove from desk"),
                 )
                 .clicked()
@@ -174,9 +210,7 @@ impl Renderer<'_, '_> {
     }
     fn resize(&self, ui: &Ui, rect: Rect, card: &Card, actions: &mut Vec<Action>) {
         let scale = self.viewport.scale() as f32;
-        if self.selected == Some(card.id)
-            && (self.arrange || matches!(card.content, Content::Artwork { .. }))
-        {
+        if self.selected == Some(card.id) && self.movable(card) {
             ui.painter().rect_stroke(
                 rect,
                 9.0,
@@ -293,7 +327,9 @@ fn card_label(card: &Card, pins: &[Pin]) -> String {
         Content::Section { title, .. }
         | Content::Projects { title }
         | Content::Project { title, .. } => title.clone(),
-        Content::Shortcut { pin, label } | Content::Artwork { pin, label } => {
+        Content::Shortcut { pin, label }
+        | Content::Artwork { pin, label }
+        | Content::Folder { pin, label, .. } => {
             if label.is_empty() {
                 pins.iter()
                     .find(|p| p.id == *pin)

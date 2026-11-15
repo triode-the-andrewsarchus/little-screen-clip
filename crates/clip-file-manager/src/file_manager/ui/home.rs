@@ -3,7 +3,7 @@ use super::*;
 use crate::file_manager::home::{Board, Content, Pin};
 use little_clip_core::diagram::drawing::Bounds;
 use uuid::Uuid;
-mod cards;
+pub(super) mod cards;
 mod projects;
 mod regions;
 use cards::{Action, Renderer};
@@ -131,6 +131,7 @@ impl FileManager {
         ui.menu_button("Add", |ui| {
             ui.set_min_width(420.0);
             self.home_artwork_add(ui, &selected, can_pin);
+            self.home_folder_add(ui, can_pin);
             self.home_project_add_actions(ui, can_pin);
             if ui
                 .add_enabled(can_pin, egui::Button::new("Pin current folder"))
@@ -185,6 +186,39 @@ impl FileManager {
                     ui.close_menu();
                 }
             });
+        });
+    }
+    fn home_folder_add(&mut self, ui: &mut Ui, can_pin: bool) {
+        ui.menu_button("Live folder pane", |ui| {
+            let mut target = None;
+            if ui
+                .add_enabled(
+                    can_pin,
+                    egui::Button::new(format!("Current folder · {}", display_path(self.path()))),
+                )
+                .clicked()
+            {
+                target = Some(self.path().to_path_buf());
+            }
+            for pin in self.home_surface.pins().iter().filter(|pin| pin.folder) {
+                if ui
+                    .add_enabled(
+                        self.home_surface.ready(),
+                        egui::Button::new(format!(
+                            "{} · {}",
+                            cards::pin_name(pin),
+                            display_path(&pin.path)
+                        )),
+                    )
+                    .clicked()
+                {
+                    target = Some(pin.path.clone());
+                }
+            }
+            if let Some(path) = target {
+                self.home_surface.add_folder(path);
+                ui.close_menu();
+            }
         });
     }
     fn home_artwork_add(&mut self, ui: &mut Ui, selected: &[PathBuf], can_pin: bool) {
@@ -265,7 +299,7 @@ impl FileManager {
     }
     fn home_inspector(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let editable = self.home_surface.editing_allowed();
-        let (pins, session, _, _) = self.home_surface.canvas_parts();
+        let (pins, session, _, _, _) = self.home_surface.canvas_parts();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if session.selected.is_some() {
@@ -347,6 +381,7 @@ impl FileManager {
             self.history_step(true);
             return false;
         }
+        self.handle_strip_copy_key(ui.ctx());
         let editing = self.home_surface.editing_allowed();
         let session = &mut self.home_surface.session;
         if key(ui.ctx(), Modifiers::NONE, Key::Escape) {
@@ -371,10 +406,17 @@ impl FileManager {
     fn home_canvas(&mut self, ui: &mut Ui, palette: &AppPalette) -> Vec<Action> {
         let enabled = self.home_surface.editing_allowed();
         let unpin = self.home_surface.ready();
-        let mut region_ui = std::mem::take(&mut self.home_surface.region_ui);
-        let (pins, session, projects, artwork) = self.home_surface.canvas_parts();
+        // Lend the browser's existing row/media owners to the composition while
+        // its Home state is held separately. No navigation/tick runs until it is
+        // restored below; actions are applied only after this render completes.
+        let mut home = std::mem::take(&mut self.home_surface);
+        let mut region_ui = std::mem::take(&mut home.region_ui);
+        let mut folder_filters = std::mem::take(&mut home.folder_filters);
+        folder_filters.retain(|id| home.session.board.cards.iter().any(|card| card.id == *id));
+        let (pins, session, projects, artwork, folders) = home.canvas_parts();
         projects.previews.begin();
         artwork.begin();
+        folders.begin();
         let mut surface_rect = None;
         let mut actions = Vec::new();
         let excluded = exclusions(&session.board, session.selected, session.arrange);
@@ -382,6 +424,7 @@ impl FileManager {
         let mut spawn = session.spawn;
         let mut paper_pressed = false;
         let mut region_activated = None;
+        let mut play = None;
         let options = clip_studios::drawing_canvas::Options {
             composition: true,
             editable: session.arrange,
@@ -430,15 +473,21 @@ impl FileManager {
                     enabled,
                     selected: session.selected,
                     unpin,
-                };
-                renderer.cards(
-                    ui,
-                    &session.board.cards,
-                    projects,
-                    artwork,
                     palette,
-                    &mut actions,
-                );
+                };
+                let frames = folder_frames(&renderer, &session.board.cards, folders);
+                let (_, requested_play) =
+                    self.with_home_rows(ui, &frames, &mut folder_filters, &renderer, |ui, rows| {
+                        renderer.cards(
+                            ui,
+                            &session.board.cards,
+                            projects,
+                            artwork,
+                            &mut actions,
+                            |ui, card, rect, actions| rows.folder(ui, card, rect, actions),
+                        );
+                    });
+                play = requested_play;
                 region_activated = region_ui.surface(
                     ui,
                     &renderer.viewport,
@@ -450,6 +499,7 @@ impl FileManager {
         );
         projects.previews.end();
         artwork.end();
+        folders.end();
         session.spawn = spawn;
         if enabled {
             session.retain_view();
@@ -477,8 +527,11 @@ impl FileManager {
         if !ui.input(|input| input.pointer.any_down()) {
             session.end_drag();
         }
-        self.home_surface.drop_rect = surface_rect;
-        self.home_surface.region_ui = region_ui;
+        home.drop_rect = surface_rect;
+        home.region_ui = region_ui;
+        home.folder_filters = folder_filters;
+        self.home_surface = home;
+        self.list_audio(play);
         actions
     }
     fn home_actions(&mut self, actions: Vec<Action>) {
@@ -511,6 +564,14 @@ impl FileManager {
                 }
                 Action::End => self.home_surface.session.end_drag(),
                 Action::ReloadArtwork(pin) => self.home_surface.artwork.reload(pin),
+                Action::RefreshFolder(pin) => self.home_surface.folders.refresh(pin),
+                Action::FolderOptions(id, options) => self.home_surface.session.edit(|board| {
+                    if let Some(card) = board.cards.iter_mut().find(|card| card.id == id)
+                        && let Content::Folder { options: old, .. } = &mut card.content
+                    {
+                        *old = options;
+                    }
+                }),
                 Action::Remove(id) => {
                     self.home_surface.session.select(id);
                     self.home_surface.session.remove_selected();
@@ -537,6 +598,41 @@ impl FileManager {
         }
     }
 }
+fn folder_frames(
+    renderer: &Renderer<'_, '_>,
+    cards: &[crate::file_manager::home::Card],
+    folders: &mut crate::file_manager::home::folders::Previews,
+) -> Vec<super::list::home::Frame> {
+    let mut frames = Vec::new();
+    for card in cards.iter().rev() {
+        let Content::Folder { pin, .. } = card.content else {
+            continue;
+        };
+        let rect = renderer.viewport.bounds(card.bounds());
+        if !rect.intersects(renderer.viewport.rect) || rect.width() < 140.0 || rect.height() < 90.0
+        {
+            continue;
+        }
+        let Some(pin) = renderer.pins.iter().find(|p| p.id == pin) else {
+            continue;
+        };
+        let frame = match folders.request(pin) {
+            Some(view) => super::list::home::Frame {
+                card: card.id,
+                snapshot: view.snapshot.clone(),
+                error: view.error.clone(),
+            },
+            None => super::list::home::Frame {
+                card: card.id,
+                snapshot: None,
+                error: Some("Zoom in to load more folder panes".into()),
+            },
+        };
+        frames.push(frame);
+    }
+    frames
+}
+
 fn home_edit_keys(ctx: &egui::Context, session: &mut crate::file_manager::home::Session) {
     // egui's logical matching permits extra Shift; consume the specific chord first.
     if key(ctx, Modifiers::CTRL | Modifiers::SHIFT, Key::Z) {
