@@ -37,6 +37,7 @@ mod music;
 mod native_drag;
 mod notebook;
 mod organization;
+mod visibility;
 use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
@@ -222,6 +223,7 @@ pub(crate) struct FileManager {
     home: PathBuf,
     home_surface: home::Home,
     organization: organization::Organization,
+    visibility: visibility::Visibility,
     history: Vec<Location>,
     index: Option<usize>,
     directory: Option<Directory>,
@@ -318,6 +320,7 @@ impl FileManager {
             home,
             home_surface: Default::default(),
             organization: Default::default(),
+            visibility: Default::default(),
             history: Vec::new(),
             index: None,
             directory: None,
@@ -430,6 +433,7 @@ impl FileManager {
             || self.home_surface.busy()
             || self.home_surface.projects.busy()
             || self.organization.active()
+            || self.visibility.active()
     }
     fn presentation_writing(&self) -> bool {
         self.bookmarks.busy()
@@ -574,6 +578,7 @@ impl FileManager {
         self.tick_view_preferences(&local_state::IO);
         self.home_surface.tick(&local_state::IO);
         self.tick_organization();
+        self.tick_visibility();
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
@@ -792,6 +797,8 @@ impl FileManager {
             .export_directory(&directory.path)
             .unwrap_or_else(|| directory.path.clone());
         self.tree.reveal(&tree_path);
+        self.visibility
+            .request(&directory, self.archive_context().is_none());
         self.directory = Some(directory);
         self.rebuild_visible();
         if let Some(path) = self.reveal_target.take() {
@@ -847,6 +854,7 @@ impl FileManager {
     fn rebuild_visible(&mut self) {
         self.containers.organization = self.organization.snapshot.clone();
         self.containers.set_filter = self.organization.filter;
+        self.containers.visibility_ignored = self.visibility.ignored;
         self.single_family = None;
         self.visible = self
             .directory
@@ -856,7 +864,13 @@ impl FileManager {
                     .entries
                     .iter()
                     .enumerate()
-                    .filter(|(_, entry)| self.show_hidden || !entry.hidden)
+                    .filter(|(_, entry)| {
+                        self.visibility.snapshot.visible(
+                            entry,
+                            self.show_hidden,
+                            self.visibility.ignored,
+                        )
+                    })
                     .filter(|(_, entry)| {
                         entry.directory
                             || self

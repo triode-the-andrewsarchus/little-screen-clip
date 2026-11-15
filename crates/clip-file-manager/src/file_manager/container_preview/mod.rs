@@ -60,6 +60,7 @@ pub(super) struct Previews {
     sequence: u64,
     pub organization: Arc<super::organization::Snapshot>,
     pub set_filter: super::organization::Filter,
+    pub visibility_ignored: bool,
 }
 struct Node {
     revision: u64,
@@ -210,10 +211,18 @@ impl Previews {
                 .and_then(|node| node.ready.as_ref())
                 .is_none_or(|ready| !ready.complete)
     }
-    fn set_visible(&self, child: &Child) -> bool {
+    fn child_visible(
+        &self,
+        child: &Child,
+        hidden: bool,
+        rules: &Result<super::visibility::Rules, String>,
+    ) -> bool {
         match child {
             Child::File(entry) => {
-                entry.directory || self.organization.sets.matches(&entry.path, self.set_filter)
+                rules.as_ref().map_or(hidden || !entry.hidden, |rules| {
+                    rules.visible(entry, hidden, self.visibility_ignored)
+                }) && (entry.directory
+                    || self.organization.sets.matches(&entry.path, self.set_filter))
             }
             Child::Member { .. } => true,
         }
@@ -224,11 +233,14 @@ impl Previews {
             .filter(|node| node.revision == entry.revision && node.expanded(self.options))
             .and_then(|node| node.ready.as_ref())
             .into_iter()
-            .flat_map(|ready| &ready.children)
+            .flat_map(|ready| {
+                ready
+                    .children
+                    .iter()
+                    .filter(|child| self.child_visible(child, hidden, &ready.visibility))
+            })
             .filter_map(|child| match child {
-                Child::File(entry) if (hidden || !entry.hidden) && self.set_visible(child) => {
-                    Some(entry.as_ref())
-                }
+                Child::File(entry) => Some(entry.as_ref()),
                 _ => None,
             })
             .collect()

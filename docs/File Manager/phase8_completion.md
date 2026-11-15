@@ -432,3 +432,43 @@ ancestor-column badges. Full suite: 1,006 passed, 6 ignored; strict Clippy/build
 passed as recorded above.
 
 C6 is complete. C7–C9 remain open. Phase 8 is not complete.
+
+### C7 visibility rules — implementation checkpoint, native acceptance pending
+
+The versioned rule contract is documented in `visibility_rules.md`: TOML version
+1, bounded globs/negation, deeper-directory precedence, `.show` priority at equal
+depth, inherited directory opinions, selective dotfiles and mount-scoped ancestry.
+The guarded loader pins directory parents, verifies directory object/mount identity,
+rejects symlink/nonregular rule sources, checks same-handle source revisions and
+never rewrites unknown/malformed input. A separate bounded read worker owns root
+collection. Existing folder-inventory workers use the same loader for local
+preview overrides; source errors remain attached to the retained inventory.
+
+Rules: on/off, source opening, reload and one-click reveal-all recovery use the
+existing toolbar. Root rows use solid tinted backgrounds and explicit source
+labels. Session underlines and set badges remain separate. Ancestor columns keep
+active-route entries available. Collection failure clears previous hide opinions
+and exposes normal visibility with an explicit error. Details remain temporary
+viewing state, independent from file permissions and source content.
+
+- Full file-manager tests: 1,013 passed, zero failed, 6 ignored
+  (`/tmp/phase8-rules-all-tests.log`). New cases cover real inherited sources,
+  selective dotfiles, negation/precedence/anchoring/directory matches, malformed
+  and future schemas, source aliases/types/limits, replaced directory identities,
+  non-UTF-8 Unix names, an ordinary `/dev/shm` mount beneath a protected parent,
+  and agreement between folder cards and keyboard children during recovery.
+- Strict Clippy and debug build passed (`/tmp/phase8-rules-{clippy,build}.log`).
+  The earlier larger archive-view enum was avoided by retaining each preview's
+  rule success/failure together in one shared immutable result.
+- Native checks are still running in both appearances. The first captures
+  demonstrated working selective dotfiles and child-folder overrides, and exposed
+  a cramped Rules menu. Its minimum width is now explicit; those initial failed
+  reports are retained rather than counted as acceptance.
+- Architecture comparison has no new excessive-complexity function after
+  separating bounded source collection from held-parent traversal. Overall
+  average/maximum complexity is unchanged and duplication is down 0.05 points;
+  the aggregate report still flags eleven additional short clone groups across
+  C1–C7, including existing job scaffolding and independently asserted fixtures.
+
+C7 remains unchecked pending final native results and review. C8/C9 are still
+required before Phase 8 is complete.

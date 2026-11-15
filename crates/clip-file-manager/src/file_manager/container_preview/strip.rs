@@ -34,7 +34,7 @@ impl Previews {
             let direct = root
                 .children
                 .iter()
-                .filter(|child| visible(child, hidden) && self.set_visible(child))
+                .filter(|child| self.child_visible(child, hidden, &root.visibility))
                 .count();
             let mut spare = (width - direct as f32 * (edge(0) + GAP)).max(0.0);
             let mut queue = VecDeque::new();
@@ -59,7 +59,7 @@ impl Previews {
                 let count = ready
                     .children
                     .iter()
-                    .filter(|child| visible(child, hidden) && self.set_visible(child))
+                    .filter(|child| self.child_visible(child, hidden, &ready.visibility))
                     .count();
                 let needed = count as f32 * (edge(level) + GAP);
                 if count > 0 && needed <= spare {
@@ -103,7 +103,7 @@ impl Previews {
         for child in ready
             .children
             .iter()
-            .filter(|child| visible(child, hidden) && self.set_visible(child))
+            .filter(|child| self.child_visible(child, hidden, &ready.visibility))
         {
             output.push(Tile {
                 child: child.clone(),
@@ -208,6 +208,21 @@ impl Previews {
             FontId::proportional(10.0),
             colors.text_secondary,
         );
+        if let Err(error) = ready.visibility.as_ref() {
+            ui.interact(
+                Rect::from_min_size(body.min, vec2(body.width(), 10.0)),
+                ui.id().with(("folder-rule-error", &entry.path)),
+                Sense::hover(),
+            )
+            .on_hover_text(error);
+            ui.painter().text(
+                body.right_top(),
+                Align2::RIGHT_TOP,
+                "Rules unavailable",
+                FontId::proportional(10.0),
+                colors.danger,
+            );
+        }
         let mut tiles = Vec::new();
         self.tiles(entry, hidden, 0, &mut tiles);
         ui.allocate_ui_at_rect(Rect::from_min_max(body.min + vec2(0.0, 10.0), body.max), |ui| {

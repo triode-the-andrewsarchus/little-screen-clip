@@ -138,6 +138,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         archive_source: None,
         verified: true,
         payload: None,
+        visibility: Arc::new(Ok(Default::default())),
     }));
     assert!(
         !node.expanded(Options::default()),
@@ -156,6 +157,7 @@ fn automatic_small_folder_expansion_and_manual_override_have_separate_meanings()
         archive_source: None,
         verified: true,
         payload: None,
+        visibility: Arc::new(Ok(Default::default())),
     }));
     node.expanded = Some(false);
     assert!(
@@ -800,4 +802,38 @@ fn inline_layout_stops_after_three_progressively_smaller_layers() {
             .collect::<Vec<_>>(),
         [64.0, 44.0, 32.0]
     );
+}
+
+#[test]
+fn local_visibility_rules_filter_folder_cards_and_keyboard_children_together() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join(".hide"), "version=1\npatterns=['secret.txt']").unwrap();
+    std::fs::write(folder.join(".show"), "version=1\npatterns=['.env']").unwrap();
+    for name in ["secret.txt", "visible.txt", ".env"] {
+        std::fs::write(folder.join(name), name).unwrap();
+    }
+    let entry = entry(root.path(), "folder");
+    let ready = inventory::load(&entry, &AtomicBool::new(false)).unwrap();
+    assert!(ready.visibility.is_ok());
+    let mut previews = Previews::default();
+    let mut node = Node::new(entry.revision);
+    node.expanded = Some(true);
+    node.ready = Some(Arc::new(ready));
+    previews.nodes.insert(entry.path.clone(), node);
+    let names: Vec<_> = previews
+        .children(&entry, false)
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(names, vec![".env", "visible.txt"]);
+    let mut tiles = Vec::new();
+    previews.tiles(&entry, false, 0, &mut tiles);
+    assert_eq!(
+        tiles.iter().map(|t| t.child.name()).collect::<Vec<_>>(),
+        vec![".env", "visible.txt"]
+    );
+    previews.visibility_ignored = true;
+    assert_eq!(previews.children(&entry, true).len(), 5);
 }

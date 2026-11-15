@@ -77,6 +77,7 @@ impl<'a> ListPreviews<'a> {
         palette: &AppPalette,
         actions: &mut ListActions,
     ) -> (egui::Response, bool) {
+        let colors = super::visibility::background(ui, rect, entry, &actions.visibility, colors);
         if self.metadata_only {
             return (
                 file_row(ui, rect, entry, marked, self.columns, None, colors),

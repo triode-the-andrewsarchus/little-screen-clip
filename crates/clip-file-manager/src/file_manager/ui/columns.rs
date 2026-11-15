@@ -76,11 +76,13 @@ fn row(
     selected: bool,
     colors: WorkbenchColors,
     annotated: bool,
+    rules: &super::super::visibility::Rules,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), ROW_HEIGHT),
         Sense::click_and_drag(),
     );
+    let colors = super::visibility::background(ui, rect, entry, rules, colors);
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     if selected || response.hovered() {
         painter.rect_filled(
@@ -333,7 +335,14 @@ impl FileManager {
         let entries: Vec<_> = directory
             .entries
             .iter()
-            .filter(|entry| !entry.hidden || self.show_hidden)
+            .filter(|entry| {
+                current.starts_with(&entry.path)
+                    || self.visibility.snapshot.visible(
+                        entry,
+                        self.show_hidden,
+                        self.visibility.ignored,
+                    )
+            })
             .collect();
         let mut target = None;
         let route_id = ui.id().with("ancestor-route");
@@ -362,6 +371,7 @@ impl FileManager {
                     on_route,
                     colors,
                     self.organization.snapshot.color(entry).is_some(),
+                    &self.visibility.snapshot,
                 );
                 super::organization::paint_session(
                     ui,
@@ -370,12 +380,15 @@ impl FileManager {
                     &self.organization.snapshot,
                     true,
                 );
-                super::sorting_sets::paint_set(
+                let mut badge = response.rect;
+                badge.max.x -= super::visibility::label(
                     ui,
-                    response.rect,
+                    badge,
                     entry,
-                    &self.organization.snapshot,
+                    &self.visibility.snapshot,
+                    self.visibility.ignored,
                 );
+                super::sorting_sets::paint_set(ui, badge, entry, &self.organization.snapshot);
                 if restore && on_route {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }

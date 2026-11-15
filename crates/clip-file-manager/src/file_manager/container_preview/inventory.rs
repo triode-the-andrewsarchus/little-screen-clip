@@ -56,6 +56,7 @@ pub(super) struct Inventory {
     pub archive_source: Option<FileSource>,
     pub verified: bool,
     pub payload: Option<Vec<u8>>,
+    pub visibility: std::sync::Arc<Result<super::super::visibility::Rules, String>>,
 }
 
 pub(in crate::file_manager) fn archive(path: &Path) -> bool {
@@ -109,6 +110,12 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         cancel,
         LIMIT + 1,
     )?;
+    let visibility = std::sync::Arc::new(super::super::visibility::Rules::load(
+        &directory.path,
+        directory.object,
+        directory.mount,
+        cancel,
+    ));
     let source = clip_search::source::SourceRoot::from_directory(&directory);
     let observed = directory.entries.len();
     let complete = directory.skipped == 0 && observed <= LIMIT;
@@ -128,6 +135,7 @@ fn folder(entry: &Entry, cancel: &AtomicBool) -> Result<Inventory, String> {
         archive_source: None,
         verified: complete,
         payload: None,
+        visibility,
     })
 }
 
@@ -386,6 +394,7 @@ impl Members {
             archive_source: None,
             verified: scanned_all,
             payload: self.payload,
+            visibility: std::sync::Arc::new(Ok(Default::default())),
         }
     }
 }

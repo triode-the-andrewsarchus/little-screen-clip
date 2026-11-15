@@ -18,6 +18,7 @@ pub(super) mod music;
 mod organization;
 mod sorting_sets;
 mod video;
+mod visibility;
 
 const ROW_HEIGHT: f32 = 28.0;
 pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
@@ -76,6 +77,7 @@ impl FileManager {
         self.sync_preview_context();
         self.media_view_toolbar(ui, palette);
         self.organization_feedback(ui);
+        self.visibility_feedback(ui);
         ui.separator();
         self.docked_panels(ui, palette);
         // A coalesced header click can also clear focus during the later list
@@ -1610,6 +1612,8 @@ enum TreeAction {
 struct ListActions {
     organization: std::sync::Arc<super::organization::Snapshot>,
     organization_ready: bool,
+    visibility: std::sync::Arc<super::visibility::Rules>,
+    visibility_ignored: bool,
     set_assignment: Option<(PathBuf, bool, Option<uuid::Uuid>)>,
     set_name_end: Option<f32>,
     session_mark: Option<(
@@ -1645,6 +1649,8 @@ impl ListActions {
         Self {
             organization: browser.organization.snapshot.clone(),
             organization_ready: browser.organization.ready(),
+            visibility: browser.visibility.snapshot.clone(),
+            visibility_ignored: browser.visibility.ignored,
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
@@ -1743,6 +1749,13 @@ impl ListActions {
             if let Some(end) = self.set_name_end {
                 badge_rect.max.x = end;
             }
+            badge_rect.max.x -= visibility::label(
+                ui,
+                badge_rect,
+                entry,
+                &self.visibility,
+                self.visibility_ignored,
+            );
             sorting_sets::paint_set(ui, badge_rect, entry, &self.organization);
             if let Some(color) = self.organization.color(entry) {
                 response.clone().on_hover_text(format!(
