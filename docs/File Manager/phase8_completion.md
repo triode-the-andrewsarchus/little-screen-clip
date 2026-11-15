@@ -39,7 +39,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       handling and project-area membership from the registry.
 - [x] C5. Session red/yellow/green marks with editable meanings; distinct labeled
       underlines, persistence and clearing/recovery.
-- [ ] C6. Configurable A/B/... sets, membership/filtering and repeated subdivision;
+- [x] C6. Configurable A/B/... sets, membership/filtering and repeated subdivision;
       independent from session state and visibility.
 - [ ] C7. `.hide`/`.show` syntax, precedence/inheritance, selective dotfile reveal,
       labeled solid backgrounds and an obvious recovery/ignore-rules control.
@@ -415,3 +415,20 @@ are documented in `organization.md`.
   rather than adding another persistence or inventory system.
 
 C6 is in progress. C7–C9 remain open. Phase 8 is not complete.
+
+
+### C6 native acceptance completed
+
+Both final native workflows passed all 24 observations:
+`/tmp/phase8-sets-dark-06/report.json` and
+`/tmp/phase8-sets-light-06/report.json`. They assign A/B memberships, filter to A,
+create a child Keep group, move the selected file into that child, verify the
+parent still includes it, inspect Unassigned, return to All and restart with
+stored memberships intact. Source bytes remain unchanged. Badge placement and
+both appearances were visually inspected, including size/modified columns.
+Earlier input/OCR failures remain in the preceding reports and are not counted
+as successful evidence. The final build includes bounded shared pickers and
+ancestor-column badges. Full suite: 1,006 passed, 6 ignored; strict Clippy/build
+passed as recorded above.
+
+C6 is complete. C7–C9 remain open. Phase 8 is not complete.

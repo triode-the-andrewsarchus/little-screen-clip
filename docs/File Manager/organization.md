@@ -77,7 +77,7 @@ clone the full mark list. File content is never read or written by assignment.
 Sorting sets use the separate model described below. Visibility rules remain a
 subsequent Phase 8 delivery; neither is inferred from session colors.
 
-## Sorting sets (current implementation under validation)
+## Sorting sets
 
 Sets classify path references independently from session review marks. A/B are
 the initial root groups. Each group has a stable UUID, name, RGB border color and
