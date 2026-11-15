@@ -160,11 +160,8 @@ impl Session {
         }
     }
     pub fn commit_labels(&mut self) {
-        if !self.arrange {
-            return;
-        }
         let title = self.title_draft.trim().to_owned();
-        if !title.is_empty() && title.len() <= 256 {
+        if self.arrange && !title.is_empty() && title.len() <= 256 {
             self.edit(|board| board.title = title);
         }
         self.rename_selected();
