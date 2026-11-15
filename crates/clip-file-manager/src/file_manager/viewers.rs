@@ -129,6 +129,12 @@ impl Viewers {
             ..Self::default()
         }
     }
+    pub(super) fn set_appearance(
+        &mut self,
+        appearance: little_clip_core::config::WorkbenchAppearance,
+    ) {
+        self.config.workbench.appearance = appearance;
+    }
     pub(super) fn video_fullscreen(&self) -> bool {
         matches!(&self.session, Some(ViewerSession::Video(video)) if video.fullscreen())
     }

@@ -385,18 +385,50 @@ impl FileManagerApp {
             }
         }
     }
+    fn appearance_menu(&mut self, ui: &mut egui::Ui) {
+        use little_clip_core::config::WorkbenchAppearance;
+        ui.menu_button("Appearance", |ui| {
+            for (appearance, label) in [
+                (WorkbenchAppearance::Light, "Light mode"),
+                (WorkbenchAppearance::Dark, "Dark mode"),
+            ] {
+                if ui
+                    .selectable_label(
+                        self.palette.is_dark == (appearance == WorkbenchAppearance::Dark),
+                        label,
+                    )
+                    .clicked()
+                {
+                    self.palette = ui_appearance::palette(appearance);
+                    ui_appearance::apply_visuals(ui.ctx(), &self.palette);
+                    self.viewers.set_appearance(appearance);
+                    if let Err(error) = AppConfig::save_workbench_appearance_to_file(appearance) {
+                        self.browser.error = Some(format!("Could not save appearance: {error}"));
+                    }
+                    ui.ctx().request_repaint();
+                    ui.close_menu();
+                }
+            }
+        });
+        ui.separator();
+    }
     fn menu_bar(&mut self, ctx: &egui::Context) {
         if !self.viewers.video_fullscreen() {
             egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
-                    ui.set_enabled(!self.browser.home_surface.open || self.viewers.active());
                     for title in ["File", "Edit", "View"] {
-                        ui.menu_button(title, |ui| {
-                            if title == "View" {
-                                if !self.viewers.active() {
-                                    self.browser.folder_view_settings(ui, &self.palette);
-                                }
-                                ui.menu_button("Photos", |ui| {
+                        ui.add_enabled_ui(
+                            title == "View"
+                                || !self.browser.home_surface.open
+                                || self.viewers.active(),
+                            |ui| {
+                                ui.menu_button(title, |ui| {
+                                    if title == "View" {
+                                        self.appearance_menu(ui);
+                                        if !self.viewers.active() {
+                                            self.browser.folder_view_settings(ui, &self.palette);
+                                        }
+                                        ui.menu_button("Photos", |ui| {
                                     ui.style_mut().wrap = Some(false);
                                     let current_mode = self.browser.photo_mode;
                                     if ui
@@ -443,7 +475,7 @@ impl FileManagerApp {
                                         self.browser.refresh();
                                     }
                                 });
-                                ui.menu_button("Audio", |ui| {
+                                        ui.menu_button("Audio", |ui| {
                                 ui.style_mut().wrap = Some(false);
                                 let mut spectrum = self.browser.music_previews.audio_spectrum();
                                 if ui
@@ -469,19 +501,22 @@ impl FileManagerApp {
                                     }
                                 }
                             });
-                            } else if title == "Edit" {
-                                self.edit_menu(ui);
-                                if !self.viewers.active() && ui.button("Search settings…").clicked()
-                                {
-                                    self.browser.open_search_settings();
-                                    ui.close_menu();
-                                }
-                            } else if title == "File" {
-                                self.constellation_index_menu(ui);
-                            } else {
-                                ui.add_enabled(false, egui::Label::new("No actions yet"));
-                            }
-                        });
+                                    } else if title == "Edit" {
+                                        self.edit_menu(ui);
+                                        if !self.viewers.active()
+                                            && ui.button("Search settings…").clicked()
+                                        {
+                                            self.browser.open_search_settings();
+                                            ui.close_menu();
+                                        }
+                                    } else if title == "File" {
+                                        self.constellation_index_menu(ui);
+                                    } else {
+                                        ui.add_enabled(false, egui::Label::new("No actions yet"));
+                                    }
+                                });
+                            },
+                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.viewers.active() {

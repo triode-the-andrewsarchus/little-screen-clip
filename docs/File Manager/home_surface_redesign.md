@@ -236,3 +236,20 @@ prerequisite discovered in the first check-in review.
 Validation: 42 Home tests and strict file-manager Clippy pass. The real native
 artwork workflow now moves/resizes without clicking Arrange and passes in dark
 mode (`/tmp/home-feedback-direct-dark-01/report.json`).
+
+
+## Review feedback: appearance in Files
+
+View → Appearance offers Light mode and Dark mode in folders, studios and Home.
+Home no longer disables the View menu. The choice updates the current palette and
+future studio configuration immediately, and saves through the existing shared
+appearance-setting writer, preserving unrelated configuration. A failed save is
+reported; successful changes do not add a status message.
+
+The private native acceptance passes nine observations including both theme
+transitions, saved preference after restart and an unrelated-setting sentinel:
+`/tmp/files-appearance-menu-dark-02/report.json`. Strict file-manager all-target
+Clippy and formatting pass. Architecture measurements retain duplication, average
+and maximum complexity; the menu's additional branch is the necessary exception
+that makes View available on Home. Reported dependency-cycle changes only reorder
+unchanged existing members, and clone reports touch existing host/studio snippets.
