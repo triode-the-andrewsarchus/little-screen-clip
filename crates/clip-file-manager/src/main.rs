@@ -18,7 +18,7 @@ fn main() -> Result<(), eframe::Error> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: clip-file-manager [DIRECTORY]\n\nBrowse folders in the standalone Little Screen Clip file manager.\nDefaults to your home directory. Ctrl+Q closes the application."
+            "Usage: clip-file-manager [DIRECTORY]\n\nBrowse folders in the standalone Little Screen Clip file manager.\nWith no directory argument, opens your personal Home desk. Ctrl+Q closes the application."
         );
         return Ok(());
     }

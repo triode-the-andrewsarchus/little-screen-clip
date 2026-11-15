@@ -620,3 +620,10 @@ C8 native acceptance and C9 final integration/review fixtures remain open.
   before F2 and did not exercise a rename.
 
 C8 is complete. C9 integration/review and final workspace gates remain open.
+
+### C9 command help correction
+
+- [x] Updated `clip-file-manager --help` to describe no-argument startup as the
+  personal Home desk, matching the implemented behavior. Manually verified
+  through `cargo run -p clip-file-manager -- --help`; log:
+  `/tmp/phase8-final-help.log`.
