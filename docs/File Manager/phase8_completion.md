@@ -131,3 +131,13 @@ geometry, unknown future schemas and oversized input remain explicit failures.
 
 C2 remains unchecked: its interactive Home presentation, arrangement/undo and
 native review still need implementation. No live project task UI is claimed yet.
+
+### C1 follow-up: same-frame pan alignment
+
+- [x] Fixed native artwork lagging live overlays during primary-button pan.
+  A rendered-frame regression first demonstrated a 40×30-pixel mismatch.
+  Artwork projection is now computed after pan/Fit input, matching feedback
+  and live-widget projection in that same frame. Middle-button Fit also updates
+  before painting. The drawing regression suite passes: 17 tests, zero failures.
+  Before-fix evidence: `/tmp/phase8-pan-regression-before.log`;
+  current suite: `/tmp/phase8-desk-drawing-tests.log`.

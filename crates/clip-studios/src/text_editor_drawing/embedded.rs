@@ -354,3 +354,97 @@ mod tests {
         assert_eq!(canvas.editor.model.as_ref().unwrap().source(), source);
     }
 }
+
+#[cfg(test)]
+mod pan_tests {
+    use super::*;
+    #[test]
+    fn primary_pan_paints_artwork_and_live_content_with_the_same_frames_camera() {
+        let ctx = egui::Context::default();
+        let source = r#"{"type":"excalidraw","version":2,"elements":[]}"#;
+        let preview = Preview::drawing_fixture(&ctx, source);
+        let mut canvas = Canvas {
+            editor: DrawingEditor {
+                source: Some(Arc::from(source)),
+                model: Some(Arc::new(Scene::parse(source).unwrap())),
+                ..Default::default()
+            },
+            preview,
+        };
+        let mut overlay = Rect::NOTHING;
+        let mut render = |canvas: &mut Canvas, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        canvas.show(
+                            ui,
+                            source,
+                            &AppPalette::default(),
+                            Options {
+                                editable: false,
+                                enabled: true,
+                                excluded: &[],
+                                extent: None,
+                            },
+                            |_, view| {
+                                overlay = view.bounds(Bounds {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: 100.0,
+                                    height: 100.0,
+                                    angle: 0.0,
+                                });
+                            },
+                        );
+                    });
+                },
+            )
+        };
+        let _ = render(&mut canvas, vec![]);
+        let point = egui::pos2(450.0, 300.0);
+        let _ = render(
+            &mut canvas,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let output = render(
+            &mut canvas,
+            vec![egui::Event::PointerMoved(point + egui::vec2(40.0, 30.0))],
+        );
+        let artwork = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => Some(Rect::from_points(
+                    &mesh
+                        .vertices
+                        .iter()
+                        .map(|vertex| vertex.pos)
+                        .collect::<Vec<_>>(),
+                )),
+                _ => None,
+            })
+            .expect("fixture artwork must be painted during the pan");
+        assert!(
+            (artwork.min - overlay.min).length() < 0.01,
+            "native artwork lagged the live overlay by {:?}",
+            overlay.min - artwork.min
+        );
+        assert!((artwork.max - overlay.max).length() < 0.01);
+    }
+}

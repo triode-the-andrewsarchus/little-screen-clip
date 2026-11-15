@@ -319,7 +319,6 @@ impl DrawingEditor {
             let fit_layout = embedded::fit_layout(frame.layout, options.extent);
             self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
             self.camera.input(ui, &response, rect);
-            let image = self.camera.image_rect(frame.layout, rect);
             let tint = if frame.fresh {
                 Color32::WHITE
             } else {
@@ -331,16 +330,19 @@ impl DrawingEditor {
                 self.retained_move = None;
             }
             activated = self.surface_input(ui, &response, rect, ready, options);
+            if response.double_clicked_by(egui::PointerButton::Middle) {
+                self.camera.fitted = false;
+                self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
+            }
+            // Interaction may pan or refit this frame. Derive the image mapping
+            // afterward so native artwork, feedback and live overlays agree.
+            let image = self.camera.image_rect(frame.layout, rect);
             let motion = self.vector_motion(ui.ctx(), frame.layout.origin);
             if let Some(error) = frame.paint(ui, rect, image, motion, tint) {
                 self.parse_error = Some(error);
             }
             if options.editable {
                 self.paint_feedback(&painter, rect, palette);
-            }
-            if response.double_clicked_by(egui::PointerButton::Middle) {
-                self.camera.fitted = false;
-                self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
             }
         }
         if options.editable && options.enabled {
