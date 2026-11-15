@@ -78,6 +78,20 @@ impl Home {
         };
         true
     }
+    pub(super) fn prepare_drop_close(&mut self) -> bool {
+        if self.drops.reading.is_some()
+            || (self.drops.token.is_some()
+                && self.drops.items.is_empty()
+                && self.drops.project.is_none())
+            || (self.drops.project.is_some()
+                && self.projects.form.is_none()
+                && self.projects.error.is_none())
+        {
+            return false;
+        }
+        self.cancel_drop();
+        true
+    }
     pub fn cancel_drop(&mut self) {
         if let Some(token) = self.drops.token.take() {
             self.native_results.push((token, false));
@@ -122,7 +136,7 @@ impl Home {
                     })
                 });
                 self.drops.project = None;
-            } else if self.projects.form.is_none() {
+            } else if self.projects.form.is_none() && self.projects.conflict.is_none() {
                 self.drops.project = None;
                 self.drops.cancelled = true;
             }

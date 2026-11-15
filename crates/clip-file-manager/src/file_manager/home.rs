@@ -457,7 +457,9 @@ impl Home {
         self.session.poll(ctx);
     }
     pub fn prepare_close(&mut self) -> bool {
-        self.cancel_drop();
+        if !self.prepare_drop_close() {
+            return false;
+        }
         self.finish_ink();
         if self.ink.drawing() {
             self.open = true;
@@ -485,6 +487,7 @@ impl Home {
         }
     }
     pub fn discard_board(&mut self) {
+        self.cancel_drop();
         if self.pending.is_none() && self.queued.is_none() {
             self.session.discard(&self.state.board);
             self.error = None;
