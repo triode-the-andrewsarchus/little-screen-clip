@@ -624,3 +624,12 @@ committed native acceptance scripts reproduce these checks on private desktops.
   stays separate from saved content; restarting starts locked again.
 - [x] The keyboard regression verifies default locking, guarded Delete and Undo.
   Six Home UI tests pass; strict all-target file-manager/studio Clippy is clean.
+
+Native verification passes for default locked dragging without selection,
+unlocking, editing, relocking, restart, and a restored shortcut move. The same
+run zooms out below 30% and checks matching grid backgrounds at both edges and
+center, proving no side gutters: `/tmp/home-camera-lock-native-dark-02/report.json`.
+The wide-viewport camera regression, six Home UI tests, strict all-target Clippy,
+formatting and debug build pass. Architecture average/max complexity and
+duplication remain unchanged; reported clone/cycle flags refer to existing code
+and test setup. No additional layout-mode state or persistence format was added.

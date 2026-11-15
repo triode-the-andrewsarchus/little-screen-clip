@@ -95,11 +95,14 @@ def exercise(session,root,binary):
     before=find(shortcut)["rect"]
     drag(session,point,(point[0]+45,point[1]+25))
     wait_for(lambda:find(shortcut)["rect"]!=before,"restored folder shortcut can move with objects unlocked")
-    session.scroll(640,700,-2400)
+    session.scroll(640,700,1000)
     wait_for(lambda:read()["view"]["scale"]<0.3,"zoom-out has breathing room")
     session.observe("zoomed-out",[])
     with Image.open(session.output/"zoomed-out.png").convert("RGB") as picture:
-        backgrounds=[Counter(picture.crop(bounds).getdata()).most_common(1)[0][0] for bounds in [(105,680,135,720),(625,680,655,720),(1145,680,1175,720)]]
+        backgrounds=[]
+        for bounds in [(105,680,135,720),(625,680,655,720),(1145,680,1175,720)]:
+            crop=picture.crop(bounds)
+            backgrounds.append(Counter(getattr(crop,"get_flattened_data",crop.getdata)()).most_common(1)[0][0])
     assert backgrounds[0]==backgrounds[1]==backgrounds[2],"canvas must fill both sides without gutters"
     assert (folder/"one.txt").read_text()=="Live preview"
 
