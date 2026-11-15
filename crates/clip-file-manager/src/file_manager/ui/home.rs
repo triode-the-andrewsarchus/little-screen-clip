@@ -5,6 +5,7 @@ use little_clip_core::diagram::drawing::Bounds;
 use uuid::Uuid;
 mod cards;
 mod projects;
+mod regions;
 use cards::{Action, Renderer};
 
 impl FileManager {
@@ -23,6 +24,7 @@ impl FileManager {
         }
         self.home_recovery(ui, palette);
         self.home_project_form(ui, palette);
+        self.home_region_panel(ui, palette);
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -101,6 +103,15 @@ impl FileManager {
                 .clicked()
             {
                 session.canvas.fit();
+            }
+            if ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Click regions", palette))
+                .on_hover_text(
+                    "See and edit click areas · hold right button and trace an outline to add one",
+                )
+                .clicked()
+            {
+                self.home_surface.region_ui.open = !self.home_surface.region_ui.open;
             }
             self.home_projects_menu(ui);
             if self.home_surface.busy() || self.pending.is_some() {
@@ -339,6 +350,9 @@ impl FileManager {
         let editing = self.home_surface.editing_allowed();
         let session = &mut self.home_surface.session;
         if key(ui.ctx(), Modifiers::NONE, Key::Escape) {
+            if self.home_surface.region_ui.cancel() {
+                return false;
+            }
             if session.cancel_drag() || session.canvas.cancel() || session.selected.take().is_some()
             {
                 return false;
@@ -357,6 +371,7 @@ impl FileManager {
     fn home_canvas(&mut self, ui: &mut Ui, palette: &AppPalette) -> Vec<Action> {
         let enabled = self.home_surface.editing_allowed();
         let unpin = self.home_surface.ready();
+        let mut region_ui = std::mem::take(&mut self.home_surface.region_ui);
         let (pins, session, projects, artwork) = self.home_surface.canvas_parts();
         projects.previews.begin();
         artwork.begin();
@@ -366,6 +381,7 @@ impl FileManager {
         let extent = board_extent(&session.board);
         let mut spawn = session.spawn;
         let mut paper_pressed = false;
+        let mut region_activated = None;
         let options = clip_studios::drawing_canvas::Options {
             composition: true,
             editable: session.arrange,
@@ -390,7 +406,7 @@ impl FileManager {
                                     .iter()
                                     .any(|bound| viewport.bounds(*bound).contains(point))
                         });
-                if session.board.is_empty() && !session.arrange {
+                if session.board.is_empty() && !session.arrange && !region_ui.drafting() {
                     let center = viewport.rect.center();
                     ui.painter().text(
                         center - vec2(0.0, 18.0),
@@ -423,6 +439,13 @@ impl FileManager {
                     palette,
                     &mut actions,
                 );
+                region_activated = region_ui.surface(
+                    ui,
+                    &renderer.viewport,
+                    &session.board,
+                    enabled,
+                    session.arrange,
+                );
             },
         );
         projects.previews.end();
@@ -437,7 +460,12 @@ impl FileManager {
         if let Some(source) = response.changed {
             session.edit(|board| board.drawing = source);
         }
-        if let Some(element) = response.activated
+        if let Some(activation) = region_activated {
+            actions.clear();
+            if let regions::Activation::Open(pin) = activation {
+                actions.push(Action::Open(pin));
+            }
+        } else if let Some(element) = response.activated
             && let Some(binding) = session
                 .board
                 .bindings
@@ -450,6 +478,7 @@ impl FileManager {
             session.end_drag();
         }
         self.home_surface.drop_rect = surface_rect;
+        self.home_surface.region_ui = region_ui;
         actions
     }
     fn home_actions(&mut self, actions: Vec<Action>) {
@@ -528,6 +557,12 @@ fn board_extent(board: &Board) -> Bounds {
         min[1] = min[1].min(card.rect[1]);
         max[0] = max[0].max(card.rect[0] + card.rect[2]);
         max[1] = max[1].max(card.rect[1] + card.rect[3]);
+    }
+    for point in board.regions.iter().flat_map(|region| &region.points) {
+        min[0] = min[0].min(point[0]);
+        min[1] = min[1].min(point[1]);
+        max[0] = max[0].max(point[0]);
+        max[1] = max[1].max(point[1]);
     }
     Bounds {
         x: min[0],

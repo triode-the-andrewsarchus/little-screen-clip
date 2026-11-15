@@ -2,6 +2,7 @@
 pub(in crate::file_manager) mod artwork;
 mod board;
 pub(in crate::file_manager) mod projects;
+pub(in crate::file_manager) mod regions;
 mod session;
 use super::local_state;
 pub(in crate::file_manager) use board::{Board, Card, Content};
@@ -100,6 +101,38 @@ impl State {
         self.board.retain_pin_refs(&valid, &replacements);
         self.validate()
     }
+    fn reference(&mut self, pin: Pin) -> Uuid {
+        if let Some(old) = self.pins.iter().find(|old| old.path == pin.path) {
+            return old.id;
+        }
+        let id = pin.id;
+        self.pins.push(pin);
+        id
+    }
+    fn install_region(
+        &mut self,
+        mut region: regions::Region,
+        pin: Pin,
+        expected: u64,
+    ) -> Result<(), String> {
+        if expected != self.board.revision {
+            return Err(
+                "Home changed in another window; reload before saving this click region".into(),
+            );
+        }
+        region.target = Some(self.reference(pin));
+        if let Some(old) = self
+            .board
+            .regions
+            .iter_mut()
+            .find(|old| old.id == region.id)
+        {
+            *old = region;
+        } else {
+            self.board.regions.push(region);
+        }
+        Ok(())
+    }
     fn apply(&mut self, change: Change) -> Result<(), String> {
         if self.version == 1 {
             for pin in &self.pins {
@@ -124,16 +157,7 @@ impl State {
             }
             Change::Import { pins, point, .. } => {
                 for (index, pin) in pins.into_iter().enumerate() {
-                    let id = self
-                        .pins
-                        .iter()
-                        .find(|old| old.path == pin.path)
-                        .map(|old| old.id)
-                        .unwrap_or_else(|| {
-                            let id = pin.id;
-                            self.pins.push(pin);
-                            id
-                        });
+                    let id = self.reference(pin);
                     self.board.cards.push(Card {
                         id: Uuid::new_v4(),
                         rect: [
@@ -149,6 +173,11 @@ impl State {
                     });
                 }
             }
+            Change::Region {
+                region,
+                pin,
+                expected,
+            } => self.install_region(region, pin, expected)?,
             Change::Remove(id) => {
                 self.pins.retain(|p| p.id != id);
                 self.board.remove_pin(id);
@@ -185,6 +214,11 @@ enum Change {
         point: [f64; 2],
         token: Option<u64>,
     },
+    Region {
+        region: regions::Region,
+        pin: Pin,
+        expected: u64,
+    },
     Remove(Uuid),
     Relocate(Vec<super::reference_updates::Relocation>),
     Board {
@@ -211,6 +245,7 @@ pub(super) struct Home {
     pub opening: Option<PathBuf>,
     pub artwork: artwork::Assets,
     pub drop_rect: Option<egui::Rect>,
+    pub region_ui: regions::Interaction,
     pub native_results: Vec<(u64, bool)>,
     path: Option<PathBuf>,
     state: State,
@@ -327,6 +362,17 @@ impl Home {
         });
         true
     }
+    pub fn save_region(&mut self, region: regions::Region, pin: Pin) -> bool {
+        if !self.ready() {
+            return false;
+        }
+        self.queued = Some(Change::Region {
+            region,
+            pin,
+            expected: self.session.board.revision,
+        });
+        true
+    }
     pub fn remove(&mut self, id: Uuid) {
         if self.ready() {
             self.queued = Some(Change::Remove(id));
@@ -379,6 +425,9 @@ impl Home {
         {
             self.native_results.push((*token, true));
         }
+        if let Action::Change(Change::Region { region, .. }) = &action {
+            self.region_ui.saved(region.id);
+        }
         match action {
             Action::Change(Change::Board {
                 generation: Some(generation),
@@ -411,9 +460,9 @@ impl Home {
                 self.session
                     .references_relocated(&state.board, &state.pins, &replacements);
             }
-            Action::Change(Change::Add(_) | Change::Remove(_) | Change::Import { .. }) => {
-                self.session.references_changed(&state.board, &state.pins)
-            }
+            Action::Change(
+                Change::Add(_) | Change::Remove(_) | Change::Import { .. } | Change::Region { .. },
+            ) => self.session.references_changed(&state.board, &state.pins),
             _ => self.session.install(&state.board),
         }
         if state.version == 1 {
@@ -540,6 +589,64 @@ fn save(path: &Path, change: Change) -> Result<State, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn click_region_uses_stable_pin_through_rename_merge_unpin_and_layout_history() {
+        let pin = super::Pin::new("/tmp/notes".into(), true);
+        let mut state = super::State::default();
+        state.apply(super::Change::Add(vec![pin.clone()])).unwrap();
+        let region = super::regions::Region {
+            id: uuid::Uuid::new_v4(),
+            label: "Read notes".into(),
+            points: vec![[0., 0.], [80., 0.], [40., 60.]],
+            target: None,
+            enabled: true,
+        };
+        let revision = state.board.revision;
+        state
+            .apply(super::Change::Region {
+                region: region.clone(),
+                pin: super::Pin::new(pin.path.clone(), true),
+                expected: revision,
+            })
+            .unwrap();
+        assert_eq!(state.pins.len(), 1);
+        assert_eq!(state.board.regions[0].target, Some(pin.id));
+        assert_eq!(
+            state.board.cards.len(),
+            1,
+            "an action target must not add another shortcut card"
+        );
+        let mut session = super::Session::default();
+        session.install(&state.board);
+        session.edit(|board| board.regions[0].enabled = false);
+        session.undo();
+        assert!(session.board.regions[0].enabled);
+        state
+            .relocate(
+                std::path::Path::new("/tmp/notes"),
+                std::path::Path::new("/tmp/new-notes"),
+            )
+            .unwrap();
+        assert_eq!(state.board.regions[0].target, Some(pin.id));
+        assert_eq!(state.pins[0].path, std::path::Path::new("/tmp/new-notes"));
+        let saved = serde_json::to_vec(&state).unwrap();
+        let restored: super::State = serde_json::from_slice(&saved).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.board.regions, state.board.regions);
+        assert!(
+            state
+                .apply(super::Change::Region {
+                    region,
+                    pin: pin.clone(),
+                    expected: revision
+                })
+                .is_err()
+        );
+        state.apply(super::Change::Remove(pin.id)).unwrap();
+        assert_eq!(state.board.regions.len(), 1);
+        assert!(!state.board.regions[0].enabled);
+        assert!(state.board.regions[0].target.is_none());
+    }
     #[test]
     fn imported_artwork_keeps_source_references_and_independent_placement_through_moves() {
         let mut state = super::State::default();

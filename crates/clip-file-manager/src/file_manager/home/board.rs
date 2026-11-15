@@ -1,5 +1,5 @@
 //! Home-owned presentation; all file/project content remains outside this model.
-use super::Pin;
+use super::{Pin, regions::Region};
 use little_clip_core::diagram::drawing::{Bounds, Scene};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -15,6 +15,8 @@ pub(in crate::file_manager) struct Board {
     pub drawing: String,
     pub cards: Vec<Card>,
     pub bindings: Vec<Binding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
     #[serde(default)]
     pub view: Option<clip_studios::drawing_canvas::ViewState>,
 }
@@ -26,6 +28,7 @@ impl Default for Board {
             drawing: EMPTY_DRAWING.into(),
             cards: Vec::new(),
             bindings: Vec::new(),
+            regions: Vec::new(),
             view: None,
         }
     }
@@ -66,7 +69,7 @@ impl Card {
 }
 impl Board {
     pub fn is_empty(&self) -> bool {
-        self.cards.is_empty() && self.drawing == EMPTY_DRAWING
+        self.cards.is_empty() && self.regions.is_empty() && self.drawing == EMPTY_DRAWING
     }
     pub fn add_shortcut(&mut self, pin: Uuid) {
         if self
@@ -103,6 +106,15 @@ impl Board {
                 *pin = *replacement;
             }
         }
+        for region in &mut self.regions {
+            if let Some(target) = &mut region.target {
+                *target = replacements.get(target).copied().unwrap_or(*target);
+                if !valid.contains(target) {
+                    region.target = None;
+                    region.enabled = false;
+                }
+            }
+        }
         for binding in &mut self.bindings {
             if let Some(replacement) = replacements.get(&binding.pin) {
                 binding.pin = *replacement;
@@ -117,6 +129,12 @@ impl Board {
         self.cards
             .retain(|card| !matches!(card.content, Content::Shortcut { pin: id, .. } | Content::Artwork { pin: id, .. } if id == pin));
         self.bindings.retain(|binding| binding.pin != pin);
+        for region in &mut self.regions {
+            if region.target == Some(pin) {
+                region.target = None;
+                region.enabled = false;
+            }
+        }
     }
     pub fn retain_artwork_bindings(&mut self) -> Result<(), String> {
         let scene = Scene::parse(&self.drawing).map_err(|error| error.to_string())?;
@@ -145,6 +163,7 @@ impl Board {
             }
             card.validate(&pin_ids)?;
         }
+        super::regions::validate(&self.regions, &pin_ids)?;
         self.validate_bindings(&pin_ids)
     }
 

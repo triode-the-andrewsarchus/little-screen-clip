@@ -54,6 +54,7 @@ static void usage(const char *program) {
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click|right-click <width> <height> <x> <y> | "
             "drag|drag-held|right-drag|middle-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
+            "right-trace <width> <height> <x> <y> [<x> <y> ...] | "
             "scroll|hscroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -137,11 +138,12 @@ int main(int argc, char **argv) {
     uint32_t button = argc == 6 ? click_button(argv[1]) : 0;
     int click = button != 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
+    int trace = argc >= 10 && argc <= 260 && argc % 2 == 0 && strcmp(argv[1], "right-trace") == 0;
     int right_drag = argc == 8 && strcmp(argv[1], "right-drag") == 0;
     int middle_drag = argc == 8 && strcmp(argv[1], "middle-drag") == 0;
     int drag_held = argc == 8 && strcmp(argv[1], "drag-held") == 0;
-    int drag = right_drag || middle_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
-    uint32_t drag_button = right_drag ? BTN_RIGHT : middle_drag ? BTN_MIDDLE : BTN_LEFT;
+    int drag = trace || right_drag || middle_drag || drag_held || (argc == 8 && strcmp(argv[1], "drag") == 0);
+    uint32_t drag_button = (trace || right_drag) ? BTN_RIGHT : middle_drag ? BTN_MIDDLE : BTN_LEFT;
     int scroll_axis = argc == 7 ? parse_scroll_axis(argv[1]) : -1;
     int scroll = scroll_axis >= 0;
     int scroll_amount = 0;
@@ -158,6 +160,15 @@ int main(int argc, char **argv) {
          (scroll && !parse_scroll(argv[6], &scroll_amount)))) {
         usage(argv[0]);
         return 2;
+    }
+
+    if (trace) {
+        for (int index = 6; index < argc; index += 2) {
+            if (!parse_coordinate(argv[index], width, &end_x) ||
+                !parse_coordinate(argv[index + 1], height, &end_y)) {
+                usage(argv[0]); return 2;
+            }
+        }
     }
 
     struct wl_display *display = wl_display_connect(NULL);
@@ -254,11 +265,17 @@ int main(int argc, char **argv) {
                 }
                 struct timespec pause = {.tv_sec = 0, .tv_nsec = 50000000};
                 nanosleep(&pause, NULL);
+                int segments = trace ? (argc - 6) / 2 : 1;
+                for (int segment = 0; segment < segments; segment++) {
+                    if (trace) {
+                        parse_coordinate(argv[6 + segment * 2], width, &end_x);
+                        parse_coordinate(argv[7 + segment * 2], height, &end_y);
+                    }
                 for (uint32_t step = 1; step <= 4; step++) {
                     uint32_t move_x = x + ((int64_t)end_x - x) * step / 4;
                     uint32_t move_y = y + ((int64_t)end_y - y) * step / 4;
                     zwlr_virtual_pointer_v1_motion_absolute(
-                        pointer, time_ms + 50 + step * 50, move_x, move_y, width, height);
+                        pointer, monotonic_msec(), move_x, move_y, width, height);
                     zwlr_virtual_pointer_v1_frame(pointer);
                     if (wl_display_roundtrip(display) < 0) {
                         fprintf(stderr, "private drag motion failed\n");
@@ -266,10 +283,12 @@ int main(int argc, char **argv) {
                     }
                     nanosleep(&pause, NULL);
                 }
+                    x = end_x; y = end_y;
+                }
                 if (drag_held) {
                     hold_drag_until_release();
                 }
-                zwlr_virtual_pointer_v1_button(pointer, time_ms + 251, drag_button, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_button(pointer, monotonic_msec(), drag_button, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private drag release failed\n");

@@ -24,7 +24,7 @@ it must not force the user to design their space from a small shape toolbox.
   must not be mistaken for pen pressure. Mouse drawing controls are unnecessary.
 - [x] Pan only with middle-button dragging. Left input selects/places/activates;
   wheel zooms around the pointer without also scrolling an underlying folder.
-- [ ] Right-button tracing creates a transparent arbitrary closed click region.
+- [x] Right-button tracing creates a transparent arbitrary closed click region.
   Offer a discoverable region manager with add/edit/delete, enabled state,
   meaningful labels, preview and explicit stacking order. Resolve overlaps
   deterministically, offering a chooser when multiple enabled regions match.
@@ -253,3 +253,53 @@ Clippy and formatting pass. Architecture measurements retain duplication, averag
 and maximum complexity; the menu's additional branch is the necessary exception
 that makes View available on Home. Reported dependency-cycle changes only reorder
 unchanged existing members, and clone reports touch existing host/studio snippets.
+
+
+## Transparent click region delivery
+
+Holding the right button and tracing on the desk creates an arbitrary closed
+outline. Right-clicks without a meaningful drag retain existing context menus;
+project/task/shortcut controls keep their own interaction. The inline picker shows
+an explicit file/folder target, offers current folder, pinned references and
+registered projects, and permits an absolute path. Saving/editing never activates
+the action. Targets share stable pins and the existing guarded browser/studio
+handoff; source files are neither copied nor rewritten.
+
+Click regions are transparent. Their actual even-odd polygon, including concave
+corners, is the hit area; the enclosing rectangle never becomes clickable.
+Hover reveals the outline and action. The Click regions button opens an inline
+manager with add, enable/disable, edit target/label, redraw outline, delete and
+raise/lower controls. Outlines are shown while managing/arranging and otherwise
+stay out of the composition. Overlaps offer an inline chooser ordered front to
+back; that click cannot also activate artwork underneath. Escape cancels drawing,
+action drafts or the chooser before leaving Home.
+
+Accepted edits use the existing guarded Home transaction and revision conflict
+check. Shapes participate in layout undo/restart, source renames/merges retarget
+their stable pin, and unpinning disables an area while preserving its outline for
+reassignment. Limits are 128 regions and 512 finite sampled points per outline;
+excessively detailed traces report a failure instead of silently truncating.
+The private pointer acceptance helper now supports a bounded multi-point
+right-button trace, used for actual native input rather than synthetic egui events.
+
+The complete file-manager library gate passes 1,032 tests (6 ignored), including
+concave hit geometry, invalid/collapsed geometry, region persistence, stable target
+identity, stale revision rejection and layout history. Strict all-target Clippy,
+formatting and the debug build pass. Native light-mode acceptance covers 21
+observations, including a concave trace, its empty corner, both target pickers,
+overlaps, correct navigation, disable, delete/undo, restart and unchanged sources:
+`/tmp/home-regions-light-01/report.json`. The final dark-mode workflow also passes 21 observations:
+`/tmp/home-regions-dark-06/report.json`.
+
+Architecture review separated region validation, transaction installation, shared
+reference interning, outline painting and activation. This removes the initial
+high-complexity region surface and duplicated target insertion. Average complexity
+rises by 0.01 for the new capability; maximum stays unchanged and duplication
+percentage decreases 0.01 points. Remaining diagnostics concern host controls,
+short test/worker snippets and the native pointer test helper's bounded trace
+argument/motion branches; no renderer, navigation owner or state writer was added.
+
+The action picker currently opens files/folders/projects. There is no registered
+file-manager workflow runner to select; workflow actions remain explicitly pending,
+rather than accepting arbitrary shell strings. Tablet input, live folder previews,
+per-pane filters, remaining format imports and legacy-area migration remain active.
