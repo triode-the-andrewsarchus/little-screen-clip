@@ -34,5 +34,5 @@ history. Folder-only shortcuts and drop targets remain inactive while Home is
 visible.
 
 Reference retargeting after confirmed mutations is described in
-`reference_updates.md`; its native acceptance remains tracked in the completion
-ledger. External moves are not inferred from a navigation history visit.
+`reference_updates.md`; its final native acceptance is recorded in
+`phase8_closeout.md`. External moves are not inferred from a navigation history visit.

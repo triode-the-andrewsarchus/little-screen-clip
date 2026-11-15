@@ -1,7 +1,7 @@
 # Phase 8 completion — personal Home and organization
 
-Active objective: complete the full Phase 8 scope, including the user's expanded
-Home direction. The earlier static-pin delivery is a foundation, not completion.
+Status: complete. The full Phase 8 scope, including the user's expanded
+Home direction, is delivered and verified in [phase8_closeout.md](phase8_closeout.md). The earlier static-pin delivery is a foundation, not completion.
 Work stays on `feat/file-manager-phase8`; personal Cargo/runtime configuration
 changes remain outside commits. Baseline: `before-phase8-completion`.
 
@@ -45,7 +45,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       labeled solid backgrounds and an obvious recovery/ignore-rules control.
 - [x] C8. Home browser history/startup behavior; defined/tested rename/move/restart
       handling for pins, marks, sets and project identities.
-- [ ] C9. Realistic review fixtures, native interaction/visual verification in both
+- [x] C9. Realistic review fixtures, native interaction/visual verification in both
       themes, affected tests plus workspace gate, strict Clippy, formatting,
       architecture review and logical commits as each delivery becomes usable.
 
@@ -627,3 +627,26 @@ C8 is complete. C9 integration/review and final workspace gates remain open.
   personal Home desk, matching the implemented behavior. Manually verified
   through `cargo run -p clip-file-manager -- --help`; log:
   `/tmp/phase8-final-help.log`.
+
+### C9 final integration and closeout
+
+- [x] Added an exclusive-create review fixture generator and an isolated launcher
+  at `/home/vega/Documents/type_testing/phase8_organization/open-review.sh`.
+  It contains clickable native artwork, two real project folders with live TODOs,
+  notes and selective visibility examples. Normal personal state is untouched.
+- [x] Integrated native review passed all seven observations in both themes:
+  `/tmp/phase8-review-dark-03/report.json` and
+  `/tmp/phase8-review-light-03/report.json`. Visually inspected both desks;
+  verified one-byte source edits, external refresh, actual ink navigation and
+  camera/layout persistence on restart.
+- [x] Workspace tests: 3,372 passed, zero failed, 36 ignored. Strict workspace
+  all-target Clippy, final workspace build, formatting and diff checks passed.
+  Final build/Clippy emitted no warnings. Logs and the complete requirement audit
+  are in [phase8_closeout.md](phase8_closeout.md).
+- [x] Architecture review completed: average/max complexity unchanged, duplication
+  percentage down 0.06 points; eleven additional short clone groups reviewed and
+  documented rather than concealed. Renderer/camera, guarded persistence and
+  bounded worker owners remain shared.
+
+All C1–C9 deliveries are complete. Earlier pending notes above describe historical
+checkpoints; the closeout audit records current verification and explicit limits.

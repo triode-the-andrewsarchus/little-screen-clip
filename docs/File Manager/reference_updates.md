@@ -1,7 +1,7 @@
 # References after file operations
 
-This C8 implementation is under native acceptance review; its status and evidence
-are recorded in `phase8_completion.md`.
+This C8 implementation passed native acceptance in both appearances; its
+requirement audit and evidence are recorded in `phase8_closeout.md`.
 
 Only confirmed rename results, completed move pairs and studio rename handoffs
 retarget references. A partially completed batch contributes its completed pairs;

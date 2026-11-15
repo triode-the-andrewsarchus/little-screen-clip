@@ -1,7 +1,8 @@
 # Phase 8 — organization and a real Home
 
-Status: active completion work on `feat/file-manager-phase8`. The full current
-requirements and delivery ledger are in [phase8_completion.md](phase8_completion.md).
+Status: complete on `feat/file-manager-phase8`. The final requirement audit,
+workspace gate and both-theme native evidence are in [phase8_closeout.md](phase8_closeout.md).
+The delivery history is in [phase8_completion.md](phase8_completion.md).
 The original initial slice started from Phase 7 merge `bf6bf73e`.
 Architecture baseline: `before-phase8-home`.
 
@@ -34,7 +35,7 @@ claimed. Home must never be implemented as a fabricated filesystem path.
       concurrent updates and source-folder preservation.
 - [x] Native review in both appearances; document the delivered initial limits.
 
-## Remaining Phase 8 roadmap
+## Original full Phase 8 roadmap (delivered)
 
 - Named user-arranged Home sections; dynamic rule-driven sections remain Phase 10.
 - Session Mode: red/yellow/green underlines with user-defined meanings and labels.
