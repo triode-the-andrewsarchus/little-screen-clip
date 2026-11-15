@@ -1,6 +1,10 @@
-//! Static Home references; every target handoff uses ordinary browser guards.
+//! Personal Home presentation; target handoffs retain ordinary browser guards.
 use super::*;
-use crate::file_manager::home::Pin;
+use crate::file_manager::home::{Board, Content, Pin};
+use little_clip_core::diagram::drawing::Bounds;
+use uuid::Uuid;
+mod cards;
+use cards::{Action, Renderer};
 
 impl FileManager {
     pub(super) fn show_home(&mut self) {
@@ -16,87 +20,112 @@ impl FileManager {
         self.home_surface.reload();
     }
     pub(super) fn home_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        let back = ui
-            .horizontal(|ui| {
-                let back = ui
-                    .add(clip_ui::buttons::ButtonRole::Secondary.button("Back to folder", palette))
-                    .clicked();
-                ui.heading("Home");
-                back
-            })
-            .inner
-            || key(ui.ctx(), Modifiers::NONE, Key::Escape)
-            || key(ui.ctx(), Modifiers::ALT, Key::ArrowLeft);
-        if back {
+        let back = self.home_header(ui, palette);
+        if back || self.home_keys(ui) {
             self.home_surface.open = false;
+            self.home_surface.session.canvas.suspend();
             self.focus_list = true;
             return;
         }
-        ui.separator();
-        ui.label("Keep files and folders you want to return to.");
-        self.home_pin_actions(ui, palette);
-        if let Some(error) = &self.home_surface.error {
-            ui.colored_label(
-                WorkbenchColors::from_palette(palette).warning,
-                format!("Home: {error}"),
-            );
-        }
+        self.home_recovery(ui, palette);
         if let Some(error) = &self.error {
-            ui.colored_label(WorkbenchColors::from_palette(palette).warning, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if self.home_surface.busy() {
-            ui.spinner();
+        if self.home_surface.session.arrange {
+            self.home_inspector(ui, palette);
         }
         ui.separator();
-        let pins = self.home_surface.pins().to_vec();
-        if pins.is_empty() && !self.home_surface.busy() {
-            ui.label("No pins yet. Choose files in a folder, then pin them here.");
-        }
-        let mut open = None;
-        let mut remove = None;
-        egui::ScrollArea::vertical()
-            .id_source("file_manager_home")
-            .show(ui, |ui| {
-                for pin in pins {
-                    let (opened, removed) = pin_row(ui, &pin, self.home_surface.ready(), palette);
-                    if opened {
-                        open = Some(pin.clone());
-                    }
-                    if removed {
-                        remove = Some(pin.id);
-                    }
-                }
-            });
-        if let Some(id) = remove {
-            self.home_surface.remove(id);
-        }
-        if let Some(pin) = open {
-            self.open_home_pin(pin);
-        }
+        let actions = self.home_canvas(ui, palette);
+        self.home_actions(actions);
     }
-
-    fn home_pin_actions(&mut self, ui: &mut Ui, palette: &AppPalette) {
+    fn home_header(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
+        let editing = self.home_surface.editing_allowed();
+        ui.horizontal_wrapped(|ui| {
+            let back = ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Back to folder", palette))
+                .clicked();
+            if self.home_surface.session.arrange {
+                let session = &mut self.home_surface.session;
+                let field = ui.add_enabled(
+                    editing,
+                    egui::TextEdit::singleline(&mut session.title_draft)
+                        .id_source("home_title")
+                        .desired_width(150.0)
+                        .char_limit(64),
+                );
+                if field.lost_focus() && !session.title_draft.trim().is_empty() {
+                    let title = session.title_draft.trim().to_owned();
+                    session.edit(|board| board.title = title);
+                }
+            } else {
+                ui.heading(&self.home_surface.session.board.title);
+            }
+            ui.add_enabled_ui(editing, |ui| {
+                if ui
+                    .selectable_label(self.home_surface.session.arrange, "Arrange")
+                    .on_hover_text("Draw, write and move your shortcuts")
+                    .clicked()
+                {
+                    let session = &mut self.home_surface.session;
+                    session.arrange = !session.arrange;
+                    session.selected = None;
+                    session.canvas.cancel();
+                }
+                self.home_add_menu(ui);
+            });
+            let session = &mut self.home_surface.session;
+            if ui
+                .add_enabled(
+                    editing && session.can_undo() && !session.canvas.busy(),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Undo", palette),
+                )
+                .clicked()
+            {
+                session.undo();
+            }
+            if ui
+                .add_enabled(
+                    editing && session.can_redo() && !session.canvas.busy(),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Redo", palette),
+                )
+                .clicked()
+            {
+                session.redo();
+            }
+            if ui
+                .button("Fit")
+                .on_hover_text("Show the whole desk")
+                .clicked()
+            {
+                session.canvas.fit();
+            }
+            if self.home_surface.busy() {
+                ui.spinner();
+            }
+            back
+        })
+        .inner
+    }
+    fn home_add_menu(&mut self, ui: &mut Ui) {
         let selected = self.selected_paths();
         let can_pin = self.home_surface.ready()
             && self.directory.is_some()
             && self.archive_context().is_none()
             && !self.search.open
             && !self.filesystem_busy();
-        ui.horizontal_wrapped(|ui| {
+        ui.menu_button("Add", |ui| {
             if ui
-                .add_enabled(
-                    can_pin,
-                    clip_ui::buttons::ButtonRole::Secondary.button("Pin current folder", palette),
-                )
+                .add_enabled(can_pin, egui::Button::new("Pin current folder"))
                 .clicked()
             {
                 self.home_surface
                     .add(vec![Pin::new(self.path().into(), true)]);
+                ui.close_menu();
             }
             if ui
                 .add_enabled(
                     can_pin && !selected.is_empty(),
-                    clip_ui::buttons::ButtonRole::Secondary.button("Pin selection", palette),
+                    egui::Button::new("Pin selection"),
                 )
                 .clicked()
             {
@@ -107,19 +136,297 @@ impl FileManager {
                     .map(|entry| Pin::new(entry.path.clone(), entry.directory))
                     .collect();
                 self.home_surface.add(pins);
+                ui.close_menu();
             }
-            if ui
-                .add_enabled(
-                    !self.home_surface.busy(),
-                    clip_ui::buttons::ButtonRole::Secondary.button("Reload pins", palette),
-                )
-                .clicked()
-            {
-                self.home_surface.reload();
+            if ui.button("Named section").clicked() {
+                let session = &mut self.home_surface.session;
+                session.arrange = true;
+                session.section();
+                ui.close_menu();
             }
+            ui.menu_button("Existing shortcuts", |ui| {
+                let mut add = None;
+                for pin in self.home_surface.pins() {
+                    if ui.button(cards::pin_name(pin)).clicked() {
+                        add = Some(pin.id);
+                    }
+                }
+                if let Some(pin) = add {
+                    let session = &mut self.home_surface.session;
+                    let [x, y] = session.spawn;
+                    session.edit(|board| {
+                        board.cards.push(crate::file_manager::home::Card {
+                            id: Uuid::new_v4(),
+                            rect: [x - 130.0, y - 55.0, 260.0, 110.0],
+                            content: Content::Shortcut {
+                                pin,
+                                label: String::new(),
+                            },
+                        })
+                    });
+                    ui.close_menu();
+                }
+            });
         });
     }
-
+    fn home_recovery(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if let Some(error) = self.home_surface.error.clone() {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Home: {error}"));
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add(clip_ui::buttons::ButtonRole::Primary.button(
+                        if self.home_surface.session.dirty() {
+                            "Retry save"
+                        } else {
+                            "Retry load"
+                        },
+                        palette,
+                    ))
+                    .clicked()
+                {
+                    self.home_surface.retry_board();
+                }
+                if ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Destructive
+                            .button("Reload and discard unsaved Home edits", palette),
+                    )
+                    .clicked()
+                {
+                    self.home_surface.discard_board();
+                }
+            });
+        }
+        if let Some(error) = self.home_surface.session.canvas.error() {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+    }
+    fn home_inspector(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let editable = self.home_surface.editing_allowed();
+        let (pins, session) = self.home_surface.canvas_parts();
+        ui.add_enabled_ui(editable, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if session.selected.is_some() {
+                    ui.label("Label");
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut session.label_draft)
+                            .id_source(("home_card_label", session.selected))
+                            .desired_width(180.0)
+                            .char_limit(64),
+                    );
+                    if field.lost_focus() {
+                        session.rename_selected();
+                    }
+                    if ui
+                        .add(
+                            clip_ui::buttons::ButtonRole::Destructive
+                                .button("Remove from desk", palette),
+                        )
+                        .clicked()
+                    {
+                        session.remove_selected();
+                    }
+                    if let Some(card) = session
+                        .board
+                        .cards
+                        .iter()
+                        .find(|card| Some(card.id) == session.selected)
+                        && let Content::Section { color, .. } = card.content
+                    {
+                        let mut next = color;
+                        if ui.color_edit_button_srgb(&mut next).changed() {
+                            let selected = session.selected;
+                            session.edit(|board| {
+                                if let Some(card) = board
+                                    .cards
+                                    .iter_mut()
+                                    .find(|card| Some(card.id) == selected)
+                                    && let Content::Section { color, .. } = &mut card.content
+                                {
+                                    *color = next;
+                                }
+                            });
+                        }
+                    }
+                }
+                if !session.canvas.selected().is_empty() {
+                    ui.menu_button("Link drawing to…", |ui| {
+                        let mut link = None;
+                        for pin in pins {
+                            if ui.button(cards::pin_name(pin)).clicked() {
+                                link = Some(pin.id);
+                            }
+                        }
+                        if let Some(pin) = link {
+                            session.link(pin);
+                            ui.close_menu();
+                        }
+                    });
+                }
+                ui.weak("Pencil P · text T · select V · wheel zoom · middle-drag pan");
+            });
+        });
+    }
+    fn home_keys(&mut self, ui: &Ui) -> bool {
+        if popup_open(ui.ctx()) {
+            return false;
+        }
+        let text = ui
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        if text {
+            return false;
+        }
+        let editing = self.home_surface.editing_allowed();
+        let session = &mut self.home_surface.session;
+        if key(ui.ctx(), Modifiers::NONE, Key::Escape) {
+            if session.cancel_drag() || session.canvas.cancel() || session.selected.take().is_some()
+            {
+                return false;
+            }
+            if session.arrange {
+                session.arrange = false;
+                return false;
+            }
+            return true;
+        }
+        if key(ui.ctx(), Modifiers::ALT, Key::ArrowLeft) {
+            return true;
+        }
+        if editing && session.arrange && !session.canvas.busy() {
+            home_edit_keys(ui.ctx(), session);
+        }
+        false
+    }
+    fn home_canvas(&mut self, ui: &mut Ui, palette: &AppPalette) -> Vec<Action> {
+        let enabled = self.home_surface.editing_allowed();
+        let unpin = self.home_surface.ready();
+        let (pins, session) = self.home_surface.canvas_parts();
+        let mut actions = Vec::new();
+        let excluded = exclusions(&session.board, session.selected, session.arrange);
+        let extent = board_extent(&session.board);
+        let mut spawn = session.spawn;
+        let mut paper_pressed = false;
+        let options = clip_studios::drawing_canvas::Options {
+            editable: session.arrange,
+            enabled,
+            excluded: &excluded,
+            extent: Some(extent),
+        };
+        let response = session.canvas.show(
+            ui,
+            &session.board.drawing,
+            palette,
+            options,
+            |ui, viewport| {
+                spawn = viewport.world(viewport.rect.center());
+                paper_pressed = ui.input(|input| input.pointer.primary_pressed())
+                    && ui
+                        .input(|input| input.pointer.interact_pos())
+                        .is_some_and(|point| {
+                            viewport.rect.contains(point)
+                                && !excluded
+                                    .iter()
+                                    .any(|bound| viewport.bounds(*bound).contains(point))
+                        });
+                if session.board.is_empty() && !session.arrange {
+                    let center = viewport.rect.center();
+                    ui.painter().text(
+                        center - vec2(0.0, 18.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Make this place yours",
+                        FontId::proportional(26.0),
+                        Color32::from_rgb(73, 91, 91),
+                    );
+                    ui.painter().text(
+                        center + vec2(0.0, 20.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Add shortcuts. Arrange a corner. Draw a landmark.",
+                        FontId::proportional(16.0),
+                        Color32::from_rgb(117, 126, 122),
+                    );
+                }
+                let renderer = Renderer {
+                    viewport,
+                    pins,
+                    arrange: session.arrange,
+                    enabled,
+                    selected: session.selected,
+                    unpin,
+                };
+                for card in session
+                    .board
+                    .cards
+                    .iter()
+                    .filter(|card| matches!(card.content, Content::Section { .. }))
+                {
+                    renderer.card(ui, card, &mut actions);
+                }
+                for card in session
+                    .board
+                    .cards
+                    .iter()
+                    .filter(|card| !matches!(card.content, Content::Section { .. }))
+                {
+                    renderer.card(ui, card, &mut actions);
+                }
+            },
+        );
+        session.spawn = spawn;
+        if paper_pressed || !session.canvas.selected().is_empty() {
+            session.selected = None;
+        }
+        if let Some(source) = response.changed {
+            session.edit(|board| board.drawing = source);
+        }
+        if let Some(element) = response.activated
+            && let Some(binding) = session
+                .board
+                .bindings
+                .iter()
+                .find(|binding| binding.element == element)
+        {
+            actions.push(Action::Open(binding.pin));
+        }
+        if !ui.input(|input| input.pointer.any_down()) {
+            session.end_drag();
+        }
+        actions
+    }
+    fn home_actions(&mut self, actions: Vec<Action>) {
+        for action in actions {
+            match action {
+                Action::Open(id) => {
+                    if let Some(pin) = self
+                        .home_surface
+                        .pins()
+                        .iter()
+                        .find(|pin| pin.id == id)
+                        .cloned()
+                    {
+                        self.open_home_pin(pin);
+                    }
+                }
+                Action::Unpin(id) => self.home_surface.remove(id),
+                Action::Select(id) => {
+                    self.home_surface.session.canvas.cancel();
+                    self.home_surface.session.select(id);
+                }
+                Action::Begin(id) => {
+                    self.home_surface.session.canvas.cancel();
+                    self.home_surface.session.begin_drag(id);
+                }
+                Action::Drag(id, delta, resize) => {
+                    self.home_surface.session.drag(id, delta, resize)
+                }
+                Action::End => self.home_surface.session.end_drag(),
+                Action::Remove(id) => {
+                    self.home_surface.session.select(id);
+                    self.home_surface.session.remove_selected();
+                }
+            }
+        }
+    }
     fn open_home_pin(&mut self, pin: Pin) {
         if pin.folder {
             self.navigate(pin.path, Navigation::New);
@@ -130,43 +437,59 @@ impl FileManager {
                 Navigation::New
             };
             self.navigate(parent.into(), navigation);
-            // Always read the parent before selecting/opening a file, so
-            // shared studios receive that folder's real sibling ordering.
             self.reveal_target = Some(pin.path.clone());
             self.home_surface.opening = Some(pin.path);
         }
     }
 }
+fn home_edit_keys(ctx: &egui::Context, session: &mut crate::file_manager::home::Session) {
+    if key(ctx, Modifiers::CTRL, Key::Z) {
+        session.undo();
+    }
+    if key(ctx, Modifiers::CTRL | Modifiers::SHIFT, Key::Z) {
+        session.redo();
+    }
+    if session.selected.is_some() && key(ctx, Modifiers::NONE, Key::Delete) {
+        session.remove_selected();
+    }
+}
 
-fn pin_row(ui: &mut Ui, pin: &Pin, editable: bool, palette: &AppPalette) -> (bool, bool) {
-    ui.push_id(pin.id, |ui| {
-        let actions = ui
-            .horizontal_wrapped(|ui| {
-                let name = pin.path.file_name().map_or_else(
-                    || display_path(&pin.path),
-                    |name| name.to_string_lossy().into_owned(),
-                );
-                let icon = if pin.folder { Icon::Folder } else { Icon::Text };
-                let (rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
-                icon.paint(ui.painter(), rect.shrink(3.0), ui.visuals().text_color());
-                let open = ui
-                    .add(clip_ui::buttons::ButtonRole::Secondary.button(name, palette))
-                    .clicked();
-                let remove = ui
-                    .add_enabled(
-                        editable,
-                        clip_ui::buttons::ButtonRole::Secondary.button("Unpin", palette),
-                    )
-                    .on_hover_text("Remove this reference; keep the original file")
-                    .clicked();
-                (open, remove)
-            })
-            .inner;
-        ui.label(egui::RichText::new(display_path(&pin.path)).small().weak());
-        ui.add_space(8.0);
-        actions
-    })
-    .inner
+fn board_extent(board: &Board) -> Bounds {
+    let mut min = [0.0_f64, 0.0];
+    let mut max = [1000.0_f64, 700.0];
+    for card in &board.cards {
+        min[0] = min[0].min(card.rect[0]);
+        min[1] = min[1].min(card.rect[1]);
+        max[0] = max[0].max(card.rect[0] + card.rect[2]);
+        max[1] = max[1].max(card.rect[1] + card.rect[3]);
+    }
+    Bounds {
+        x: min[0],
+        y: min[1],
+        width: max[0] - min[0],
+        height: max[1] - min[1],
+        angle: 0.0,
+    }
+}
+fn exclusions(board: &Board, selected: Option<Uuid>, arrange: bool) -> Vec<Bounds> {
+    let mut bounds = Vec::new();
+    for card in &board.cards {
+        let mut bound = card.bounds();
+        if matches!(card.content, Content::Section { .. }) {
+            bound.height = 40.0;
+            if arrange && selected == Some(card.id) {
+                bounds.push(Bounds {
+                    x: card.rect[0] + card.rect[2] - 16.0,
+                    y: card.rect[1] + card.rect[3] - 16.0,
+                    width: 16.0,
+                    height: 16.0,
+                    angle: 0.0,
+                });
+            }
+        }
+        bounds.push(bound);
+    }
+    bounds
 }
 
 #[cfg(test)]
@@ -222,6 +545,40 @@ mod tests {
         assert!(!browser.home_surface.open);
         let _ = render(&mut browser, Key::ArrowDown);
         assert_eq!(browser.selected_paths(), [root.path().join("b.txt")]);
+    }
+
+    #[test]
+    fn home_keyboard_mutations_obey_the_same_admission_as_disabled_controls() {
+        let mut browser = FileManager::default();
+        browser.home_surface.session.arrange = true;
+        browser
+            .home_surface
+            .session
+            .edit(|board| board.title = "Pending load draft".into());
+        assert!(!browser.home_surface.editing_allowed());
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                modifiers: Modifiers::CTRL,
+                events: vec![egui::Event::Key {
+                    key: Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::CTRL,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    browser.home_keys(ui);
+                });
+            },
+        );
+        assert_eq!(
+            browser.home_surface.session.board.title,
+            "Pending load draft"
+        );
     }
 
     #[test]

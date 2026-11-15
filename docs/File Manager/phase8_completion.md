@@ -129,8 +129,9 @@ geometry, unknown future schemas and oversized input remain explicit failures.
   The new fixture deliberately asserts hit/mapping behavior independently of
   the original drawing tests. There is no second renderer or persistence path.
 
-C2 remains unchecked: its interactive Home presentation, arrangement/undo and
-native review still need implementation. No live project task UI is claimed yet.
+C2 remains unchecked: the interactive Home presentation is implemented below,
+but persisted camera state and the remaining editing/close behavior still need
+completion. No live project task UI is claimed yet.
 
 ### C1 follow-up: same-frame pan alignment
 
@@ -141,3 +142,36 @@ native review still need implementation. No live project task UI is claimed yet.
   before painting. The drawing regression suite passes: 17 tests, zero failures.
   Before-fix evidence: `/tmp/phase8-pan-regression-before.log`;
   current suite: `/tmp/phase8-desk-drawing-tests.log`.
+
+### C2 interactive desk delivery
+
+The static pin list is replaced by the shared native canvas and host-owned live
+cards. Browse opens guarded file/folder references or linked artwork. Arrange
+supports native pencil/text/shapes, movable/resizable cards, named tinted sections,
+editable labels/title and 24-step layout/source undo/redo. Sections leave their
+interiors available for drawing. Card and artwork selection are mutually exclusive.
+The host polls accepted drawing edits even while hidden, debounces completed
+layout edits and retains newer drafts across earlier save acknowledgments.
+Reference removal prunes history so undo cannot resurrect an orphan target.
+Rejected writes retain the draft with explicit retry/discard controls.
+
+- Native dark-theme acceptance passed 28 observations, including resize,
+  move/undo/redo, section-body drawing, artwork binding, restart, clicking real
+  painted ink to open its file, studio return, folder opening and non-destructive
+  unpin. Report: `/tmp/phase8-desk-selection-dark-02/report.json`.
+- Light-theme acceptance passed the same 28-observation workflow before the final
+  mutual-selection correction: `/tmp/phase8-desk-resize-light/report.json`.
+  Both rendered desks were visually inspected. OCR needs
+  `TESSDATA_PREFIX=/tmp/clip-video-ocr/tessdata` in this environment.
+- Targeted Home tests: 20 passed (`/tmp/phase8-home-canvas-tests.log`).
+- Strict combined file-manager/studios Clippy passed
+  (`/tmp/phase8-desk-clippy.log`); owned formatting and diff checks pass.
+- Architecture comparison has no new excessive-complexity functions. Its
+  aggregate result still flags three additional clone groups; the reported
+  matches include independent rendered test fixtures, existing controller/job
+  transport scaffolding, and symmetric undo/redo state transitions. The native
+  renderer, camera and guarded persistence transport remain shared. Overall
+  duplication percentage decreased by 0.02 points; maximum complexity is unchanged.
+
+This delivery does not complete C2 or Phase 8: camera persistence, draft-close
+handling, live projects/tasks and the other organization/history work remain.

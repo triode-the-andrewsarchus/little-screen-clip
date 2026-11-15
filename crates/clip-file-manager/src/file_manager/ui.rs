@@ -49,6 +49,7 @@ impl FileManager {
     pub(crate) fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         self.drop_targets.clear();
         self.bookmark_drop_rect = None;
+        self.home_surface.poll_canvas(ui.ctx());
         self.tick(super::BackgroundJobs::global());
         if self.home_surface.open {
             ui.set_enabled(!self.browser_modal());
@@ -552,7 +553,7 @@ impl FileManager {
 
     pub(super) fn selection_summary(&self) -> String {
         if self.home_surface.open {
-            return format!("{} pinned items", self.home_surface.pins().len());
+            return format!("Pinned references: {}", self.home_surface.pins().len());
         }
         if self.view == super::BrowserView::Constellation {
             return self.constellation.sample_count_label();

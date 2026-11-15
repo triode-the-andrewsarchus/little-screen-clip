@@ -706,6 +706,7 @@ impl eframe::App for FileManagerApp {
             self.finish_app_close(ctx);
             return;
         }
+        self.browser.home_surface.poll_canvas(ctx);
         self.tick_external(ctx);
         self.browser
             .search

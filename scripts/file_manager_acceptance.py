@@ -14,7 +14,7 @@ import time
 import subprocess
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 import ui_acceptance_capture as private
 
@@ -180,8 +180,10 @@ class Session:
             region = self.output / filename
             with Image.open(path) as screen:
                 crop = screen.crop(bounds)
+                if filename.startswith("contrast-line-"):
+                    crop = ImageOps.autocontrast(crop.convert("L"))
                 crop.resize((crop.width * 3, crop.height * 3)).save(region)
-            mode = "7" if filename.startswith("strip-title-") else ("11" if filename.startswith("studio-") else "6")
+            mode = "7" if filename.startswith(("strip-title-", "contrast-line-")) else ("11" if filename.startswith("studio-") else "6")
             text += private.run_checked(["tesseract", str(region), "stdout", "--psm", mode], env=self.env, timeout=_OCR_TIMEOUT)
             visible = "".join(text.lower().split())
             if all("".join(fragment.lower().split()) in visible for fragment in expected):

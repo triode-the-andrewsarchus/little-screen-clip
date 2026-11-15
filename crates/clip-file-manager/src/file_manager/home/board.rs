@@ -9,7 +9,7 @@ const EMPTY_DRAWING: &str = r##"{"type":"excalidraw","version":2,"elements":[],"
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Board {
+pub(in crate::file_manager) struct Board {
     pub revision: u64,
     pub title: String,
     pub drawing: String,
@@ -29,7 +29,7 @@ impl Default for Board {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Card {
+pub(in crate::file_manager) struct Card {
     pub id: Uuid,
     /// Stores x/y/width/height in the drawing's world space.
     pub rect: [f64; 4],
@@ -37,13 +37,13 @@ pub(super) struct Card {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum Content {
+pub(in crate::file_manager) enum Content {
     Shortcut { pin: Uuid, label: String },
     Section { title: String, color: [u8; 3] },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Binding {
+pub(in crate::file_manager) struct Binding {
     pub element: String,
     pub pin: Uuid,
 }
@@ -59,6 +59,9 @@ impl Card {
     }
 }
 impl Board {
+    pub fn is_empty(&self) -> bool {
+        self.cards.is_empty() && self.drawing == EMPTY_DRAWING
+    }
     pub fn add_shortcut(&mut self, pin: Uuid) {
         if self
             .cards

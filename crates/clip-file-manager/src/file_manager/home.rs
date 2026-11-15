@@ -1,7 +1,9 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
 mod board;
+mod session;
 use super::local_state;
-use board::Board;
+pub(in crate::file_manager) use board::{Board, Card, Content};
+pub(in crate::file_manager) use session::Session;
 const STATE_LIMIT: usize = 2 * 1024 * 1024;
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
 use serde::{Deserialize, Serialize};
@@ -99,6 +101,7 @@ impl State {
             Change::Board {
                 expected,
                 mut board,
+                ..
             } => {
                 if expected != self.board.revision {
                     return Err(
@@ -120,7 +123,11 @@ impl State {
 enum Change {
     Add(Vec<Pin>),
     Remove(Uuid),
-    Board { expected: u64, board: Board },
+    Board {
+        expected: u64,
+        board: Board,
+        generation: Option<u64>,
+    },
 }
 #[derive(Clone)]
 enum Action {
@@ -135,6 +142,7 @@ struct Pending {
 #[derive(Default)]
 pub(super) struct Home {
     pub open: bool,
+    pub session: Session,
     pub opening: Option<PathBuf>,
     path: Option<PathBuf>,
     state: State,
@@ -159,14 +167,23 @@ impl Home {
             ..Self::default()
         }
     }
+    pub fn canvas_parts(&mut self) -> (&[Pin], &mut Session) {
+        (&self.state.pins, &mut self.session)
+    }
     pub fn pins(&self) -> &[Pin] {
         &self.state.pins
     }
     pub fn busy(&self) -> bool {
-        self.reload || self.pending.is_some() || self.queued.is_some()
+        self.reload
+            || self.pending.is_some()
+            || self.queued.is_some()
+            || self.session.canvas.busy()
+            || (self.session.dirty() && self.error.is_none())
     }
     pub fn writing(&self) -> bool {
-        self.queued.is_some()
+        self.session.dirty()
+            || self.session.canvas.busy()
+            || self.queued.is_some()
             || self
                 .pending
                 .as_ref()
@@ -190,6 +207,76 @@ impl Home {
             self.queued = Some(Change::Remove(id));
         }
     }
+    pub fn editing_allowed(&self) -> bool {
+        self.loaded
+            && (self.error.is_none() || self.session.dirty())
+            && !self.reload
+            && self
+                .queued
+                .as_ref()
+                .is_none_or(|change| matches!(change, Change::Board { .. }))
+            && self.pending.as_ref().is_none_or(|pending| {
+                matches!(pending.action, Action::Change(Change::Board { .. }))
+            })
+    }
+    pub fn poll_canvas(&mut self, ctx: &egui::Context) {
+        self.session.poll(ctx);
+    }
+    pub fn retry_board(&mut self) {
+        if self.session.dirty() {
+            self.error = None;
+        } else {
+            self.reload();
+        }
+    }
+    pub fn discard_board(&mut self) {
+        if self.pending.is_none() && self.queued.is_none() {
+            self.session.discard(&self.state.board);
+            self.error = None;
+            self.reload();
+        }
+    }
+    fn accept(&mut self, state: State, action: Action) {
+        match action {
+            Action::Change(Change::Board {
+                generation: Some(generation),
+                ..
+            }) => self.session.acknowledge(&state.board, generation),
+            Action::Change(Change::Add(_) | Change::Remove(_)) => {
+                self.session.references_changed(&state.board, &state.pins)
+            }
+            _ => self.session.install(&state.board),
+        }
+        if state.version == 1 {
+            let mut board = state.board.clone();
+            for pin in &state.pins {
+                board.add_shortcut(pin.id);
+            }
+            self.queued = Some(Change::Board {
+                expected: state.board.revision,
+                board,
+                generation: None,
+            });
+        }
+        self.state = state;
+        self.loaded = true;
+        self.error = None;
+    }
+    fn queue_draft(&mut self) {
+        if self.pending.is_none()
+            && self.queued.is_none()
+            && self.loaded
+            && !self.reload
+            && self.error.is_none()
+            && self.session.due()
+        {
+            self.queued = Some(Change::Board {
+                expected: self.session.board.revision,
+                board: self.session.board.clone(),
+                generation: Some(self.session.generation()),
+            });
+        }
+    }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
@@ -198,21 +285,7 @@ impl Home {
                     Action::Load => self.reload = true,
                     Action::Change(change) => self.queued = Some(change),
                 },
-                Ok(Ok(state)) => {
-                    if state.version == 1 {
-                        let mut board = state.board.clone();
-                        for pin in &state.pins {
-                            board.add_shortcut(pin.id);
-                        }
-                        self.queued = Some(Change::Board {
-                            expected: state.board.revision,
-                            board,
-                        });
-                    }
-                    self.state = state;
-                    self.loaded = true;
-                    self.error = None;
-                }
+                Ok(Ok(state)) => self.accept(state, pending.action),
                 result => {
                     self.error = Some(match result {
                         Ok(Err(error)) => error,
@@ -222,6 +295,7 @@ impl Home {
                 }
             }
         }
+        self.queue_draft();
         if self.pending.is_none()
             && let Some(path) = self.path.clone()
         {
@@ -362,6 +436,7 @@ mod board_persistence_tests {
             Change::Board {
                 expected: initial.board.revision,
                 board: first,
+                generation: None,
             },
         )
         .unwrap();
@@ -373,12 +448,84 @@ mod board_persistence_tests {
                 &path,
                 Change::Board {
                     expected: initial.board.revision,
-                    board: second
+                    board: second,
+                    generation: None
                 }
             )
             .unwrap_err()
             .contains("another window")
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod session_delivery_tests {
+    use super::*;
+    fn await_state(home: &mut Home, jobs: &BackgroundJobs, predicate: impl Fn(&Home) -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            home.tick(jobs);
+            if predicate(home) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Home delivery did not settle: {:?}",
+                home.error
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    #[test]
+    fn draft_changes_defer_close_until_the_accepted_state_is_published() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("home.json");
+        let jobs = BackgroundJobs::new(1, 2);
+        let mut home = Home::new(path.clone());
+        await_state(&mut home, &jobs, Home::ready);
+        home.session.edit(|board| board.title = "My desk".into());
+        assert!(
+            home.writing(),
+            "debounce cannot release the write/close owner"
+        );
+        await_state(&mut home, &jobs, |home| !home.writing());
+        let (state, _) = local_state::read::<State>(&path, STATE_LIMIT).unwrap();
+        assert_eq!(state.board.title, "My desk");
+        assert_eq!(home.session.board.revision, state.board.revision);
+        assert!(home.ready());
+    }
+    #[test]
+    fn rejected_conflicting_save_retains_the_draft_until_explicit_discard_and_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("home.json");
+        let jobs = BackgroundJobs::new(1, 2);
+        let mut home = Home::new(path.clone());
+        await_state(&mut home, &jobs, Home::ready);
+        home.session
+            .edit(|board| board.title = "Local unsaved".into());
+        let mut other = home.state.board.clone();
+        other.title = "Other window".into();
+        save(
+            &path,
+            Change::Board {
+                expected: other.revision,
+                board: other,
+                generation: None,
+            },
+        )
+        .unwrap();
+        await_state(&mut home, &jobs, |home| home.error.is_some());
+        assert_eq!(home.session.board.title, "Local unsaved");
+        assert!(home.writing());
+        assert!(
+            home.editing_allowed(),
+            "the draft remains editable for recovery"
+        );
+        assert!(home.error.as_ref().unwrap().contains("another window"));
+        home.discard_board();
+        await_state(&mut home, &jobs, Home::ready);
+        assert_eq!(home.session.board.title, "Other window");
+        assert!(!home.writing());
     }
 }
