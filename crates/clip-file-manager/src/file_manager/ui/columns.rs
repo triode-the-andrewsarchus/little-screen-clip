@@ -70,7 +70,13 @@ fn heading(ui: &mut Ui, path: &Path) {
     ui.separator();
 }
 
-fn row(ui: &mut Ui, entry: &Entry, selected: bool, colors: WorkbenchColors) -> egui::Response {
+fn row(
+    ui: &mut Ui,
+    entry: &Entry,
+    selected: bool,
+    colors: WorkbenchColors,
+    annotated: bool,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), ROW_HEIGHT),
         Sense::click_and_drag(),
@@ -97,7 +103,7 @@ fn row(ui: &mut Ui, entry: &Entry, selected: bool, colors: WorkbenchColors) -> e
         ui,
         rect,
         26.0,
-        rect.width() - 48.0,
+        rect.width() - if annotated { 62.0 } else { 48.0 },
         &entry.name,
         colors.text_primary,
     );
@@ -350,7 +356,20 @@ impl FileManager {
         area.show_rows(ui, ROW_HEIGHT, entries.len(), |ui, range| {
             for entry in &entries[range] {
                 let on_route = current.starts_with(&entry.path);
-                let response = row(ui, entry, on_route, colors);
+                let response = row(
+                    ui,
+                    entry,
+                    on_route,
+                    colors,
+                    self.organization.snapshot.color(entry).is_some(),
+                );
+                super::organization::paint_session(
+                    ui,
+                    response.rect,
+                    entry,
+                    &self.organization.snapshot,
+                    true,
+                );
                 if restore && on_route {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }

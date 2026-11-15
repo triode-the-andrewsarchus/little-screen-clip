@@ -109,6 +109,7 @@ impl FileManagerApp {
             browser.search.error = Some(error);
         }
         browser.home_surface = super::home::Home::for_user(&browser.home);
+        browser.organization = super::organization::Organization::for_user(&browser.home);
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.view_preferences = super::view_preferences::Preferences::for_user(&browser.home);
         browser.containers.configure(
@@ -632,11 +633,12 @@ impl FileManagerApp {
     }
 
     fn request_app_close(&mut self, ctx: &egui::Context) {
-        if !self.browser.home_surface.prepare_close() {
+        // Resolve the studio's own edits before exposing browser-owned draft errors.
+        if self.viewers.active() && !self.viewers.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
-        if self.viewers.active() && !self.viewers.request_close() {
+        if !self.browser.prepare_presentation_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
@@ -645,9 +647,7 @@ impl FileManagerApp {
         if self.browser.edit_busy()
             || self.browser.transfers.busy()
             || self.browser.constellation.writing_pack()
-            || self.browser.bookmarks.busy()
-            || self.browser.view_preferences.writing()
-            || self.browser.home_surface.writing()
+            || self.browser.presentation_writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
             || self.browser.shelf.sending()

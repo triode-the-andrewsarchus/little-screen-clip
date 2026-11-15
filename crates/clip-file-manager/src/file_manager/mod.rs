@@ -36,6 +36,7 @@ mod multisample;
 mod music;
 mod native_drag;
 mod notebook;
+mod organization;
 use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
@@ -220,6 +221,7 @@ struct Request {
 pub(crate) struct FileManager {
     home: PathBuf,
     home_surface: home::Home,
+    organization: organization::Organization,
     history: Vec<Location>,
     index: Option<usize>,
     directory: Option<Directory>,
@@ -315,6 +317,7 @@ impl FileManager {
             native_drag_point: None,
             home,
             home_surface: Default::default(),
+            organization: Default::default(),
             history: Vec::new(),
             index: None,
             directory: None,
@@ -426,6 +429,23 @@ impl FileManager {
         self.view_preferences.active()
             || self.home_surface.busy()
             || self.home_surface.projects.busy()
+            || self.organization.active()
+    }
+    fn presentation_writing(&self) -> bool {
+        self.bookmarks.busy()
+            || self.view_preferences.writing()
+            || self.home_surface.writing()
+            || self.organization.writing()
+    }
+    fn prepare_presentation_close(&mut self) -> bool {
+        if !self.home_surface.prepare_close() {
+            return false;
+        }
+        if !self.organization.prepare_close() {
+            self.home_surface.open = false;
+            return false;
+        }
+        true
     }
 
     fn stop_previews(&mut self) {
@@ -524,6 +544,7 @@ impl FileManager {
     }
 
     fn refresh(&mut self) {
+        self.organization.refresh_if_clean();
         fuse_binwalk::refresh_cached_mount_table();
         self.mounts.request_scan(BackgroundJobs::global());
         self.tree.refresh(self.path().to_path_buf());
@@ -552,6 +573,7 @@ impl FileManager {
         }
         self.tick_view_preferences(&local_state::IO);
         self.home_surface.tick(&local_state::IO);
+        self.organization.tick(&local_state::IO);
         self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);

@@ -37,7 +37,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       README/TODO defaults and local global project registry.
 - [x] C4. Bounded live project/TODO views, source-backed checkboxes, refresh/error
       handling and project-area membership from the registry.
-- [ ] C5. Session red/yellow/green marks with editable meanings; distinct labeled
+- [x] C5. Session red/yellow/green marks with editable meanings; distinct labeled
       underlines, persistence and clearing/recovery.
 - [ ] C6. Configurable A/B/... sets, membership/filtering and repeated subdivision;
       independent from session state and visibility.
@@ -329,3 +329,49 @@ C4 is complete. C5–C9 remain open; the full Phase 8 goal is not complete.
   `/tmp/phase8-close-probe-modifier/report.json`. Temporary close/input tracing
   was removed from the application. This changes test setup, not production
   keyboard or application close behavior.
+
+
+### C5 session marks
+
+The existing view toolbar now contains Session controls. Red/Yellow/Green marks
+use labeled underlines without increasing row height; List, Columns, ancestor
+columns and Photos share one immutable index and renderer. Name and color
+meanings are editable, with explicit save/discard and draft-safe application
+close. Session disable retains assignments. Clear retains one recovery set;
+Restore and Forget validate the observed recovery revision against concurrent
+windows. Assignments describe the captured metadata revision, while unavailable
+or changed references remain stored and dormant. The complete contract is in
+`organization.md`.
+
+The existing local-state worker handles semantic transactions, cooperating-window
+merges and pinned atomic replacement. Different definition fields merge;
+conflicting edits to the same label fail. Accepted writes retain completion
+ownership and block close. Unknown/malformed files are preserved. No source
+content is read or written to assign a mark.
+
+- Full file-manager tests: 1,000 passed, zero failed, 6 ignored
+  (`/tmp/phase8-session-all-tests.log`). Tests cover lossless path storage,
+  revision matching, disable/clear/recovery, stale recovery rejection, concurrent
+  assignment/definition merging, failed same-field edits, restart, close ownership
+  and malformed/future-version preservation.
+- Strict file-manager Clippy, debug build and workspace formatting passed:
+  `/tmp/phase8-session-{clippy,build,format}.log`.
+- Native acceptance passes 32 observations in each appearance:
+  `/tmp/phase8-session-complete-dark/report.json` and
+  `/tmp/phase8-session-complete-light/report.json`. Independent pixel checks
+  confirm all three painted underlines, including Columns ancestors. Real saved
+  state is checked through clear/restore, custom meanings and restart. An invalid
+  label survives a close request from a saved text studio, returns to a visible
+  browser error, and can be explicitly discarded without replacing saved labels.
+  Fixtures are checked byte-for-byte unchanged. Both themes and error presentation
+  were visually inspected.
+- Architecture comparison retains average/max complexity and reduces overall
+  duplication by 0.04 percentage points from the completion baseline. The
+  aggregate report flags eight additional short clone groups across C1–C5.
+  C5's reported matches are shared job-owner setup/result handling, six lines of
+  ordinary absolute-reference validation and independent model test setup.
+  These do not duplicate the persistence transport or annotation renderer; a
+  generic controller framework would add more indirection than these small
+  domain-specific sequences. No C5 function introduces excessive complexity.
+
+C5 is complete. C6–C9 remain open; Phase 8 is not complete.

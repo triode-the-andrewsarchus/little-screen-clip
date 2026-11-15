@@ -15,6 +15,7 @@ mod home;
 mod list;
 mod mounts;
 pub(super) mod music;
+mod organization;
 mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
@@ -73,6 +74,7 @@ impl FileManager {
         self.answer_columns_ui(ui, palette);
         self.sync_preview_context();
         self.media_view_toolbar(ui, palette);
+        self.organization_feedback(ui);
         ui.separator();
         self.docked_panels(ui, palette);
         // A coalesced header click can also clear focus during the later list
@@ -758,6 +760,7 @@ impl FileManager {
     }
 
     fn apply_list_actions(&mut self, actions: ListActions) {
+        self.apply_session_action(actions.session_mark);
         if actions.selection.is_some() || actions.clear {
             self.type_navigation.clear();
         }
@@ -1603,6 +1606,13 @@ enum TreeAction {
 // the directory only once and all selection decisions use the same snapshot.
 #[derive(Default)]
 struct ListActions {
+    organization: std::sync::Arc<super::organization::Snapshot>,
+    organization_ready: bool,
+    session_mark: Option<(
+        super::organization::Observation,
+        bool,
+        Option<super::organization::Color>,
+    )>,
     additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
@@ -1629,6 +1639,8 @@ struct ListActions {
 impl ListActions {
     fn for_browser(browser: &FileManager) -> Self {
         Self {
+            organization: browser.organization.snapshot.clone(),
+            organization_ready: browser.organization.ready(),
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
@@ -1721,6 +1733,15 @@ impl ListActions {
         selection_count: usize,
     ) {
         let marked = self.row_selection(ui, response, entry, selected);
+        if !self.metadata_only {
+            organization::paint_session(ui, response.rect, entry, &self.organization, false);
+            if let Some(color) = self.organization.color(entry) {
+                response.clone().on_hover_text(format!(
+                    "Session: {}",
+                    self.organization.definitions().label(color)
+                ));
+            }
+        }
         if entry.directory {
             self.transfer = drop_files(ui, response, &entry.path);
         }
@@ -1767,6 +1788,7 @@ impl ListActions {
         selection_count: usize,
     ) {
         response.context_menu(|ui| {
+            self.session_mark_menu(ui, entry, marked);
             if let Some(path) = inspection_button(ui, entry) {
                 self.inspect = Some(path);
                 ui.close_menu();

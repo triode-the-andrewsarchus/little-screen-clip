@@ -80,6 +80,7 @@ impl FileManager {
                 ui.small("Last-known matches: metadata list");
             }
             self.transfer_toolbar(ui, palette);
+            self.organization_menu(ui);
             if self.view == super::super::BrowserView::List {
                 self.containers.settings(ui);
             }
