@@ -8,37 +8,36 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 from file_manager_phase4_acceptance import click_word as sparse_click
 
 
+def click_cropped_word(session, shot, word, bounds, minimum_y, maximum_y):
+    name = shot + "-cropped-control"
+    with Image.open(session.output / f"{shot}.png") as picture:
+        isolated = Image.new("L", picture.size, 255)
+        isolated.paste(ImageOps.autocontrast(picture.crop(bounds).convert("L")), bounds[:2])
+        isolated.resize((picture.width*3,picture.height*3)).save(session.output / f"{name}-ocr.png")
+    for tree in [True, False]:
+        point = session.word(name, word, tree=tree, required=False, minimum_y=minimum_y)
+        if point and (maximum_y is None or point[1] < maximum_y):
+            session.click(point[0] + 2, point[1]); return True
+    return False
+
+
 def click_word(session, shot, word, *, minimum_y=85, maximum_y=None, control_bounds=None):
     try:
         sparse_click(session, shot, word, minimum_y=minimum_y, maximum_y=maximum_y)
     except RuntimeError:
-        # Reuse the runner's alternate OCR layout for plain, low-contrast
-        # toolbar text. Keep the target inside the original requested band.
+        # Reuse alternate OCR and observed control crops when borders or selected
+        # colors prevent the full-window layout from identifying a label.
         for tree in [True, False]:
             point = session.word(shot, word, tree=tree, required=False, minimum_y=minimum_y)
             if point and (maximum_y is None or point[1] < maximum_y):
                 session.click(point[0] + 5, point[1]); return
-        if minimum_y < 145:
-            name = shot + "-header"
-            with Image.open(session.output / f"{shot}.png") as picture:
-                isolated = Image.new("L", picture.size, 255)
-                isolated.paste(ImageOps.autocontrast(picture.crop((96,96,900,140)).convert("L")), (96,96))
-                isolated.resize((picture.width*3,picture.height*3)).save(session.output / f"{name}-ocr.png")
-            for tree in [True, False]:
-                point = session.word(name, word, tree=tree, required=False, minimum_y=minimum_y)
-                if point and (maximum_y is None or point[1] < maximum_y):
-                    session.click(point[0] + 5, point[1]); return
+        if minimum_y < 145 and click_cropped_word(session, shot, word, (96,96,900,140), minimum_y, maximum_y):
+            return
         controls = {"Arrange":(400,104,462,131), "Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
-        if control_bounds is not None or (minimum_y < 145 and word in controls):
-            name = shot + "-control"
-            bounds = control_bounds or controls[word]
-            with Image.open(session.output / f"{shot}.png") as picture:
-                isolated = Image.new("L", picture.size, 255)
-                isolated.paste(ImageOps.autocontrast(picture.crop(bounds).convert("L")), bounds[:2])
-                isolated.resize((picture.width*3,picture.height*3)).save(session.output / f"{name}-ocr.png")
-            for tree in [True, False]:
-                point = session.word(name, word, tree=tree, required=False, minimum_y=minimum_y)
-                if point: session.click(point[0] + 2, point[1]); return
+        bounds = control_bounds or controls.get(word)
+        if bounds is not None and (control_bounds is not None or minimum_y < 145):
+            if click_cropped_word(session, shot, word, bounds, minimum_y, maximum_y):
+                return
         raise
 
 

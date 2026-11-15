@@ -423,7 +423,9 @@ impl FileManager {
     }
 
     fn local_state_busy(&self) -> bool {
-        self.view_preferences.active() || self.home_surface.busy()
+        self.view_preferences.active()
+            || self.home_surface.busy()
+            || self.home_surface.projects.busy()
     }
 
     fn stop_previews(&mut self) {

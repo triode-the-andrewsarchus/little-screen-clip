@@ -66,6 +66,36 @@ that another folder is its replacement. External moves require explicit
 registration at the new location. Local registration reads and validates the
 manifest through a guarded handle; it does not copy project content into Home.
 
-Live TODO content and checkbox editing are the next Phase 8 delivery. At this
-point the Projects menu opens the registered folder through ordinary guarded
-browser navigation; it does not scan project content on the UI thread.
+## Live TODO areas
+
+Home → Add → **Live Projects area** places a movable, resizable area on the desk.
+Its membership follows the registry; removing the area does not unregister a
+project, and unregistering a project does not remove its files. Each visible row
+shows the project title, the first four Markdown tasks, Reload TODO and Open TODO.
+Open TODO exposes the complete source document through the ordinary editor.
+Arrange moves/resizes/renames the area; Browse enables task checkboxes.
+
+UTF-8 TODO documents are limited to 256 KiB per preview and 2,048 tasks, with
+explicit truncation at the task limit. Parsing uses the existing CommonMark
+implementation with task-list support and source offsets, so fenced examples are
+not interpreted as real tasks. Nested tasks and inline formatting are supported;
+the preview labels omit Markdown markup. Extensionless TODO files use the same
+manifest-selected reader as TODO.md.
+
+A checkbox changes exactly one marker byte in the real source. It uses the source
+snapshot's identity-checked atomic write and held parent directory; both project
+manifest and TODO revision must still match. CRLF, UTF-8, comments, formatting and
+every other byte remain intact. External changes, renamed/replaced parents,
+missing documents or changed project IDs cause explicit errors, never overwrite
+an unrelated revision or silently recreate a missing TODO. Drawing/layout undo
+only changes the desk, independently from these document writes.
+
+Only visible rows request reads. A separate bounded pool admits two reads, with
+at most 24 retained previews. Hidden reads retire; accepted writes retain their
+completion owner and block close until delivery even after Home is hidden.
+Visible areas refresh every two seconds and keep the previous snapshot during
+loading. Read failures retain the old display with disabled checkboxes and an
+error. Save failures remain visible in Home recovery even without a live area, until
+explicit Reload task previews or Reload TODO; successful
+operations add no notification text. Reads, Markdown parsing and writes all run
+off the UI thread. No TODO bytes or checkbox state are stored in Home JSON.

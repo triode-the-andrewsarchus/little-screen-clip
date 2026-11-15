@@ -1429,6 +1429,7 @@ dependencies = [
  "ndarray",
  "object 0.40.0",
  "ort",
+ "pulldown-cmark 0.13.6",
  "raw-cpuid",
  "raw-window-handle 0.6.2",
  "realfft",

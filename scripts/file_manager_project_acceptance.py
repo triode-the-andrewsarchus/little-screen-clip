@@ -63,7 +63,7 @@ def exercise(session, root, binary):
     enter_home(session, "copy-folder")
     session.observe("copy-home", ["Home", "Projects"])
     add_action(session, "copy-home", "Register", "copy-register-menu")
-    session.observe("location-conflict", ["registered at another location", "Use this location", "Cancel"])
+    session.observe("location-conflict", ["registered at another location", "Current:", "Chosen:", "Use this location"])
     assert saved()[0]["folder"] == str(root)
     click_word(session, "location-conflict", "Use", minimum_y=250, maximum_y=285,
                control_bounds=(114,257,232,276))

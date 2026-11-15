@@ -35,7 +35,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       sections, live card placement, view state, undo/redo and deliberate editing.
 - [x] C3. Versioned `.fmproject`, safe create/register workflow, no-overwrite
       README/TODO defaults and local global project registry.
-- [ ] C4. Bounded live project/TODO views, source-backed checkboxes, refresh/error
+- [x] C4. Bounded live project/TODO views, source-backed checkboxes, refresh/error
       handling and project-area membership from the registry.
 - [ ] C5. Session red/yellow/green marks with editable meanings; distinct labeled
       underlines, persistence and clearing/recovery.
@@ -246,9 +246,9 @@ rejected without replacing the original input.
 - Native dark workflow passed 19 observations:
   `/tmp/phase8-project-dark-04/report.json`. Creation, restart, unregister,
   re-registration, copied-ID conflict, explicit relocation and folder opening
-  are checked against the real files and registry. Light-theme forms were
-  visually inspected; its full workflow is being rerun with tighter OCR crops
-  for bordered/colored buttons. Earlier failures were OCR target/label issues,
+  are checked against the real files and registry. Light workflow also passed all 19 observations:
+  `/tmp/phase8-project-light-05/report.json`. Both themes were visually inspected.
+  Earlier failures were OCR target/label issues,
   retained in the corresponding `/tmp/phase8-project-*` reports.
 - Architecture comparison has no new excessive-complexity function after
   separating project controls from ordinary Home pin controls. The aggregate
@@ -266,3 +266,54 @@ claimed from the project menu or manifest foundation.
   passes afterward. Logs: `/tmp/phase8-redo-before.log` and
   `/tmp/phase8-redo-after.log`. The live project native workflow exposed this
   while checking that layout undo leaves independently saved TODO content alone.
+
+### C4 live project/TODO areas
+
+Add → Live Projects area creates a movable/resizable/renameable desk area whose
+membership follows the registry. It shows visible project rows, four source-backed
+Markdown task checkboxes per row, refresh and an ordinary guarded Open TODO
+handoff. Document content and checked state remain solely in each project folder;
+layout undo/redo only changes the desk. Browse enables checkboxes; Arrange keeps
+them inert. Live-widget bounds own wheel interaction instead of also zooming the
+canvas through a scrolling task area.
+
+CommonMark task-list parsing reuses pulldown-cmark (already used by document
+rendering), including byte offsets, nested/inline formatting and fenced-code
+exclusion. A toggle changes one source byte via FileSource atomic replacement,
+retaining project/root/document parents and rechecking manifest/source identity.
+Extensionless TODO works through the same manifest path. New sources, replaced
+parents, missing payloads, non-UTF-8/oversized documents and changed project IDs
+fail explicitly instead of overwriting/recreating content.
+
+Task reads use a separate two-worker queue, at most two pending reads and 24
+retained snapshots. Only visible rows request work; hidden reads retire and
+accepted writes survive retirement with unbounded delivery ownership. Visible
+areas refresh every two seconds, keeping prior content during refresh. Errors
+keep stale checkboxes disabled. Save failures remain visible in Home recovery
+even if the live area was removed, with explicit Reload task previews.
+
+- Focused Home suite: 36 passed (`/tmp/phase8-project-live-tests.log`), including
+  one-byte CRLF/UTF-8 edits, nested tasks/code exclusion, external conflicts,
+  changed project IDs, extensionless TODO, parent replacement, bounded retention,
+  hidden-view accepted writes and error visibility without any live area.
+- Final full file-manager suite: 995 passed, zero failed, 6 ignored
+  (`/tmp/phase8-project-live-final-all-tests.log`).
+- Drawing suite: 18 passed (`/tmp/phase8-project-live-drawing-tests.log`).
+- Strict combined file-manager/studios Clippy and workspace formatting passed:
+  `/tmp/phase8-project-live-{clippy,format}.log`.
+- Native final workflows passed all 20 observations in both themes:
+  `/tmp/phase8-project-tasks-final-dark-02/report.json` and
+  `/tmp/phase8-project-tasks-final-light/report.json`. They click actual checkboxes,
+  verify exact source bytes, undo/redo the layout without reverting tasks, force
+  a real write-lock failure and recover, refresh external edits, remove/recreate
+  TODO, open it in the studio and unregister without deleting files. Live areas,
+  disabled/error states and both appearances were visually inspected. Prior OCR
+  failures are retained in earlier reports; narrow contrast crops identify
+  bordered controls and the red failure text without changing production styles.
+- Architecture comparison has no new excessive-complexity function. The fourth
+  short additional clone group is in Cargo dependency declarations after adding
+  the existing CommonMark dependency directly to file manager, not a duplicate
+  parser or runtime mechanism. Average/max complexity stay unchanged and overall
+  duplication percentage is down 0.03 points from the original baseline.
+
+C4 is complete. C5–C9 remain open; the full Phase 8 goal is not complete.

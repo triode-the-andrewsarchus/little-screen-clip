@@ -1,6 +1,10 @@
 //! Project registry and accepted writes have a lifecycle independent of Home layout.
+mod previews;
+pub(in crate::file_manager) use previews::View;
+pub(in crate::file_manager) use tasks::Snapshot;
 mod registry;
 mod source;
+mod tasks;
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
 pub(in crate::file_manager) use registry::{Conflict, Record};
 use registry::{Outcome, State};
@@ -47,6 +51,7 @@ pub(in crate::file_manager) struct Projects {
     pub error: Option<String>,
     pub conflict: Option<Conflict>,
     pub form: Option<(PathBuf, String)>,
+    pub previews: previews::Previews,
 }
 impl Projects {
     pub fn new(path: PathBuf) -> Self {
@@ -59,20 +64,30 @@ impl Projects {
     pub fn records(&self) -> &[Record] {
         &self.state.projects
     }
+    pub fn preview_parts(&mut self) -> (&[Record], &mut previews::Previews) {
+        (&self.state.projects, &mut self.previews)
+    }
     pub fn busy(&self) -> bool {
-        self.queued.is_some() || self.pending.is_some()
+        self.queued.is_some() || self.pending.is_some() || self.previews.active()
     }
     pub fn writing(&self) -> bool {
-        self.queued
-            .as_ref()
-            .is_some_and(|action| !matches!(action, Action::Load))
+        self.previews.writing()
+            || self
+                .queued
+                .as_ref()
+                .is_some_and(|action| !matches!(action, Action::Load))
             || self
                 .pending
                 .as_ref()
                 .is_some_and(|pending| !matches!(pending.action, Action::Load))
     }
     pub fn ready(&self) -> bool {
-        self.loaded && !self.busy() && self.error.is_none() && self.path.is_some()
+        self.loaded
+            && self.queued.is_none()
+            && self.pending.is_none()
+            && !self.previews.writing()
+            && self.error.is_none()
+            && self.path.is_some()
     }
     pub fn refresh(&mut self) {
         if self.path.is_some() && !self.busy() {
@@ -108,6 +123,7 @@ impl Projects {
         }
     }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
+        self.previews.tick(jobs);
         if let Some(result) = self
             .pending
             .as_ref()

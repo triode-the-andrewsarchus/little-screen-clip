@@ -318,7 +318,9 @@ impl DrawingEditor {
         if let Some(frame) = frame {
             let fit_layout = embedded::fit_layout(frame.layout, options.extent);
             self.camera.fit_if_ready(fit_layout, rect, frame.fresh);
-            self.camera.input(ui, &response, rect);
+            if !embedded::pointer_blocked(ui, &self.camera, rect, options.excluded) {
+                self.camera.input(ui, &response, rect);
+            }
             let tint = if frame.fresh {
                 Color32::WHITE
             } else {

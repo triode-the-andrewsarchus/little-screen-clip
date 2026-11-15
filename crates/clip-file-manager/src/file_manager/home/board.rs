@@ -43,6 +43,7 @@ pub(in crate::file_manager) struct Card {
 pub(in crate::file_manager) enum Content {
     Shortcut { pin: Uuid, label: String },
     Section { title: String, color: [u8; 3] },
+    Projects { title: String },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -150,7 +151,9 @@ impl Card {
             Content::Shortcut { pin, label } if !pin_ids.contains(pin) || label.len() > 256 => {
                 Err("Invalid Home shortcut reference".into())
             }
-            Content::Section { title, .. } if title.trim().is_empty() || title.len() > 256 => {
+            Content::Section { title, .. } | Content::Projects { title }
+                if title.trim().is_empty() || title.len() > 256 =>
+            {
                 Err("Invalid Home section title".into())
             }
             _ => Ok(()),

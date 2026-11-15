@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 
 pub(super) const LIMIT: usize = 2 * 1024 * 1024;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::file_manager) struct Record {
     pub id: Uuid,

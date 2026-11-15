@@ -1,6 +1,6 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
 mod board;
-mod projects;
+pub(in crate::file_manager) mod projects;
 mod session;
 use super::local_state;
 pub(in crate::file_manager) use board::{Board, Card, Content};
@@ -170,15 +170,14 @@ impl Home {
             ..Self::default()
         }
     }
-    pub fn canvas_parts(&mut self) -> (&[Pin], &mut Session) {
-        (&self.state.pins, &mut self.session)
+    pub fn canvas_parts(&mut self) -> (&[Pin], &mut Session, &mut projects::Projects) {
+        (&self.state.pins, &mut self.session, &mut self.projects)
     }
     pub fn pins(&self) -> &[Pin] {
         &self.state.pins
     }
     pub fn busy(&self) -> bool {
-        self.projects.busy()
-            || self.reload
+        self.reload
             || self.pending.is_some()
             || self.queued.is_some()
             || self.session.canvas.busy()
@@ -295,6 +294,9 @@ impl Home {
     }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         self.projects.tick(jobs);
+        if !self.open {
+            self.projects.previews.retire();
+        }
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
             match result {

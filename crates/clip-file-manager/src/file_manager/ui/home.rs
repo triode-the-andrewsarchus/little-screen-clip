@@ -233,7 +233,7 @@ impl FileManager {
     }
     fn home_inspector(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let editable = self.home_surface.editing_allowed();
-        let (pins, session) = self.home_surface.canvas_parts();
+        let (pins, session, _) = self.home_surface.canvas_parts();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if session.selected.is_some() {
@@ -331,7 +331,8 @@ impl FileManager {
     fn home_canvas(&mut self, ui: &mut Ui, palette: &AppPalette) -> Vec<Action> {
         let enabled = self.home_surface.editing_allowed();
         let unpin = self.home_surface.ready();
-        let (pins, session) = self.home_surface.canvas_parts();
+        let (pins, session, projects) = self.home_surface.canvas_parts();
+        projects.previews.begin();
         let mut actions = Vec::new();
         let excluded = exclusions(&session.board, session.selected, session.arrange);
         let extent = board_extent(&session.board);
@@ -399,9 +400,13 @@ impl FileManager {
                     .filter(|card| !matches!(card.content, Content::Section { .. }))
                 {
                     renderer.card(ui, card, &mut actions);
+                    if matches!(card.content, Content::Projects { .. }) {
+                        renderer.project_area(ui, card, projects, &mut actions);
+                    }
                 }
             },
         );
+        projects.previews.end();
         session.spawn = spawn;
         if enabled {
             session.retain_view();
@@ -441,6 +446,8 @@ impl FileManager {
                     }
                 }
                 Action::Unpin(id) => self.home_surface.remove(id),
+                Action::OpenDocument(path) => self.open_home_pin(Pin::new(path, false)),
+                Action::OpenFolder(path) => self.open_home_pin(Pin::new(path, true)),
                 Action::Select(id) => {
                     self.home_surface.session.canvas.cancel();
                     self.home_surface.session.select(id);
@@ -461,6 +468,10 @@ impl FileManager {
         }
     }
     fn open_home_pin(&mut self, pin: Pin) {
+        if !self.home_surface.session.allow_leave() {
+            return;
+        }
+        self.home_surface.session.commit_labels();
         if pin.folder {
             self.navigate(pin.path, Navigation::New);
         } else if let Some(parent) = pin.path.parent() {
@@ -532,6 +543,38 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[test]
+    fn task_save_failures_stay_visible_without_a_live_projects_area() {
+        let mut browser = FileManager::default();
+        assert!(browser.home_surface.session.board.cards.is_empty());
+        browser.home_surface.projects.previews.write_error = Some("Garden: changed source".into());
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                browser.home_project_form(ui, &AppPalette::default())
+            });
+        });
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("TODO save failed: Garden: changed source"))
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Reload task previews"))
+        );
+        assert!(browser.home_surface.projects.previews.write_error.is_some());
+    }
+
+    #[test]
     fn shifted_redo_is_not_consumed_as_plain_undo() {
         let mut session = crate::file_manager::home::Session::default();
         session.edit(|board| board.title = "My desk".into());
@@ -558,8 +601,6 @@ mod tests {
             assert_eq!(session.board.title, title);
         }
     }
-
-
 
     #[test]
     fn home_suspends_folder_shortcuts_and_resumes_selection_without_a_fake_path() {

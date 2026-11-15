@@ -3,6 +3,20 @@ use super::*;
 
 impl FileManager {
     pub(super) fn home_project_add_actions(&mut self, ui: &mut Ui, can_pin: bool) {
+        if ui.button("Live Projects area").clicked() {
+            let session = &mut self.home_surface.session;
+            let [x, y] = session.spawn;
+            session.edit(|board| {
+                board.cards.push(crate::file_manager::home::Card {
+                    id: Uuid::new_v4(),
+                    rect: [x - 310.0, y - 260.0, 620.0, 520.0],
+                    content: Content::Projects {
+                        title: "Projects".into(),
+                    },
+                })
+            });
+            ui.close_menu();
+        }
         let can_project = can_pin
             && self.home_surface.projects.ready()
             && self
@@ -85,6 +99,7 @@ impl FileManager {
     }
     pub(super) fn home_project_form(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let projects = &mut self.home_surface.projects;
+        task_recovery(ui, projects);
         let ready = projects.ready();
         if let Some((folder, title)) = &mut projects.form {
             let mut create = false;
@@ -131,6 +146,28 @@ impl FileManager {
             if ui.button("Reload project registry").clicked() {
                 projects.refresh();
             }
+        }
+    }
+}
+
+fn task_recovery(ui: &mut Ui, projects: &mut crate::file_manager::home::projects::Projects) {
+    if let Some(error) = &projects.previews.write_error {
+        ui.colored_label(
+            ui.visuals().error_fg_color,
+            format!("TODO save failed: {error}"),
+        );
+        if ui
+            .add_enabled(
+                !projects.previews.writing(),
+                egui::Button::new("Reload task previews"),
+            )
+            .clicked()
+        {
+            let ids: Vec<_> = projects.records().iter().map(|record| record.id).collect();
+            for id in ids {
+                projects.previews.refresh(id);
+            }
+            projects.previews.write_error = None;
         }
     }
 }

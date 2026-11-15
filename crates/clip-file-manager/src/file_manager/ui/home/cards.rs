@@ -3,6 +3,7 @@ use super::*;
 use crate::file_manager::home::{Card, Content};
 use clip_studios::drawing_canvas::Viewport;
 use uuid::Uuid;
+mod projects;
 
 pub(super) enum Action {
     Open(Uuid),
@@ -12,6 +13,8 @@ pub(super) enum Action {
     End,
     Remove(Uuid),
     Unpin(Uuid),
+    OpenDocument(std::path::PathBuf),
+    OpenFolder(std::path::PathBuf),
 }
 pub(super) struct Renderer<'a, 'camera> {
     pub viewport: Viewport<'camera>,
@@ -30,6 +33,11 @@ impl Renderer<'_, '_> {
         let scale = self.viewport.scale() as f32;
         match &card.content {
             Content::Section { title, color } => self.section(ui, card, rect, title, *color),
+            Content::Projects { title } => {
+                ui.painter()
+                    .rect_filled(rect, 12.0, Color32::from_rgb(247, 250, 248));
+                self.section(ui, card, rect, title, [69, 132, 134]);
+            }
             Content::Shortcut { pin, label } => {
                 let Some(pin) = self.pins.iter().find(|target| target.id == *pin) else {
                     return;
@@ -38,7 +46,7 @@ impl Renderer<'_, '_> {
             }
         }
         let hit = match card.content {
-            Content::Section { .. } => {
+            Content::Section { .. } | Content::Projects { .. } => {
                 Rect::from_min_size(rect.min, vec2(rect.width(), 40.0 * scale))
             }
             _ => rect,
@@ -224,7 +232,7 @@ impl Renderer<'_, '_> {
 }
 fn card_label(card: &Card, pins: &[Pin]) -> String {
     match &card.content {
-        Content::Section { title, .. } => title.clone(),
+        Content::Section { title, .. } | Content::Projects { title } => title.clone(),
         Content::Shortcut { pin, label } => {
             if label.is_empty() {
                 pins.iter()
