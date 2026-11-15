@@ -66,7 +66,11 @@ impl FileManager {
             ui.add_enabled_ui(editing, |ui| {
                 if ui
                     .add(clip_ui::ui_ext::mode_tab_button(
-                        "Objects locked",
+                        if self.home_surface.session.arrange {
+                            "Objects unlocked"
+                        } else {
+                            "Objects locked"
+                        },
                         !self.home_surface.session.arrange,
                         palette,
                     ))
