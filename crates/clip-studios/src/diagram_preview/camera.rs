@@ -70,6 +70,44 @@ impl Camera {
             .clamp(MIN_SCALE, 8.0);
         self.fitted = true;
     }
+    /// Bounds a composition to its content plus a practical margin; document canvases stay unchanged.
+    pub(crate) fn constrain_composition(
+        &mut self,
+        layout: DrawingLayout,
+        rect: Rect,
+    ) -> DrawingLayout {
+        let center = [
+            layout.origin[0] + layout.size[0] * 0.5,
+            layout.origin[1] + layout.size[1] * 0.5,
+        ];
+        let size = [
+            (layout.size[0] + 1024.).max(2000.),
+            (layout.size[1] + 1024.).max(1400.),
+        ];
+        let workspace = DrawingLayout {
+            origin: [center[0] - size[0] * 0.5, center[1] - size[1] * 0.5],
+            size,
+        };
+        let minimum = (f64::from(rect.width()) / size[0])
+            .min(f64::from(rect.height()) / size[1])
+            .clamp(0.05, 1.0);
+        self.scale = self.scale.clamp(minimum, 16.);
+        for axis in 0..2 {
+            let half = f64::from(if axis == 0 {
+                rect.width()
+            } else {
+                rect.height()
+            }) / (2. * self.scale);
+            let low = workspace.origin[axis] + half;
+            let high = workspace.origin[axis] + size[axis] - half;
+            self.center[axis] = if low <= high {
+                self.center[axis].clamp(low, high)
+            } else {
+                center[axis]
+            };
+        }
+        workspace
+    }
     pub fn screen(&self, point: [f64; 2], rect: Rect) -> Pos2 {
         rect.center()
             + egui::vec2(
@@ -131,6 +169,37 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn composition_limits_keep_the_workspace_visible_without_changing_an_ordinary_view() {
+        let layout = DrawingLayout {
+            origin: [0., 0.],
+            size: [1000., 700.],
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+        let mut camera = Camera::default();
+        camera.restore(ViewState {
+            center: [500., 350.],
+            scale: 1.,
+        });
+        camera.constrain_composition(layout, rect);
+        assert_eq!(
+            camera.view().unwrap(),
+            ViewState {
+                center: [500., 350.],
+                scale: 1.
+            }
+        );
+        camera.restore(ViewState {
+            center: [1e7, -1e7],
+            scale: 0.001,
+        });
+        let workspace = camera.constrain_composition(layout, rect);
+        assert!(camera.scale >= 0.3);
+        assert!(
+            camera.center[0] >= workspace.origin[0]
+                && camera.center[0] <= workspace.origin[0] + workspace.size[0]
+        );
+    }
     #[test]
     fn restored_view_preserves_world_center_across_viewport_sizes_and_skips_auto_fit() {
         let saved = ViewState {

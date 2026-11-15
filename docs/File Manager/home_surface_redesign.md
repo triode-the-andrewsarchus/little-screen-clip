@@ -558,7 +558,10 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   double-click/Enter; middle/right drags do not move cards.
 - [x] Preserve the camera when adding placements. Reference delivery no longer
   requests Fit; the existing view remains intact and drop coordinates stay exact.
-- [ ] Bound Home zoom/pan and its grid to a useful workspace.
+- [x] Bound Home zoom/pan and its grid to a useful workspace. The shared
+  composition camera uses content bounds plus room to grow, caps zoom-out, and
+  keeps the workspace in view. Document editors keep their original camera rules.
+  The bounded-camera regression passes.
 - [ ] Offer project versus folder-preview choices for folder drops.
 - [x] Dock click-region controls on the left and align their actions. Names and
   wrapped destinations sit above a consistent action row in a resizable sidebar;
