@@ -70,8 +70,9 @@ def create(root, *, state_home=None):
     ink("underline", 72, 260, [[0, 4], [120, 0], [250, 3], [410, 0]], "#91b5a1")
     text("reminder", 85, 420, "Leave room for the next idea...", 23)
     text("source-note", 640, 590, "These checkboxes edit the real TODO files", 19)
-    cards = [{"id": str(uuid.uuid4()), "rect": [620, 80, 570, 495],
-              "content": {"kind": "projects", "title": "Work in progress"}}]
+    cards = [{"id": str(uuid.uuid4()), "rect": [620, 80 + index * 255, 570, 240],
+              "content": {"kind": "project", "project": project["id"], "title": "Project tasks"}}
+             for index, project in enumerate(projects)]
     home = {"version": 2, "pins": pins, "board": {"revision": 0,
         "title": "My little field desk", "drawing": json.dumps({"type": "excalidraw",
         "version": 2, "elements": elements, "appState": {"viewBackgroundColor": "#ffffff"}, "files": {}}),

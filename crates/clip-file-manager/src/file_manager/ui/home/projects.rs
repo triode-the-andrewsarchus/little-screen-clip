@@ -3,18 +3,45 @@ use super::*;
 
 impl FileManager {
     pub(super) fn home_project_add_actions(&mut self, ui: &mut Ui, can_pin: bool) {
-        if ui.button("Live Projects area").clicked() {
+        let mut placement = None;
+        ui.menu_button("Place a project", |ui| {
+            if self.home_surface.projects.records().is_empty() {
+                ui.weak("Create or register a project below first.");
+            }
+            for project in self.home_surface.projects.records() {
+                ui.strong(&project.title);
+                ui.label(project.folder.display().to_string());
+                ui.horizontal(|ui| {
+                    if ui.button("Project folder").clicked() {
+                        placement = Some((project.clone(), false));
+                        ui.close_menu();
+                    }
+                    if ui.button("TODO list").clicked() {
+                        placement = Some((project.clone(), true));
+                        ui.close_menu();
+                    }
+                });
+                ui.separator();
+            }
+        });
+        if let Some((project, tasks)) = placement {
             let session = &mut self.home_surface.session;
             let [x, y] = session.spawn;
-            session.edit(|board| {
-                board.cards.push(crate::file_manager::home::Card {
-                    id: Uuid::new_v4(),
-                    rect: [x - 310.0, y - 260.0, 620.0, 520.0],
-                    content: Content::Projects {
-                        title: "Projects".into(),
-                    },
-                })
-            });
+            if tasks {
+                session.edit(|board| {
+                    board.cards.push(crate::file_manager::home::Card {
+                        id: Uuid::new_v4(),
+                        rect: [x - 260.0, y - 140.0, 520.0, 280.0],
+                        content: Content::Project {
+                            project: project.id,
+                            title: project.title,
+                        },
+                    })
+                });
+            } else {
+                self.home_surface
+                    .add(vec![super::Pin::new(project.folder, true)]);
+            }
             ui.close_menu();
         }
         let can_project = can_pin
@@ -29,7 +56,7 @@ impl FileManager {
             egui::Label::new(egui::RichText::new(self.path().display().to_string()).monospace())
                 .wrap(true),
         );
-        ui.weak("Create or register the folder shown above.");
+        ui.weak("Applies to the folder shown above.");
         if ui
             .add_enabled(
                 can_project,

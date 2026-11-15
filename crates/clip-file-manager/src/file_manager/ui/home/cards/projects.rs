@@ -29,9 +29,21 @@ impl Renderer<'_, '_> {
         style.spacing.icon_width_inner = (10.0 * scale).max(6.0);
         style.wrap = Some(false);
         let (records, previews) = projects.preview_parts();
+        let records: Vec<_> = records
+            .iter()
+            .filter(|record| match card.content {
+                Content::Project { project, .. } => record.id == project,
+                _ => true,
+            })
+            .collect();
         if records.is_empty() {
-            live.label("Registered projects appear here.");
-            live.weak("Use Add to create or register a project in its own folder.");
+            if matches!(card.content, Content::Project { .. }) {
+                live.label("This project is no longer registered.");
+                live.weak("Register its folder again to restore this view.");
+            } else {
+                live.label("Registered projects appear here.");
+                live.weak("Use Add to create or register a project in its own folder.");
+            }
             return;
         }
         live.ctx()
@@ -48,7 +60,7 @@ impl Renderer<'_, '_> {
                 records.len(),
                 |ui, range| {
                     for index in range {
-                        let record = &records[index];
+                        let record = records[index];
                         let Some(view) = previews.request(record) else {
                             ui.weak("Scroll to load more project previews");
                             continue;

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_home_acceptance import click_word, enter_home
+from file_manager_phase4_acceptance import click_word as menu_click
 
 
 def project_menu(session, shot, name):
@@ -13,8 +14,8 @@ def project_menu(session, shot, name):
 
 def add_action(session, shot, word, name):
     click_word(session, shot, "Add", minimum_y=90, maximum_y=145)
-    session.observe(name, ["Create project in current folder", "Register current folder", "Pin current folder"])
-    click_word(session, name, word, minimum_y=135, maximum_y=330)
+    session.observe(name, ["Project destination", "Create project in current folder", "Register current folder", "Pin current folder"])
+    menu_click(session, name, word, last=True, minimum_y=135, maximum_y=600)
 
 
 def exercise(session, root, binary):

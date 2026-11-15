@@ -195,7 +195,9 @@ impl Session {
                 .find(|card| card.id == id)
                 .map(|card| match &card.content {
                     Content::Shortcut { label, .. } => label.clone(),
-                    Content::Section { title, .. } | Content::Projects { title } => title.clone(),
+                    Content::Section { title, .. }
+                    | Content::Projects { title }
+                    | Content::Project { title, .. } => title.clone(),
                 })
                 .unwrap_or_default();
         }
@@ -232,7 +234,9 @@ impl Session {
             {
                 match &mut card.content {
                     Content::Shortcut { label, .. } => *label = title,
-                    Content::Section { title: label, .. } | Content::Projects { title: label }
+                    Content::Section { title: label, .. }
+                    | Content::Projects { title: label }
+                    | Content::Project { title: label, .. }
                         if !title.is_empty() =>
                     {
                         *label = title

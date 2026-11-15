@@ -42,9 +42,10 @@ def click_word(session, shot, word, *, minimum_y=85, maximum_y=None, control_bou
 
 
 def enter_home(session, shot):
-    # Captured browser toolbar; native Home contents are independently asserted.
-    point = session.word(shot, "Home", required=False)
-    session.click(*(point if point else (995, 118)))
+    # Scope navigation to the actual toolbar; "home" can also name a sidebar
+    # folder, so unrestricted OCR must never choose that target.
+    click_word(session, shot, "Home", minimum_y=90, maximum_y=145,
+               control_bounds=(965, 99, 1027, 135))
 
 
 def add(session, shot, word, name):

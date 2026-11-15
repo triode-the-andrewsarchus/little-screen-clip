@@ -76,3 +76,20 @@ individual project views can reuse that owner. The existing .note/Supernote
 importer must be inspected for its real vector capabilities; its file extension
 alone does not establish vector content. Native tablet input also requires
 verification beyond reading egui touch-force fields.
+
+## Individual project panel delivery
+
+New Add → Place a project entries offer a project-folder shortcut and a separate
+TODO panel for each registered project, showing its path. Panels have independent
+IDs, positions, sizes and labels, while retaining the stable project UUID and the
+shared bounded task reader/writer. Unregistering leaves a recoverable unavailable
+panel rather than deleting either its source or layout. Existing aggregate areas
+remain readable for migration; no new aggregate area is offered. Final legacy
+area migration and the rest of the composition redesign remain open.
+
+Home/model tests pass (38), including independently persisted geometry and invalid
+project-ID rejection; file-manager strict Clippy and the debug build passed. Native
+source-backed task workflows are being rerun in both appearances. The Add menu
+has a readable minimum width so long destination paths do not squeeze into a
+column of letters. The native driver scopes Home to its toolbar and keeps the
+pointer over submenus when inspecting them.

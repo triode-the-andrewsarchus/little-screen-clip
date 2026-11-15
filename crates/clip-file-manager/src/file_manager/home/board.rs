@@ -44,6 +44,7 @@ pub(in crate::file_manager) enum Content {
     Shortcut { pin: Uuid, label: String },
     Section { title: String, color: [u8; 3] },
     Projects { title: String },
+    Project { project: Uuid, title: String },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -173,7 +174,12 @@ impl Card {
             Content::Shortcut { pin, label } if !pin_ids.contains(pin) || label.len() > 256 => {
                 Err("Invalid Home shortcut reference".into())
             }
-            Content::Section { title, .. } | Content::Projects { title }
+            Content::Project { project, .. } if project.is_nil() => {
+                Err("Invalid Home project identity".into())
+            }
+            Content::Section { title, .. }
+            | Content::Projects { title }
+            | Content::Project { title, .. }
                 if title.trim().is_empty() || title.len() > 256 =>
             {
                 Err("Invalid Home section title".into())
@@ -186,6 +192,32 @@ impl Card {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn individual_project_views_keep_independent_geometry_and_stable_project_references() {
+        let mut board = Board::default();
+        let project = Uuid::new_v4();
+        for x in [10.0, 700.0] {
+            board.cards.push(Card {
+                id: Uuid::new_v4(),
+                rect: [x, 20.0, 520.0, 280.0],
+                content: Content::Project {
+                    project,
+                    title: "Tasks".into(),
+                },
+            });
+        }
+        board.validate(&[]).unwrap();
+        let saved = serde_json::to_string(&board).unwrap();
+        let restored: Board = serde_json::from_str(&saved).unwrap();
+        assert_eq!(board, restored);
+        board.cards[0].rect[0] += 100.0;
+        assert_eq!(board.cards[1].rect[0], 700.0);
+        board.cards[0].content = Content::Project {
+            project: Uuid::nil(),
+            title: "Tasks".into(),
+        };
+        assert!(board.validate(&[]).is_err());
+    }
     #[test]
     fn pin_removal_retires_only_its_presentation_and_shape_shortcuts() {
         let pins = [

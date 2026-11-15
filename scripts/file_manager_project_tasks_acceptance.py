@@ -15,16 +15,20 @@ def exercise(session, root):
     original = todo.read_bytes()
     home = Path(session.env["XDG_STATE_HOME"]) / "little-screen-clip/home.json"
     session.ocr_regions = [("contrast-line-tasks-header-ocr.png", (96,96,900,140)),
-                           ("contrast-line-tasks-arrange-ocr.png", (400,104,462,131)),
+                           ("contrast-line-tasks-arrange-ocr.png", (385,104,460,131)),
+                           ("contrast-line-tasks-arrange-active-ocr.png", (485,104,560,131)),
                            ("contrast-line-tasks-fit-ocr.png", (670,104,695,131)),
                            ("contrast-line-tasks-save-error-ocr.png", (98,142,400,162))]
     session.observe("folder", ["README.md", "TODO.md", "Home"])
     enter_home(session, "folder")
     session.observe("home", ["Home", "Add", "Projects"])
-    add_action(session, "home", "Live", "area-menu")
-    wait_for(lambda: home.exists() and any(card["content"]["kind"] == "projects" for card in json.loads(home.read_text())["board"]["cards"]), "live Projects area persisted")
-    session.observe("empty-area", ["Registered projects appear here", "Home"])
-    add_action(session, "empty-area", "Register", "register-menu")
+    add_action(session, "home", "Register", "register-menu")
+    wait_for(lambda: (home.parent / "projects.json").exists() and len(json.loads((home.parent / "projects.json").read_text())["projects"]) == 1, "project registry write completed")
+    session.observe("registered-project", ["Home", "Projects"])
+    add_action(session, "registered-project", "Place", "place-project")
+    session.observe("place-project-menu", ["Garden", "Project folder", "TODO list"], preserve_pointer=True)
+    click_word(session, "place-project-menu", "TODO", minimum_y=140)
+    wait_for(lambda: home.exists() and any(card["content"]["kind"] == "project" for card in json.loads(home.read_text())["board"]["cards"]), "individual project TODO area persisted")
     session.observe("live-tasks", ["Garden", "Water herbs", "Plan beds", "Reload TODO"])
     click_word(session, "live-tasks", "Water", minimum_y=200)
     checked = original.replace(b"[ ] **Water", b"[x] **Water")
@@ -35,13 +39,13 @@ def exercise(session, root):
     session.observe("arrange", ["Garden", "Water herbs", "Fit"])
     session.click(1100,700)
     session.key("z", "ctrl")
-    wait_for(lambda: not any(card["content"]["kind"] == "projects" for card in json.loads(home.read_text())["board"]["cards"]), "layout undo removed only the live area")
+    wait_for(lambda: not any(card["content"]["kind"] == "project" for card in json.loads(home.read_text())["board"]["cards"]), "layout undo removed only the live area")
     assert todo.read_bytes() == checked
     private.run_checked(["wtype", "-M", "ctrl", "-M", "shift", "-k", "z", "-m", "shift", "-m", "ctrl"], env=session.env)
-    wait_for(lambda: any(card["content"]["kind"] == "projects" for card in json.loads(home.read_text())["board"]["cards"]), "layout redo restored area")
+    wait_for(lambda: any(card["content"]["kind"] == "project" for card in json.loads(home.read_text())["board"]["cards"]), "layout redo restored area")
     assert todo.read_bytes() == checked
     session.observe("redone-area", ["Garden", "Water herbs"])
-    click_word(session, "redone-area", "Arrange", minimum_y=90, maximum_y=145)
+    click_word(session, "redone-area", "Arrange", minimum_y=90, maximum_y=145, control_bounds=(485,104,560,131))
     session.observe("before-failed-save", ["Garden", "Water herbs"])
     with (root / ".fmproject.lock").open("rb") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -70,7 +74,7 @@ def exercise(session, root):
     click_word(session, "returned-desk", "Projects", minimum_y=90, maximum_y=145)
     session.observe("project-menu", ["Garden", "Unregister"])
     click_word(session, "project-menu", "Unregister", minimum_y=135)
-    session.observe("unregistered-area", ["Registered projects appear here", "Home"])
+    session.observe("unregistered-area", ["This project is no longer registered", "Home"])
     assert todo.read_bytes() == restored
     assert (root / ".fmproject").is_file()
 

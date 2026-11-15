@@ -118,6 +118,7 @@ impl FileManager {
             && !self.search.open
             && !self.filesystem_busy();
         ui.menu_button("Add", |ui| {
+            ui.set_min_width(420.0);
             self.home_project_add_actions(ui, can_pin);
             if ui
                 .add_enabled(can_pin, egui::Button::new("Pin current folder"))
@@ -402,7 +403,10 @@ impl FileManager {
                     .filter(|card| !matches!(card.content, Content::Section { .. }))
                 {
                     renderer.card(ui, card, &mut actions);
-                    if matches!(card.content, Content::Projects { .. }) {
+                    if matches!(
+                        card.content,
+                        Content::Projects { .. } | Content::Project { .. }
+                    ) {
                         renderer.project_area(ui, card, projects, &mut actions);
                     }
                 }
