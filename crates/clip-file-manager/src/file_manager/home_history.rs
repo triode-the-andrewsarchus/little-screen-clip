@@ -37,7 +37,7 @@ impl FileManager {
         self.failed = None;
     }
     pub(super) fn return_from_home(&mut self) {
-        if !self.home_surface.session.allow_leave() {
+        if !self.home_surface.prepare_close() {
             return;
         }
         self.home_surface.session.commit_labels();

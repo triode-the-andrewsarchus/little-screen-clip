@@ -13,7 +13,7 @@ def trace(session, points):
 
 
 def save(session, name, target, step):
-    session.observe(step, ["choose what it opens"])
+    session.observe(step, ["choose an action"])
     x,y = session.word(step, "Name", tree=True)
     session.click(x+150,y)
     session.key("a", "ctrl")
@@ -22,7 +22,7 @@ def save(session, name, target, step):
     session.click(x+120,y)
     private.run_checked(["wtype",str(target)], env=session.env)
     session.observe(step+"-target", [name, "Open folder"])
-    x,y = session.word(step+"-target", "Open", tree=True, minimum_y=240)
+    x,y = session.word(step+"-target", "Open", tree=True, minimum_y=240,last=True)
     if not click_cropped_word(session,step+"-target","Save",(100,y+15,212,y+58),140,400):
         # The observed shared primary button is immediately below the target
         # summary; colored button fills can make OCR omit its label entirely.

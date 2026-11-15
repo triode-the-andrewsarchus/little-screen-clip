@@ -128,10 +128,10 @@ impl Board {
             }
         }
         for region in &mut self.regions {
-            if let Some(target) = &mut region.target {
+            if let Some(super::regions::RegionAction::Open { pin: target }) = &mut region.action {
                 *target = replacements.get(target).copied().unwrap_or(*target);
                 if !valid.contains(target) {
-                    region.target = None;
+                    region.action = None;
                     region.enabled = false;
                 }
             }
@@ -151,8 +151,8 @@ impl Board {
             .retain(|card| !matches!(card.content, Content::Shortcut { pin: id, .. } | Content::Artwork { pin: id, .. } | Content::Folder { pin: id, .. } if id == pin));
         self.bindings.retain(|binding| binding.pin != pin);
         for region in &mut self.regions {
-            if region.target == Some(pin) {
-                region.target = None;
+            if region.pin() == Some(pin) {
+                region.action = None;
                 region.enabled = false;
             }
         }

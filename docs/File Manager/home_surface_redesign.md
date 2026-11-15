@@ -30,7 +30,7 @@ it must not force the user to design their space from a small shape toolbox.
   deterministically, offering a chooser when multiple enabled regions match.
   Right clicks on live controls retain their ordinary menus; a drag is distinct
   from a stationary context click.
-- [ ] Design one inline action picker with an explicit target summary. Reuse
+- [x] Design one inline action picker with an explicit target summary. Reuse
   guarded folder/file navigation and the existing workflow mechanism; actions run
   only on deliberate activation, never during import, layout or preview. Do not
   encode arbitrary shell strings as a substitute for workflows.
@@ -299,10 +299,9 @@ percentage decreases 0.01 points. Remaining diagnostics concern host controls,
 short test/worker snippets and the native pointer test helper's bounded trace
 argument/motion branches; no renderer, navigation owner or state writer was added.
 
-The action picker currently opens files/folders/projects. There is no registered
-file-manager workflow runner to select; workflow actions remain explicitly pending,
-rather than accepting arbitrary shell strings. Tablet input, live folder previews,
-per-pane filters, remaining format imports and legacy-area migration remain active.
+The initial action picker opened files/folders/projects. Saved recipe actions now
+reuse the daemon execution protocol, as recorded below. Tablet input, remaining
+format imports and legacy-area migration remain active.
 
 
 ## Live folder pane delivery
@@ -359,3 +358,44 @@ owners intact rather than hiding them in a second browser abstraction.
 
 Tablet pressure input, recipe actions, additional artwork import adapters and
 legacy aggregate-project migration remain active work.
+
+
+## Saved recipe actions
+
+Click regions can select a saved clipboard recipe and an optional prompt in the
+same inline action picker. The summary explicitly identifies current clipboard
+hands as the input; this does not invent folder/selection workflows ahead of their
+planned model. Recipe discovery and execution reuse the daemon's existing
+ListRecipes/ExecuteRecipeWithPrompt protocol and pipeline executor. No shell
+commands, second execution engine or workbench application dependency are added.
+
+Only explicit activation dispatches execution. Editing, saving, hover and restart
+remain passive. Accepted execution retains its completion owner and blocks close;
+only queue admission retries. A lost reply reports an uncertain outcome rather
+than running again. Failures use the existing dismissible operation report, now
+also displayed on Home; successful operations add no redundant message.
+
+Legacy file-target regions migrate without changing IDs or geometry. Editing
+compares the captured original region as well as the board revision, preventing a
+stale draft from overwriting a changed region. Declared reference relocations
+retarget the draft and its captured original. Unfinished region edits require an
+explicit cancel/discard before Back/history/close can leave the surface.
+
+Validation: the complete file-manager library suite passes 1,042 tests (6 ignored),
+including delivery admission, hidden-read retirement, uncertain replies, legacy
+action migration, stale edits and draft close protection. Strict all-target Clippy,
+formatting and debug build pass. The 56 Home tests also pass after the final reference-merge regression. Native
+recipe workflows pass 12 observations in each appearance:
+`/tmp/home-recipe-dark-04/report.json` and
+`/tmp/home-recipe-light-02/report.json`. They verify explicit-only dispatch, exact
+name/prompt delivery, persistence, hover and visible failures without retries.
+
+Architecture comparison against `before-home-recipe-actions` keeps maximum and
+average complexity unchanged, lowers duplication by 0.01 points and adds no
+cycles. Separating action drafting from the manager removes the initial CCN25
+controller. Remaining flags are one necessary branch each in host tick/canvas
+and short transaction/test/admission snippets; the shared task, transport,
+mutation owner, state writer and action executor remain reused.
+
+The ordinary folder-region workflow also passes all 21 native observations after
+the action-schema change: `/tmp/home-regions-recipes-dark-01/report.json`.

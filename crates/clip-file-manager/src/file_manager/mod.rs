@@ -540,7 +540,7 @@ impl FileManager {
         };
         if let Some(target) = target.filter(|target| *target < self.history.len()) {
             if self.home_surface.open {
-                if !self.home_surface.session.allow_leave() {
+                if !self.home_surface.prepare_close() {
                     return;
                 }
                 self.home_surface.session.commit_labels();
@@ -612,6 +612,12 @@ impl FileManager {
         }
         self.tick_view_preferences(&local_state::IO);
         self.home_surface.tick(&local_state::IO);
+        if let Some(error) = self.home_surface.recipes.failure.take() {
+            self.edits.report = Some(edits::EditReport {
+                text: format!("Saved recipe failed: {error}"),
+                failed: true,
+            });
+        }
         self.tick_organization();
         self.tick_visibility();
         self.tick_search(jobs);

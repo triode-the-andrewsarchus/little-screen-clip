@@ -3,6 +3,7 @@ pub(in crate::file_manager) mod artwork;
 mod board;
 pub(in crate::file_manager) mod folders;
 pub(in crate::file_manager) mod projects;
+pub(in crate::file_manager) mod recipes;
 pub(in crate::file_manager) mod regions;
 mod session;
 use super::local_state;
@@ -103,7 +104,11 @@ impl State {
         self.validate()
     }
     fn reference(&mut self, pin: Pin) -> Uuid {
-        if let Some(old) = self.pins.iter().find(|old| old.path == pin.path) {
+        if let Some(old) = self
+            .pins
+            .iter()
+            .find(|old| old.id == pin.id || old.path == pin.path)
+        {
             return old.id;
         }
         let id = pin.id;
@@ -113,15 +118,26 @@ impl State {
     fn install_region(
         &mut self,
         mut region: regions::Region,
-        pin: Pin,
+        pin: Option<Pin>,
         expected: u64,
+        original: Option<regions::Region>,
     ) -> Result<(), String> {
         if expected != self.board.revision {
             return Err(
                 "Home changed in another window; reload before saving this click region".into(),
             );
         }
-        region.target = Some(self.reference(pin));
+        if self.board.regions.iter().find(|old| old.id == region.id) != original.as_ref() {
+            return Err(
+                "This click region changed; cancel the draft and reopen Edit action before saving"
+                    .into(),
+            );
+        }
+        if let Some(pin) = pin {
+            region.action = Some(regions::RegionAction::Open {
+                pin: self.reference(pin),
+            });
+        }
         if let Some(old) = self
             .board
             .regions
@@ -178,7 +194,8 @@ impl State {
                 region,
                 pin,
                 expected,
-            } => self.install_region(region, pin, expected)?,
+                original,
+            } => self.install_region(region, pin, expected, original.map(|value| *value))?,
             Change::Folder { pin, point } => {
                 let pin = self.reference(pin);
                 self.board.cards.push(Card {
@@ -233,8 +250,9 @@ enum Change {
     },
     Region {
         region: regions::Region,
-        pin: Pin,
+        pin: Option<Pin>,
         expected: u64,
+        original: Option<Box<regions::Region>>,
     },
     Remove(Uuid),
     Relocate(Vec<super::reference_updates::Relocation>),
@@ -265,6 +283,7 @@ pub(super) struct Home {
     pub folder_filters: BTreeSet<Uuid>,
     pub drop_rect: Option<egui::Rect>,
     pub region_ui: regions::Interaction,
+    pub recipes: recipes::Recipes,
     pub native_results: Vec<(u64, bool)>,
     path: Option<PathBuf>,
     state: State,
@@ -316,7 +335,8 @@ impl Home {
             || (self.session.dirty() && self.error.is_none())
     }
     pub fn writing(&self) -> bool {
-        self.relocations.writing()
+        self.recipes.writing()
+            || self.relocations.writing()
             || self.projects.writing()
             || self.session.dirty()
             || self.session.canvas.busy()
@@ -383,13 +403,19 @@ impl Home {
         });
         true
     }
-    pub fn save_region(&mut self, region: regions::Region, pin: Pin) -> bool {
+    pub fn save_region(
+        &mut self,
+        region: regions::Region,
+        pin: Option<Pin>,
+        original: Option<regions::Region>,
+    ) -> bool {
         if !self.ready() {
             return false;
         }
         self.queued = Some(Change::Region {
             region,
             pin,
+            original: original.map(Box::new),
             expected: self.session.board.revision,
         });
         true
@@ -424,6 +450,11 @@ impl Home {
         self.session.poll(ctx);
     }
     pub fn prepare_close(&mut self) -> bool {
+        if self.region_ui.draft.is_some() || self.region_ui.tracing {
+            self.region_ui.leave_notice = true;
+            self.open = true;
+            return false;
+        }
         if self.editing_allowed() {
             self.session.commit_labels();
         }
@@ -486,6 +517,7 @@ impl Home {
                             .map(|pin| (old.id, pin.id))
                     })
                     .collect();
+                self.region_ui.retarget(&state.pins, &replacements);
                 self.session
                     .references_relocated(&state.board, &state.pins, &replacements);
             }
@@ -562,10 +594,12 @@ impl Home {
     }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
         self.projects.tick(jobs);
+        self.recipes.tick();
         if !self.open {
             self.projects.previews.retire();
             self.artwork.retire();
             self.folders.retire();
+            self.recipes.retire_reads();
         }
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
@@ -676,19 +710,20 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             label: "Read notes".into(),
             points: vec![[0., 0.], [80., 0.], [40., 60.]],
-            target: None,
+            action: None,
             enabled: true,
         };
         let revision = state.board.revision;
         state
             .apply(super::Change::Region {
                 region: region.clone(),
-                pin: super::Pin::new(pin.path.clone(), true),
+                pin: Some(super::Pin::new(pin.path.clone(), true)),
                 expected: revision,
+                original: None,
             })
             .unwrap();
         assert_eq!(state.pins.len(), 1);
-        assert_eq!(state.board.regions[0].target, Some(pin.id));
+        assert_eq!(state.board.regions[0].pin(), Some(pin.id));
         assert_eq!(
             state.board.cards.len(),
             1,
@@ -705,7 +740,7 @@ mod tests {
                 std::path::Path::new("/tmp/new-notes"),
             )
             .unwrap();
-        assert_eq!(state.board.regions[0].target, Some(pin.id));
+        assert_eq!(state.board.regions[0].pin(), Some(pin.id));
         assert_eq!(state.pins[0].path, std::path::Path::new("/tmp/new-notes"));
         let saved = serde_json::to_vec(&state).unwrap();
         let restored: super::State = serde_json::from_slice(&saved).unwrap();
@@ -715,15 +750,16 @@ mod tests {
             state
                 .apply(super::Change::Region {
                     region,
-                    pin: pin.clone(),
-                    expected: revision
+                    pin: Some(pin.clone()),
+                    expected: revision,
+                    original: None,
                 })
                 .is_err()
         );
         state.apply(super::Change::Remove(pin.id)).unwrap();
         assert_eq!(state.board.regions.len(), 1);
         assert!(!state.board.regions[0].enabled);
-        assert!(state.board.regions[0].target.is_none());
+        assert!(state.board.regions[0].pin().is_none());
     }
     #[test]
     fn imported_artwork_keeps_source_references_and_independent_placement_through_moves() {
@@ -993,6 +1029,45 @@ mod session_delivery_tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn unsaved_region_requires_explicit_discard_before_leaving() {
+        let mut home = Home::default();
+        home.region_ui.draft = Some(super::regions::Draft::from_region(
+            super::regions::Region {
+                id: uuid::Uuid::new_v4(),
+                label: "Draft".into(),
+                points: vec![[0., 0.], [100., 0.], [0., 100.]],
+                enabled: true,
+                action: None,
+            },
+            &[],
+            None,
+        ));
+        assert!(!home.prepare_close());
+        assert!(home.open && home.region_ui.leave_notice);
+        home.region_ui.cancel();
+        assert!(home.prepare_close());
+    }
+    #[test]
+    fn region_edit_cannot_overwrite_changed_content_after_reloading_revision() {
+        let mut state = super::State::default();
+        let original = super::regions::Region {
+            id: uuid::Uuid::new_v4(),
+            label: "Original".into(),
+            points: vec![[0., 0.], [100., 0.], [0., 100.]],
+            enabled: true,
+            action: None,
+        };
+        state.board.regions.push(original.clone());
+        state.board.regions[0].label = "Changed elsewhere".into();
+        let expected = state.board.revision;
+        assert!(
+            state
+                .install_region(original.clone(), None, expected, Some(original))
+                .is_err()
+        );
+        assert_eq!(state.board.regions[0].label, "Changed elsewhere");
     }
     #[test]
     fn draft_changes_defer_close_until_the_accepted_state_is_published() {

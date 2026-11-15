@@ -2,17 +2,25 @@
 use super::*;
 use crate::file_manager::home::{
     Card,
-    regions::{Draft, Interaction, Region},
+    regions::{Draft, Interaction, Region, RegionAction},
 };
 use clip_studios::drawing_canvas::Viewport;
 
 pub(super) enum Activation {
-    Open(Uuid),
+    Run(RegionAction),
     Choose,
 }
 
 impl FileManager {
     pub(super) fn home_region_panel(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if self.home_surface.recipes.writing() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Running saved recipe…");
+            });
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
         let mut interaction = std::mem::take(&mut self.home_surface.region_ui);
         if !interaction.chooser.is_empty() {
             self.home_region_chooser(ui, &mut interaction);
@@ -20,12 +28,51 @@ impl FileManager {
         if interaction.open {
             self.home_region_list(ui, &mut interaction);
         }
-        if let Some(draft) = &mut interaction.draft {
-            let ready = self.home_surface.ready();
-            let mut save = false;
-            let mut cancel = false;
-            ui.group(|ui| {
-                ui.label("Click region · choose what it opens");
+        if interaction.leave_notice && interaction.draft.is_some() {
+            ui.horizontal(|ui| {
+                ui.label("This click region has not been saved.");
+                if ui.button("Keep editing region").clicked() {
+                    interaction.leave_notice = false;
+                }
+                if ui
+                    .add_enabled(
+                        !self.home_surface.busy(),
+                        clip_ui::buttons::ButtonRole::Destructive
+                            .button("Discard region draft", palette),
+                    )
+                    .clicked()
+                {
+                    interaction.cancel();
+                }
+            });
+        }
+        if let Some(draft) = &mut interaction.draft
+            && self.home_region_draft(ui, palette, draft)
+        {
+            interaction.draft = None;
+        }
+        if let Some(error) = &interaction.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        self.home_surface.region_ui = interaction;
+    }
+    /// Returns true only for an explicit Cancel; accepted saves own completion.
+    fn home_region_draft(&mut self, ui: &mut Ui, palette: &AppPalette, draft: &mut Draft) -> bool {
+        if let Some(target) = draft
+            .target
+            .as_ref()
+            .and_then(|old| self.home_surface.pins().iter().find(|pin| pin.id == old.id))
+            && draft.path != target.path.to_string_lossy()
+        {
+            draft.path = target.path.to_string_lossy().into_owned();
+            draft.folder = target.folder;
+            draft.target = Some(target.clone());
+        }
+        let ready = self.home_surface.ready();
+        let mut save = false;
+        let mut cancel = false;
+        ui.group(|ui| {
+                ui.label("Click region · choose an action");
                 ui.horizontal(|ui| {
                     ui.label("Name");
                     ui.add(egui::TextEdit::singleline(&mut draft.region.label).desired_width(240.0).char_limit(64));
@@ -35,27 +82,43 @@ impl FileManager {
                 });
                 self.home_region_targets(ui, draft);
                 ui.horizontal(|ui| {
-                    let valid = draft.region.valid() && draft.target.as_ref().is_some_and(|pin| pin.path.is_absolute());
+                    let valid = draft.valid();
                     save = ui.add_enabled(ready && valid,
                         clip_ui::buttons::ButtonRole::Primary.button("Save region", palette)).clicked();
                     cancel = ui.add_enabled(!self.home_surface.busy(),
                         clip_ui::buttons::ButtonRole::Secondary.button("Cancel region", palette)).clicked();
                 });
-                ui.weak("Opening happens only when you click the saved region. Editing or previewing never runs its action.");
+                ui.weak("Actions run only when you click the saved region. Editing or previewing never runs them.");
             });
-            if save && let Some(pin) = draft.target.clone() {
-                self.home_surface.save_region(draft.region.clone(), pin);
+        if save {
+            let mut region = draft.region.clone();
+            if draft.recipe {
+                region.action = Some(RegionAction::Recipe {
+                    name: draft.recipe_name.clone(),
+                    prompt: (!draft.prompt.is_empty()).then(|| draft.prompt.clone()),
+                });
             }
-            if cancel {
-                interaction.draft = None;
-            }
+            self.home_surface.save_region(
+                region,
+                if draft.recipe {
+                    None
+                } else {
+                    draft.target.clone()
+                },
+                draft.original.clone(),
+            );
         }
-        if let Some(error) = &interaction.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        self.home_surface.region_ui = interaction;
+        cancel
     }
-    fn home_region_targets(&self, ui: &mut Ui, draft: &mut Draft) {
+    fn home_region_targets(&mut self, ui: &mut Ui, draft: &mut Draft) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut draft.recipe, false, "Open file or folder");
+            ui.selectable_value(&mut draft.recipe, true, "Run saved recipe");
+        });
+        if draft.recipe {
+            self.home_region_recipe(ui, draft);
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("Choose target", |ui| {
                 if self.directory.is_some()
@@ -122,6 +185,59 @@ impl FileManager {
             ));
         }
     }
+    fn home_region_recipe(&mut self, ui: &mut Ui, draft: &mut Draft) {
+        let recipes = &mut self.home_surface.recipes;
+        recipes.load(false);
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_source("home_region_recipe")
+                .selected_text(if draft.recipe_name.is_empty() {
+                    "Choose a saved recipe"
+                } else {
+                    &draft.recipe_name
+                })
+                .show_ui(ui, |ui| {
+                    for name in &recipes.names {
+                        ui.selectable_value(&mut draft.recipe_name, name.clone(), name);
+                    }
+                });
+            if ui.button("Refresh recipes").clicked() {
+                recipes.load(true);
+            }
+            if recipes.loading() {
+                ui.spinner();
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        });
+        if let Some(error) = &recipes.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        ui.horizontal(|ui| {
+            ui.label("Optional prompt");
+            ui.add(
+                egui::TextEdit::singleline(&mut draft.prompt)
+                    .desired_width(350.0)
+                    .char_limit(4096),
+            );
+        });
+        ui.weak("Runs the saved recipe on the current clipboard hands. Only clicking the saved region starts it.");
+    }
+    pub(super) fn activate_home_region(&mut self, action: RegionAction) {
+        match action {
+            RegionAction::Open { pin } => {
+                if let Some(pin) = self
+                    .home_surface
+                    .pins()
+                    .iter()
+                    .find(|p| p.id == pin)
+                    .cloned()
+                {
+                    self.open_home_pin(pin);
+                }
+            }
+            RegionAction::Recipe { name, prompt } => self.home_surface.recipes.run(name, prompt),
+        }
+    }
     fn home_region_chooser(&mut self, ui: &mut Ui, interaction: &mut Interaction) {
         let mut chosen = None;
         let mut cancel = false;
@@ -136,33 +252,38 @@ impl FileManager {
                     .iter()
                     .find(|region| region.id == *id)
                     && region.enabled
-                    && let Some(pin) = region
-                        .target
-                        .and_then(|id| self.home_surface.pins().iter().find(|pin| pin.id == id))
+                    && let Some(action) = &region.action
                     && ui
-                        .button(format!("{} · {}", region.label, display_path(&pin.path)))
+                        .button(format!(
+                            "{} · {}",
+                            region.label,
+                            action_label(action, self.home_surface.pins())
+                        ))
                         .clicked()
                 {
-                    chosen = Some(pin.clone());
+                    chosen = Some(action.clone());
                 }
             }
             cancel = ui.button("Cancel choice").clicked();
         });
-        if let Some(pin) = chosen {
+        if let Some(action) = chosen {
             interaction.chooser.clear();
-            self.open_home_pin(pin);
+            self.activate_home_region(action);
         } else if cancel {
             interaction.chooser.clear();
         }
     }
     fn home_region_list(&mut self, ui: &mut Ui, interaction: &mut Interaction) {
-        let enabled = self.home_surface.editing_allowed();
+        let enabled = self.home_surface.editing_allowed() && interaction.draft.is_none();
         let regions = self.home_surface.session.board.regions.clone();
         ui.group(|ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong("Click regions");
                 ui.weak("Hold the right button and trace a closed outline on the desk to add one.");
-                if ui.button("Add region").clicked() {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Add region"))
+                    .clicked()
+                {
                     interaction.adding = true;
                     interaction.open = false;
                 }
@@ -195,23 +316,11 @@ impl FileManager {
                                 .add_enabled(enabled, egui::Button::new("Edit action"))
                                 .clicked()
                             {
-                                let pin = region
-                                    .target
-                                    .and_then(|id| {
-                                        self.home_surface.pins().iter().find(|pin| pin.id == id)
-                                    })
-                                    .cloned();
-                                let mut draft = Draft {
-                                    region: region.clone(),
-                                    target: None,
-                                    path: String::new(),
-                                    folder: true,
-                                    retrace: false,
-                                };
-                                if let Some(pin) = pin {
-                                    draft.choose(pin);
-                                }
-                                interaction.draft = Some(draft);
+                                interaction.draft = Some(Draft::from_region(
+                                    region.clone(),
+                                    self.home_surface.pins(),
+                                    Some(region.clone()),
+                                ));
                             }
                             if ui
                                 .add_enabled(
@@ -240,10 +349,8 @@ impl FileManager {
                                     .session
                                     .edit(|board| board.regions.retain(|old| old.id != region.id));
                             }
-                            if let Some(pin) = region.target.and_then(|id| {
-                                self.home_surface.pins().iter().find(|pin| pin.id == id)
-                            }) {
-                                ui.weak(display_path(&pin.path));
+                            if let Some(action) = &region.action {
+                                ui.weak(action_label(action, self.home_surface.pins()));
                             } else {
                                 ui.weak("No target · choose an action");
                             }
@@ -253,7 +360,6 @@ impl FileManager {
         });
     }
 }
-
 impl Interaction {
     pub(super) fn surface(
         &mut self,
@@ -297,7 +403,7 @@ impl Interaction {
             .rev()
             .filter(|region| {
                 region.enabled
-                    && region.target.is_some()
+                    && region.action.is_some()
                     && hover.is_some_and(|point| region.contains(point))
             })
             .collect();
@@ -350,7 +456,7 @@ impl Interaction {
             });
         if response.clicked() {
             if hits.len() == 1 {
-                return top.target.map(Activation::Open);
+                return top.action.clone().map(Activation::Run);
             }
             self.chooser = hits.iter().map(|region| region.id).collect();
             return Some(Activation::Choose);
@@ -401,7 +507,7 @@ impl Interaction {
                 id: Uuid::new_v4(),
                 label: "New click region".into(),
                 points,
-                target: None,
+                action: None,
                 enabled: true,
             };
             if self.error.is_none()
@@ -418,16 +524,19 @@ impl Interaction {
                     draft.region.points = region.points;
                     draft.retrace = false;
                 } else {
-                    self.draft = Some(Draft {
-                        region,
-                        target: None,
-                        path: String::new(),
-                        folder: true,
-                        retrace: false,
-                    });
+                    self.draft = Some(Draft::from_region(region, &[], None));
                 }
             }
         }
+    }
+}
+fn action_label(action: &RegionAction, pins: &[Pin]) -> String {
+    match action {
+        RegionAction::Open { pin } => pins.iter().find(|p| p.id == *pin).map_or_else(
+            || "Missing file reference".into(),
+            |p| display_path(&p.path),
+        ),
+        RegionAction::Recipe { name, .. } => format!("Run recipe · {name}"),
     }
 }
 fn live_control(card: &Card, viewport: &Viewport<'_>, point: egui::Pos2) -> bool {

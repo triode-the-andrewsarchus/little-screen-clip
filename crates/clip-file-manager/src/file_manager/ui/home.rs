@@ -25,6 +25,7 @@ impl FileManager {
         self.home_recovery(ui, palette);
         self.home_project_form(ui, palette);
         self.home_region_panel(ui, palette);
+        self.edit_status(ui, WorkbenchColors::from_palette(palette), palette);
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -510,10 +511,11 @@ impl FileManager {
         if let Some(source) = response.changed {
             session.edit(|board| board.drawing = source);
         }
+        let mut region_run = None;
         if let Some(activation) = region_activated {
             actions.clear();
-            if let regions::Activation::Open(pin) = activation {
-                actions.push(Action::Open(pin));
+            if let regions::Activation::Run(action) = activation {
+                region_run = Some(action);
             }
         } else if let Some(element) = response.activated
             && let Some(binding) = session
@@ -532,6 +534,9 @@ impl FileManager {
         home.folder_filters = folder_filters;
         self.home_surface = home;
         self.list_audio(play);
+        if let Some(action) = region_run {
+            self.activate_home_region(action);
+        }
         actions
     }
     fn home_actions(&mut self, actions: Vec<Action>) {
@@ -580,7 +585,7 @@ impl FileManager {
         }
     }
     fn open_home_pin(&mut self, pin: Pin) {
-        if !self.home_surface.session.allow_leave() {
+        if !self.home_surface.prepare_close() {
             return;
         }
         self.home_surface.session.commit_labels();
