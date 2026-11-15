@@ -429,8 +429,8 @@ Home now owns a small persisted tablet-stroke collection alongside its linked
 artwork, live cards and regions. Each stroke retains measured normalized pressure,
 local coordinates, world origin, brush width/color and marker state. Layout
 history/atomic writes own its persistence; source drawing JSON and imported files
-stay unchanged. Theme ink adapts at paint time, while authored colors retain their
-color. There are two brushes, three widths and four colors in the compact Ink
+stay unchanged. Theme ink derives from the central text palette at paint time, while authored
+colors retain their color. There are two brushes, three widths and four colors in the compact Ink
 menu. Mouse dragging cannot create strokes. Arrange and ordinary controls remain
 usable with the pen. Escape discards an unfinished stroke; accepted ink shares
 ordinary Undo/Redo and close protection.

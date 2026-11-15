@@ -24,11 +24,9 @@ impl Color {
     ) -> clip_ui::vectors::femtovg::Color {
         let [r, g, b] = match self {
             Self::Theme => {
-                if palette.is_dark {
-                    [232, 232, 236]
-                } else {
-                    [30, 30, 34]
-                }
+                let ink =
+                    clip_ui::ui_appearance::WorkbenchColors::from_palette(palette).text_primary;
+                [ink.r(), ink.g(), ink.b()]
             }
             Self::Teal => [47, 159, 162],
             Self::Amber => [213, 155, 43],
