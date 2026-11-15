@@ -33,7 +33,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       and clickable artwork without copying its renderer/editor.
 - [x] C2. Home canvas: migration, free arrangement, artwork shortcuts, named
       sections, live card placement, view state, undo/redo and deliberate editing.
-- [ ] C3. Versioned `.fmproject`, safe create/register workflow, no-overwrite
+- [x] C3. Versioned `.fmproject`, safe create/register workflow, no-overwrite
       README/TODO defaults and local global project registry.
 - [ ] C4. Bounded live project/TODO views, source-backed checkboxes, refresh/error
       handling and project-area membership from the registry.
@@ -218,3 +218,42 @@ still-focused input does not rely on a later focus-loss frame to become durable.
 
 C2 is complete. C3–C9 remain open: this is an editable personal desk with ordinary
 file/folder references, not yet the project/TODO or organization delivery.
+
+### C3 project manifests and registry
+
+Home Add now creates a project in the currently browsed ordinary folder or
+registers an existing `.fmproject`. Creation has an inline title/path form;
+existing README/TODO documents are preserved and only missing defaults are
+created. A Projects menu exposes the global local registry, folder opening,
+non-destructive unregister and refresh. Copied IDs require an explicit inline
+location choice tied to the previously observed folder. The versioned manifest,
+relative-reference confinement, bounds, partial-failure behavior and local-state
+contract are documented in `projects.md`.
+
+Creation and registry changes run off the UI thread with unbounded accepted
+write ownership and participate in the application close gate. The existing
+pinned-directory create/write routines and shared local-state transport are
+reused. Unknown/malformed metadata, symlinks and unsafe document parents are
+rejected without replacing the original input.
+
+- Focused Home tests: 28 passed (`/tmp/phase8-project-tests.log`).
+- Full file-manager tests: 987 passed, zero failed, 6 ignored
+  (`/tmp/phase8-project-all-tests.log`). New tests verify existing CRLF documents,
+  no-overwrite creation, symlink/escape rejection, future manifest/registry
+  preservation, registry merge, explicit relocation, restart and accepted-write
+  ownership through unregister.
+- Strict file-manager Clippy passed (`/tmp/phase8-project-clippy.log`).
+- Native dark workflow passed 19 observations:
+  `/tmp/phase8-project-dark-04/report.json`. Creation, restart, unregister,
+  re-registration, copied-ID conflict, explicit relocation and folder opening
+  are checked against the real files and registry. Light-theme forms were
+  visually inspected; its full workflow is being rerun with tighter OCR crops
+  for bordered/colored buttons. Earlier failures were OCR target/label issues,
+  retained in the corresponding `/tmp/phase8-project-*` reports.
+- Architecture comparison has no new excessive-complexity function after
+  separating project controls from ordinary Home pin controls. The aggregate
+  baseline still reports the three previously documented short clone groups;
+  project work adds none. Duplication percentage is down 0.03 points overall.
+
+C3 is complete. Live project content/checkboxes are still C4, rather than being
+claimed from the project menu or manifest foundation.

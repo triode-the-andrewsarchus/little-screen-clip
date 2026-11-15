@@ -8,7 +8,7 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 from file_manager_phase4_acceptance import click_word as sparse_click
 
 
-def click_word(session, shot, word, *, minimum_y=85, maximum_y=None):
+def click_word(session, shot, word, *, minimum_y=85, maximum_y=None, control_bounds=None):
     try:
         sparse_click(session, shot, word, minimum_y=minimum_y, maximum_y=maximum_y)
     except RuntimeError:
@@ -29,9 +29,9 @@ def click_word(session, shot, word, *, minimum_y=85, maximum_y=None):
                 if point and (maximum_y is None or point[1] < maximum_y):
                     session.click(point[0] + 5, point[1]); return
         controls = {"Arrange":(400,104,462,131), "Undo":(540,104,584,131), "Redo":(606,104,649,131), "Fit":(670,104,695,131), "Link":(105,148,230,174)}
-        if minimum_y < 145 and word in controls:
+        if control_bounds is not None or (minimum_y < 145 and word in controls):
             name = shot + "-control"
-            bounds = controls[word]
+            bounds = control_bounds or controls[word]
             with Image.open(session.output / f"{shot}.png") as picture:
                 isolated = Image.new("L", picture.size, 255)
                 isolated.paste(ImageOps.autocontrast(picture.crop(bounds).convert("L")), bounds[:2])

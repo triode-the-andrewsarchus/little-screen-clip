@@ -1,0 +1,136 @@
+//! Project controls remain inline; project content stays in its own folder.
+use super::*;
+
+impl FileManager {
+    pub(super) fn home_project_add_actions(&mut self, ui: &mut Ui, can_pin: bool) {
+        let can_project = can_pin
+            && self.home_surface.projects.ready()
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| !directory.system);
+        if ui
+            .add_enabled(
+                can_project,
+                egui::Button::new("Create project in current folder…"),
+            )
+            .clicked()
+        {
+            let folder = self.path().to_path_buf();
+            let title = folder
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "My project".into());
+            self.home_surface.projects.form = Some((folder, title));
+            ui.close_menu();
+        }
+        if ui
+            .add_enabled(
+                can_project,
+                egui::Button::new("Register current folder's project"),
+            )
+            .clicked()
+        {
+            self.home_surface
+                .projects
+                .register(self.path().to_path_buf(), None);
+            ui.close_menu();
+        }
+    }
+    pub(super) fn home_projects_menu(&mut self, ui: &mut Ui) {
+        let mut open = None;
+        let projects = &mut self.home_surface.projects;
+        ui.menu_button("Projects", |ui| {
+            if projects.records().is_empty() {
+                ui.weak("No registered projects");
+            }
+            let mut remove = None;
+            for project in projects.records() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(&project.title)
+                        .on_hover_text(project.folder.display().to_string())
+                        .clicked()
+                    {
+                        open = Some(project.folder.clone());
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(projects.ready(), egui::Button::new("Unregister"))
+                        .on_hover_text("Remove the local reference; keep every project file")
+                        .clicked()
+                    {
+                        remove = Some(project.id);
+                        ui.close_menu();
+                    }
+                });
+            }
+            if let Some(id) = remove {
+                projects.remove(id);
+            }
+            ui.separator();
+            if ui
+                .add_enabled(!projects.busy(), egui::Button::new("Refresh project list"))
+                .clicked()
+            {
+                projects.refresh();
+                ui.close_menu();
+            }
+        });
+        if let Some(folder) = open
+            && self.home_surface.session.allow_leave()
+        {
+            self.navigate(folder, Navigation::New);
+        }
+    }
+    pub(super) fn home_project_form(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let projects = &mut self.home_surface.projects;
+        let ready = projects.ready();
+        if let Some((folder, title)) = &mut projects.form {
+            let mut create = false;
+            let mut cancel = false;
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Create a project here");
+                ui.label(folder.display().to_string());
+                ui.label("Existing README/TODO files will be kept. Missing documents and .fmproject will be created in this folder.");
+                ui.horizontal(|ui| {
+                    ui.label("Title");
+                    ui.add(egui::TextEdit::singleline(title).char_limit(128).desired_width(300.0));
+                    create = ui.add_enabled(ready && !title.trim().is_empty(), clip_ui::buttons::ButtonRole::Primary.button("Create project", palette)).clicked();
+                    cancel = ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette)).clicked();
+                });
+            });
+            if create {
+                let (folder, title) = projects.form.take().expect("visible project form");
+                projects.register(folder, Some(title));
+            } else if cancel {
+                projects.form = None;
+            }
+        }
+        if let Some(conflict) = &projects.conflict {
+            let mut accept = false;
+            let mut cancel = false;
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong(format!("{} is registered at another location", conflict.project.title));
+                ui.label(format!("Current: {}", conflict.previous.display()));
+                ui.label(format!("Chosen: {}", conflict.project.folder.display()));
+                ui.label("Use the chosen folder for this project ID? The previous folder and its files will be kept.");
+                ui.horizontal(|ui| {
+                    accept = ui.add_enabled(ready, clip_ui::buttons::ButtonRole::Primary.button("Use this location", palette)).clicked();
+                    cancel = ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette)).clicked();
+                });
+            });
+            if accept {
+                projects.relocate();
+            } else if cancel {
+                projects.conflict = None;
+            }
+        }
+        if let Some(error) = &projects.error {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Projects: {error}"));
+            if ui.button("Reload project registry").clicked() {
+                projects.refresh();
+            }
+        }
+    }
+}

@@ -4,6 +4,7 @@ use crate::file_manager::home::{Board, Content, Pin};
 use little_clip_core::diagram::drawing::Bounds;
 use uuid::Uuid;
 mod cards;
+mod projects;
 use cards::{Action, Renderer};
 
 impl FileManager {
@@ -29,6 +30,7 @@ impl FileManager {
             return;
         }
         self.home_recovery(ui, palette);
+        self.home_project_form(ui, palette);
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -103,6 +105,7 @@ impl FileManager {
             {
                 session.canvas.fit();
             }
+            self.home_projects_menu(ui);
             if self.home_surface.busy() {
                 ui.spinner();
             }
@@ -118,6 +121,7 @@ impl FileManager {
             && !self.search.open
             && !self.filesystem_busy();
         ui.menu_button("Add", |ui| {
+            self.home_project_add_actions(ui, can_pin);
             if ui
                 .add_enabled(can_pin, egui::Button::new("Pin current folder"))
                 .clicked()

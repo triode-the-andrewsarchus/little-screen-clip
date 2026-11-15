@@ -1,5 +1,6 @@
 //! Deliberately pinned path references, separate from clipboard and folder views.
 mod board;
+mod projects;
 mod session;
 use super::local_state;
 pub(in crate::file_manager) use board::{Board, Card, Content};
@@ -143,6 +144,7 @@ struct Pending {
 pub(super) struct Home {
     pub open: bool,
     pub session: Session,
+    pub projects: projects::Projects,
     pub opening: Option<PathBuf>,
     path: Option<PathBuf>,
     state: State,
@@ -162,6 +164,7 @@ impl Home {
     }
     fn new(path: PathBuf) -> Self {
         Self {
+            projects: projects::Projects::new(path.with_file_name("projects.json")),
             path: Some(path),
             reload: true,
             ..Self::default()
@@ -174,14 +177,16 @@ impl Home {
         &self.state.pins
     }
     pub fn busy(&self) -> bool {
-        self.reload
+        self.projects.busy()
+            || self.reload
             || self.pending.is_some()
             || self.queued.is_some()
             || self.session.canvas.busy()
             || (self.session.dirty() && self.error.is_none())
     }
     pub fn writing(&self) -> bool {
-        self.session.dirty()
+        self.projects.writing()
+            || self.session.dirty()
             || self.session.canvas.busy()
             || self.queued.is_some()
             || self
@@ -195,6 +200,7 @@ impl Home {
     pub fn reload(&mut self) {
         if !self.writing() {
             self.reload = self.path.is_some();
+            self.projects.refresh();
         }
     }
     pub fn add(&mut self, pins: Vec<Pin>) {
@@ -288,6 +294,7 @@ impl Home {
         }
     }
     pub fn tick(&mut self, jobs: &BackgroundJobs) {
+        self.projects.tick(jobs);
         if let Some(result) = self.pending.as_ref().and_then(|p| p.task.poll()) {
             let pending = self.pending.take().expect("polled Home task");
             match result {
