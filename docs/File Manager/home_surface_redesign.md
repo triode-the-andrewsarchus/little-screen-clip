@@ -552,7 +552,10 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   removes the selected section and its picker. Native checks follow below.
 - [x] Enable folder-pane controls while arranging. Their control row remains
   interactive; the separate placement header still owns dragging.
-- [ ] Support Delete/Undo and direct editing after reopening.
+- [x] Support Delete/Undo and direct editing after reopening. Card selection,
+  placement, resizing and its label inspector work outside Arrange, including
+  restored sections and folder shortcuts. Shortcuts select on click and open on
+  double-click/Enter; middle/right drags do not move cards.
 - [ ] Preserve the camera when adding placements.
 - [ ] Bound Home zoom/pan and its grid to a useful workspace.
 - [ ] Offer project versus folder-preview choices for folder drops.

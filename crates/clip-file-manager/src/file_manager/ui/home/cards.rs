@@ -130,47 +130,27 @@ impl Renderer<'_, '_> {
         self.menu(&response, card, actions);
         self.resize(ui, rect, card, actions);
     }
-    fn movable(&self, card: &Card) -> bool {
-        self.arrange
-            || matches!(
-                card.content,
-                Content::Artwork { .. }
-                    | Content::Folder { .. }
-                    | Content::Project { .. }
-                    | Content::Projects { .. }
-            )
-    }
     fn input(&self, ui: &Ui, response: &egui::Response, card: &Card, actions: &mut Vec<Action>) {
-        if self.enabled {
-            let movable = self.movable(card);
-            if movable {
-                response
-                    .clone()
-                    .on_hover_cursor(egui::CursorIcon::Grab)
-                    .on_hover_text("Drag to move · click to show the resize handle");
-            } else if matches!(card.content, Content::Shortcut { .. }) {
-                response
-                    .clone()
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-            }
-            if response.clicked() {
-                response.request_focus();
-                if movable {
-                    actions.push(Action::Select(card.id));
-                } else if let Content::Shortcut { pin, .. } = card.content {
-                    actions.push(Action::Open(pin));
-                }
-            }
-            if response.has_focus()
-                && key(ui.ctx(), Modifiers::NONE, Key::Enter)
-                && let Content::Shortcut { pin, .. } = card.content
-            {
-                actions.push(Action::Open(pin));
-            }
-            if movable {
-                self.drag(ui, response, card.id, false, actions);
-            }
+        if !self.enabled {
+            return;
         }
+        response
+            .clone()
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text(
+                "Click to select · drag to move · double-click or Enter to open a shortcut",
+            );
+        if response.clicked() {
+            response.request_focus();
+            actions.push(Action::Select(card.id));
+        }
+        if (response.double_clicked()
+            || (response.has_focus() && key(ui.ctx(), Modifiers::NONE, Key::Enter)))
+            && let Content::Shortcut { pin, .. } = card.content
+        {
+            actions.push(Action::Open(pin));
+        }
+        self.drag(ui, response, card.id, false, actions);
     }
     fn menu(&self, response: &egui::Response, card: &Card, actions: &mut Vec<Action>) {
         response.context_menu(|ui| {
@@ -198,10 +178,7 @@ impl Renderer<'_, '_> {
                 }
             }
             if ui
-                .add_enabled(
-                    self.enabled && self.movable(card),
-                    egui::Button::new("Remove from desk"),
-                )
+                .add_enabled(self.enabled, egui::Button::new("Remove from desk"))
                 .clicked()
             {
                 actions.push(Action::Remove(card.id));
@@ -211,7 +188,7 @@ impl Renderer<'_, '_> {
     }
     fn resize(&self, ui: &Ui, rect: Rect, card: &Card, actions: &mut Vec<Action>) {
         let scale = self.viewport.scale() as f32;
-        if self.selected == Some(card.id) && self.movable(card) {
+        if self.selected == Some(card.id) {
             ui.painter().rect_stroke(
                 rect,
                 9.0,
@@ -243,10 +220,10 @@ impl Renderer<'_, '_> {
         resize: bool,
         actions: &mut Vec<Action>,
     ) {
-        if response.drag_started() {
+        if response.drag_started_by(egui::PointerButton::Primary) {
             actions.push(Action::Begin(id));
         }
-        if response.dragged() {
+        if response.dragged_by(egui::PointerButton::Primary) {
             let delta = ui.input(|input| input.pointer.delta());
             actions.push(Action::Drag(
                 id,
@@ -257,7 +234,7 @@ impl Renderer<'_, '_> {
                 resize,
             ));
         }
-        if response.drag_stopped() {
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
             actions.push(Action::End);
         }
     }

@@ -31,7 +31,7 @@ impl FileManager {
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if self.home_surface.session.arrange {
+        if self.home_surface.session.arrange || self.home_surface.session.selected.is_some() {
             self.home_inspector(ui, palette);
         }
         ui.separator();
@@ -406,7 +406,7 @@ impl FileManager {
             }
             return true;
         }
-        if editing && session.arrange && !session.canvas.busy() {
+        if editing && !session.canvas.busy() {
             home_edit_keys(ui.ctx(), session);
         }
         false
@@ -700,13 +700,13 @@ fn board_extent(board: &Board) -> Bounds {
         angle: 0.0,
     }
 }
-fn exclusions(board: &Board, selected: Option<Uuid>, arrange: bool) -> Vec<Bounds> {
+fn exclusions(board: &Board, selected: Option<Uuid>, _arrange: bool) -> Vec<Bounds> {
     let mut bounds = Vec::new();
     for card in &board.cards {
         let mut bound = card.bounds();
         if matches!(card.content, Content::Section { .. }) {
             bound.height = 40.0;
-            if arrange && selected == Some(card.id) {
+            if selected == Some(card.id) {
                 bounds.push(Bounds {
                     x: card.rect[0] + card.rect[2] - 16.0,
                     y: card.rect[1] + card.rect[3] - 16.0,
