@@ -250,6 +250,65 @@ impl Session {
             }
         });
     }
+    pub fn split_projects(
+        &mut self,
+        id: Uuid,
+        projects: &[super::projects::Record],
+    ) -> Result<(), String> {
+        let Some(index) = self
+            .board
+            .cards
+            .iter()
+            .position(|card| card.id == id && matches!(card.content, Content::Projects { .. }))
+        else {
+            return Err("The shared Projects area is no longer available".into());
+        };
+        if projects.is_empty() {
+            return Err("Register a project before splitting this area".into());
+        }
+        let existing: BTreeSet<_> = self
+            .board
+            .cards
+            .iter()
+            .filter_map(|card| match card.content {
+                Content::Project { project, .. } => Some(project),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<_> = projects
+            .iter()
+            .filter(|project| !existing.contains(&project.id))
+            .collect();
+        if self.board.cards.len() - 1 + missing.len() > 1024 {
+            return Err(
+                "Home has no room for more panels; remove a placement before splitting".into(),
+            );
+        }
+        let [x, y, width, _] = self.board.cards[index].rect;
+        let columns = ((width / 540.0).floor() as usize).clamp(1, 3);
+        let cards = missing
+            .into_iter()
+            .enumerate()
+            .map(|(i, project)| Card {
+                id: Uuid::new_v4(),
+                rect: [
+                    (x + (i % columns) as f64 * 540.0).clamp(-1e8, 1e8),
+                    (y + (i / columns) as f64 * 300.0).clamp(-1e8, 1e8),
+                    520.0,
+                    280.0,
+                ],
+                content: Content::Project {
+                    project: project.id,
+                    title: project.title.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+        self.edit(|board| {
+            board.cards.splice(index..=index, cards);
+        });
+        self.selected = None;
+        Ok(())
+    }
     pub fn remove_selected(&mut self) {
         if let Some(id) = self.selected.take() {
             self.edit(|board| board.cards.retain(|card| card.id != id));
@@ -465,6 +524,69 @@ mod tests {
             board.cards[0].rect[0] + 96.0
         );
         assert_eq!(session.board.revision, 9);
+    }
+    #[test]
+    fn split_project_area_keeps_sources_existing_panels_and_one_undo_step() {
+        let projects: Vec<_> = ["One", "Two", "Three"]
+            .into_iter()
+            .map(|title| super::super::projects::Record {
+                id: Uuid::new_v4(),
+                title: title.into(),
+                folder: format!("/projects/{title}").into(),
+            })
+            .collect();
+        let aggregate = Card {
+            id: Uuid::new_v4(),
+            rect: [100., 200., 1100., 600.],
+            content: Content::Projects {
+                title: "Projects".into(),
+            },
+        };
+        let individual = Card {
+            id: Uuid::new_v4(),
+            rect: [-400., 50., 500., 300.],
+            content: Content::Project {
+                project: projects[0].id,
+                title: "Already placed".into(),
+            },
+        };
+        let mut session = Session::default();
+        session.install(&Board {
+            cards: vec![aggregate.clone(), individual.clone()],
+            ..Default::default()
+        });
+        let before = session.board.clone();
+        session.split_projects(aggregate.id, &projects).unwrap();
+        assert_eq!(session.board.cards.len(), 3);
+        assert_eq!(session.board.cards[2], individual);
+        assert_eq!(session.board.cards[0].rect, [100., 200., 520., 280.]);
+        assert_eq!(session.board.cards[1].rect, [640., 200., 520., 280.]);
+        assert_ne!(session.board.cards[0].id, session.board.cards[1].id);
+        session.board.validate(&[]).unwrap();
+        let split = session.board.clone();
+        session.undo();
+        assert_eq!(session.board, before);
+        session.redo();
+        assert_eq!(session.board, split);
+        assert!(session.split_projects(aggregate.id, &projects).is_err());
+    }
+    #[test]
+    fn splitting_an_empty_project_area_keeps_the_legacy_layout() {
+        let aggregate = Card {
+            id: Uuid::new_v4(),
+            rect: [0., 0., 500., 500.],
+            content: Content::Projects {
+                title: "Projects".into(),
+            },
+        };
+        let mut session = Session::default();
+        session.install(&Board {
+            cards: vec![aggregate.clone()],
+            ..Default::default()
+        });
+        assert!(session.split_projects(aggregate.id, &[]).is_err());
+        assert_eq!(session.board.cards, vec![aggregate]);
+        assert!(!session.can_undo());
     }
     #[test]
     fn resizing_is_bounded_and_cancelling_a_drag_restores_the_whole_card() {

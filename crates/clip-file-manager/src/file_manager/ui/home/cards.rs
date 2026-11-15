@@ -7,6 +7,7 @@ mod projects;
 
 pub(in crate::file_manager::ui) enum Action {
     Open(Uuid),
+    SplitProjects(Uuid),
     Select(Uuid),
     Begin(Uuid),
     Drag(Uuid, [f64; 2], bool),

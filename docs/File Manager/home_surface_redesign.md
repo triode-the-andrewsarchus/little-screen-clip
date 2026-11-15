@@ -34,7 +34,7 @@ it must not force the user to design their space from a small shape toolbox.
   guarded folder/file navigation and the existing workflow mechanism; actions run
   only on deliberate activation, never during import, layout or preview. Do not
   encode arbitrary shell strings as a substitute for workflows.
-- [ ] Let each project and its components, especially its live source-backed TODO,
+- [x] Let each project and its components, especially its live source-backed TODO,
   be placed/resized independently. The registry discovers projects; it does not
   dictate a single enclosing Projects box or copy tasks into Home state.
 - [x] Add live folder panes using the existing file-preview row mechanisms and
@@ -399,3 +399,25 @@ mutation owner, state writer and action executor remain reused.
 
 The ordinary folder-region workflow also passes all 21 native observations after
 the action-schema change: `/tmp/home-regions-recipes-dark-01/report.json`.
+
+
+## Shared project-area migration
+
+Old Projects areas now offer an explicit **Split into individual panels** action.
+It preserves existing individual placements and adds only the remaining registered
+projects, using their stable IDs and independent TODO-panel geometry. The original
+area is replaced in one layout-history step. Undo restores it, without undoing
+source-backed task writes. Empty/unavailable registries cannot erase an area;
+opening Home never silently migrates it. No registry, artwork or project file is
+rewritten by splitting.
+
+All 58 Home tests pass, including independent geometry, duplicate avoidance,
+empty-registry preservation and undo/redo identity. The native workflow passes
+seven observations in both appearances, including editing the real TODO after
+splitting, layout undo/redo and restart with source-byte checks:
+`/tmp/home-project-split-dark-01/report.json` and
+`/tmp/home-project-split-light-02/report.json`. Strict all-target Clippy, formatting
+and debug build pass. Architecture metrics retain average/max complexity and
+duplication. The analyzer flags short fixture/history snippets and reorders
+pre-existing cycle members in untouched files; no new runtime dependency or owner
+is introduced.

@@ -27,6 +27,16 @@ impl Renderer<'_, '_> {
         style.spacing.icon_width = (16.0 * scale).max(10.0);
         style.spacing.icon_width_inner = (10.0 * scale).max(6.0);
         style.wrap = Some(false);
+        if matches!(card.content, Content::Projects { .. }) {
+            if live.add_enabled(self.enabled && projects.ready() && !projects.records().is_empty(),
+                clip_ui::buttons::ButtonRole::Secondary.button("Split into individual panels", self.palette).small())
+                .on_hover_text("Keep existing project panels and place the remaining TODO lists separately. Undo restores this area. Project files stay unchanged.")
+                .clicked()
+            {
+                actions.push(Action::SplitProjects(card.id));
+            }
+            live.separator();
+        }
         let (records, previews) = projects.preview_parts();
         let records: Vec<_> = records
             .iter()

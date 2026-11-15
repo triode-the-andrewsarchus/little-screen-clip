@@ -553,6 +553,15 @@ impl FileManager {
                         self.open_home_pin(pin);
                     }
                 }
+                Action::SplitProjects(id) => {
+                    if let Err(error) = self
+                        .home_surface
+                        .session
+                        .split_projects(id, self.home_surface.projects.records())
+                    {
+                        self.home_surface.error = Some(error);
+                    }
+                }
                 Action::Unpin(id) => self.home_surface.remove(id),
                 Action::OpenDocument(path) => self.open_home_pin(Pin::new(path, false)),
                 Action::OpenFolder(path) => self.open_home_pin(Pin::new(path, true)),
