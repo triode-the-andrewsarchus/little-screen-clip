@@ -95,9 +95,9 @@ impl Camera {
             * 0.25)
             .clamp(0.025, 0.25);
         self.scale = self.scale.clamp(minimum, 16.);
-        for axis in 0..2 {
-            self.center[axis] = self.center[axis]
-                .clamp(workspace.origin[axis], workspace.origin[axis] + size[axis]);
+        for (axis, size) in size.into_iter().enumerate() {
+            self.center[axis] =
+                self.center[axis].clamp(workspace.origin[axis], workspace.origin[axis] + size);
         }
         workspace
     }
