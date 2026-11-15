@@ -577,3 +577,23 @@ controller or new dependency. Approximately 74 GiB of disk space remains free.
   preview/project installations finish before the Copy-only handoff is retired;
   unaccepted choices may cancel. The placement regression now exercises close
   during classification and queued installation.
+
+Second-review validation: all 1,056 file-manager tests and 852 shared-studio tests
+pass (6 and 12 ignored respectively). Strict all-target Clippy for both crates,
+workspace formatting and the debug file-manager build pass without warnings. The
+final close assertions pass separately in the folder-drop regression.
+
+Native private-desktop checks pass for both folder-drop choices, explicit project
+creation, independent preview/TODO placement, restart persistence and untouched
+source content: `/tmp/home-folder-drop-dark-05/report.json`. The restored-object,
+Delete/Undo, editable label, folder controls, repeated color changes and aligned
+left-sidebar workflow passes in dark mode:
+`/tmp/home-round2-native-dark-05/report.json`.
+
+Architecture comparison keeps average/max complexity and duplication percentage
+unchanged. The added clone is native test setup; other reported clones are existing
+host wiring and fixture patterns. The canvas gains one popup guard, and the drop
+admission method now owns guarded worker classification. There is no second
+preview or project controller, new dependency, or changed document-editor camera.
+Physical tablet input remains unverified. Disk space remains approximately 74 GiB
+free.
