@@ -43,7 +43,7 @@ This specific registry-backed area does not introduce the Phase 10 query engine.
       independent from session state and visibility.
 - [x] C7. `.hide`/`.show` syntax, precedence/inheritance, selective dotfile reveal,
       labeled solid backgrounds and an obvious recovery/ignore-rules control.
-- [ ] C8. Home browser history/startup behavior; defined/tested rename/move/restart
+- [x] C8. Home browser history/startup behavior; defined/tested rename/move/restart
       handling for pins, marks, sets and project identities.
 - [ ] C9. Realistic review fixtures, native interaction/visual verification in both
       themes, affected tests plus workspace gate, strict Clippy, formatting,
@@ -603,3 +603,20 @@ not read or written by reference retargeting.
   C8 remains unchecked until these results are inspected.
 
 C8 native acceptance and C9 final integration/review fixtures remain open.
+
+### C8 final native reference acceptance
+
+- [x] Final native runs passed all 26 observations in both appearances:
+  `/tmp/phase8-relocations-dark-05/report.json` and
+  `/tmp/phase8-relocations-light-05/report.json`.
+  Confirmed file rename and cut/paste retarget Home, session marks and sets;
+  copying does not. Project-folder rename preserves the manifest UUID and
+  retargets its registry and shortcut. Updated shortcuts open the correct file
+  and project after restart. Source payloads remain unchanged.
+- Holding the real Home writer lock causes an explicit metadata failure after
+  the filesystem rename has completed. Close is refused, and Retry changes only
+  metadata. The final driver selects the file-list folder label rather than its
+  duplicate sidebar navigation label; earlier failures navigated into the folder
+  before F2 and did not exercise a rename.
+
+C8 is complete. C9 integration/review and final workspace gates remain open.

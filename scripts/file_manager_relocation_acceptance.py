@@ -8,6 +8,7 @@ import uuid
 import ui_acceptance_capture as private
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_home_acceptance import click_word, enter_home
+from file_manager_phase4_acceptance import click_word as list_click
 from file_manager_session_acceptance import close_shelf, line_count
 
 
@@ -19,7 +20,8 @@ def pin_path(state,identifier):
 
 
 def rename(session,shot,source,name,label):
-    click_word(session,shot,source,minimum_y=230)
+    # The folder also appears in the sidebar; choose the final visible row label.
+    list_click(session,shot,source,last=True,minimum_y=230)
     session.key("F2")
     session.observe(label+"-dialog",["Rename","Name:"])
     session.key("a","ctrl")
@@ -47,7 +49,7 @@ def exercise(session,root,binary,appearance):
     enter_home(session,"seeded-ready")
     session.observe("pinned-home",["source.txt","project-old","Back to folder"])
     wait_for(lambda:load(state/"home.json")["version"]==2,"legacy pins migrated")
-    click_word(session,"pinned-home","Back",minimum_y=85,maximum_y=145)
+    session.key("Escape")
     session.observe("before-rename",["source.txt","project-old"])
     lock=open(state/".home.lock","a+b");fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     rename(session,"before-rename","source.txt","renamed.txt","file-rename")
@@ -73,10 +75,18 @@ def exercise(session,root,binary,appearance):
     session.observe("copy-target",["copies","Name"])
     session.key("v","ctrl")
     wait_for(lambda:(root/"copies/renamed.txt").exists(),"file copied")
-    session.observe("copied",["renamed.txt","1 completed"])
+    session.observe("copied",["renamed.txt"])
     assert pin_path(state,file_pin)==str(renamed)
     assert line_count(session,"copied",green)==0,"copies must not inherit the source's mark"
-    session.address(root);session.observe("move-source",["renamed.txt","project-old"])
+    # Successful close proves transfer completion and all accepted metadata writes
+    # were delivered, independently of a clipped compact operation-report dock.
+    session.close()
+    assert pin_path(state,file_pin)==str(renamed)
+    assert load(state/"organization.json")["session"]["marks"][0]["target"]["path"]==str(renamed)
+    session.restart(binary,root)
+    text=session.observe("move-restart",["project-old","Home"])
+    close_shelf(session,"move-restart",text)
+    session.observe("move-source",["renamed.txt","project-old"])
     click_word(session,"move-source","renamed.txt",minimum_y=230)
     session.key("x","ctrl");session.address(root/"moved")
     session.observe("move-target",["moved","Name"]);session.key("v","ctrl")
