@@ -597,3 +597,9 @@ admission method now owns guarded worker classification. There is no second
 preview or project controller, new dependency, or changed document-editor camera.
 Physical tablet input remains unverified. Disk space remains approximately 74 GiB
 free.
+
+The same restored-object workflow also passes in light mode, with an additional
+native drag proving a restored folder shortcut can move outside Arrange:
+`/tmp/home-round2-native-light-03/report.json`. Both modes verify repeated color
+changes through the still-open popup and aligned region action columns. The
+committed native acceptance scripts reproduce these checks on private desktops.
