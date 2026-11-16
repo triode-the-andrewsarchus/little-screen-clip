@@ -61,7 +61,7 @@ def click_word(session, shot, word, *, tree=False):
                 break
     if position is None:
         # Rounded small buttons can disappear in full-window segmentation.
-        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380)]:
+        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (820, 505, 888, 520)]:
             crop = session.output / 'drive-button.png'
             with Image.open(session.output / (shot + '.png')) as screen:
                 region = screen.crop(bounds)
@@ -90,7 +90,7 @@ def drive_menu(session, label):
 
 def exercise(session, root):
     env = session.env
-    session.ocr_regions = [('drive-confirm-ocr.png', (105, 270, 225, 325)), ('drive-dialog-buttons-ocr.png', (105, 230, 305, 380))]
+    session.ocr_regions = [('drive-confirm-ocr.png', (105, 270, 225, 325)), ('drive-dialog-buttons-ocr.png', (105, 230, 305, 380)), ('drive-catalog-menu-ocr.png', (305, 670, 475, 770))]
     portable, local, backups = root / 'portable', root / 'local', root / 'backups'
     try:
         initial = session.observe('initial', ['Portable test drive', 'portable', 'local'])
@@ -178,7 +178,7 @@ def exercise(session, root):
         session.observe('conflict-jobs', ['Jobs'])
         click_word(session, 'conflict-jobs', 'Jobs', tree=True)
         session.observe('conflict-review', ['Drive operations and conflicts', 'Conflict', 'preserved'])
-        click_word(session, 'conflict-review', 'Close')
+        session.key('Escape')
         assert not (Path(env['XDG_DATA_HOME']) / 'little-screen-clip/search/index.sqlite').exists()
     finally:
         try:

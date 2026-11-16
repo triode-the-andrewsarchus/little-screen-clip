@@ -2,7 +2,7 @@
 
 Provide RAM mirrors, partition backups, automatic two-way folder synchronization, and mountable offline catalogs through the existing daemon and file manager. Source media must work as ordinary FAT32, exFAT, NTFS, or other supported filesystems. Btrfs optimizations belong entirely to the backup destination.
 
-Implementation branch: `feat/portable-drive-services`, created from local `main` at `bf6bf73e`. Preserve the pre-existing `.cargo/config.toml` and `config.toml` edits. This document describes planned work; no feature implementation or backup has run.
+Implementation branch: `feat/portable-drive-services`, created from local `main` at `bf6bf73e`. Preserve the pre-existing `.cargo/config.toml` and `config.toml` edits. This document records the implementation design and acceptance gates. Implementation and owned-fixture validation are on this branch; see [portable-drive operating notes](docs/portable-drives.md) for current behavior and evidence.
 
 ## Agreed behavior
 
@@ -114,7 +114,7 @@ Validation proceeds in this order:
 1. Core guarded transfer/config/IPC tests and `clip-drives` planner/store/fault-injection tests, including non-UTF-8 names, identity replacement, unavailable sources, and cancellation after completed writes.
 2. Daemon lifecycle tests with no file manager, mount-event loss, reconnection, restarted operations, and conflicts awaiting a future UI session.
 3. Disposable FAT32, exFAT, and NTFS partitions against ordinary and Btrfs backup destinations. Include timestamp/case behavior, full/read-only media, partitions without UUIDs, cloned identifiers, and a FAT32-incompatible large local file.
-4. FUSE integration tests on a host with `/dev/fuse`; privileged image/Btrfs tests use disposable loop devices and never arbitrary attached media. This execution environment currently lacks `/dev/fuse`, so real mount acceptance needs a capable host rather than being reported as passed here.
+4. FUSE integration tests on a host with `/dev/fuse`; privileged image/Btrfs tests use disposable loop devices and never arbitrary attached media. The host now exposes `/dev/fuse`; real catalog mount acceptance passed using owned fixtures. Loop-device tests still require interactive PolicyKit authorization on this host.
 5. Private Weston/Niri UI acceptance for enrollment, lazy backup configuration, progress, conflict presentation, RAM browsing after removal, and catalog states. Use the repository's existing isolated compositor runner.
 6. Meaningful scale checks: small embedded cards, a million tiny files, a large file with a small edit, a sparse image, watch overflow, database limits, memory pressure, and tmpfs inode exhaustion. Report elapsed time, peak RAM, bytes read/written, and Btrfs allocated bytes separately.
 7. Run affected crate tests during each phase, then workspace tests, formatting, clippy, and architecture comparison before completion. Serialize Cargo commands and check free disk space as required by the repository.
