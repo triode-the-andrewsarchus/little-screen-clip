@@ -2,28 +2,6 @@
 use super::*;
 
 impl Owner {
-    pub(super) fn initialize_ram(
-        &mut self,
-        id: &str,
-        cancel: &AtomicBool,
-        progress: &mut impl FnMut(u64, u64),
-    ) -> Result<String> {
-        self.synchronize(id, cancel, progress)?;
-        // The first pass installs directory watches. Reconcile again so edits made
-        // before those watches existed cannot be missed during initial population.
-        let result = self.synchronize(id, cancel, progress)?;
-        let mut session: RamSession = self.db.get("ram", id)?.ok_or("RAM session disappeared")?;
-        session.ready = true;
-        self.db.put("ram", id, &session)?;
-        let mut pair: SyncPair = self
-            .db
-            .get("pair", id)?
-            .ok_or("RAM enrollment disappeared")?;
-        pair.paused = false;
-        self.db.put("pair", id, &pair)?;
-        Ok(result)
-    }
-
     pub(super) fn mount_ram(&mut self, id: &str) -> Result<()> {
         let mut session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
         if self.ram_children.contains_key(id) {

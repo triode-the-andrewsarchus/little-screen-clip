@@ -100,10 +100,29 @@ impl Root {
         self.identity == other.identity && self.namespace == other.namespace
     }
     pub fn overlap(&self, other: &Self) -> bool {
-        self.path.starts_with(&other.path)
+        if self.path.starts_with(&other.path)
             || other.path.starts_with(&self.path)
             || (self.identity.device == other.identity.device
                 && self.identity.inode == other.identity.inode)
+        {
+            return true;
+        }
+        if self.identity.device != other.identity.device {
+            return false;
+        }
+        match (self.physical_path(), other.physical_path()) {
+            (Ok(a), Ok(b)) => a.starts_with(&b) || b.starts_with(&a),
+            _ => true, // Unknown mount context cannot authorize independent writes.
+        }
+    }
+    /// Projects bind aliases onto the observed filesystem's root coordinates.
+    pub fn physical_path(&self) -> Result<PathBuf> {
+        self.validate()?;
+        let mount = crate::mounts::inventory()?
+            .into_iter()
+            .find(|m| m.id == self.identity.mount)
+            .ok_or("Root mount context disappeared")?;
+        project_path(&self.path, &mount).ok_or_else(|| "Root is outside its observed mount".into())
     }
     pub fn directory(&self, relative: &Path, create: bool) -> Result<File> {
         if !valid_relative(relative) {
@@ -341,6 +360,10 @@ impl Root {
     }
 }
 
+fn project_path(path: &Path, mount: &crate::mounts::Mount) -> Option<PathBuf> {
+    Some(mount.root.join(path.strip_prefix(&mount.target).ok()?))
+}
+
 fn reliable_change_metadata(filesystem: u64) -> bool {
     matches!(
         filesystem as u32,
@@ -351,6 +374,22 @@ fn reliable_change_metadata(filesystem: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bind_subtrees_project_into_the_original_filesystem_coordinates() {
+        let mount = crate::mounts::Mount {
+            id: 1,
+            target: "/alias".into(),
+            root: "/original/child".into(),
+            source: "/dev/fixture".into(),
+            filesystem: "ext4".into(),
+            read_only: false,
+        };
+        assert_eq!(
+            project_path(Path::new("/alias/nested"), &mount),
+            Some(PathBuf::from("/original/child/nested"))
+        );
+        assert!(project_path(Path::new("/elsewhere"), &mount).is_none());
+    }
     #[test]
     fn coarse_or_external_filesystems_never_authorize_fingerprint_cache_reuse() {
         for magic in [

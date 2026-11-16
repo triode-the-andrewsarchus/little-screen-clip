@@ -4,9 +4,9 @@ use crate::{
     root::{Root, anchor},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::CString,
-    fs::{self, File},
+    fs::File,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,
@@ -18,6 +18,7 @@ use std::{
 pub(crate) struct Changes {
     pub full: bool,
     pub paths: HashSet<PathBuf>,
+    path_bytes: usize,
 }
 struct Location {
     root: Arc<Root>,
@@ -28,6 +29,9 @@ pub(crate) struct Watch {
     paths: HashMap<PathBuf, i32>,
     locations: HashMap<i32, Location>,
     lost: bool,
+    tracked_bytes: usize,
+    pending: VecDeque<(Arc<Root>, PathBuf)>,
+    walking: Option<(Arc<Root>, crate::scan::Frame)>,
 }
 impl Watch {
     pub fn new() -> Result<Self> {
@@ -42,6 +46,9 @@ impl Watch {
             paths: HashMap::new(),
             locations: HashMap::new(),
             lost: false,
+            tracked_bytes: 0,
+            pending: VecDeque::new(),
+            walking: None,
         })
     }
     pub fn add(&mut self, root: Arc<Root>) {
@@ -57,72 +64,136 @@ impl Watch {
         }
         self.add_tree(root, PathBuf::new());
     }
+    /// Releases every retained directory under a partition before unmounting it.
+    pub fn remove_tree(&mut self, path: &std::path::Path) {
+        self.pending
+            .retain(|(root, _)| !root.path.starts_with(path));
+        if self
+            .walking
+            .as_ref()
+            .is_some_and(|(root, _)| root.path.starts_with(path))
+        {
+            self.walking = None;
+        }
+        let descriptors = self
+            .locations
+            .iter()
+            .filter_map(|(wd, location)| location.root.path.starts_with(path).then_some(*wd))
+            .collect::<Vec<_>>();
+        for wd in descriptors {
+            // SAFETY: this watch descriptor belongs to our live inotify instance.
+            unsafe {
+                libc::inotify_rm_watch(self.file.as_raw_fd(), wd);
+            }
+            self.forget(wd);
+        }
+    }
     fn forget(&mut self, wd: i32) {
         if let Some(location) = self.locations.remove(&wd) {
-            self.paths
-                .remove(&location.root.path.join(location.relative));
+            let path = location.root.path.join(&location.relative);
+            self.paths.remove(&path);
+            self.tracked_bytes = self
+                .tracked_bytes
+                .saturating_sub(watch_bytes(&path, &location.relative));
+            self.pending.retain(|(root, relative)| {
+                !(root.same_root(&location.root) && *relative == location.relative)
+            });
+            if self.walking.as_ref().is_some_and(|(root, frame)| {
+                root.same_root(&location.root) && frame.relative == location.relative
+            }) {
+                self.walking = None;
+            }
         }
     }
     fn add_tree(&mut self, root: Arc<Root>, relative: PathBuf) {
-        let mut stack = vec![relative];
-        while let Some(relative) = stack.pop() {
-            let path = root.path.join(&relative);
-            if let Some(wd) = self.paths.get(&path).copied() {
-                if self
-                    .locations
-                    .get(&wd)
-                    .is_some_and(|l| l.root.validate().is_ok())
-                {
-                    continue;
-                }
-                self.forget(wd);
-            }
-            if self.paths.len() >= 8192 {
-                self.lost = true;
+        let path = root.path.join(&relative);
+        if let Some(wd) = self.paths.get(&path).copied() {
+            if self
+                .locations
+                .get(&wd)
+                .is_some_and(|l| l.root.validate().is_ok())
+            {
                 return;
             }
-            let Ok(pin) = root.directory(&relative, false) else {
-                self.lost = true;
-                continue;
-            };
-            let Ok(c) = CString::new(anchor(&pin).as_os_str().as_bytes()) else {
-                continue;
-            };
-            let mask = libc::IN_CLOSE_WRITE
-                | libc::IN_ATTRIB
-                | libc::IN_MOVED_TO
-                | libc::IN_MOVED_FROM
-                | libc::IN_CREATE
-                | libc::IN_DELETE
-                | libc::IN_DELETE_SELF
-                | libc::IN_MOVE_SELF
-                | libc::IN_ONLYDIR;
-            // SAFETY: the path is terminated and resolves to the retained directory.
-            let wd = unsafe { libc::inotify_add_watch(self.file.as_raw_fd(), c.as_ptr(), mask) };
-            if wd < 0 {
-                self.lost = true;
-                continue;
+            self.forget(wd);
+        }
+        let bytes = watch_bytes(&path, &relative);
+        if self.paths.len() >= 8192
+            || self.pending.len() >= 8192
+            || relative.components().count() > 256
+            || self.tracked_bytes.saturating_add(bytes) > 16 * 1024 * 1024
+        {
+            self.lost = true;
+            return;
+        }
+        let Ok(pin) = root.directory(&relative, false) else {
+            self.lost = true;
+            return;
+        };
+        let Ok(c) = CString::new(anchor(&pin).as_os_str().as_bytes()) else {
+            self.lost = true;
+            return;
+        };
+        let mask = libc::IN_CLOSE_WRITE
+            | libc::IN_ATTRIB
+            | libc::IN_MOVED_TO
+            | libc::IN_MOVED_FROM
+            | libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_DELETE_SELF
+            | libc::IN_MOVE_SELF
+            | libc::IN_ONLYDIR;
+        // SAFETY: the terminated descriptor path resolves to the retained directory.
+        let wd = unsafe { libc::inotify_add_watch(self.file.as_raw_fd(), c.as_ptr(), mask) };
+        if wd < 0 {
+            self.lost = true;
+            return;
+        }
+        self.tracked_bytes += bytes;
+        self.paths.insert(path, wd);
+        self.locations.insert(
+            wd,
+            Location {
+                root: root.clone(),
+                relative: relative.clone(),
+            },
+        );
+        self.pending.push_back((root, relative));
+    }
+    fn advance(&mut self) {
+        let started = std::time::Instant::now();
+        for _ in 0..4096 {
+            if started.elapsed() >= std::time::Duration::from_millis(5) {
+                break;
             }
-            self.paths.insert(path, wd);
-            self.locations.insert(
-                wd,
-                Location {
-                    root: root.clone(),
-                    relative: relative.clone(),
-                },
-            );
-            if let Ok(reader) = fs::read_dir(anchor(&pin)) {
-                for child in reader.flatten() {
-                    if child.file_type().is_ok_and(|t| t.is_dir()) {
-                        stack.push(relative.join(child.file_name()));
-                        if stack.len() >= 8192 {
-                            self.lost = true;
-                            break;
-                        }
+            if self.walking.is_none() {
+                let Some((root, relative)) = self.pending.pop_front() else {
+                    break;
+                };
+                match crate::scan::Frame::new(&root, relative) {
+                    Ok(frame) => self.walking = Some((root, frame)),
+                    Err(_) => {
+                        self.lost = true;
+                        continue;
                     }
                 }
-            } else {
-                self.lost = true;
+            }
+            let (root, frame) = self.walking.as_mut().expect("active bounded watch walk");
+            match frame.reader.next() {
+                None => self.walking = None,
+                Some(Err(_)) => {
+                    self.lost = true;
+                    self.walking = None;
+                }
+                Some(Ok(child)) => match child.file_type() {
+                    Ok(kind) if kind.is_dir() => {
+                        let root = root.clone();
+                        let relative = frame.relative.join(child.file_name());
+                        self.add_tree(root, relative);
+                    }
+                    Err(_) => self.lost = true,
+                    _ => (),
+                },
             }
         }
     }
@@ -152,10 +223,16 @@ impl Watch {
             changes.full = true;
             return;
         }
-        if changes.paths.len() < 4096 {
-            changes.paths.insert(location.root.path.join(&relative));
-        } else {
-            changes.full = true;
+        let path = location.root.path.join(&relative);
+        if !changes.paths.contains(&path) {
+            let bytes = path.as_os_str().as_bytes().len();
+            if changes.paths.len() < 4096 && changes.path_bytes.saturating_add(bytes) <= 1024 * 1024
+            {
+                changes.paths.insert(path);
+                changes.path_bytes += bytes;
+            } else {
+                changes.full = true;
+            }
         }
         if event.mask & libc::IN_ISDIR != 0
             && event.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
@@ -164,12 +241,22 @@ impl Watch {
         }
     }
     pub fn changes(&mut self) -> Changes {
+        let incomplete = self.walking.is_some() || !self.pending.is_empty();
+        self.advance();
+        let lost = std::mem::take(&mut self.lost);
         let mut changes = Changes {
-            full: std::mem::take(&mut self.lost),
+            full: incomplete || lost,
             ..Default::default()
         };
         let mut buffer = [0_u8; 65536];
+        let started = std::time::Instant::now();
+        let mut reads = 0;
         loop {
+            if reads >= 32 || started.elapsed() >= std::time::Duration::from_millis(5) {
+                changes.full = true;
+                break;
+            }
+            reads += 1;
             // SAFETY: the buffer is writable and the descriptor is nonblocking.
             let count = unsafe {
                 libc::read(
@@ -213,9 +300,34 @@ impl Watch {
         changes
     }
 }
+fn watch_bytes(path: &std::path::Path, relative: &std::path::Path) -> usize {
+    path.as_os_str()
+        .as_bytes()
+        .len()
+        .saturating_add(relative.as_os_str().as_bytes().len())
+        .saturating_mul(4)
+        .saturating_add(256)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    #[test]
+    fn retiring_a_partition_releases_queued_and_active_directory_pins() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("child")).unwrap();
+        let root = Arc::new(Root::open(temp.path()).unwrap());
+        let mut watch = Watch::new().unwrap();
+        watch.add(root.clone());
+        assert!(Arc::strong_count(&root) > 1);
+        watch.changes();
+        watch.remove_tree(&root.path);
+        assert_eq!(Arc::strong_count(&root), 1);
+        assert_eq!(watch.tracked_bytes, 0);
+        assert!(watch.pending.is_empty());
+        assert!(watch.walking.is_none());
+    }
     #[test]
     fn queue_overflow_reports_lost_coverage_even_without_a_known_watch_descriptor() {
         let mut watch = Watch::new().unwrap();

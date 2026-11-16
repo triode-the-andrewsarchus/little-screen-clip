@@ -82,13 +82,13 @@ pub(crate) struct Coverage {
     pub complete: bool,
     pub message: String,
 }
-struct Frame {
-    relative: PathBuf,
+pub(crate) struct Frame {
+    pub relative: PathBuf,
     _pin: File,
-    reader: ReadDir,
+    pub reader: ReadDir,
 }
 impl Frame {
-    fn new(root: &Root, relative: PathBuf) -> Result<Self> {
+    pub fn new(root: &Root, relative: PathBuf) -> Result<Self> {
         let pin = root.directory(&relative, false)?;
         let reader = fs::read_dir(anchor(&pin))?;
         Ok(Self {

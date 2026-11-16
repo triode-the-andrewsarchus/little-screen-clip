@@ -67,6 +67,45 @@ fn explicit_disk_backed_ram_directory_is_rejected() {
 }
 
 #[test]
+#[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
+fn retiring_watch_pins_allows_a_real_normal_unmount() {
+    let base = directory(&DriveConfig::default()).unwrap();
+    let backing = prepare(
+        &base,
+        &Budget {
+            bytes: 128 * MIB,
+            inodes: 4096,
+        },
+    )
+    .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mount = Mounted::start(&backing, &id, true, None).unwrap();
+    let path = backing.directory.join("contents");
+    let root = std::sync::Arc::new(Root::open(&path).unwrap());
+    let mut watch = crate::watch::Watch::new().unwrap();
+    watch.add(root.clone());
+    drop(root);
+    let unmount = || {
+        CommandRequest::new("fusermount3")
+            .args(["-u"])
+            .arg(&path)
+            .timeout(Duration::from_secs(5))
+            .max_output_bytes(4096)
+            .run()
+            .unwrap()
+    };
+    assert!(
+        !unmount().status.success(),
+        "live directory pins should keep this owned fixture busy"
+    );
+    watch.remove_tree(&path);
+    let result = unmount();
+    assert!(result.status.success(), "{}", result.stderr_lossy());
+    drop(mount);
+    discard(&backing, &id).unwrap();
+}
+
+#[test]
 #[ignore = "requires tmpfs, mke2fs/e2fsck, /dev/fuse and the packaged RAM filesystem helper"]
 fn native_ram_quotas_atomic_install_and_open_file_restart_preserve_edits() {
     let config = DriveConfig::default();
