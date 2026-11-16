@@ -34,36 +34,7 @@ impl Owner {
                 .is_some_and(|job| job.roots.iter().any(|root| overlaps(&root.scope())))
     }
     pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
-        self.validate_ram_backing_target(source)?;
-        self.validate_ram_backing_target(local)?;
-        if source.overlap(local) {
-            return Err("Sync roots overlap".into());
-        }
-        let mut managed = vec![self.state.clone()];
-        if let Some(path) = &self.config.backup_directory {
-            managed.push(path.clone());
-        }
-        managed.extend(
-            self.db
-                .list::<RamSession>("ram", 0, 1000)?
-                .into_iter()
-                .map(|s| s.path),
-        );
-        managed.extend(
-            self.db
-                .list::<Catalog>("catalog", 0, 1000)?
-                .into_iter()
-                .filter_map(|s| s.mount),
-        );
-        for path in managed {
-            if let Ok(root) = Root::open(&path) {
-                if source.overlap(&root) || local.overlap(&root) {
-                    return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
-                }
-            } else if local.path.starts_with(&path) || path.starts_with(&local.path) {
-                return Err("Local folder overlaps managed storage".into());
-            }
-        }
+        self.validate_sync_storage(source, local, None)?;
         let pairs = self.db.list::<SyncPair>("pair", 0, 1000)?;
         if pairs.len() >= 256 {
             return Err(
@@ -76,6 +47,54 @@ impl Owner {
                 && local.overlap(&root)
             {
                 return Err("This local folder overlaps an existing sync enrollment".into());
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn validate_sync_storage(
+        &self,
+        source: &Root,
+        local: &Root,
+        own_ram: Option<&str>,
+    ) -> Result<()> {
+        self.validate_ram_backing_target(source)?;
+        if own_ram.is_none() {
+            self.validate_ram_backing_target(local)?;
+        }
+        if source.overlap(local) {
+            return Err("Sync roots overlap after a directory or mount change; pause and re-enroll the pair".into());
+        }
+        let mut managed = vec![(self.state.clone(), false)];
+        managed.extend(
+            self.config
+                .backup_directory
+                .clone()
+                .map(|path| (path, false)),
+        );
+        managed.extend(
+            self.db
+                .list::<RamSession>("ram", 0, 1000)?
+                .into_iter()
+                .map(|session| (session.path, own_ram == Some(session.id.as_str()))),
+        );
+        managed.extend(
+            self.db
+                .list::<Catalog>("catalog", 0, 1000)?
+                .into_iter()
+                .filter_map(|catalog| catalog.mount)
+                .map(|path| (path, false)),
+        );
+        for (path, own_view) in managed {
+            let overlaps = if let Ok(root) = Root::open(&path) {
+                source.overlap(&root) || (!own_view && local.overlap(&root))
+            } else {
+                source.path.starts_with(&path)
+                    || path.starts_with(&source.path)
+                    || (!own_view
+                        && (local.path.starts_with(&path) || path.starts_with(&local.path)))
+            };
+            if overlaps {
+                return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
             }
         }
         Ok(())

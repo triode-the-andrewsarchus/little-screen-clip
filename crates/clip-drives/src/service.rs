@@ -1351,13 +1351,13 @@ mod tests {
             ]));
             Self { temp, drives }
         }
-        fn pair(&self, service: &Service, drive: &str) -> PathBuf {
+        fn pair(&self, service: &Service, drive: &str, relative: &str) -> PathBuf {
             let local = self.temp.path().join(format!("paired-{drive}"));
             finish(
                 service,
                 DriveRequest::Pair {
                     drive: format!("part:{drive}"),
-                    relative: PathBuf::new(),
+                    relative: relative.into(),
                     local: local.clone(),
                 },
             );
@@ -1401,6 +1401,91 @@ mod tests {
         let small = fixture.temp.path().join("small");
         (fixture.temp, service, small)
     }
+    #[test]
+    fn subtree_enrollment_and_later_sync_refuse_links_outside_the_partition() {
+        use std::os::unix::fs::symlink;
+        let fixture = TestDrives::new(0);
+        let source = fixture.temp.path().join("large");
+        let outside = fixture.temp.path().join("host-data");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("edit"), b"host data must stay untouched").unwrap();
+        symlink(&outside, source.join("escape")).unwrap();
+        let service = fixture.start(None, Arc::new(partition::unmount));
+        let refused = fixture.temp.path().join("must-not-create");
+        failed(
+            &service,
+            DriveRequest::Pair {
+                drive: "part:large".into(),
+                relative: "escape".into(),
+                local: refused.clone(),
+            },
+            "Symlink",
+        );
+        assert!(!refused.exists());
+        fs::create_dir(source.join("selected")).unwrap();
+        fs::write(source.join("selected/edit"), b"portable data").unwrap();
+        let local = fixture.pair(&service, "large", "selected");
+        let pair = status(&service).pairs.into_iter().next().unwrap();
+        fs::rename(source.join("selected"), source.join("retained")).unwrap();
+        symlink(&outside, source.join("selected")).unwrap();
+        fs::write(local.join("edit"), b"local edit must not enter host data").unwrap();
+        failed(&service, DriveRequest::Sync { pair: pair.id }, "Symlink");
+        assert_eq!(
+            fs::read(outside.join("edit")).unwrap(),
+            b"host data must stay untouched"
+        );
+        assert_eq!(
+            fs::read(source.join("retained/edit")).unwrap(),
+            b"portable data"
+        );
+        assert_eq!(
+            fs::read(local.join("edit")).unwrap(),
+            b"local edit must not enter host data"
+        );
+        service.shutdown().unwrap();
+    }
+
+    #[test]
+    fn sync_refuses_a_paired_folder_relocated_inside_its_source_tree() {
+        use std::os::unix::fs::symlink;
+        let fixture = TestDrives::new(0);
+        let source = fixture.temp.path().join("large/selected");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("edit"), b"keep both trees").unwrap();
+        let service = fixture.start(None, Arc::new(partition::unmount));
+        let local = fixture.pair(&service, "large", "selected");
+        let pair = status(&service).pairs.into_iter().next().unwrap();
+        let moved = source.join("relocated");
+        fs::rename(&local, &moved).unwrap();
+        symlink(&moved, &local).unwrap();
+        failed(&service, DriveRequest::Sync { pair: pair.id }, "overlap");
+        assert!(!moved.join("relocated").exists());
+        assert_eq!(fs::read(moved.join("edit")).unwrap(), b"keep both trees");
+        service.shutdown().unwrap();
+    }
+
+    #[test]
+    fn sync_rechecks_managed_storage_after_a_local_folder_moves() {
+        use std::os::unix::fs::symlink;
+        let fixture = TestDrives::new(0);
+        let service = fixture.start(None, Arc::new(partition::unmount));
+        let local = fixture.pair(&service, "large", "");
+        let pair = status(&service).pairs.into_iter().next().unwrap();
+        let backup = fixture.temp.path().join("backup");
+        fs::create_dir(&backup).unwrap();
+        let moved = backup.join("relocated-pair");
+        fs::rename(&local, &moved).unwrap();
+        symlink(&moved, &local).unwrap();
+        fs::write(
+            fixture.temp.path().join("large/new"),
+            b"do not write into managed backups",
+        )
+        .unwrap();
+        failed(&service, DriveRequest::Sync { pair: pair.id }, "managed");
+        assert!(!moved.join("new").exists());
+        service.shutdown().unwrap();
+    }
+
     fn worker_gate() -> (
         mpsc::Receiver<()>,
         mpsc::Sender<()>,
@@ -1541,7 +1626,7 @@ mod tests {
             },
         );
         let small_ram = status(&service).ram.into_iter().next().unwrap();
-        let local = fixture.pair(&service, "large");
+        let local = fixture.pair(&service, "large", "");
         fs::write(local.join("edit"), b"local edit flushed before eject").unwrap();
         let external_reader = Root::open(&source).unwrap();
         let busy = accept(
@@ -1623,7 +1708,7 @@ mod tests {
                 Err("owned fixture authorization declined".into())
             }),
         );
-        let local = fixture.pair(&service, "large");
+        let local = fixture.pair(&service, "large", "");
         fs::write(local.join("edit"), b"flushed before unmount").unwrap();
         let id = accept(
             &service,
@@ -1726,12 +1811,26 @@ mod tests {
             _ => panic!("expected an accepted operation"),
         }
     }
-    fn finish(service: &Service, request: DriveRequest) -> DriveOperation {
+    fn completed(service: &Service, request: DriveRequest) -> DriveOperation {
         let id = accept(service, request);
-        let operation = wait_operation(service, &id, |op| op.finished.is_some());
+        wait_operation(service, &id, |operation| operation.finished.is_some())
+    }
+    fn finish(service: &Service, request: DriveRequest) -> DriveOperation {
+        let operation = completed(service, request);
         assert_eq!(operation.state, "complete", "{}", operation.message);
         operation
     }
+    fn failed(service: &Service, request: DriveRequest, diagnostic: &str) -> DriveOperation {
+        let operation = completed(service, request);
+        assert_eq!(operation.state, "failed", "{}", operation.message);
+        assert!(
+            operation.message.contains(diagnostic),
+            "{}",
+            operation.message
+        );
+        operation
+    }
+
     #[test]
     fn shutdown_closes_admission_finishes_accepted_records_and_releases_singleton() {
         let temp = tempfile::tempdir().unwrap();

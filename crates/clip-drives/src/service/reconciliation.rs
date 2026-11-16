@@ -135,7 +135,9 @@ impl Owner {
                     .mount
                     .as_ref()
                     .ok_or("Mount the drive before pairing a folder")?;
-                let source = Root::open(&mount.join(relative))?;
+                let partition = Root::open(mount)?;
+                let selected = partition.directory(relative, false)?;
+                let source = Root::open(&crate::root::anchor(&selected))?;
                 let local = Root::create(local)?;
                 self.validate_pair_target(&source, &local)?;
                 let id = uuid::Uuid::new_v4().to_string();
@@ -190,6 +192,9 @@ impl Owner {
             return Err("Drive identity differs from the enrollment; sync suspended".into());
         }
         let session = self.db.get::<RamSession>("ram", &pair.id)?;
+        if pair.ram && session.is_none() {
+            return Err("RAM session metadata is missing; retained contents need recovery before synchronization".into());
+        }
         if drive.read_only && !(pair.ram && session.as_ref().is_some_and(|s| !s.ready)) {
             return Err("Drive is read-only; edits remain local".into());
         }
@@ -197,7 +202,9 @@ impl Owner {
             .mount
             .as_ref()
             .ok_or("Drive is offline; local contents retained")?;
-        let portable = Arc::new(Root::open(&mount.join(&pair.relative))?);
+        let partition = Root::open(mount)?;
+        let selected = partition.directory(&pair.relative, false)?;
+        let portable = Arc::new(Root::open(&crate::root::anchor(&selected))?);
         if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
             self.unidentified_ram
                 .get(&pair.id)
@@ -211,6 +218,7 @@ impl Owner {
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
         }
+        self.validate_sync_storage(&portable, &local, pair.ram.then_some(pair.id.as_str()))?;
         let cached = self.sync_roots.get(&pair.id).is_some_and(|(a, b)| {
             a.validate().is_ok()
                 && b.validate().is_ok()

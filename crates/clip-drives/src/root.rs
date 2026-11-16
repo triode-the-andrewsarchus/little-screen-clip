@@ -118,6 +118,7 @@ impl Root {
     }
     pub fn validate(&self) -> Result<()> {
         if Namespace::current() != self.namespace
+            || fs::read_link(anchor(&self.file))? != self.path
             || MountIdentity::directory(&self.path)? != self.identity
         {
             return Err("Directory or mount was replaced or removed".into());
@@ -142,7 +143,9 @@ impl Root {
             path: self.path.clone(),
             identity: self.identity,
             namespace: self.namespace.clone(),
-            physical: self.physical.clone(),
+            physical: (fs::read_link(anchor(&self.file)).ok().as_ref() == Some(&self.path))
+                .then(|| self.physical.clone())
+                .flatten(),
         }
     }
     pub fn directory(&self, relative: &Path, create: bool) -> Result<File> {
@@ -467,6 +470,17 @@ mod tests {
         assert!(root.directory(Path::new("alias"), false).is_err());
         assert!(root.directory(Path::new("../outside"), true).is_err());
         fs::rename(&data, temp.path().join("old")).unwrap();
+        symlink(temp.path().join("old"), &data).unwrap();
+        assert!(
+            root.validate().is_err(),
+            "a new symlink cannot preserve the old root's named authorization"
+        );
+        let unrelated = Root::create(&temp.path().join("unrelated")).unwrap();
+        assert!(
+            root.scope().overlap(&unrelated.scope()),
+            "a moved root has uncertain coordinates until its task retires"
+        );
+        fs::remove_file(&data).unwrap();
         fs::create_dir(&data).unwrap();
         assert!(root.validate().is_err());
     }

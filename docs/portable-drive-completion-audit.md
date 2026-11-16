@@ -224,3 +224,26 @@ unchanged. Consolidating admission policy, accepted-request fixtures and shared
 barriers removed four new clone groups found in the first measurement. The partition
 admission function remains a CCN-20 review hotspot. Report:
 `.fitness/portable-drives-partition-preparation-architecture.json`.
+
+Selected-root safety follow-up: enrollment and every later synchronization resolve
+selected subtrees through the retained partition directory walk. A replacement
+symlink cannot redirect a selected subtree outside that partition. Retained roots
+also check their descriptor's current resolved name; a moved root makes its scheduling
+coordinates uncertain until the task retires. Runtime root checks reuse enrollment's
+managed-storage guard, with only the verified RAM session's own local view exempted.
+Missing RAM-session metadata cannot authorize synchronization.
+
+Owned fixtures prove that rejected linked enrollment creates no output folder,
+later subtree replacement leaves unrelated host files untouched, relocation into
+the source cannot recursively mirror itself, and relocation into managed backups
+cannot write there. Validation: 43 ordinary backend tests passed (thirteen explicit
+fixtures ignored), all ten selected native RAM/unmount fixtures passed in 12.68
+seconds, and backend all-target clippy passed with warnings denied. Shared test
+enrollment/completion helpers removed the two new fixture clones initially found.
+The overall architecture result remains REGRESSION: seventeen net new clone groups,
+7.22% duplication, average CCN 3.48; the common managed-storage guard is a CCN-16
+review hotspot. Report: `.fitness/portable-drives-sync-root-architecture.json`.
+
+Remaining identity coverage includes real bind/case-fold aliases, live mounted-source
+binding to the selected block device, device-node lifetime checks through authorized
+image open, and the full concurrent relocation/reader matrix. These are still open.

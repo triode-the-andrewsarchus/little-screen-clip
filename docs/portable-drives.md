@@ -61,6 +61,12 @@ Completed images can be mounted explicitly read-only from the backup submenu or 
 
 ## Folder synchronization
 
+Selected source subtrees must be actual directories within the selected partition.
+Links inside a tree remain references; a replacement link cannot redirect the tree
+root elsewhere. Each pass checks root identity, overlap and managed-storage boundaries
+again. Moving a paired folder inside its source or into managed backups suspends
+synchronization while preserving its files.
+
 Use **Keep in sync → Pair with a folder…**. Initial synchronization gives both folders the union of their files. Later reconciliation compares content fingerprints with the saved common baseline; modification time alone never decides which side wins.
 
 Concurrent edits preserve portable/local variants on both sides and create a persistent conflict record. Variant names include their origin and a content suffix to avoid overwriting an earlier conflict. Choose the same original on both sides to resolve it; acknowledging a conflict keeps its variants. Directory/type conflicts preserve complete variants. A deletion concurrent with an edit restores the edit and reports the conflict.
