@@ -129,6 +129,13 @@ Listing and stat operations work offline. Opening a regular file requires a matc
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
+Shelf reference summaries, recursive photo similarity discovery/features, and audio
+constellation discovery/cache reads honor drive indexing exclusions. Explicit folder
+browsing and individual-file opening remain available. Recursive photo discovery does
+not follow child symlinks. Newly excluded observations are rejected before decoding or
+publishing a new index snapshot; existing displayed UI caches do not yet have a
+policy-change retirement guarantee.
+
 Catalogs, RAM mirrors, and backup destinations do not automatically enroll in content search. The default catalog budget is 250,000 entries, 256 MiB, depth 64, and ten minutes. The database byte limit is enforced independently of the entry limit (minimum 128 KiB). A budget limit or read failure is disclosed as partial coverage; excluded directories are not represented as known-empty folders. Existing catalogs remain dated versions when policy changes.
 
 Admitted backup destinations remain registered locally even when they are used only

@@ -22,6 +22,9 @@ pub fn scan_recursive_photos(
     let mut results = Vec::new();
     let mut visited_dirs = HashSet::new();
 
+    if little_clip_core::drives::index_excluded(root) {
+        return results;
+    }
     let root_canon = match root.canonicalize() {
         Ok(p) => p,
         Err(_) => root.to_path_buf(),
@@ -36,6 +39,9 @@ pub fn scan_recursive_photos(
     while let Some((dir_path, depth)) = dir_queue.pop() {
         if cancelled.load(Ordering::Relaxed) {
             break;
+        }
+        if little_clip_core::drives::index_excluded(&dir_path) {
+            continue;
         }
         if depth > max_depth {
             continue;
@@ -65,6 +71,17 @@ pub fn scan_recursive_photos(
                 continue;
             }
 
+            // Recursive discovery must not enter an excluded tree through a link
+            // or decode a linked payload under an unrelated policy pathname.
+            if !child
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() || kind.is_file())
+            {
+                continue;
+            }
+            if little_clip_core::drives::index_excluded(&dir_path.join(&file_name)) {
+                continue;
+            }
             let entry = read_entry(child, true);
             if entry.directory {
                 if let Ok(meta) = std::fs::metadata(&entry.path) {
@@ -87,6 +104,32 @@ mod tests {
     use super::*;
 
     const DEFAULT_TEST_DIRECTORY_DEPTH: usize = 16;
+
+    #[test]
+    fn drive_no_index_policy_prunes_photo_subtrees_before_discovery() {
+        use crate::file_manager::tests::{with_drive_policy, write_drive_policy};
+        with_drive_policy(|root| {
+            let excluded = root.join("excluded");
+            std::fs::create_dir(&excluded).unwrap();
+            std::fs::write(excluded.join("hidden.jpg"), b"fixture").unwrap();
+            std::fs::write(root.join("visible.jpg"), b"fixture").unwrap();
+            std::os::unix::fs::symlink(&excluded, root.join("directory-alias")).unwrap();
+            std::os::unix::fs::symlink(excluded.join("hidden.jpg"), root.join("file-alias.jpg"))
+                .unwrap();
+            write_drive_policy(vec![excluded.clone()]);
+            let photos = scan_recursive_photos(root, true, 10, 5, &AtomicBool::new(false));
+            assert_eq!(photos.len(), 1);
+            assert_eq!(photos[0].name, "visible.jpg");
+            assert!(
+                scan_recursive_photos(&excluded, true, 10, 5, &AtomicBool::new(false)).is_empty()
+            );
+            write_drive_policy(vec![]);
+            assert_eq!(
+                scan_recursive_photos(root, true, 10, 5, &AtomicBool::new(false)).len(),
+                2
+            );
+        });
+    }
 
     #[test]
     fn recursive_scanner_skips_over_depth_branches_without_abandoning_siblings() {

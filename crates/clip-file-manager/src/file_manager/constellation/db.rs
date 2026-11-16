@@ -235,6 +235,9 @@ impl ConstellationDb {
     /// # Errors
     /// Returns an error for SQLite access or invalid stored field types/ranges.
     pub fn load_samples(&self, folder: &Path) -> Result<Vec<ConstellationSample>, String> {
+        if little_clip_core::drives::index_excluded(folder) {
+            return Ok(Vec::new());
+        }
         let conn = self.open()?;
         let folder_key = folder.as_os_str().as_bytes();
         let prefix_key = folder.join("");
@@ -283,8 +286,11 @@ impl ConstellationDb {
             )
             .map_err(|e| e.to_string())?;
 
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
+        let mut samples = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        samples.retain(|sample| !little_clip_core::drives::index_excluded(&sample.file_path));
+        Ok(samples)
     }
 
     /// Atomically replaces one complete subtree snapshot, including empty results.

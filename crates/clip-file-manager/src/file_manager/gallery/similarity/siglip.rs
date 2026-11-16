@@ -88,6 +88,9 @@ impl SiglipEmbedder {
             if cancelled.load(Ordering::Relaxed) {
                 return Err("Cancelled".into());
             }
+            if little_clip_core::drives::index_excluded(path) {
+                return Err("Image excluded by indexing policy".into());
+            }
 
             let thumb = thumbnail::load(path, SIGLIP_INPUT_SIZE, 1, cancelled)
                 .ok_or_else(|| format!("Failed to load thumbnail for {}", path.display()))?;

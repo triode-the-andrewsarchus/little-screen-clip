@@ -104,10 +104,11 @@ fn index_snapshot(
         .into_iter()
         .map(|sample| (sample.file_path.clone(), sample))
         .collect();
-    let (samples, reused) = analyze_audio_paths(&paths, folder, cancelled, sender, &cached)?;
+    let (mut samples, reused) = analyze_audio_paths(&paths, folder, cancelled, sender, &cached)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Indexing cancelled".into());
     }
+    samples.retain(|sample| !little_clip_core::drives::index_excluded(&sample.file_path));
     db.save_samples(folder, &samples)?;
     Ok((samples, reused, paths.len() - reused))
 }
@@ -135,6 +136,9 @@ fn discover_audio_paths(
         if cancelled.load(Ordering::Relaxed) {
             return Err("Indexing cancelled".into());
         }
+        if little_clip_core::drives::index_excluded(&path) {
+            continue;
+        }
         let directory = little_clip_core::kernel_interface::pin_content_directory(&path)
             .map_err(|error| format!("Cannot scan {}: {error}", path.display()))?;
         let metadata = directory.metadata().map_err(|error| error.to_string())?;
@@ -159,6 +163,9 @@ fn discover_audio_paths(
                 continue;
             }
             let target = path.join(name);
+            if little_clip_core::drives::index_excluded(&target) {
+                continue;
+            }
             let kind = entry
                 .file_type()
                 .map_err(|error| format!("Cannot inspect {}: {error}", target.display()))?;
@@ -268,12 +275,18 @@ fn analyze_or_reuse(
     cached: &HashMap<PathBuf, ConstellationSample>,
     reused: &AtomicUsize,
 ) -> Result<Option<ConstellationSample>, String> {
+    if little_clip_core::drives::index_excluded(path) {
+        return Ok(None);
+    }
     let source = crate::file_source::FileSource::capture(path)?;
     if let Some(sample) = cached
         .get(path)
         .filter(|sample| sample.source_revision.as_ref() == Some(&analysis_revision(&source)))
     {
         source.check()?;
+        if little_clip_core::drives::index_excluded(path) {
+            return Ok(None);
+        }
         reused.fetch_add(1, Ordering::Relaxed);
         return Ok(Some(sample.clone()));
     }
@@ -285,6 +298,9 @@ fn process_single_audio_file(
     filename: String,
     root_folder: &Path,
 ) -> Result<Option<ConstellationSample>, String> {
+    if little_clip_core::drives::index_excluded(path) {
+        return Ok(None);
+    }
     let file = little_clip_core::kernel_interface::open_content(path, true)
         .map_err(|error| format!("Cannot open {}: {error}", path.display()))?;
     let source = crate::file_source::FileSource::capture_file(&file)?;
@@ -372,6 +388,9 @@ fn process_single_audio_file(
             source_revision: Some(analysis_revision(&source)),
         }))
     })();
+    if little_clip_core::drives::index_excluded(path) {
+        return Ok(None);
+    }
     source.check()?;
     if crate::file_source::FileSource::capture(path)? != source {
         return Err("Audio path changed during analysis".into());
@@ -383,12 +402,7 @@ fn process_single_audio_file(
 mod tests {
     use super::*;
 
-    #[test]
-    fn incremental_index_reuses_only_matching_identity_and_precise_revision() {
-        let root = tempfile::tempdir().unwrap();
-        let library = root.path().join("library");
-        std::fs::create_dir(&library).unwrap();
-        let path = library.join("kick.wav");
+    fn write_test_kick(path: &Path) {
         let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 16000, 1);
         buffer.push_samples(
             &(0..16000)
@@ -399,7 +413,88 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
-        buffer.write_wav(&path).unwrap();
+        buffer.write_wav(path).unwrap();
+    }
+
+    #[test]
+    fn drive_no_index_policy_prunes_audio_discovery_and_cached_observations() {
+        use crate::file_manager::tests::{with_drive_policy, write_drive_policy};
+        with_drive_policy(|root| {
+            let excluded = root.join("excluded");
+            let visible = root.join("visible.wav");
+            std::fs::create_dir(&excluded).unwrap();
+            let hidden = excluded.join("hidden.wav");
+            write_test_kick(&hidden);
+            std::fs::write(&visible, b"fixture").unwrap();
+            write_drive_policy(vec![]);
+            let cancelled = AtomicBool::new(false);
+            let (sender, _) = mpsc::channel();
+            let db = ConstellationDb::open_path(root.join("index.sqlite")).unwrap();
+            let (samples, _, _) = index_snapshot(&db, root, &cancelled, &sender).unwrap();
+            assert_eq!(samples.len(), 1);
+            assert_eq!(samples[0].file_path, hidden);
+            write_drive_policy(vec![excluded.clone()]);
+            assert!(db.load_samples(root).unwrap().is_empty());
+            let reused = AtomicUsize::new(0);
+            let cached = HashMap::from([(hidden.clone(), samples[0].clone())]);
+            assert!(
+                analyze_or_reuse(&hidden, "hidden.wav".into(), root, &cached, &reused)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(reused.load(Ordering::Relaxed), 0);
+            assert!(
+                index_snapshot(&db, root, &cancelled, &sender)
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
+            // A complete replacement removes the previously indexed excluded row.
+            write_drive_policy(vec![]);
+            assert!(db.load_samples(root).unwrap().is_empty());
+            write_drive_policy(vec![excluded.clone()]);
+            let cancelled = AtomicBool::new(false);
+            let (sender, _) = mpsc::channel();
+            assert_eq!(
+                discover_audio_paths(root, &cancelled, &sender, false).unwrap(),
+                vec![visible]
+            );
+            // This path does not exist: the policy must reject before opening or statting it.
+            let missing = excluded.join("missing.wav");
+            assert!(
+                discover_audio_paths(&missing, &cancelled, &sender, false)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                analyze_or_reuse(
+                    &missing,
+                    "missing.wav".into(),
+                    root,
+                    &HashMap::new(),
+                    &AtomicUsize::new(0)
+                )
+                .unwrap()
+                .is_none()
+            );
+            write_drive_policy(vec![]);
+            assert!(discover_audio_paths(&missing, &cancelled, &sender, false).is_err());
+            assert_eq!(
+                discover_audio_paths(root, &cancelled, &sender, false)
+                    .unwrap()
+                    .len(),
+                2
+            );
+        });
+    }
+
+    #[test]
+    fn incremental_index_reuses_only_matching_identity_and_precise_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        std::fs::create_dir(&library).unwrap();
+        let path = library.join("kick.wav");
+        write_test_kick(&path);
         let db = ConstellationDb::open_path(root.path().join("index.sqlite")).unwrap();
         let (sender, _events) = mpsc::channel();
         let cancelled = AtomicBool::new(false);

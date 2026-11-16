@@ -108,6 +108,9 @@ fn cached_features(
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
+        if little_clip_core::drives::index_excluded(path) {
+            continue;
+        }
         let Ok(source) = FileSource::capture(path) else {
             continue;
         };
@@ -121,7 +124,9 @@ fn cached_features(
             })
         });
         if let Some(feature) = cached {
-            if FileSource::capture(path).ok().as_ref() == Some(&source) {
+            if !little_clip_core::drives::index_excluded(path)
+                && FileSource::capture(path).ok().as_ref() == Some(&source)
+            {
                 results.push((path.clone(), *revision, feature));
             }
         } else {
@@ -144,6 +149,9 @@ fn complete_batch(
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
+        if little_clip_core::drives::index_excluded(&path) {
+            continue;
+        }
         let feature = match &features {
             Some(features) if stable_model => features
                 .get(index)
@@ -154,7 +162,9 @@ fn complete_batch(
             None => compute_dhash_from_path(&path, cancelled).map(FeatureVector::DHash),
         };
         let Some(feature) = feature else { continue };
-        if FileSource::capture(&path).ok().as_ref() != Some(&source) {
+        if little_clip_core::drives::index_excluded(&path)
+            || FileSource::capture(&path).ok().as_ref() != Some(&source)
+        {
             continue;
         }
         if let Some(cache) = cache
@@ -171,6 +181,95 @@ fn complete_batch(
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn drive_no_index_policy_rejects_cache_hits_and_changes_during_initialization() {
+        use crate::file_manager::tests::{with_drive_policy, write_drive_policy};
+        with_drive_policy(|root| {
+            let path = root.join("image.png");
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([12, 34, 56, 255]))
+                .save(&path)
+                .unwrap();
+            let entry = crate::file_manager::filesystem::read_entry(
+                std::fs::read_dir(root)
+                    .unwrap()
+                    .find_map(|entry| {
+                        let entry = entry.unwrap();
+                        (entry.path() == path).then_some(entry)
+                    })
+                    .unwrap(),
+                true,
+            );
+            let source = FileSource::capture(&path).unwrap();
+            let encoder = model_revision();
+            let cache = FeatureCache::open_path(&root.join("features.sqlite")).unwrap();
+            let feature = if encoder.is_some() {
+                let mut values = vec![0.0; 1536];
+                values[0] = 1.0;
+                FeatureVector::Dense(values.into())
+            } else {
+                FeatureVector::DHash(123)
+            };
+            cache
+                .store(&path, &source, encoder.as_deref(), &feature)
+                .unwrap();
+            write_drive_policy(vec![path.clone()]);
+            let (tx, rx) = mpsc::channel();
+            index_with_cache(
+                vec![(path.clone(), entry.revision)],
+                &AtomicBool::new(false),
+                tx,
+                Some(cache),
+                || panic!("Excluded cached files must not initialize inference"),
+            );
+            assert!(rx.into_iter().flatten().next().is_none());
+            write_drive_policy(vec![]);
+            let (tx, rx) = mpsc::channel();
+            index_with_cache(
+                vec![(path.clone(), entry.revision)],
+                &AtomicBool::new(false),
+                tx,
+                None,
+                || None,
+            );
+            assert_eq!(
+                rx.into_iter().flatten().count(),
+                1,
+                "The admitted fixture must actually decode and produce a feature"
+            );
+            let (tx, rx) = mpsc::channel();
+            index_with_cache(
+                vec![(path.clone(), entry.revision)],
+                &AtomicBool::new(false),
+                tx,
+                None,
+                || {
+                    // A long model initialization must not grandfather its earlier admission.
+                    write_drive_policy(vec![path.clone()]);
+                    None
+                },
+            );
+            assert!(rx.into_iter().flatten().next().is_none());
+            // Already-computed neural features must also be dropped before persistence.
+            let cache = FeatureCache::open_path(&root.join("late.sqlite")).unwrap();
+            assert!(
+                complete_batch(
+                    vec![(path.clone(), entry.revision, source.clone())],
+                    Some(vec![Some(feature)]),
+                    Some(&cache),
+                    encoder.as_deref(),
+                    &AtomicBool::new(false)
+                )
+                .is_empty()
+            );
+            assert!(
+                cache
+                    .load(&path, &source, encoder.as_deref())
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
 
     #[test]
     fn restart_loads_cached_features_without_initializing_inference() {

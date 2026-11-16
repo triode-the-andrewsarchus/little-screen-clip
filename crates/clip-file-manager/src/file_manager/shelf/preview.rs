@@ -761,6 +761,11 @@ fn file_preview(paths: &[PathBuf]) -> Data {
         .map(|path| display_path(Path::new(path.file_name().unwrap_or_default())))
         .collect::<Vec<_>>()
         .join("\n");
+    // Shelf summaries are background discovery, rather than explicit file opens.
+    if little_clip_core::drives::index_excluded(path) {
+        data.detail = "Preview excluded by indexing policy".into();
+        return data;
+    }
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -922,6 +927,31 @@ fn audio_excerpt(path: &Path) -> (Vec<f32>, Vec<[u8; 3]>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_no_index_policy_skips_folder_summaries_but_keeps_explicit_reads() {
+        use crate::file_manager::tests::{with_drive_policy, write_drive_policy};
+        with_drive_policy(|root| {
+            let folder = root.join("removable");
+            std::fs::create_dir(&folder).unwrap();
+            let path = folder.join("individual.txt");
+            std::fs::write(&path, b"explicitly readable").unwrap();
+            write_drive_policy(vec![folder.clone()]);
+            let data = file_preview(std::slice::from_ref(&folder));
+            assert_eq!(data.detail, "Preview excluded by indexing policy");
+            assert!(!data.text.contains("individual.txt"));
+            assert_eq!(
+                crate::file_source::read_file_bytes(&path, 100, false, false).unwrap(),
+                b"explicitly readable"
+            );
+            let listing =
+                super::super::super::filesystem::read_directory(&folder, &AtomicBool::new(false))
+                    .unwrap();
+            assert_eq!(listing.entries.len(), 1);
+            write_drive_policy(vec![]);
+            assert!(file_preview(&[folder]).text.contains("individual.txt"));
+        });
+    }
 
     #[test]
     fn ambiguous_sampler_preview_uses_worker_evidence_and_rejects_protected_aliases() {

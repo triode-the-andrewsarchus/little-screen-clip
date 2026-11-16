@@ -40,7 +40,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.6 | Host gate | Explicit read-only loop mount implemented; provider reads and recursion refusal need real image-loop acceptance. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
-| 6.3 | Partial | Search exclusion routing and private UI checks exist; audit every recursive fallback consumer. |
+| 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Live UI cache retirement, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Open | Future scans honor subtree rules; removal of saved descendant records after readers release and explicit Not catalogued presentation remain. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
@@ -376,9 +376,9 @@ One-shot backup roots are durably registered before collection and policy public
 They retain no-index and sync-recursion protection after success, publication failure,
 preference changes and restart. Older completed versions supply historical roots too.
 Real bind/relocation aliases and every recursive consumer still need their full audit.
-In particular, private UI captures show ordinary folder previews rendering backup
-descendant metadata; this alone does not prove payload reads, but that recursive
-entry point still needs policy verification.
+Private UI captures showed ordinary folder previews rendering backup descendant
+metadata. The no-index consumer follow-up below addresses that entry point;
+the broader alias and consumer inventory remain unfinished.
 
 UI verification also exposed two independent defects: mount row IDs followed list
 positions, and long notification labels pushed Dismiss outside the window. Commits
@@ -414,3 +414,46 @@ settings persistence and owned review fixtures, and separates preview capture fr
 registration. The new preflight functions stay below the CCN hotspot threshold;
 original feature-wide clone/complexity findings remain for final review. Report:
 `.fitness/portable-drives-backup-review-architecture.json`.
+
+
+No-index consumer follow-up: Shelf file-reference summaries now stop before enumerating
+an excluded directory or reading its payload. Explicit browser navigation and guarded
+individual-file reads remain available. Recursive photo discovery checks each directory
+and entry before admission and does not follow child symlinks. Photo feature indexing
+checks cached hits, decoder admission and completed features, so a rule introduced
+during model initialization prevents fallback decoding and persistence. Audio discovery
+checks before opening each directory; analysis, cached database loads and final snapshot
+publication also apply the shared drive policy. A completed rescan removes excluded
+sample observations from its replaced snapshot.
+
+Four isolated policy fixtures pass without mutating the parent test environment or
+using the live registry. They prove excluded/missing paths are rejected before opening,
+policy changes invalidate cached observations, a valid photo is decodable when admitted
+but produces no feature after exclusion during initialization, directory/file symlinks
+cannot bypass recursive photo discovery, and direct navigation/reads remain possible.
+The full file-manager library suite passes 969 cases (six ignored); the final scanner
+suite passes five cases after adding symlink refusal, and the four policy fixtures
+pass again with the valid-image positive control. Logs are
+`/tmp/portable-drive-noindex-files-tests.log`,
+`/tmp/portable-drive-noindex-scanner-final.log` and
+`/tmp/portable-drive-noindex-tests-final.log`.
+
+This does not yet prove every recursive consumer or every alias, nor immediate
+retirement of already displayed UI caches after a policy change. Those requirements
+remain open alongside the catalog redaction/coverage work.
+
+File-manager all-target clippy with warnings denied passes for this checkpoint
+(`/tmp/portable-drive-noindex-clippy.log`), as do explicit changed-source rustfmt and
+diff whitespace checks. The implementation reuses core's policy registry without a
+second exclusion mechanism or new dependency. Additional traversal/admission checks
+increase existing scanner and decoder CCN; those branches enforce distinct pre-descent,
+pre-decode and post-analysis boundaries rather than duplicate traversal algorithms.
+
+The final no-index architecture checkpoint still reports REGRESSION against the
+original baseline: eleven net new clone groups (unchanged from the preceding
+backup-review checkpoint), 7.19% duplication, average CCN 3.48, maximum 274 and
+143 cycles. Current touched hotspots include sample loading (23), audio discovery
+(20), audio processing (16), photo discovery (22) and neural batching (17). Their
+added policy/symlink boundaries are necessary; broader feature-wide clone and
+complexity cleanup remains unfinished. The saved report is
+`.fitness/portable-drives-noindex-architecture.json`.

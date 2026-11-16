@@ -6,6 +6,51 @@ use std::os::unix::{
 };
 use std::time::Instant;
 
+// Run policy consumers in a disposable process: never mutate the test runner's
+// environment or point it at the user's live exclusion registry.
+pub(super) fn with_drive_policy(test: impl FnOnce(&Path)) {
+    const FIXTURE: &str = "LITTLE_CLIP_INDEX_POLICY_TEST";
+    if let Some(directory) = std::env::var_os(FIXTURE) {
+        test(Path::new(&directory));
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let thread = std::thread::current();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            thread.name().unwrap(),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(FIXTURE, directory.path())
+        .env(
+            "LITTLE_CLIP_DRIVE_STATE_DIR",
+            directory.path().join("state"),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Isolated policy fixture failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+pub(super) fn write_drive_policy(excluded: Vec<PathBuf>) {
+    let fixture = std::env::var_os("LITTLE_CLIP_INDEX_POLICY_TEST").unwrap();
+    let directory = Path::new(&fixture).join("state");
+    std::fs::create_dir_all(&directory).unwrap();
+    let temporary = directory.join("policy.new");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec(&little_clip_core::drives::IndexPolicy { excluded }).unwrap(),
+    )
+    .unwrap();
+    std::fs::rename(temporary, directory.join("index-policy.json")).unwrap();
+}
+
 fn read(path: &Path) -> Directory {
     read_directory(path, &AtomicBool::new(false)).unwrap()
 }
