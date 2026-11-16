@@ -217,6 +217,23 @@ impl Watch {
 mod tests {
     use super::*;
     #[test]
+    fn queue_overflow_reports_lost_coverage_even_without_a_known_watch_descriptor() {
+        let mut watch = Watch::new().unwrap();
+        let mut changes = Changes::default();
+        watch.event(
+            libc::inotify_event {
+                wd: -1,
+                mask: libc::IN_Q_OVERFLOW,
+                cookie: 0,
+                len: 0,
+            },
+            &[],
+            &mut changes,
+        );
+        assert!(changes.full);
+        assert!(changes.paths.is_empty());
+    }
+    #[test]
     fn tracks_new_subtrees_and_replaced_roots_without_following_links() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("root");

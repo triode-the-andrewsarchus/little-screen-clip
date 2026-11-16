@@ -337,6 +337,10 @@ impl Owner {
             let changes = self.watch.as_mut().map(Watch::changes).unwrap_or_default();
             let periodic = synchronized.elapsed()
                 >= Duration::from_secs(self.config.sync_interval_seconds.max(1));
+            if changes.full {
+                // Lost events invalidate the observation epoch, even on precise filesystems.
+                self.sync_roots.clear();
+            }
             if periodic || changes.full {
                 self.automatic();
                 synchronized = Instant::now();
@@ -677,7 +681,7 @@ impl Owner {
                 (&portable, &local),
                 cancel,
                 progress,
-                cached,
+                cached && portable.reliable_revision_cache()? && local.reliable_revision_cache()?,
             )?
         };
         pair.last_success = Some(now());

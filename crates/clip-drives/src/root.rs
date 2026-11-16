@@ -62,6 +62,13 @@ impl Root {
         }
         Ok(())
     }
+    /// Only known local filesystems provide sufficiently precise change metadata.
+    /// Removable FAT/NTFS, network and arbitrary FUSE sources require fresh hashes.
+    pub fn reliable_revision_cache(&self) -> Result<bool> {
+        Ok(reliable_change_metadata(
+            rustix::fs::fstatfs(&self.file)?.f_type as u64,
+        ))
+    }
     pub fn same_root(&self, other: &Self) -> bool {
         self.identity == other.identity && self.namespace == other.namespace
     }
@@ -299,9 +306,27 @@ impl Root {
     }
 }
 
+fn reliable_change_metadata(filesystem: u64) -> bool {
+    matches!(
+        filesystem as u32,
+        0xef53 | 0x9123683e | 0x58465342 | 0x01021994
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coarse_or_external_filesystems_never_authorize_fingerprint_cache_reuse() {
+        for magic in [
+            0x4d44, 0x2011bab0, 0x5346544e, 0x7366746e, 0xff534d42, 0x65735546, 0,
+        ] {
+            assert!(!reliable_change_metadata(magic));
+        }
+        for magic in [0xef53, 0x9123683e, 0x58465342, 0x01021994] {
+            assert!(reliable_change_metadata(magic));
+        }
+    }
     #[test]
     fn directory_replacement_and_symlink_escapes_are_rejected() {
         use std::os::unix::fs::symlink;
