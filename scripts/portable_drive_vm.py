@@ -70,6 +70,7 @@ def make_initrd(output, args, repo):
         init.append('mount -t 9p -o trans=virtio,version=9p2000.L,ro host_tools /opt/drive-tools')
     init.extend([
         'export PATH=/opt/drive-tools/bin:/usr/bin:/bin', 'export LC_ALL=C',
+        'mount -t tmpfs tmpfs /work',
         'mkdir -p /work/tmp /work/run /work/data /work/state',
         'export TMPDIR=/work/tmp XDG_RUNTIME_DIR=/work/run XDG_DATA_HOME=/work/data',
         'export LITTLE_CLIP_DRIVE_STATE_DIR=/work/state LITTLE_CLIP_DRIVE_VM=1',

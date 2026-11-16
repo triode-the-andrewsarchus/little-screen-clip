@@ -41,10 +41,15 @@ Each invocation receives:
 - `LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR=/work/media`
 - `LITTLE_CLIP_DRIVE_TEST_DEVICE` identifying the guest loop device
 - `LITTLE_CLIP_DRIVE_TEST_FILESYSTEM` (`vfat`, `exfat`, or `ntfs3`)
-- Private XDG, temporary and drive-service state directories under `/work`.
+- `LITTLE_CLIP_DRIVE_TEST_CAPACITY` and `LITTLE_CLIP_DRIVE_TEST_UUID`, observed from
+  the owned guest block device
+- Private XDG, temporary and drive-service state directories on the guest's
+  `/work` tmpfs, which supplies filesystem identities for backup publication.
 
-Application tests must opt into these inputs and preserve their ordinary fixture
-ownership checks. The bootstrap/remount probe alone does not verify backup, sync,
+Each command status is recorded as `GUEST_FILESYSTEM_RESULT`; a failing command
+marks the overall run failed while remaining filesystem cases still run. Mount or
+format failures abort an unsafe fixture setup. Application tests must opt into these
+inputs and preserve their ordinary fixture ownership checks. The bootstrap/remount probe alone does not verify backup, sync,
 catalog, device authorization or filesystem-name handling in the application.
 
 The output directory must be new. It retains the initramfs, exact QEMU command,
@@ -66,3 +71,12 @@ Verified on this host:
 
 These establish a usable isolated test environment. The application-level removable
 filesystem matrix remains a separate acceptance gate.
+
+The metadata handoff and tmpfs working-directory follow-up passed all three command
+invocations in `/tmp/portable-drive-vm-native-bootstrap/report.json`. The updated
+failure-continuation probe, `/tmp/portable-drive-vm-native-refusal-all/report.json`,
+records failure and completed cleanup for all three filesystems before rejecting the
+run. Native permission/link/timestamp probes are retained in
+`/tmp/portable-drive-vm-native-capabilities/guest.log`; FAT32/exFAT can acknowledge a
+chmod without changing their presented mode, so application fidelity tests must check
+observed metadata rather than syscall success alone.
