@@ -37,15 +37,7 @@ impl Owner {
             if self.drive(&drive.id)? != drive {
                 return Err("Drive changed while pinning RAM source".into());
             }
-            if self
-                .sync_jobs
-                .values()
-                .any(|job| job.plan.overlaps_root(&source))
-                || self
-                    .background
-                    .as_ref()
-                    .is_some_and(|job| job.roots.iter().any(|root| root.overlap(&source)))
-            {
+            if self.claims_busy(&[source.scope()]) {
                 return Err(
                     "RAM source overlaps an active storage operation; retry after it finishes"
                         .into(),

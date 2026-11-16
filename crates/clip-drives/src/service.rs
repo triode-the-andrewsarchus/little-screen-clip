@@ -33,6 +33,7 @@ pub struct Service {
 }
 mod background;
 mod lifetime;
+mod partition;
 mod policy;
 mod ram_save;
 mod ram_sessions;
@@ -48,6 +49,9 @@ struct Owner {
     deferred: std::collections::VecDeque<Envelope>,
     sync_epoch: u64,
     background: Option<background::Pending>,
+    partition: Option<partition::Pending>,
+    partition_jobs: little_clip_core::jobs::BackgroundJobs,
+    unmounter: partition::Unmounter,
     backup_jobs: little_clip_core::jobs::BackgroundJobs,
     inventory: Inventory,
     unidentified_ram: HashMap<String, Arc<Root>>,
@@ -119,6 +123,21 @@ impl Service {
         inventory: Inventory,
         config_path: Option<PathBuf>,
     ) -> Result<Self> {
+        Self::start_with_unmounter(
+            config,
+            state,
+            inventory,
+            config_path,
+            Arc::new(partition::unmount),
+        )
+    }
+    fn start_with_unmounter(
+        config: DriveConfig,
+        state: PathBuf,
+        inventory: Inventory,
+        config_path: Option<PathBuf>,
+        unmounter: partition::Unmounter,
+    ) -> Result<Self> {
         policy::validate_config(&config)?;
         let root = Root::create(&state)?;
         fs::set_permissions(&root.path, fs::Permissions::from_mode(0o700))?;
@@ -159,6 +178,9 @@ impl Service {
             deferred: Default::default(),
             sync_epoch: 0,
             background: None,
+            partition: None,
+            partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
+            unmounter,
             backup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             inventory,
             unidentified_ram: HashMap::new(),
@@ -409,6 +431,7 @@ impl Owner {
                 discovered = Instant::now();
             }
             self.poll_background();
+            self.poll_partition();
             self.poll_ram_setup();
             self.poll_sync();
             for envelope in std::mem::take(&mut self.deferred) {
@@ -467,6 +490,11 @@ impl Owner {
         }
         while !self.sync_jobs.is_empty() {
             self.poll_sync();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        while let Some(job) = &self.partition {
+            job.cancel.store(true, Ordering::Release);
+            self.poll_partition();
             std::thread::sleep(Duration::from_millis(20));
         }
         // Retain accepted bulk ownership and the singleton lock until actual completion.
@@ -535,22 +563,18 @@ impl Owner {
                 roots.push(root);
             }
         }
-        let busy = self.ram_setup.as_ref().is_some_and(|job| {
-            drive.as_ref() == Some(&job.drive.id)
-                || roots.iter().any(|root| job.source.overlap(root))
-        }) || self.sync_jobs.values().any(|job| {
-            drive.as_ref() == Some(&job.drive)
-                || roots.iter().any(|root| job.plan.overlaps_root(root))
-        }) || self.background.as_ref().is_some_and(|job| {
-            drive.as_ref() == Some(&job.drive)
-                || roots.iter().any(|a| job.roots.iter().any(|b| a.overlap(b)))
-        }) || self.sync_waiting.iter().any(|intent| {
-            self.db
-                .get::<SyncPair>("pair", &intent.pair)
-                .ok()
-                .flatten()
-                .is_some_and(|p| drive.as_ref() == Some(&p.drive))
-        });
+        let claims = roots.iter().map(Root::scope).collect::<Vec<_>>();
+        let busy = drive
+            .as_ref()
+            .is_some_and(|drive| self.check_busy(drive).is_err())
+            || self.claims_busy(&claims)
+            || self.sync_waiting.iter().any(|intent| {
+                self.db
+                    .get::<SyncPair>("pair", &intent.pair)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|pair| drive.as_ref() == Some(&pair.drive))
+            });
         drop(roots);
         if busy {
             if matches!(envelope.request, DriveRequest::Pause { paused: true, .. }) {
@@ -604,6 +628,17 @@ impl Owner {
         }
         if matches!(
             envelope.request,
+            DriveRequest::Eject { .. }
+                | DriveRequest::Backup {
+                    kind: BackupKind::Image,
+                    ..
+                }
+        ) {
+            self.start_partition(envelope);
+            return;
+        }
+        if matches!(
+            envelope.request,
             DriveRequest::Backup { .. } | DriveRequest::Catalog { .. }
         ) {
             self.start_background(envelope);
@@ -616,9 +651,8 @@ impl Owner {
         };
         op.state = "running".into();
         let _ = self.db.put("operation", id, &op);
-        let mut progress = job_progress(self.state.clone(), id.clone());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute(envelope.request, &envelope.cancel, &mut progress)
+            self.execute(envelope.request, &envelope.cancel)
         }));
         let result = result
             .unwrap_or_else(|_| Err("Storage worker failed; completed writes retained".into()));
@@ -639,24 +673,11 @@ impl Owner {
         discovery::select((self.inventory)()?, id)
     }
 
-    fn execute(
-        &mut self,
-        request: DriveRequest,
-        cancel: &AtomicBool,
-        progress: &mut impl FnMut(u64, u64),
-    ) -> Result<String> {
+    fn execute(&mut self, request: DriveRequest, cancel: &AtomicBool) -> Result<String> {
         cancelled(cancel)?;
         match request {
-            DriveRequest::Eject { drive } => {
-                self.check_busy(&drive)?;
-                let drive = self.drive(&drive)?;
-                for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-                    if pair.drive == drive.id && !pair.paused {
-                        self.synchronize(&pair.id, cancel, progress)?;
-                    }
-                }
-                self.unmount_partition(&drive)?;
-                Ok("Partition unmounted; RAM copy retained".into())
+            DriveRequest::Eject { .. } => {
+                Err("Eject must use retained pre-unmount admission".into())
             }
             DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
             DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
@@ -793,37 +814,6 @@ impl Owner {
             }
             DriveRequest::Status { .. } | DriveRequest::Cancel { .. } => {
                 Err("Request must use coordinator admission".into())
-            }
-        }
-    }
-    fn synchronize(
-        &mut self,
-        id: &str,
-        cancel: &AtomicBool,
-        progress: &mut impl FnMut(u64, u64),
-    ) -> Result<String> {
-        let pair: SyncPair = self.db.get("pair", id)?.ok_or("Unknown sync pair")?;
-        self.check_busy(&pair.drive)?;
-        let plan = self.prepare_sync(id)?;
-        let intent = reconciliation::Intent {
-            queued: Instant::now(),
-            pair: id.into(),
-            operation: None,
-            cancel: Arc::new(AtomicBool::new(cancel.load(Ordering::Acquire))),
-            paths: None,
-            initialize: false,
-            save: None,
-        };
-        // Synchronous pre-unmount reconciliation uses the accepted caller's token.
-        let result = plan.run_with_cancel(&self.db, &intent, cancel, progress);
-        match result {
-            Ok(message) => {
-                self.sync_result(&intent, Ok(message.clone()), Some(plan));
-                Ok(message)
-            }
-            Err(error) => {
-                self.sync_result(&intent, Err(error.to_string().into()), None);
-                Err(error)
             }
         }
     }
@@ -983,6 +973,16 @@ impl Owner {
     fn publish_policy(&self) -> Result<()> {
         let mut excluded = Vec::<PathBuf>::new();
         excluded.extend(
+            self.partition
+                .as_ref()
+                .and_then(|job| job.destination.as_ref().map(|root| root.path.clone())),
+        );
+        excluded.extend(
+            self.background
+                .as_ref()
+                .and_then(|job| job.destination.clone()),
+        );
+        excluded.extend(
             self.db
                 .list::<ram_setup::Allocation>("ram-allocation", 0, 1000)?
                 .into_iter()
@@ -1045,6 +1045,13 @@ fn write_task<T: Send + 'static>(
     little_clip_core::jobs::task::Task::start_unbounded(pool, move |_| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
             .unwrap_or_else(|_| Err("Storage worker panicked; completed writes retained".into()))
+    })
+}
+fn write_result<T>(
+    result: std::result::Result<Result<T>, little_clip_core::JobError>,
+) -> Result<T> {
+    result.unwrap_or_else(|error| {
+        Err(format!("Storage worker failed: {error}; completed writes retained").into())
     })
 }
 fn job_progress(state: PathBuf, id: String) -> impl FnMut(u64, u64) {
@@ -1135,14 +1142,12 @@ mod tests {
         assert_eq!(config.drives.ram_capacity_limit, 3_000_000_000);
         assert_eq!(config.drives.backup_directory.as_ref(), Some(&destination));
         std::fs::write(&path, "invalid [").unwrap();
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::BackupDirectory {
+        let id = accept(
+            &service,
+            DriveRequest::BackupDirectory {
                 path: temp.path().join("other-backup"),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         let operation = wait_operation(&service, &id, |op| op.finished.is_some());
         assert_eq!(operation.state, "failed");
         assert!(
@@ -1281,16 +1286,13 @@ mod tests {
         let drive = fixture_drive(&source, "queued-cancel");
         let block = Arc::new(AtomicBool::new(false));
         let barrier = block.clone();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let release_rx = Mutex::new(release_rx);
+        let (entered_rx, release_tx, gate) = worker_gate();
         let service = Service::start_with_inventory(
             DriveConfig::default(),
             temp.path().join("state"),
             Arc::new(move || {
                 if barrier.swap(false, Ordering::AcqRel) {
-                    entered_tx.send(()).unwrap();
-                    release_rx.lock().unwrap().recv().unwrap();
+                    gate();
                 }
                 Ok(vec![drive.clone()])
             }),
@@ -1307,15 +1309,13 @@ mod tests {
             .unwrap();
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let destination = temp.path().join("must-not-be-created");
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::SaveRam {
+        let id = accept(
+            &service,
+            DriveRequest::SaveRam {
                 session: "not-an-enrolled-session".into(),
                 destination: destination.clone(),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         service
             .request(DriveRequest::Cancel {
                 operation: id.clone(),
@@ -1329,6 +1329,66 @@ mod tests {
         assert!(!destination.exists());
         service.shutdown().unwrap();
     }
+    struct TestDrives {
+        temp: tempfile::TempDir,
+        drives: Arc<Mutex<Vec<Drive>>>,
+    }
+    impl TestDrives {
+        fn new(bytes: u64) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let small = temp.path().join("small");
+            let large = temp.path().join("large");
+            fs::create_dir(&small).unwrap();
+            fs::create_dir(&large).unwrap();
+            fs::write(small.join("edit"), b"initial").unwrap();
+            File::create(large.join("large-sparse"))
+                .unwrap()
+                .set_len(bytes)
+                .unwrap();
+            let drives = Arc::new(Mutex::new(vec![
+                fixture_drive(&small, "small"),
+                fixture_drive(&large, "large"),
+            ]));
+            Self { temp, drives }
+        }
+        fn pair(&self, service: &Service, drive: &str) -> PathBuf {
+            let local = self.temp.path().join(format!("paired-{drive}"));
+            finish(
+                service,
+                DriveRequest::Pair {
+                    drive: format!("part:{drive}"),
+                    relative: PathBuf::new(),
+                    local: local.clone(),
+                },
+            );
+            local
+        }
+        fn start(
+            &self,
+            observed: Option<Arc<dyn Fn() + Send + Sync>>,
+            unmounter: partition::Unmounter,
+        ) -> Service {
+            let drives = self.drives.clone();
+            Service::start_with_unmounter(
+                DriveConfig {
+                    ram_min_available: 0,
+                    sync_interval_seconds: 3600,
+                    backup_directory: Some(self.temp.path().join("backup")),
+                    ..Default::default()
+                },
+                self.temp.path().join("state"),
+                Arc::new(move || {
+                    if let Some(observe) = &observed {
+                        observe();
+                    }
+                    Ok(drives.lock().unwrap().clone())
+                }),
+                None,
+                unmounter,
+            )
+            .unwrap()
+        }
+    }
     fn two_drives(bytes: u64) -> (tempfile::TempDir, Service, PathBuf) {
         two_drives_observed(bytes, None)
     }
@@ -1336,42 +1396,338 @@ mod tests {
         bytes: u64,
         observed: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> (tempfile::TempDir, Service, PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
-        let small = temp.path().join("small");
-        let large = temp.path().join("large");
-        fs::create_dir(&small).unwrap();
-        fs::create_dir(&large).unwrap();
-        fs::write(small.join("edit"), b"initial").unwrap();
-        File::create(large.join("large-sparse"))
-            .unwrap()
-            .set_len(bytes)
-            .unwrap();
-        let drives = vec![
-            fixture_drive(&small, "small"),
-            fixture_drive(&large, "large"),
-        ];
-        let service = Service::start_with_inventory(
-            DriveConfig {
-                ram_min_available: 0,
-                sync_interval_seconds: 3600,
-                backup_directory: Some(temp.path().join("backup")),
-                ..Default::default()
-            },
-            temp.path().join("state"),
-            Arc::new(move || {
-                if let Some(observe) = &observed {
-                    observe();
-                }
-                Ok(drives.clone())
+        let fixture = TestDrives::new(bytes);
+        let service = fixture.start(observed, Arc::new(partition::unmount));
+        let small = fixture.temp.path().join("small");
+        (fixture.temp, service, small)
+    }
+    fn worker_gate() -> (
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let wait = Arc::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(20))
+                .unwrap();
+        });
+        (entered_rx, release_tx, wait)
+    }
+    #[test]
+    fn cancelled_image_waits_for_unmount_result_and_never_starts_copying() {
+        let fixture = TestDrives::new(0);
+        let drives = fixture.drives.clone();
+        let (entered, release, gate) = worker_gate();
+        let service = fixture.start(
+            None,
+            Arc::new(move |drive| {
+                gate();
+                drives
+                    .lock()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|candidate| candidate.device == drive.device)
+                    .unwrap()
+                    .mount = None;
+                Ok(())
             }),
+        );
+        let id = accept(
+            &service,
+            DriveRequest::Backup {
+                drive: "part:large".into(),
+                kind: BackupKind::Image,
+            },
+        );
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        service
+            .request(DriveRequest::Cancel {
+                operation: id.clone(),
+            })
+            .unwrap();
+        assert_unfinished(&service, &id);
+        finish(
+            &service,
+            DriveRequest::Rule {
+                drive: "part:small".into(),
+                relative: PathBuf::new(),
+                catalog: false,
+                index: false,
+            },
+        );
+        release.send(()).unwrap();
+        let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "cancelled");
+        assert!(
+            operation.message.contains("Partition is unmounted"),
+            "{}",
+            operation.message
+        );
+        assert!(status(&service).backups.is_empty());
+        assert!(!fixture.temp.path().join("backup/large").exists());
+        assert!(
+            status(&service)
+                .drives
+                .iter()
+                .find(|drive| drive.id == "part:large")
+                .unwrap()
+                .mount
+                .is_none()
+        );
+        service.shutdown().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; unmounts only an owned FUSE fixture"]
+    fn partition_unmount_keeps_other_ram_responsive_and_retains_completed_cancellation() {
+        let fixture = TestDrives::new(0);
+        let base = crate::ram::directory(&DriveConfig::default()).unwrap();
+        let backing = crate::ram::prepare(
+            &base,
+            &crate::ram::Budget {
+                bytes: 128 * 1024 * 1024,
+                inodes: 4096,
+            },
+            |_| Ok(()),
         )
         .unwrap();
-        (temp, service, small)
+        let source_id = uuid::Uuid::new_v4().to_string();
+        let native = crate::ram::Mounted::start(&backing, &source_id, true, None).unwrap();
+        let source = backing.directory.join("contents");
+        fs::write(source.join("edit"), b"original portable content").unwrap();
+        fixture.drives.lock().unwrap()[1].mount = Some(source.clone());
+        let drives = fixture.drives.clone();
+        let blocked = Arc::new(AtomicBool::new(false));
+        let block = blocked.clone();
+        let (entered, release, gate) = worker_gate();
+        let service = fixture.start(
+            None,
+            Arc::new(move |drive| {
+                if block.swap(false, Ordering::AcqRel) {
+                    gate();
+                }
+                let result = CommandRequest::new("fusermount3")
+                    .arg("-u")
+                    .arg(drive.mount.as_ref().unwrap())
+                    .timeout(Duration::from_secs(5))
+                    .max_output_bytes(4096)
+                    .run()
+                    .map_err(|error| error.to_string())?;
+                if !result.status.success() {
+                    return Err(
+                        format!("Owned FUSE fixture busy: {}", result.stderr_lossy()).into(),
+                    );
+                }
+                drives
+                    .lock()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|candidate| candidate.device == drive.device)
+                    .unwrap()
+                    .mount = None;
+                Ok(())
+            }),
+        );
+        finish(
+            &service,
+            DriveRequest::CopyToRam {
+                drive: "part:small".into(),
+            },
+        );
+        let small_ram = status(&service).ram.into_iter().next().unwrap();
+        let local = fixture.pair(&service, "large");
+        fs::write(local.join("edit"), b"local edit flushed before eject").unwrap();
+        let external_reader = Root::open(&source).unwrap();
+        let busy = accept(
+            &service,
+            DriveRequest::Eject {
+                drive: "part:large".into(),
+            },
+        );
+        let operation = wait_operation(&service, &busy, |op| op.finished.is_some());
+        assert_eq!(operation.state, "failed");
+        assert!(
+            operation.message.contains("Owned FUSE fixture busy"),
+            "{}",
+            operation.message
+        );
+        assert_eq!(
+            fs::read(source.join("edit")).unwrap(),
+            b"local edit flushed before eject"
+        );
+        drop(external_reader);
+        blocked.store(true, Ordering::Release);
+        let id = accept(
+            &service,
+            DriveRequest::Eject {
+                drive: "part:large".into(),
+            },
+        );
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        fs::write(
+            small_ram.path.join("edit"),
+            b"RAM edit during pending unmount",
+        )
+        .unwrap();
+        wait_contents(
+            &fixture.temp.path().join("small/edit"),
+            b"RAM edit during pending unmount",
+        );
+        service
+            .request(DriveRequest::Cancel {
+                operation: id.clone(),
+            })
+            .unwrap();
+        assert_unfinished(&service, &id);
+        release.send(()).unwrap();
+        let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "complete", "{}", operation.message);
+        assert!(operation.message.contains("Partition unmounted"));
+        finish(
+            &service,
+            DriveRequest::DiscardRam {
+                session: small_ram.id,
+                confirmed: true,
+            },
+        );
+        service.shutdown().unwrap();
+        drop(native);
+        let recovered = crate::ram::Mounted::start(&backing, &source_id, false, None).unwrap();
+        assert_eq!(
+            fs::read(source.join("edit")).unwrap(),
+            b"local edit flushed before eject"
+        );
+        drop(recovered);
+        crate::ram::discard(&backing, &source_id).unwrap();
+    }
+
+    #[test]
+    fn image_authority_refusal_keeps_completed_flushes_and_creates_no_backup() {
+        let fixture = TestDrives::new(0);
+        let source = fixture.temp.path().join("large");
+        fs::write(source.join("edit"), b"before").unwrap();
+        let checked = source.clone();
+        let service = fixture.start(
+            None,
+            Arc::new(move |_| {
+                assert_eq!(
+                    fs::read(checked.join("edit")).unwrap(),
+                    b"flushed before unmount"
+                );
+                Err("owned fixture authorization declined".into())
+            }),
+        );
+        let local = fixture.pair(&service, "large");
+        fs::write(local.join("edit"), b"flushed before unmount").unwrap();
+        let id = accept(
+            &service,
+            DriveRequest::Backup {
+                drive: "part:large".into(),
+                kind: BackupKind::Image,
+            },
+        );
+        let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "failed");
+        assert!(
+            operation
+                .message
+                .contains("owned fixture authorization declined"),
+            "{}",
+            operation.message
+        );
+        assert!(operation.message.contains("still appears mounted"));
+        assert!(status(&service).backups.is_empty());
+        assert!(!fixture.temp.path().join("backup/large").exists());
+        assert_eq!(
+            fs::read(local.join("edit")).unwrap(),
+            b"flushed before unmount"
+        );
+        let pair = status(&service).pairs.into_iter().next().unwrap();
+        assert!(pair.last_success.is_some());
+        assert!(pair.status.contains("files copied"));
+        service.shutdown().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; uses only owned fixture storage"]
+    fn file_backup_rejects_private_ram_backing_configured_before_restart() {
+        let fixture = TestDrives::new(0);
+        let service = fixture.start(None, Arc::new(partition::unmount));
+        finish(
+            &service,
+            DriveRequest::CopyToRam {
+                drive: "part:small".into(),
+            },
+        );
+        let snapshot = status(&service);
+        let session = snapshot.ram.into_iter().next().unwrap();
+        let backing = session.backing.unwrap();
+        let mut config = snapshot.config;
+        config.backup_directory = Some(backing.directory.clone());
+        service.shutdown().unwrap();
+        let drives = fixture.drives.clone();
+        let restarted = Service::start_with_unmounter(
+            config,
+            fixture.temp.path().join("state"),
+            Arc::new(move || Ok(drives.lock().unwrap().clone())),
+            None,
+            Arc::new(partition::unmount),
+        )
+        .unwrap();
+        let id = accept(
+            &restarted,
+            DriveRequest::Backup {
+                drive: "part:large".into(),
+                kind: BackupKind::Files,
+            },
+        );
+        let operation = wait_operation(&restarted, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "failed");
+        assert!(
+            operation.message.contains("private RAM backing storage"),
+            "{}",
+            operation.message
+        );
+        assert!(!backing.directory.join("large").exists());
+        assert!(backing.directory.join("volume.ext4").is_file());
+        assert!(status(&restarted).backups.is_empty());
+        finish(
+            &restarted,
+            DriveRequest::DiscardRam {
+                session: session.id,
+                confirmed: true,
+            },
+        );
+        restarted.shutdown().unwrap();
+    }
+
+    fn assert_unfinished(service: &Service, id: &str) {
+        let snapshot = status(service);
+        let operation = snapshot
+            .operations
+            .iter()
+            .find(|operation| operation.id == id)
+            .unwrap();
+        assert!(
+            operation.finished.is_none(),
+            "operation finished while its worker was held: {}",
+            operation.message
+        );
+    }
+    fn accept(service: &Service, request: DriveRequest) -> String {
+        match service.request(request).unwrap() {
+            DriveReply::Accepted(id) => id,
+            _ => panic!("expected an accepted operation"),
+        }
     }
     fn finish(service: &Service, request: DriveRequest) -> DriveOperation {
-        let DriveReply::Accepted(id) = service.request(request).unwrap() else {
-            panic!("accepted operation");
-        };
+        let id = accept(service, request);
         let operation = wait_operation(service, &id, |op| op.finished.is_some());
         assert_eq!(operation.state, "complete", "{}", operation.message);
         operation
@@ -1408,9 +1764,7 @@ mod tests {
                 index: false,
             },
         ] {
-            let DriveReply::Accepted(id) = service.request(request).unwrap() else {
-                panic!("accepted");
-            };
+            let id = accept(&service, request);
             ids.push(id);
         }
         service.shutdown().unwrap();
@@ -1447,16 +1801,14 @@ mod tests {
                 local: local.clone(),
             },
         );
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::Pair {
+        let id = accept(
+            &service,
+            DriveRequest::Pair {
                 drive: "part:large".into(),
                 relative: PathBuf::new(),
                 local: temp.path().join("large-local"),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         wait_operation(&service, &id, |op| op.state == "running");
         fs::write(local.join("edit"), b"independent event during full scan").unwrap();
         wait_contents(&small.join("edit"), b"independent event during full scan");
@@ -1487,21 +1839,14 @@ mod tests {
     fn ram_preflight_keeps_other_writeback_responsive_and_cancellation_retains_admission() {
         let held = Arc::new(AtomicBool::new(false));
         let hold = held.clone();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let release_rx = Mutex::new(release_rx);
+        let (entered_rx, release_tx, gate) = worker_gate();
         let (temp, service, small) = two_drives_observed(
             1024,
             Some(Arc::new(move || {
                 if std::thread::current().name() != Some("portable-drive-owner")
                     && hold.swap(false, Ordering::AcqRel)
                 {
-                    entered_tx.send(()).unwrap();
-                    release_rx
-                        .lock()
-                        .unwrap()
-                        .recv_timeout(Duration::from_secs(20))
-                        .unwrap();
+                    gate();
                 }
             })),
         );
@@ -1513,14 +1858,12 @@ mod tests {
         );
         let ram = status(&service).ram.into_iter().next().unwrap();
         held.store(true, Ordering::Release);
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::CopyToRam {
+        let id = accept(
+            &service,
+            DriveRequest::CopyToRam {
                 drive: "part:large".into(),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         fs::write(ram.path.join("edit"), b"writeback while preflight is held").unwrap();
         wait_contents(&small.join("edit"), b"writeback while preflight is held");
@@ -1534,11 +1877,7 @@ mod tests {
         let mut config = status(&service).config;
         config.ram_session_max_bytes = 128 * 1024 * 1024;
         config.ram_total_max_bytes = config.ram_session_max_bytes;
-        let DriveReply::Accepted(reload) =
-            service.request(DriveRequest::Configure { config }).unwrap()
-        else {
-            panic!("accepted");
-        };
+        let reload = accept(&service, DriveRequest::Configure { config });
         service
             .request(DriveRequest::Cancel {
                 operation: id.clone(),
@@ -1603,14 +1942,12 @@ mod tests {
             .into_iter()
             .find(|s| s.drive == "part:small")
             .unwrap();
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::CopyToRam {
+        let id = accept(
+            &service,
+            DriveRequest::CopyToRam {
                 drive: "part:large".into(),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         wait_operation(&service, &id, |op| op.state == "running");
         fs::write(
             ram.path.join("edit"),
@@ -1821,14 +2158,12 @@ mod tests {
             Arc::new(move || Ok(vec![drive.clone()])),
         )
         .unwrap();
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::CopyToRam {
+        let id = accept(
+            &service,
+            DriveRequest::CopyToRam {
                 drive: "part:cancelled".into(),
-            })
-            .unwrap()
-        else {
-            panic!("accepted");
-        };
+            },
+        );
         let start = Instant::now();
         let session = loop {
             if let Some(session) = status(&service).ram.into_iter().next()
@@ -1904,15 +2239,13 @@ mod tests {
             },
         );
         let ram = status(&service).ram[0].clone();
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::Backup {
+        let id = accept(
+            &service,
+            DriveRequest::Backup {
                 drive: "part:large".into(),
                 kind: BackupKind::Files,
-            })
-            .unwrap()
-        else {
-            panic!()
-        };
+            },
+        );
         wait_operation(&service, &id, |op| op.state == "running");
         fs::write(ram.path.join("edit"), b"RAM first during backup").unwrap();
         wait_contents(&small.join("edit"), b"RAM first during backup");
@@ -1952,15 +2285,13 @@ mod tests {
             Arc::new(move || Ok(vec![drive.clone()])),
         )
         .unwrap();
-        let DriveReply::Accepted(id) = service
-            .request(DriveRequest::Backup {
+        let id = accept(
+            &service,
+            DriveRequest::Backup {
                 drive: "part:duplicate".into(),
                 kind: BackupKind::Image,
-            })
-            .unwrap()
-        else {
-            panic!()
-        };
+            },
+        );
         let start = Instant::now();
         loop {
             if let Some(op) = status(&service)

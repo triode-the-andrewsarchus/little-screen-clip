@@ -66,7 +66,7 @@ impl Watch {
     }
     /// Releases retained pins across the partition's filesystem and bind aliases.
     pub fn remove_scope(&mut self, scope: &crate::root::Scope) {
-        self.remove_matching(|root| scope.same_filesystem(root));
+        self.remove_matching(|root| scope.overlap(&root.scope()));
     }
     fn remove_matching(&mut self, matches: impl Fn(&Root) -> bool) {
         self.pending.retain(|(root, _)| !matches(root));

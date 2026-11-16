@@ -5,6 +5,7 @@ use little_clip_core::jobs::task::Task;
 pub(super) struct Pending {
     pub(super) drive: String,
     pub(super) roots: Vec<Arc<Root>>,
+    pub(super) destination: Option<PathBuf>,
     id: String,
     pub(super) cancel: Arc<AtomicBool>,
     task: Task<Result<String>>,
@@ -16,6 +17,10 @@ impl Owner {
             .as_ref()
             .is_some_and(|job| job.drive.id == drive)
             || self
+                .partition
+                .as_ref()
+                .is_some_and(|job| job.drive == drive)
+            || self
                 .background
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)
@@ -24,48 +29,6 @@ impl Owner {
             return Err("This partition has an active storage operation; synchronization resumes when it finishes".into());
         }
         Ok(())
-    }
-    pub(super) fn unmount_partition(&mut self, drive: &Drive) -> Result<()> {
-        if let Some(path) = &drive.mount {
-            let scope = Root::open(path)?.scope();
-            self.sync_roots.retain(|_, (portable, local)| {
-                !scope.same_filesystem(portable) && !scope.same_filesystem(local)
-            });
-            self.unidentified_ram
-                .retain(|_, root| !scope.same_filesystem(root));
-            if let Some(watch) = &mut self.watch {
-                watch.remove_scope(&scope);
-            }
-        }
-        let output = CommandRequest::new("udisksctl")
-            .args(["unmount", "--block-device"])
-            .arg(&drive.device)
-            .timeout(Duration::from_secs(60))
-            .own_process_group()
-            .run()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err(format!(
-                "Could not unmount partition; local and RAM edits retained: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn prepare_backup(&mut self, drive: &str, image: bool, cancel: &AtomicBool) -> Result<Drive> {
-        let selector = drive.to_owned();
-        let mut drive = self.drive(drive)?;
-        if image && drive.mount.is_some() {
-            for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-                if pair.drive == drive.id && !pair.paused {
-                    self.synchronize(&pair.id, cancel, &mut |_, _| {})?;
-                }
-            }
-            self.unmount_partition(&drive)?;
-            drive = self.drive(&selector)?;
-        }
-        Ok(drive)
     }
     pub(super) fn start_background(&mut self, envelope: Envelope) {
         if matches!(envelope.request, DriveRequest::Backup { .. })
@@ -78,95 +41,73 @@ impl Owner {
             );
             return;
         }
-        let resources = (|| -> Result<Vec<Arc<Root>>> {
+        if self.background.is_some()
+            || self
+                .partition
+                .as_ref()
+                .is_some_and(partition::Pending::is_image)
+        {
+            self.defer_operation(envelope);
+            return;
+        }
+        let resources = (|| -> Result<(Drive, Vec<Arc<Root>>)> {
             let selector = match &envelope.request {
                 DriveRequest::Backup { drive, .. } | DriveRequest::Catalog { drive } => drive,
                 _ => return Err("Missing bulk drive".into()),
             };
             let drive = self.drive(selector)?;
             let mut roots = Vec::new();
-            if let Some(path) = drive.mount {
-                roots.push(Arc::new(Root::open(&path)?));
+            if let Some(path) = &drive.mount {
+                roots.push(Arc::new(Root::open(path)?));
             }
-            if matches!(envelope.request, DriveRequest::Backup { .. })
-                && let Some(path) = &self.config.backup_directory
-            {
-                roots.push(Arc::new(Root::create(path)?));
+            if matches!(envelope.request, DriveRequest::Backup { .. }) {
+                let source = roots.first().map(Arc::as_ref);
+                roots.push(self.backup_destination(source)?);
             }
-            Ok(roots)
+            if self.drive(selector)? != drive {
+                return Err("Drive changed while pinning bulk-operation roots".into());
+            }
+            Ok((drive, roots))
         })();
-        if let Err(error) = resources.as_ref() {
-            self.finish_operation(
-                &envelope.id,
-                &envelope.cancel,
-                Err(error.to_string().into()),
-            );
-            return;
-        }
-        if let Ok(roots) = &resources
-            && (self
-                .ram_setup
-                .as_ref()
-                .is_some_and(|job| roots.iter().any(|root| job.source.overlap(root)))
-                || self
-                    .sync_jobs
-                    .values()
-                    .any(|job| roots.iter().any(|root| job.plan.overlaps_root(root))))
-        {
-            self.defer_operation(envelope);
-            return;
-        }
-        // Pre-unmount flushes must not retain the admission pins themselves.
-        drop(resources);
-        let prepared = (|| {
-            if self.background.is_some() {
-                return Err("One backup/catalog is already active; retry after it finishes".into());
-            }
-            match &envelope.request {
-                DriveRequest::Backup { drive, kind } => {
-                    self.prepare_backup(drive, *kind == BackupKind::Image, &envelope.cancel)
-                }
-                DriveRequest::Catalog { drive } => self.drive(drive),
-                _ => Err("Invalid bulk operation".into()),
-            }
-        })();
-        let drive = match prepared {
-            Ok(drive) => drive,
+        let (drive, roots) = match resources {
+            Ok(value) => value,
             Err(error) => {
                 self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
                 return;
             }
         };
+        if self.claims_busy(&roots.iter().map(|root| root.scope()).collect::<Vec<_>>()) {
+            self.defer_operation(envelope);
+            return;
+        }
+        self.launch_bulk(envelope, drive, self.config.clone(), roots);
+    }
+    pub(super) fn launch_bulk(
+        &mut self,
+        envelope: Envelope,
+        drive: Drive,
+        config: DriveConfig,
+        roots: Vec<Arc<Root>>,
+    ) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", &envelope.id) {
             operation.state = "running".into();
             let _ = self.db.put("operation", &envelope.id, &operation);
         }
         let state = self.state.clone();
-        let config = self.config.clone();
         let id = envelope.id.clone();
         let cancel = envelope.cancel.clone();
         let drive_id = drive.id.clone();
-        let roots = (|| -> Result<Vec<Arc<Root>>> {
-            let mut roots = Vec::new();
-            if let Some(path) = &drive.mount {
-                roots.push(Arc::new(Root::open(path)?));
-            }
-            if let Some(path) = &self.config.backup_directory {
-                roots.push(Arc::new(Root::open(path)?));
-            }
-            Ok(roots)
-        })();
-        let roots = match roots {
-            Ok(roots) => roots,
-            Err(error) => {
-                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
-                return;
-            }
-        };
+        let destination = matches!(envelope.request, DriveRequest::Backup { .. })
+            .then(|| config.backup_directory.clone())
+            .flatten();
+        let worker_roots = roots.clone();
         let task = write_task(&self.backup_jobs, move || {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
             let mut progress = job_progress(state.clone(), id);
             cancelled(&cancel)?;
+            for root in worker_roots {
+                root.validate()?;
+            }
             match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
                     backup::recover_publications(&db)?;
@@ -202,6 +143,7 @@ impl Owner {
         self.background = Some(Pending {
             drive: drive_id,
             roots,
+            destination,
             id: envelope.id,
             cancel: envelope.cancel,
             task,
@@ -211,9 +153,7 @@ impl Owner {
         let result = self.background.as_ref().and_then(|job| job.task.poll());
         if let Some(result) = result {
             let job = self.background.take().expect("polled retained job");
-            let result = result.unwrap_or_else(|e| {
-                Err(format!("Storage worker failed: {e}; completed writes retained").into())
-            });
+            let result = write_result(result);
             self.finish_operation(&job.id, &job.cancel, result);
             self.automatic();
         }

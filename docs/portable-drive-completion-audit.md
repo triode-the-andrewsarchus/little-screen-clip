@@ -10,8 +10,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush/preparation still needs scheduling off the owner thread. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers the entire selected filesystem, including aliases. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; real bind/case-fold aliases, managed-root coverage and image destinations still need the complete matrix. |
+| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers overlapping observed filesystem regions, including bind aliases, while retaining unrelated watches. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; a restarted native fixture also proves startup-configured file backups refuse private RAM backing. Real bind/case-fold aliases, remaining managed-root coverage, image destinations and device-node lifetime binding still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
@@ -32,7 +32,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
-| 5.1 | Open | Imaging flush/unmount exists. Daemon cache and watch pins are retired before unmount; a real owned FUSE fixture proves normal unmount fails with pins and succeeds after retirement. Exact size/space presentation and complete reader/auth coordination remain. |
+| 5.1 | Partial | Preflush and unmount now run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Exact size/space presentation, device lifetime binding and real UDisks authorization coordination remain. |
 | 5.2 | Host gate | UDisks OpenForBackup implemented; real authorized/declined/busy-device acceptance is blocked by interactive PolicyKit. |
 | 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; typed layout facts and full authorized-device publication evidence remain. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs/device matrix remains. |
@@ -184,3 +184,43 @@ coordinates conservatively overlap. Four root-policy tests, ordinary backend tes
 and backend all-target clippy pass. The original architecture comparison remains
 REGRESSION with seventeen net new clone groups and average CCN 3.48; this checkpoint
 adds no clone group. Report: `.fitness/portable-drives-unmount-scope-architecture.json`.
+
+
+Partition-preparation checkpoint: Eject and partition-image requests share retained
+preflush/unmount stages on one bounded worker. Pair/RAM status updates are committed
+together before advancing past each flush. All worker admission now shares the same
+captured scope-overlap policy. Snapshot reuse avoids rediscovering the drive twice
+per enrolled folder during a single pre-unmount admission. Image requests reserve
+the future bulk slot and keep their admitted destination/configuration through the
+handoff; in-flight destination exclusions survive preference changes.
+
+Authority refusal and cancellation fixtures prove that no completed image is
+advertised and no partition backup folder is created. A real owned FUSE fixture
+first refuses normal unmount with an external pin; after releasing it, another RAM
+session flushes an edit while unmount is held. Cancellation waits for that result
+and records the completed eject, and remounting the owned fixture verifies the last
+local edit was flushed. Actual UDisks/PolicyKit acceptance remains host-gated.
+
+File backups also use the common managed-destination guard. A restarted native
+fixture with a backup directory pointing into private RAM backing refuses the
+operation before creating any backup entry or damaging the image.
+
+Validation: 40 ordinary backend tests passed; nine native RAM fixtures passed in
+11.89 seconds, and the added private-backing refusal fixture passed separately.
+The rebuilt test-support host passed all three shutdown tests. Targeted backend
+clippy passes with warnings denied; daemon, file-manager and CLI compilation also
+passed. No user daemon or attached media were changed.
+
+Remaining partition work includes precise size/free-space presentation, device-node
+lifetime binding before/after authorized open, explicit remount restoration and
+phase-specific durable restart recovery. These remain required rather than being
+inferred from the narrower unmount tests. Architecture comparison still reports
+REGRESSION; admission guards and the original clone/complexity backlog remain under
+review. The final report for this checkpoint is recorded below.
+
+Final partition checkpoint comparison remains REGRESSION: seventeen net new clone
+groups, duplication 7.30% to 7.22%, average CCN 3.48, max 274 and cycles 143
+unchanged. Consolidating admission policy, accepted-request fixtures and shared
+barriers removed four new clone groups found in the first measurement. The partition
+admission function remains a CCN-20 review hotspot. Report:
+`.fitness/portable-drives-partition-preparation-architecture.json`.

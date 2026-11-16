@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 #[derive(Clone)]
 pub(super) struct Plan {
-    pair: SyncPair,
+    pub(super) pair: SyncPair,
     portable: Arc<Root>,
     local: Arc<Root>,
     cached: bool,
@@ -27,6 +27,39 @@ pub(super) struct Pending {
     epoch: u64,
     task: Task<Result<String>>,
 }
+/// Persists completed reconciliation effects for both normal jobs and pre-unmount flushes.
+pub(super) fn persist_result(db: &Store, intent: &Intent, result: &Result<String>) -> Result<()> {
+    let transaction = db.0.unchecked_transaction()?;
+    if let Some(mut pair) = db.get::<SyncPair>("pair", &intent.pair)? {
+        match result {
+            Ok(message) => {
+                pair.last_success = Some(now());
+                pair.status = message.clone();
+                if intent.initialize {
+                    pair.paused = false;
+                }
+            }
+            Err(error) => {
+                pair.status = error.to_string();
+                if intent.operation.is_some() && pair.last_success.is_none() {
+                    pair.paused = true;
+                }
+            }
+        }
+        db.put("pair", &pair.id, &pair)?;
+        if let Some(mut session) = db.get::<RamSession>("ram", &pair.id)? {
+            session.status = pair.status.clone();
+            if result.is_ok() {
+                session.ready = true;
+                session.connected = true;
+            }
+            db.put("ram", &pair.id, &session)?;
+        }
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 impl Plan {
     pub(super) fn run_with_cancel(
         &self,
@@ -144,10 +177,19 @@ impl Owner {
     pub(super) fn prepare_sync(&self, id: &str) -> Result<Plan> {
         let pair: SyncPair = self.db.get("pair", id)?.ok_or("Unknown sync pair")?;
         let drive = self.drive(&pair.drive)?;
-        if drive.evidence != pair.evidence {
+        let plan = self.prepare_sync_pair(pair, &drive)?;
+        if self.drive(&drive.id)? != drive {
+            return Err(
+                "Drive changed while pinning sync roots; retry with fresh inventory".into(),
+            );
+        }
+        Ok(plan)
+    }
+    pub(super) fn prepare_sync_pair(&self, pair: SyncPair, drive: &Drive) -> Result<Plan> {
+        if drive.ambiguous || drive.evidence != pair.evidence {
             return Err("Drive identity differs from the enrollment; sync suspended".into());
         }
-        let session = self.db.get::<RamSession>("ram", id)?;
+        let session = self.db.get::<RamSession>("ram", &pair.id)?;
         if drive.read_only && !(pair.ram && session.as_ref().is_some_and(|s| !s.ready)) {
             return Err("Drive is read-only; edits remain local".into());
         }
@@ -158,7 +200,7 @@ impl Owner {
         let portable = Arc::new(Root::open(&mount.join(&pair.relative))?);
         if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
             self.unidentified_ram
-                .get(id)
+                .get(&pair.id)
                 .ok_or("No persistent media identity; writeback requires a new explicit session")?
                 .validate()?;
         }
@@ -169,18 +211,12 @@ impl Owner {
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
         }
-        let cached = self.sync_roots.get(id).is_some_and(|(a, b)| {
+        let cached = self.sync_roots.get(&pair.id).is_some_and(|(a, b)| {
             a.validate().is_ok()
                 && b.validate().is_ok()
                 && a.same_root(&portable)
                 && b.same_root(&local)
         });
-        let current = self.drive(&pair.drive)?;
-        if current != drive {
-            return Err(
-                "Drive changed while pinning sync roots; retry with fresh inventory".into(),
-            );
-        }
         Ok(Plan {
             pair,
             portable,
@@ -304,20 +340,7 @@ impl Owner {
                 self.queue_sync(intent);
                 continue;
             }
-            if self
-                .ram_setup
-                .as_ref()
-                .is_some_and(|job| plan.overlaps_root(&job.source))
-                || self
-                    .background
-                    .as_ref()
-                    .is_some_and(|job| job.roots.iter().any(|root| plan.overlaps_root(root)))
-                || self.check_busy(&plan.pair.drive).is_err()
-                || self
-                    .sync_jobs
-                    .values()
-                    .any(|other| plan.overlaps(&other.plan))
-            {
+            if self.claims_busy(&plan.scopes()) || self.check_busy(&plan.pair.drive).is_err() {
                 self.queue_sync(intent);
                 continue;
             }
@@ -391,32 +414,16 @@ impl Owner {
             }
             return;
         }
-        if let Ok(Some(mut pair)) = self.db.get::<SyncPair>("pair", &intent.pair) {
-            match &result {
-                Ok(message) => {
-                    pair.last_success = Some(now());
-                    pair.status = message.clone();
-                    if intent.initialize {
-                        pair.paused = false;
-                    }
-                }
-                Err(error) => {
-                    pair.status = error.to_string();
-                    if intent.operation.is_some() && pair.last_success.is_none() {
-                        pair.paused = true;
-                    }
-                }
-            }
-            let _ = self.db.put("pair", &pair.id, &pair);
-            if let Ok(Some(mut session)) = self.db.get::<RamSession>("ram", &pair.id) {
-                session.status = pair.status.clone();
-                if result.is_ok() {
-                    session.ready = true;
-                    session.connected = true;
-                }
-                let _ = self.db.put("ram", &pair.id, &session);
-            }
-        }
+        let result = match persist_result(&self.db, intent, &result) {
+            Ok(()) => result,
+            Err(error) => Err(format!(
+                "{}; could not persist synchronization status: {error}",
+                result
+                    .as_ref()
+                    .map_or_else(|error| error.to_string(), Clone::clone)
+            )
+            .into()),
+        };
         if result.is_ok()
             && let Some(plan) = plan
         {
@@ -460,17 +467,7 @@ impl Owner {
     }
 }
 impl Plan {
-    pub(super) fn overlaps_root(&self, root: &Root) -> bool {
-        self.portable.overlap(root) || self.local.overlap(root)
-    }
-    fn overlaps(&self, other: &Self) -> bool {
-        [
-            (&self.portable, &other.portable),
-            (&self.portable, &other.local),
-            (&self.local, &other.portable),
-            (&self.local, &other.local),
-        ]
-        .iter()
-        .any(|(a, b)| a.overlap(b))
+    pub(super) fn scopes(&self) -> [crate::root::Scope; 2] {
+        [self.portable.scope(), self.local.scope()]
     }
 }

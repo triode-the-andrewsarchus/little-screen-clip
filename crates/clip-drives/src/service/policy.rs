@@ -1,6 +1,38 @@
 //! Enrollment checks keep managed storage out of synchronization feedback loops.
 use super::*;
 impl Owner {
+    pub(super) fn backup_destination(&self, source: Option<&Root>) -> Result<Arc<Root>> {
+        let path = self
+            .config
+            .backup_directory
+            .as_ref()
+            .ok_or("Choose a DriveBackupDir before starting a backup")?;
+        let destination = Arc::new(Root::create(path)?);
+        self.validate_backup_directory(&destination)?;
+        if source.is_some_and(|source| source.overlap(&destination)) {
+            return Err("Backup destination overlaps the source partition".into());
+        }
+        Ok(destination)
+    }
+    /// Every worker uses the same captured-root scheduling policy, including unmount.
+    pub(super) fn claims_busy(&self, claims: &[crate::root::Scope]) -> bool {
+        let overlaps = |scope: &crate::root::Scope| claims.iter().any(|claim| claim.overlap(scope));
+        self.partition
+            .as_ref()
+            .is_some_and(|job| job.claims.iter().any(&overlaps))
+            || self
+                .ram_setup
+                .as_ref()
+                .is_some_and(|job| overlaps(&job.source.scope()))
+            || self
+                .sync_jobs
+                .values()
+                .any(|job| job.plan.scopes().iter().any(&overlaps))
+            || self
+                .background
+                .as_ref()
+                .is_some_and(|job| job.roots.iter().any(|root| overlaps(&root.scope())))
+    }
     pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
         self.validate_ram_backing_target(source)?;
         self.validate_ram_backing_target(local)?;

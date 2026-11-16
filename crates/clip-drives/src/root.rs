@@ -53,10 +53,6 @@ impl Scope {
             _ => true,
         }
     }
-    /// Retire all pins on the selected filesystem, including bind aliases.
-    pub fn same_filesystem(&self, root: &Root) -> bool {
-        self.namespace != root.namespace || self.identity.device == root.identity.device
-    }
 }
 pub(crate) fn anchor(file: &File) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
