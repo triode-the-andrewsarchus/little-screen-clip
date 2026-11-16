@@ -44,8 +44,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
-| 6.7 | Partial | Provider metadata/digests checked where captured; reuse available sync/backup hashes and uncertain revision handling need stronger evidence. |
-| 6.8 | Partial | Pinned per-open files and self-mount refusal tested; alias, replacement and concurrent provider change matrix remains. |
+| 6.7 | Partial | Provider metadata/digests now validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups also require their captured directory identity. Reuse of available sync/backup hashes and uncertain revision handling remain. |
+| 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
@@ -132,6 +132,33 @@ remains open. Raw report:
 `.fitness/portable-drives-catalog-redaction-ui-architecture.json`.
 
 ## Cross-cutting gates
+
+Catalog provider validation checkpoint: provider revision and SHA-256 validation
+now operate on the retained content descriptor, using core FileSource checks
+before returning it. File-tree backups require their saved StorageIdentity;
+missing legacy identities and replaced directories cannot authorize new contents.
+Tests cover a replaced name whose new file has the expected digest while the
+retained file has different bytes, matching hashes with changed timestamps,
+same-size/mtime tampering, and fallback from a stale newer backup.
+
+Backend tests pass 82 cases (27 explicit fixtures ignored), and the separately
+selected native FUSE provider-change test passes against the newly built actual
+helper. It reads part of a file, modifies that provider while retaining mtime,
+publishes a newer backup, verifies a new open's correct bytes and verifies ESTALE
+on the original open handle. Logs:
+`/tmp/portable-drive-provider-validation-backend-reviewed.log` and
+`/tmp/portable-drive-provider-validation-fuse-reviewed.log`. Backend all-target
+clippy with warnings denied and repository formatting pass. The native test uses
+a separate helper process: the initial in-process test design deadlocked while
+forking with its own FUSE client handle. Both failed disposable mounts/processes
+were retired and their owned fixture directories removed.
+
+The original architecture result remains REGRESSION, with the same 4301 clone
+groups, 7.16% duplication, average CCN 3.48, maximum 274 and 144 reported cycles.
+Sharing timestamp-preserving mutation setup removed both newly reported fixture
+clones; provider resolution CCN fell from 29 to 25. No broader gate is closed by
+these tests. Report:
+`.fitness/portable-drives-provider-validation-reviewed-architecture.json`.
 
 - Preserve a headless core/backend and independent file-manager lifecycle; no workbench application dependency.
 - Preserve directory/source identities, lossless paths, accepted write ownership and completed mutations through failures/cancellation.

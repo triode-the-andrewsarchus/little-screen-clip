@@ -127,6 +127,13 @@ The daemon validates partition identity and additional device evidence before wr
 
 Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
+File-backup providers must retain their saved directory identity; replacing a
+backup directory does not authorize the replacement to supply catalog contents.
+Older records without that identity cannot supply file contents. When a catalog
+entry has a digest, validation hashes the same retained descriptor used for reads.
+A stale candidate can fall back to another matching backup, while an already open
+file keeps its chosen provider and reports stale data if that provider changes.
+
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
 Files labels excluded catalog folders **Not catalogued**, while a captured empty

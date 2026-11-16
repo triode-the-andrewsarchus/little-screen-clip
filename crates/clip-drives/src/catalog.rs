@@ -99,6 +99,29 @@ struct OpenFile {
     source: FileSource,
     root: Root,
 }
+impl OpenFile {
+    fn validated(root: Root, file: File, entry: &Entry) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+
+        let source = FileSource::capture_file(&file)?;
+        let metadata = file.metadata()?;
+        if metadata.len() != entry.size
+            || metadata.mtime() != entry.modified
+            || metadata.mtime_nsec() != entry.nanos
+        {
+            return Err("Catalog provider revision is stale".into());
+        }
+        // Hash the retained provider handle, never a second lookup of its name.
+        if let Some(hash) = &entry.hash
+            && source.sha256(&file, &AtomicBool::new(false), Duration::MAX)? != *hash
+        {
+            return Err("Catalog provider contents are stale".into());
+        }
+        source.check_file(&file)?;
+        root.validate()?;
+        Ok(Self { file, source, root })
+    }
+}
 struct CatalogFs {
     db: Store,
     state: PathBuf,
@@ -175,7 +198,7 @@ impl CatalogFs {
                 && !drive.ambiguous
                 && let Some(mount) = drive.mount
             {
-                providers.push(mount);
+                providers.push((mount, None));
             }
         }
         let mut offset = 0;
@@ -188,9 +211,11 @@ impl CatalogFs {
                 if version.drive == self.catalog.drive && version.evidence == self.catalog.evidence
                 {
                     if version.kind == crate::BackupKind::Files {
-                        providers.push(version.path);
+                        if version.identity.is_some() {
+                            providers.push((version.path, version.identity));
+                        }
                     } else if let Some(mount) = version.mount {
-                        providers.push(mount);
+                        providers.push((mount, None));
                     }
                 }
             }
@@ -216,7 +241,7 @@ impl CatalogFs {
                 || catalog_mounts.iter().any(|mount| path.starts_with(mount))
         };
         let mut stale = false;
-        for path in providers {
+        for (path, identity) in providers {
             // Reject our own FUSE paths before opening even their directory metadata.
             if recursive(&path) {
                 continue;
@@ -227,24 +252,19 @@ impl CatalogFs {
             if recursive(&root.path) {
                 continue;
             }
+            if let Some(identity) = identity
+                && root.storage_identity().ok().as_ref() != Some(&identity)
+            {
+                stale = true;
+                continue;
+            }
             let Ok(file) = root.input(&entry.path) else {
                 continue;
             };
-            use std::os::unix::fs::MetadataExt;
-            let m = file.metadata()?;
-            if m.len() != entry.size || m.mtime() != entry.modified || m.mtime_nsec() != entry.nanos
-            {
-                stale = true;
-                continue;
+            match OpenFile::validated(root, file, entry) {
+                Ok(open) => return Ok(open),
+                Err(_) => stale = true,
             }
-            if let Some(hash) = &entry.hash
-                && root.digest(&entry.path, entry.size, &AtomicBool::new(false))? != *hash
-            {
-                stale = true;
-                continue;
-            }
-            let source = FileSource::capture_file(&file)?;
-            return Ok(OpenFile { file, source, root });
         }
         Err(if stale {
             "Catalog entry is stale; refresh its catalog"
@@ -562,6 +582,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod provider_tests;
     mod redaction_tests;
     use super::*;
     struct Fixture {
