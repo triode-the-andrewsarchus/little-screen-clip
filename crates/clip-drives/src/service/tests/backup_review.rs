@@ -273,24 +273,39 @@ fn review_storage_is_bounded_expires_and_is_cleared_by_shutdown() {
 
 #[test]
 fn independent_image_space_is_checked_before_unmount_for_reviewed_and_direct_requests() {
-    let fixture = TestDrives::new(4096);
     let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    fixture.drives.lock().unwrap()[1].capacity = u64::MAX;
+    refused_image_destination(destination.path(), u64::MAX, "available bytes");
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_fat32_image_size_is_checked_before_unmount() {
+    let (destination, _native_fixture, drive) = crate::sync_edge_tests::native_fs::fixture();
+    if drive.filesystem == "vfat" {
+        let root = Root::open(destination.path()).unwrap();
+        root.check_file_size(u32::MAX as u64).unwrap();
+        refused_image_destination(destination.path(), u32::MAX as u64 + 1, "FAT32");
+    }
+}
+
+fn refused_image_destination(destination: &Path, capacity: u64, reason: &str) {
+    let fixture = TestDrives::new(4096);
+    fixture.drives.lock().unwrap()[1].capacity = capacity;
     let mut authority = fixture.image_authority();
-    authority.unmount = Arc::new(|_| panic!("insufficient space must precede unmount"));
+    authority.unmount = Arc::new(|_| panic!("destination refusal must precede unmount"));
     let service = fixture.start_authority(None, authority);
     let error = service
         .request(DriveRequest::PreviewBackup {
             drive: "part:large".into(),
             kind: BackupKind::Image,
-            destination: Some(destination.path().into()),
+            destination: Some(destination.into()),
         })
         .unwrap_err();
-    assert!(error.to_string().contains("available bytes"));
+    assert!(error.to_string().contains(reason), "{error}");
     finish(
         &service,
         DriveRequest::BackupDirectory {
-            path: destination.path().into(),
+            path: destination.into(),
         },
     );
     let operation = completed(
@@ -302,14 +317,10 @@ fn independent_image_space_is_checked_before_unmount_for_reviewed_and_direct_req
         },
     );
     assert_eq!(operation.state, "failed");
-    assert!(
-        operation.message.contains("available bytes"),
-        "{}",
-        operation.message
-    );
+    assert!(operation.message.contains(reason), "{}", operation.message);
     assert!(fixture.drives.lock().unwrap()[1].mount.is_some());
     assert!(status(&service).backups.is_empty());
-    assert!(fs::read_dir(destination.path()).unwrap().next().is_none());
+    assert!(fs::read_dir(destination).unwrap().next().is_none());
     service.shutdown().unwrap();
 }
 

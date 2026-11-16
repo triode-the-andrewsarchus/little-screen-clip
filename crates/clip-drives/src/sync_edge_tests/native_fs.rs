@@ -8,7 +8,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
+pub(crate) fn guest_drive() -> Drive {
     assert_eq!(std::env::var("LITTLE_CLIP_DRIVE_VM").unwrap(), "1");
     assert!(Path::new("/work/.owned-vm-fixture").is_file());
     assert_ne!(
@@ -37,30 +37,46 @@ fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
         .unwrap();
     assert_eq!(mount.filesystem, filesystem);
     assert_eq!(mount.source, device);
-    let native = tempfile::tempdir_in(&source).unwrap();
-    let mut fixture = Fixture::new();
-    fixture.a = native.path().into();
     let uuid = std::env::var("LITTLE_CLIP_DRIVE_TEST_UUID").unwrap();
     let capacity = std::env::var("LITTLE_CLIP_DRIVE_TEST_CAPACITY")
         .unwrap()
         .parse()
         .unwrap();
-    let drive = Drive {
-        id: format!("fs:{uuid}"),
+    let part_uuid = std::env::var("LITTLE_CLIP_DRIVE_TEST_PARTUUID")
+        .ok()
+        .filter(|value| !value.is_empty());
+    Drive {
+        id: part_uuid
+            .as_ref()
+            .map(|uuid| format!("part:{uuid}"))
+            .unwrap_or_else(|| format!("fs:{uuid}")),
         label: "Owned native filesystem".into(),
         device,
-        mount: Some(fixture.a.clone()),
-        part_uuid: None,
+        mount: Some(source),
+        part_uuid,
         filesystem_uuid: Some(uuid.clone()),
         filesystem,
         capacity,
         drive_capacity: capacity,
-        disk_sequence: None,
+        disk_sequence: Some(
+            std::env::var("LITTLE_CLIP_DRIVE_TEST_DISK_SEQUENCE")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        ),
         removable: true,
         read_only: false,
         evidence: format!("owned-guest:{uuid}"),
         ambiguous: false,
-    };
+    }
+}
+
+pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
+    let mut drive = guest_drive();
+    let native = tempfile::tempdir_in(drive.mount.as_ref().unwrap()).unwrap();
+    let mut fixture = Fixture::new();
+    fixture.a = native.path().into();
+    drive.mount = Some(fixture.a.clone());
     fixture.pair.drive = drive.id.clone();
     fixture.pair.evidence = drive.evidence.clone();
     fixture.pair.local = fixture.b.clone();
@@ -187,7 +203,11 @@ fn native_file_backups_keep_versions_and_observed_timestamps() {
     );
     assert_eq!(
         first.path.parent().unwrap().file_name().unwrap(),
-        format!("fs-{}", drive.filesystem_uuid.as_ref().unwrap()).as_str()
+        drive
+            .part_uuid
+            .clone()
+            .unwrap_or_else(|| format!("fs-{}", drive.filesystem_uuid.as_ref().unwrap()))
+            .as_str()
     );
     let manifest = first.manifest.as_ref().unwrap();
     assert_eq!(
@@ -436,7 +456,7 @@ fn native_ntfs_stream_addresses_cannot_modify_a_base_file() {
 #[test]
 #[ignore = "requires the isolated removable-filesystem guest"]
 fn native_fat32_size_limit_is_refused_before_reading_sparse_payload() {
-    let (_native, fixture, drive) = fixture();
+    let (_native, fixture, mut drive) = fixture();
     if drive.filesystem != "vfat" {
         return;
     }
@@ -460,4 +480,17 @@ fn native_fat32_size_limit_is_refused_before_reading_sparse_payload() {
         .unwrap_err();
     assert!(error.to_string().contains("FAT32"), "{error}");
     assert!(!fixture.a.join("large.bin").exists());
+    drive.capacity = u32::MAX as u64 + 1;
+    let error = backup::image_from(
+        &fixture.db,
+        &drive,
+        &Root::open(&fixture.a).unwrap(),
+        &File::open(fixture.b.join("large.bin")).unwrap(),
+        &fixture.cancel,
+        |_, _| panic!("oversized FAT32 images must fail before copying"),
+        || panic!("oversized FAT32 images must fail before reading input"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("FAT32"), "{error}");
+    assert!(fs::read_dir(&fixture.a).unwrap().next().is_none());
 }

@@ -110,6 +110,9 @@ pub(super) fn expire(previews: &Previews) {
 }
 
 pub(super) fn space(root: &Root, drive: &Drive, kind: BackupKind) -> Result<BackupSpace> {
+    if kind == BackupKind::Image {
+        root.check_file_size(drive.capacity)?;
+    }
     let pin = root.directory(Path::new(""), false)?;
     rustix::fs::accessat(
         &pin,

@@ -526,3 +526,15 @@ The original-baseline architecture gate remains REGRESSION: duplication 7.30% to
 clone groups. Common filename scenarios were consolidated; remaining short conflict
 assertions retain independent native and ordinary regression coverage. Raw report:
 `.fitness/portable-drives-native-names-architecture.json`.
+
+
+Image-admission checkpoint: the existing FAT32 single-file limit is now shared by
+ordinary copies, image review and image execution. Real FAT32 fixtures prove that
+both reviewed and direct service requests refuse a 4 GiB image before unmounting,
+while execution refuses before invoking source validation or copying. The exact
+maximum of 4,294,967,295 bytes passes the filesystem-size check; free-space
+admission remains separate. No incomplete image or backup bucket is created.
+Evidence: `/tmp/portable-drive-vm-fat-image-size/report.json` (the FAT32-specific
+assertions return early on exFAT/NTFS3). All 64 ordinary backend tests pass, with
+25 explicit fixtures ignored. All twelve core doctests pass; rendered docs and
+post-change clippy are still pending.

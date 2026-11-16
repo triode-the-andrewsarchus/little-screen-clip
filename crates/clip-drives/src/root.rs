@@ -256,6 +256,16 @@ impl Root {
         File::open(anchor(&directory))?.sync_all()?;
         Ok(())
     }
+    pub fn check_file_size(&self, bytes: u64) -> Result<()> {
+        self.validate()?;
+        if bytes > u32::MAX as u64 && rustix::fs::fstatfs(&self.file)?.f_type as u32 == 0x4d44 {
+            return Err(
+                "FAT32 cannot store a file larger than 4 GiB minus one byte (4294967295 bytes)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
     pub fn copy(&self, from: &Root, spec: CopySpec<'_>, cancel: &AtomicBool) -> Result<u64> {
         let CopySpec {
             source: path,
@@ -269,6 +279,7 @@ impl Root {
         let mut input = from.input(path)?;
         let observed = FileSource::capture_file(&input)?;
         let metadata = input.metadata()?;
+        self.check_file_size(metadata.len())?;
         let (parent, destination) = self.parent(target, true)?;
         let previous = self.metadata(target)?;
         if previous.as_ref().is_some_and(|m| !m.is_file()) {
@@ -282,10 +293,6 @@ impl Root {
             }
         } else if previous.is_some() {
             return Err("Destination appeared during synchronization".into());
-        }
-        if rustix::fs::fstatfs(&parent)?.f_type as u32 == 0x4d44 && metadata.len() > u32::MAX as u64
-        {
-            return Err("FAT32 cannot store a file larger than 4 GB minus one byte".into());
         }
         let mut temporary = tempfile::NamedTempFile::new_in(anchor(&parent))?;
         let cloned = if delta {

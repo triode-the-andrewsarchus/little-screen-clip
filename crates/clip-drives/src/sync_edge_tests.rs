@@ -1,7 +1,7 @@
 //! Reconciliation regressions exercised with owned ordinary filesystem fixtures.
 use crate::{root::Root, store::Store, sync, *};
 use std::{fs, path::PathBuf, sync::atomic::AtomicBool};
-struct Fixture {
+pub(crate) struct Fixture {
     _temp: tempfile::TempDir,
     db: Store,
     a: PathBuf,
@@ -223,4 +223,4 @@ fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestam
     );
 }
 
-mod native_fs;
+pub(crate) mod native_fs;

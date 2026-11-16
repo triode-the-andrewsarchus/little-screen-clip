@@ -45,7 +45,7 @@ DriveBackupDir/
 
 Before starting, Files shows the selected partition, exact partition capacity,
 destination and available destination bytes. Image review includes the size of a
-full independent image plus 64 MiB of working headroom. Btrfs sharing and sparse
+full independent image plus 64 MiB of working headroom. FAT32 destinations reject images above 4,294,967,295 bytes before unmounting the source, regardless of free space. Btrfs sharing and sparse
 zero ranges can reduce actual allocation; shared-image admission requires that
 working headroom and warns when a full independent image would not fit. Other
 image destinations require the full estimate before unmount. File backup admission

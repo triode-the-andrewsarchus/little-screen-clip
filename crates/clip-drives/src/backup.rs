@@ -486,6 +486,7 @@ pub(crate) fn image_from(
     if drive.capacity == 0 {
         return Err("Partition capacity is unknown; cannot create a complete image".into());
     }
+    destination.check_file_size(drive.capacity)?;
     validate_source()?;
     let parent = backup_parent(destination, drive)?;
     let pin = parent.directory(Path::new(""), false)?;
