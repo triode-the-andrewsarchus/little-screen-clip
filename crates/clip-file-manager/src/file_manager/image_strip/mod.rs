@@ -155,6 +155,7 @@ mod tests {
             modified_time: None,
             created_time: None,
             warning: None,
+            catalog_status: None,
             revision: 1,
             identity: None,
         }

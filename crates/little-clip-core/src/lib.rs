@@ -6,6 +6,7 @@ pub mod animation;
 pub mod audio;
 pub mod blend_image;
 pub mod calendar;
+pub mod catalog_metadata;
 pub mod clipboard;
 pub mod color;
 pub mod config;
@@ -40,6 +41,7 @@ pub mod presentation {
 pub mod markdown_metadata;
 pub mod media_backend;
 pub mod media_stream;
+pub mod mount_inventory;
 pub mod natural_sort;
 pub mod notebook;
 pub mod palette;

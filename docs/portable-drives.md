@@ -129,6 +129,20 @@ Listing and stat operations work offline. Opening a regular file requires a matc
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
+Files labels excluded catalog folders **Not catalogued**, while a captured empty
+folder remains empty. Opening an excluded folder reports that its contents were
+excluded from the saved catalog. Coverage labels do not change file identity or
+authorize content access. Catalog directory inventories do not probe file payloads
+to classify their formats.
+
+The focused private-desktop check covers this distinction and the wrapped
+navigation error without repeating RAM population or backup setup:
+
+```bash
+python3 scripts/portable_drive_acceptance.py --appearance dark --catalog-boundary-only --output-dir /tmp/catalog-boundary-dark
+python3 scripts/portable_drive_acceptance.py --appearance light --catalog-boundary-only --output-dir /tmp/catalog-boundary-light
+```
+
 Shelf reference summaries, recursive photo similarity discovery/features, and audio
 constellation discovery/cache reads honor drive indexing exclusions. Explicit folder
 browsing and individual-file opening remain available. Recursive photo discovery does

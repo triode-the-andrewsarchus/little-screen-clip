@@ -648,7 +648,10 @@ impl FileManager {
         }
         let (retry, dismiss) = ui
             .horizontal_wrapped(|ui| {
-                ui.add(Icon::Alert.label(egui::RichText::new(error).color(colors.danger)));
+                Icon::Alert.ui(ui, clip_ui::ui_ext::CONTROL_ICON_SIZE, colors.danger);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(error).color(colors.danger)).wrap(true),
+                );
                 let retry = ui
                     .add(
                         clip_ui::buttons::ButtonRole::Secondary
@@ -1254,11 +1257,11 @@ pub(super) struct ListColumns {
 
 impl ListColumns {
     pub(super) fn new(header: Rect) -> Self {
-        let name_width = (header.width() - 245.0).max(header.width() * 0.4);
+        let name_width = (header.width() - 275.0).max(header.width() * 0.4);
         Self {
             left: header.left(),
             size: header.left() + name_width,
-            modified: header.left() + name_width + 90.0,
+            modified: header.left() + name_width + 120.0,
             right: header.right(),
             extra: None,
             extra_count: 0,
@@ -1325,7 +1328,14 @@ impl ListColumns {
     }
 
     fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
-        paint_text(ui, row, self.size - row.left() + 5.0, 80.0, size, color);
+        paint_text(
+            ui,
+            row,
+            self.size - row.left() + 5.0,
+            self.modified - self.size - 10.0,
+            size,
+            color,
+        );
         paint_text(
             ui,
             row,
@@ -1531,8 +1541,15 @@ fn file_row(
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let response = if rect.height() <= ROW_HEIGHT && !popup_open(ui.ctx()) {
         response.on_hover_text(format!(
-            "{}{}",
+            "{}{}{}",
             display_path(&entry.path),
+            entry
+                .catalog_status
+                .map(|status| format!(
+                    "\n{}: contents were excluded from this saved snapshot",
+                    status.label()
+                ))
+                .unwrap_or_default(),
             entry
                 .warning
                 .as_ref()

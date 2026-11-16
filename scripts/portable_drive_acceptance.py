@@ -247,7 +247,11 @@ def exercise(session, root):
         mount = Path(catalog['mount'])
         assert (mount / 'readme.txt').read_text() == 'online RAM edit\n'
         session.address(mount)
-        session.observe('offline-catalog', ['readme.txt', 'many', 'Catalog'])
+        session.observe('offline-catalog', ['readme.txt', 'many', 'Catalog', 'Not catalogued'])
+        session.address(mount / 'many')
+        session.observe('excluded-catalog-folder', ['Cannot open', 'Not catalogued', 'excluded from the saved catalog'])
+        session.address(mount)
+        session.observe('catalog-after-excluded-navigation', ['readme.txt', 'many', 'Not catalogued'])
 
         (root / 'removed-portable/readme.txt').write_text('offline portable edit\n')
         (root / 'removed-portable').rename(portable)
@@ -276,15 +280,45 @@ def exercise(session, root):
             (session.output / 'drive-cleanup-error.txt').write_text(str(error))
 
 
+def exercise_catalog_boundary(session, root):
+    """Verify exclusion presentation without repeating unrelated storage workflows."""
+    env = session.env
+    drive = status(env)['drives'][0]['id']
+    completed(env, request(env, {'Rule': {'drive': drive, 'relative': 'many', 'catalog': False, 'index': False}}))
+    completed(env, request(env, {'Catalog': {'drive': drive}}))
+    catalog = status(env)['catalogs'][0]
+    (root / 'portable').rename(root / 'removed-portable')
+    wait_for(lambda: not status(env)['drives'], 'offline catalog source')
+    completed(env, request(env, {'MountCatalog': {'catalog': catalog['id']}}))
+    try:
+        mount = Path(next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])['mount'])
+        session.address(mount)
+        text = session.observe('offline-catalog', ['readme.txt', 'many', 'empty', 'Not catalogued'])
+        assert 'File changed since enumeration' not in text
+        assert list((mount / 'empty').iterdir()) == []
+        session.address(mount / 'many')
+        session.observe('excluded-catalog-folder', ['Cannot open', 'Not catalogued', 'excluded from the saved catalog'])
+        session.address(mount)
+        session.observe('catalog-after-excluded-navigation', ['readme.txt', 'many', 'Not catalogued'])
+    finally:
+        completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+
+
 def main():
     repository = Path(__file__).resolve().parent.parent
-    args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=lambda parser: parser.add_argument('--backup-review-only', action='store_true'))
+    def configure(parser):
+        scenarios = parser.add_mutually_exclusive_group()
+        scenarios.add_argument('--backup-review-only', action='store_true')
+        scenarios.add_argument('--catalog-boundary-only', action='store_true')
+    args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
         (root / name).mkdir()
     (root / 'portable/readme.txt').write_text('original portable contents\n')
     (root / 'portable/many').mkdir()
     (root / 'portable/many/hidden.txt').write_text('Back up and sync this; exclude catalog/index traversal.\n')
+    if args.catalog_boundary_only:
+        (root / 'portable/empty').mkdir()
     (root / 'local/local-only.txt').write_text('Union merge keeps this file.\n')
     def prepare(env, children):
         state = output / 'drive-state'
@@ -292,8 +326,12 @@ def main():
         env['LITTLE_CLIP_DRIVE_MOUNT_HELPER'] = str(repository / 'target/debug/clip-drive-mount')
         children.start('drive-fixture', [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')], env=env, cwd=output, log_path=output / 'drive-fixture.log')
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
-    scenario = exercise_backup_review if args.backup_review_only else exercise
-    scope = 'Backup review: lazy selection, cancellation, file backup publication and image review' if args.backup_review_only else 'Drive context menus, RAM writeback, union enrollment, lazy backups, subtree exclusions, offline FUSE and preserved conflicts'
+    if args.catalog_boundary_only:
+        scenario, scope = exercise_catalog_boundary, 'Offline catalog exclusion labels, empty folders and navigation errors'
+    elif args.backup_review_only:
+        scenario, scope = exercise_backup_review, 'Backup review: lazy selection, cancellation, file backup publication and image review'
+    else:
+        scenario, scope = exercise, 'Drive context menus, RAM writeback, union enrollment, lazy backups, subtree exclusions, offline FUSE and preserved conflicts'
     return run_application_acceptance(args, output, root, scenario, scope, prepare_environment=prepare)
 
 

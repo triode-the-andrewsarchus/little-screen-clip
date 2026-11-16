@@ -9,7 +9,7 @@ use crate::{
 };
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
-    ReplyOpen, Request,
+    ReplyOpen, ReplyXattr, Request,
 };
 use little_clip_core::file_source::FileSource;
 use rusqlite::{OptionalExtension, params};
@@ -99,8 +99,21 @@ struct CatalogFs {
     catalog: Catalog,
     opened: HashMap<u64, OpenFile>,
     next_handle: u64,
+    #[cfg(test)]
+    payload_opens: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 impl CatalogFs {
+    fn coverage(
+        &self,
+        ino: u64,
+    ) -> Result<Option<little_clip_core::catalog_metadata::CatalogEntryStatus>> {
+        if ino == 1 {
+            return Ok(None);
+        }
+        let entry = self.row(ino)?.ok_or("Unknown catalog entry")?;
+        Ok((entry.kind == "excluded")
+            .then_some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued))
+    }
     fn row(&self, ino: u64) -> Result<Option<Entry>> {
         let json: Option<String> = self
             .db
@@ -263,6 +276,37 @@ fn file_type(kind: &str) -> FileType {
     }
 }
 impl Filesystem for CatalogFs {
+    fn getxattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: ReplyXattr,
+    ) {
+        if name != OsStr::new(little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR) {
+            reply.error(libc::ENODATA);
+            return;
+        }
+        match self.coverage(ino) {
+            Ok(Some(status)) => xattr_reply(status.token(), size, reply),
+            Ok(None) => reply.error(libc::ENODATA),
+            _ => reply.error(libc::ENOENT),
+        }
+    }
+    fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
+        match self.coverage(ino) {
+            Ok(Some(_)) => {
+                let key = format!(
+                    "{}\0",
+                    little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR
+                );
+                xattr_reply(key.as_bytes(), size, reply);
+            }
+            Ok(None) => xattr_reply(b"", size, reply),
+            Err(_) => reply.error(libc::ENOENT),
+        }
+    }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let result = (|| {
             let parent = self.parent_path(parent)?;
@@ -369,6 +413,9 @@ impl Filesystem for CatalogFs {
         }
     }
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        #[cfg(test)]
+        self.payload_opens
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if flags & libc::O_ACCMODE != libc::O_RDONLY {
             reply.error(libc::EROFS);
             return;
@@ -441,6 +488,26 @@ impl Filesystem for CatalogFs {
         reply.ok();
     }
 }
+fn xattr_reply(value: &[u8], size: u32, reply: ReplyXattr) {
+    if size == 0 {
+        reply.size(value.len() as u32);
+    } else if size < value.len() as u32 {
+        reply.error(libc::ERANGE);
+    } else {
+        reply.data(value);
+    }
+}
+
+fn mount_options(id: &str) -> [fuser::MountOption; 6] {
+    [
+        fuser::MountOption::RO,
+        fuser::MountOption::NoExec,
+        fuser::MountOption::NoDev,
+        fuser::MountOption::NoSuid,
+        fuser::MountOption::Subtype(little_clip_core::catalog_metadata::CATALOG_FS_SUBTYPE.into()),
+        fuser::MountOption::FSName(format!("little-clip-catalog:{id}")),
+    ]
+}
 /// Mounts an existing immutable catalog until it is unmounted by its owner.
 ///
 /// # Errors
@@ -459,15 +526,11 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
             catalog,
             opened: HashMap::new(),
             next_handle: 0,
+            #[cfg(test)]
+            payload_opens: Default::default(),
         },
         &root.path,
-        &[
-            fuser::MountOption::RO,
-            fuser::MountOption::NoExec,
-            fuser::MountOption::NoDev,
-            fuser::MountOption::NoSuid,
-            fuser::MountOption::FSName(format!("little-clip-catalog:{id}")),
-        ],
+        &mount_options(id),
     )?;
     Ok(())
 }
@@ -570,6 +633,7 @@ mod tests {
             catalog,
             opened: HashMap::new(),
             next_handle: 0,
+            payload_opens: Default::default(),
         }
     }
     #[test]
@@ -705,25 +769,81 @@ mod tests {
     #[ignore = "requires /dev/fuse and fusermount3"]
     fn real_fuse_mount_lists_offline_metadata_and_returns_media_errors() {
         let fixture = fixture();
+        std::fs::create_dir(fixture.source.path.join("empty")).unwrap();
+        std::fs::write(
+            fixture.source.path.join("metadata-only.ts"),
+            b"const value: number = 1;",
+        )
+        .unwrap();
         let catalog = fixture.capture(&DriveConfig::default()).unwrap();
         let mount = fixture.temp.path().join("mount");
         std::fs::create_dir(&mount).unwrap();
-        let fsname = format!("little-clip-catalog:{}", catalog.id);
-        let session = fuser::spawn_mount2(
-            filesystem(&fixture.state.path, catalog),
-            &mount,
-            &[
-                fuser::MountOption::RO,
-                fuser::MountOption::FSName(fsname),
-                fuser::MountOption::NoExec,
-                fuser::MountOption::NoDev,
-                fuser::MountOption::NoSuid,
-            ],
-        )
-        .unwrap();
+        let options = mount_options(&catalog.id);
+        let server = filesystem(&fixture.state.path, catalog);
+        let opens = server.payload_opens.clone();
+        let session = fuser::spawn_mount2(server, &mount, &options).unwrap();
         assert_eq!(std::fs::metadata(mount.join("file.txt")).unwrap().len(), 15);
         assert!(std::fs::read(mount.join("file.txt")).is_err());
         assert!(std::fs::read_dir(mount.join("excluded")).is_err());
+        opens.store(0, std::sync::atomic::Ordering::Relaxed);
+        let entries =
+            little_clip_core::file_inventory::read_directory(&mount, &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(
+            opens.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "Metadata listing must not open TypeScript or other file payloads"
+        );
+        let excluded = entries
+            .entries
+            .iter()
+            .find(|entry| entry.name == "excluded")
+            .unwrap();
+        assert_eq!(
+            excluded.catalog_status,
+            Some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued)
+        );
+        assert_eq!(excluded.size, "Not catalogued");
+        little_clip_core::file_inventory::check_revision(&excluded.path, excluded.revision)
+            .unwrap();
+        let empty = entries
+            .entries
+            .iter()
+            .find(|entry| entry.name == "empty")
+            .unwrap();
+        assert_eq!(empty.catalog_status, None);
+        assert!(
+            std::fs::read_dir(mount.join("empty"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let error = little_clip_core::file_inventory::read_directory(
+            &mount.join("excluded"),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Not catalogued:"), "{error}");
+        let pin = little_clip_core::kernel_interface::pin(&mount.join("excluded"), true).unwrap();
+        let pinned_error = little_clip_core::file_inventory::read_pinned_directory(
+            &mount.join("excluded"),
+            &pin,
+            &AtomicBool::new(false),
+            100,
+        )
+        .unwrap_err();
+        assert!(
+            pinned_error.starts_with("Not catalogued:"),
+            "{pinned_error}"
+        );
+        drop(pin);
+        let view = little_clip_core::catalog_metadata::CatalogMount::detect(&mount).unwrap();
+        assert_eq!(
+            view.status(&mount.join("excluded")),
+            Some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued)
+        );
+        assert_eq!(view.status(fixture.source.path.as_path()), None);
+        drop(view);
         let mut backup = fixture.backup().unwrap();
         assert_eq!(
             std::fs::read(mount.join("file.txt")).unwrap(),

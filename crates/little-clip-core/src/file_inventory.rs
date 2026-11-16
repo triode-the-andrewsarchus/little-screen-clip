@@ -34,6 +34,9 @@ pub struct Entry {
     pub modified_time: Option<std::time::SystemTime>,
     pub created_time: Option<std::time::SystemTime>,
     pub warning: Option<String>,
+    /// A disclosed catalog boundary; absent on ordinary or unrecognized sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_status: Option<crate::catalog_metadata::CatalogEntryStatus>,
     pub revision: u64,
     pub identity: Option<Identity>,
 }
@@ -151,7 +154,7 @@ pub struct Directory {
 /// Returns cancellation, directory I/O or observed replacement/mount changes.
 pub fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Directory, String> {
     let path = path.canonicalize().map_err(|error| error.to_string())?;
-    let reader = std::fs::read_dir(&path).map_err(|error| error.to_string())?;
+    let reader = std::fs::read_dir(&path).map_err(|error| directory_read_error(&path, error))?;
     collect_directory(path, reader, cancelled, usize::MAX, None)
 }
 
@@ -170,7 +173,7 @@ pub fn read_pinned_directory(
 ) -> Result<Directory, String> {
     use std::os::fd::AsRawFd;
     let held = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let reader = std::fs::read_dir(&held).map_err(|error| error.to_string())?;
+    let reader = std::fs::read_dir(&held).map_err(|error| directory_read_error(&held, error))?;
     collect_directory(path.into(), reader, cancelled, limit, Some(&held))
 }
 
@@ -181,6 +184,7 @@ fn collect_directory(
     limit: usize,
     held: Option<&Path>,
 ) -> Result<Directory, String> {
+    let catalog = crate::catalog_metadata::CatalogMount::detect(held.unwrap_or(&path));
     let object = std::fs::metadata(held.unwrap_or(&path))
         .ok()
         .map(|metadata| (metadata.dev(), metadata.ino()));
@@ -199,7 +203,13 @@ fn collect_directory(
         }
         match child {
             Ok(child) => {
-                let mut entry = read_entry(child, held.is_none());
+                let mut entry = read_entry(child, held.is_none() && catalog.is_none());
+                if entry.directory
+                    && let Some(status) = catalog.as_ref().and_then(|view| view.status(&entry.path))
+                {
+                    entry.size = status.label().into();
+                    entry.catalog_status = Some(status);
+                }
                 if let Some(held) = held {
                     entry.path =
                         path.join(entry.path.strip_prefix(held).map_err(|e| e.to_string())?);
@@ -246,6 +256,19 @@ fn collect_directory(
         object,
         mount,
     })
+}
+
+fn directory_read_error(path: &Path, error: std::io::Error) -> String {
+    if let Some(status) =
+        crate::catalog_metadata::CatalogMount::detect(path).and_then(|view| view.status(path))
+    {
+        format!(
+            "{}: this folder's contents were excluded from the saved catalog",
+            status.label()
+        )
+    } else {
+        error.to_string()
+    }
 }
 
 /// Observes an entry; optional TypeScript probing belongs only on workers.
@@ -302,6 +325,7 @@ pub fn read_entry(child: std::fs::DirEntry, inspect_typescript: bool) -> Entry {
         modified_time: modified,
         created_time: metadata.as_ref().ok().and_then(|data| data.created().ok()),
         warning,
+        catalog_status: None,
     }
 }
 

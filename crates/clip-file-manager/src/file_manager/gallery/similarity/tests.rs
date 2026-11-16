@@ -313,6 +313,7 @@ fn test_multi_grid_search_retention_and_chaining() {
             modified_time: None,
             created_time: None,
             warning: None,
+            catalog_status: None,
             revision: 1,
             identity: None,
         });
@@ -464,6 +465,7 @@ fn test_search_pan_to_grid_results() {
             modified_time: None,
             created_time: None,
             warning: None,
+            catalog_status: None,
             revision: 1,
             identity: None,
         });
@@ -538,6 +540,7 @@ fn test_vertical_packing_and_order_retention() {
             modified_time: None,
             created_time: None,
             warning: None,
+            catalog_status: None,
             revision: 1,
             identity: None,
         });
@@ -680,6 +683,7 @@ fn test_search_from_photo_creates_ranked_grid() {
         modified_time: None,
         created_time: None,
         warning: None,
+        catalog_status: None,
         revision: 1,
         identity: None,
     };
@@ -855,6 +859,7 @@ fn test_per_grid_match_allowance_adjustment() {
         modified_time: None,
         created_time: None,
         warning: None,
+        catalog_status: None,
         revision: 1,
         identity: None,
     };
@@ -973,6 +978,7 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         modified_time: None,
         created_time: None,
         warning: None,
+        catalog_status: None,
         revision: 1,
         identity: None,
     };

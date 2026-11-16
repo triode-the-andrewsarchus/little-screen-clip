@@ -121,6 +121,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 modified_time: None,
                 created_time: None,
                 warning: None,
+                catalog_status: None,
                 revision: 1,
                 identity: None,
             })
@@ -642,6 +643,7 @@ fn test_deferred_gallery_hq_upgrade_resilience() {
         modified_time: None,
         created_time: None,
         warning: None,
+        catalog_status: None,
         revision: 1,
         identity: None,
     };

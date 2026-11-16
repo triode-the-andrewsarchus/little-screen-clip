@@ -41,7 +41,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
-| 6.4 | Open | Future scans honor subtree rules; removal of saved descendant records after readers release and explicit Not catalogued presentation remain. |
+| 6.4 | Partial | Future scans honor subtree rules. Real FUSE coverage metadata distinguishes Not catalogued from empty folders; Files displays the label and explanatory navigation error. Removal of saved descendant records after readers release remains unfinished. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
 | 6.7 | Partial | Provider metadata/digests checked where captured; reuse available sync/backup hashes and uncertain revision handling need stronger evidence. |
@@ -53,6 +53,42 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance passed; add pending-count/resource/coverage/recovery flows as completed. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup and RAM byte/inode exhaustion tests pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, pressure and underlying-tmpfs exhaustion remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Catalog exclusion boundary checkpoint
+
+The real FUSE test now verifies the fixed-size coverage attribute, an excluded
+folder versus a captured empty folder, normal and pinned navigation errors,
+unchanged file revisions, and zero file payload opens during directory inventory
+(including a TypeScript filename). Ordinary filesystems with an identically named
+attribute do not become catalog views, and existing inventory serialization and
+revision semantics remain compatible. Core owns the one shared bounded lossless
+mount inventory parser; the backend reuses it.
+
+Dark and light private desktop runs passed `--catalog-boundary-only`. Their PNGs
+were inspected: the full label fits the Size column, empty folders remain distinct,
+and the navigation error wraps even with a long mount path. Reports are under
+`/tmp/portable-drive-catalog-boundary-final-{dark,light}/`. The metadata observation
+is display-only and does not authorize content access or indexing.
+
+Validation: backend 69 passed/25 explicit fixtures ignored; core 450 passed/three
+ignored; Files 977 passed/six ignored; all selected-package integration tests and
+twelve core doctests passed. The current native FUSE fixture and five Files UI
+logic tests passed separately. Selected-package all-target clippy, builds, API-doc
+generation/inspection and package formatting passed. Workspace-wide formatting
+reports 141 unchanged vendored files, with no failures outside `vendor/`; those
+files were not reformatted as part of this feature.
+
+The original architecture gate remains REGRESSION: duplication 7.30% to 7.17%,
+average CCN 3.44 to 3.48, maximum 274 unchanged, twelve net new clone groups,
+and reported cycles 143 to 144. The extra reported self-cycle is the admission
+fixture's `cleanup` calling `self.temp.cleanup()`, not recursive invocation of its
+own method. Reusing `pin_content_directory` removed the new detector hotspot;
+the broader clone/complexity review stays open. Raw report:
+`.fitness/portable-drives-catalog-boundary-reviewed-architecture.json`.
+
+Requirement 6.4 is still partial: durable saved-record redaction, reader leases,
+and explicit redaction dates are the next implementation work. No saved catalog
+records are removed by this checkpoint.
 
 ## Cross-cutting gates
 
