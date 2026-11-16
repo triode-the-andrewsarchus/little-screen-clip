@@ -112,7 +112,7 @@ impl Owner {
                 root.validate()?;
             }
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut progress = job_progress(state.clone(), id);
+            let mut progress = job_progress(state.clone(), id.clone());
             match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
                     backup::recover_publications(&db)?;
@@ -134,7 +134,34 @@ impl Owner {
                             let source = source
                                 .as_ref()
                                 .ok_or("Missing original device admission pin")?;
-                            backup::image(&db, &drive, source, destination, &cancel, &mut progress)?
+                            let mut previous = None;
+                            let version = backup::image(
+                                &db,
+                                &drive,
+                                source,
+                                destination,
+                                &cancel,
+                                |phase, bytes| {
+                                    if previous != Some(phase) {
+                                        partition::phase(&db, &id, phase, None)?;
+                                        previous = Some(phase);
+                                    }
+                                    progress(0, bytes);
+                                    Ok(())
+                                },
+                            )?;
+                            if let Err(error) = partition::phase(
+                                &db,
+                                &id,
+                                PartitionPhase::ImagePublished,
+                                Some(&version),
+                            ) {
+                                return Ok(format!(
+                                    "Backup completed: {}; completion journal update failed: {error}",
+                                    version.path.display()
+                                ));
+                            }
+                            version
                         }
                     };
                     Ok(format!(

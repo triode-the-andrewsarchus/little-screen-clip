@@ -298,3 +298,30 @@ all-target clippy passes with warnings denied. Architecture remains REGRESSION,
 with twelve net new clone groups (down from seventeen at the previous checkpoint),
 7.21% duplication and average CCN 3.48; max CCN 274 and cycles 143 are unchanged.
 Report: `.fitness/portable-drives-bulk-roots-architecture.json`.
+
+Partition-checkpoint follow-up: existing operation records now retain the selected
+drive/destination, typed flush/unmount/image phase, whether this operation confirmed
+the unmount, and a completed image's identifier. Image progress distinguishes copying
+from byte-for-byte verification. Critical phase recording failures stop further
+image admission/publication; a journal failure after actual publication is reported
+without discarding the already-completed image result. Unmount completion is delivered
+to its owner before recording the next checkpoint, preserving the known effect if
+checkpointing fails.
+
+Restart retains those facts and reports an interrupted authorization request as an
+uncertain effect instead of declaring it failed. No mount action is replayed from
+the journal. Eight owned interruption states and legacy records pass restart checks;
+owned image tests verify phase order, verification-time source failure and checkpoint
+failure before publication while retaining the previous current image. The details
+window shows the selected partition size and destination from the persisted context.
+The explicit restoration option and pre-admission space/size presentation remain
+unfinished at this checkpoint.
+
+Validation: 48 ordinary backend tests pass, backend all-target clippy passes with
+warnings denied, and daemon/file-manager/CLI compilation passes. The real native
+FUSE unmount/cancellation fixture and real Btrfs file/image delta fixture also pass.
+The original-baseline architecture comparison still reports REGRESSION with twelve
+net new clone groups, 7.21% duplication, average CCN 3.48, max CCN 274 and cycles 143.
+Separating the existing operation-row renderer keeps the new partition context from
+introducing a details-list complexity hotspot. Report:
+`.fitness/portable-drives-partition-checkpoints-architecture.json`.

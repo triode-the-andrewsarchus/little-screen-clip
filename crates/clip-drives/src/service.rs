@@ -258,6 +258,7 @@ impl Service {
             bytes: 0,
             started: now(),
             finished: None,
+            partition: None,
         };
         db.put("operation", &id, &operation)?;
         tokens.insert(id.clone(), cancel.clone());
@@ -350,9 +351,8 @@ impl Owner {
             for mut op in operations {
                 if op.finished.is_none() {
                     op.state = "interrupted".into();
-                    op.message =
-                        "Daemon restarted; completed writes retained. Reconcile before retrying."
-                            .into();
+                    op.message = op.partition.as_ref().map(PartitionPreparation::interruption_message)
+                        .unwrap_or_else(|| "Daemon restarted; completed writes retained. Reconcile before retrying.".into());
                     op.finished = Some(now());
                     self.db.put("operation", &op.id, &op)?;
                 }
@@ -1526,6 +1526,85 @@ mod tests {
                 .unwrap();
         });
         (entered_rx, release_tx, wait)
+    }
+    #[test]
+    fn restart_preserves_partition_checkpoints_without_replaying_mount_actions() {
+        let fixture = TestDrives::new(0);
+        let service = fixture.start(None, Arc::new(|_| panic!("unexpected authority request")));
+        service.shutdown().unwrap();
+        drop(service);
+        let db = Store::existing(&fixture.temp.path().join("state/drives.sqlite"), false).unwrap();
+        let mut expected = Vec::new();
+        for (index, phase) in [
+            PartitionPhase::Flushing,
+            PartitionPhase::Unmounting,
+            PartitionPhase::Unmounted,
+            PartitionPhase::CopyingImage,
+            PartitionPhase::VerifyingImage,
+            PartitionPhase::PublishingImage,
+            PartitionPhase::ImagePublished,
+            PartitionPhase::RestoringMount,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let partition = PartitionPreparation {
+                drive: fixture.drives.lock().unwrap()[1].clone(),
+                destination: Some(fixture.temp.path().join("backup")),
+                phase,
+                unmounted_by_job: index >= 2,
+                restore_mounted: true,
+                completed_backup: (phase == PartitionPhase::ImagePublished)
+                    .then(|| "owned-completed-image".into()),
+                restore_error: None,
+            };
+            let id = format!("owned-interruption-{index}");
+            let operation = DriveOperation {
+                id: id.clone(),
+                title: "Owned partition checkpoint".into(),
+                state: "running".into(),
+                message: "before restart".into(),
+                files: 0,
+                bytes: 17,
+                started: now(),
+                finished: None,
+                partition: Some(partition.clone()),
+            };
+            db.put("operation", &id, &operation).unwrap();
+            expected.push((id, partition));
+        }
+        let mut legacy = serde_json::to_value(
+            db.get::<DriveOperation>("operation", &expected[0].0)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        legacy.as_object_mut().unwrap().remove("partition");
+        legacy["id"] = "owned-legacy-operation".into();
+        db.put("operation", "owned-legacy-operation", &legacy)
+            .unwrap();
+        drop(db);
+        let restarted = fixture.start(None, Arc::new(|_| panic!("restart replayed unmount")));
+        let status = status(&restarted);
+        for (id, partition) in expected {
+            let operation = status.operations.iter().find(|op| op.id == id).unwrap();
+            assert_eq!(operation.state, "interrupted");
+            assert!(operation.finished.is_some());
+            assert_eq!(operation.bytes, 17);
+            assert_eq!(operation.message, partition.interruption_message());
+            assert_eq!(operation.partition.as_ref().unwrap().phase, partition.phase);
+            if partition.phase == PartitionPhase::Unmounting {
+                assert!(operation.message.contains("may have taken effect"));
+            }
+        }
+        let legacy = status
+            .operations
+            .iter()
+            .find(|op| op.id == "owned-legacy-operation")
+            .unwrap();
+        assert!(legacy.partition.is_none());
+        assert!(legacy.message.contains("completed writes retained"));
+        restarted.shutdown().unwrap();
     }
     #[test]
     fn image_admission_requires_a_disk_lifetime_and_authorized_block_descriptor() {

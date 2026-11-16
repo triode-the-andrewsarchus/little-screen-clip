@@ -264,6 +264,79 @@ pub struct DriveOperation {
     pub bytes: u64,
     pub started: u64,
     pub finished: Option<u64>,
+    /// Retained partition effects and the last durable preparation checkpoint.
+    #[serde(default)]
+    pub partition: Option<PartitionPreparation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PartitionPreparation {
+    pub drive: Drive,
+    #[serde(with = "crate::path_serde::optional")]
+    pub destination: Option<PathBuf>,
+    pub phase: PartitionPhase,
+    pub unmounted_by_job: bool,
+    pub restore_mounted: bool,
+    pub completed_backup: Option<String>,
+    pub restore_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PartitionPhase {
+    Flushing,
+    Unmounting,
+    Unmounted,
+    OpeningImage,
+    CopyingImage,
+    VerifyingImage,
+    PublishingImage,
+    ImagePublished,
+    RestoringMount,
+    MountRestored,
+    MountRestoreFailed,
+}
+impl PartitionPhase {
+    /// Describes the work whose checkpoint has been durably recorded.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Flushing => "Flushing enrolled folders before unmount",
+            Self::Unmounting => "Waiting for partition unmount / authorization",
+            Self::Unmounted => "Partition confirmed unmounted",
+            Self::OpeningImage => "Waiting for exclusive image read / authorization",
+            Self::CopyingImage => "Copying partition bytes",
+            Self::VerifyingImage => "Verifying every image byte",
+            Self::PublishingImage => "Publishing verified image",
+            Self::ImagePublished => "Completed image published",
+            Self::RestoringMount => "Restoring the partition's mounted state",
+            Self::MountRestored => "Partition mounted again",
+            Self::MountRestoreFailed => "Partition remount failed",
+        }
+    }
+}
+impl PartitionPreparation {
+    /// Reports retained effects without assuming an interrupted authority call failed.
+    pub fn interruption_message(&self) -> String {
+        let effect = if self.phase == PartitionPhase::MountRestored {
+            "This job confirmed the partition was mounted again before interruption."
+        } else if self.unmounted_by_job {
+            "This job confirmed the unmount before interruption."
+        } else if self.phase == PartitionPhase::Unmounting {
+            "The unmount request may have taken effect; inspect the current mount state."
+        } else if self.drive.mount.is_none() {
+            "The partition was already unmounted when this job started."
+        } else {
+            "This job did not record a confirmed unmount."
+        };
+        let image = self
+            .completed_backup
+            .as_ref()
+            .map(|id| format!(" Completed backup: {id}."))
+            .unwrap_or_default();
+        format!(
+            "Daemon restarted during: {}. {effect}{image} Completed writes are retained. Check current drive state and completed/prepared backups before retrying; no mount action was replayed automatically.",
+            self.phase.description()
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -202,17 +202,38 @@ fn details(ui: &mut Ui, status: &DriveStatus, requests: &mut Vec<DriveRequest>) 
             });
         }
         for pair in &status.pairs { ui.label(format!("{} · {}", display_path(&pair.local), pair.status)); }
-        for operation in &status.operations {
-            ui.group(|ui| {
-                ui.label(format!("{} · {}", operation.title, operation.state));
-                ui.small(format!("{} files · {} bytes", operation.files, operation.bytes));
-                ui.label(&operation.message);
-                if operation.finished.is_none() && ui.button("Cancel remaining work").clicked() {
-                    requests.push(DriveRequest::Cancel { operation: operation.id.clone() });
-                }
+        for operation in &status.operations { operation_details(ui, operation, requests); }
+        if status.next_offset.is_some() { ui.small("Showing recent jobs and snapshots. Older records remain available through clipctl drives status."); }
+    });
+}
+fn operation_details(ui: &mut Ui, operation: &DriveOperation, requests: &mut Vec<DriveRequest>) {
+    ui.group(|ui| {
+        ui.label(format!("{} · {}", operation.title, operation.state));
+        ui.small(format!(
+            "{} files · {} bytes",
+            operation.files, operation.bytes
+        ));
+        ui.label(&operation.message);
+        if let Some(partition) = &operation.partition {
+            ui.small(format!(
+                "Partition: {} · {} bytes",
+                partition.drive.label, partition.drive.capacity
+            ));
+            if let Some(destination) = &partition.destination {
+                ui.small(format!("Backup destination: {}", display_path(destination)));
+            }
+            if partition.restore_mounted {
+                ui.small("Restore mounted state requested");
+            }
+            if let Some(error) = &partition.restore_error {
+                ui.label(format!("Remount: {error}"));
+            }
+        }
+        if operation.finished.is_none() && ui.button("Cancel remaining work").clicked() {
+            requests.push(DriveRequest::Cancel {
+                operation: operation.id.clone(),
             });
         }
-        if status.next_offset.is_some() { ui.small("Showing recent jobs and snapshots. Older records remain available through clipctl drives status."); }
     });
 }
 impl Drives {

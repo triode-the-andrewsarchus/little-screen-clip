@@ -1,6 +1,6 @@
 //! Versioned guarded filesystem backups and partition images with reflink deltas.
 use crate::{
-    BackupKind, Drive, Result, cancelled, now,
+    BackupKind, Drive, PartitionPhase, Result, cancelled, now,
     root::{Root, anchor},
     scan::{self, Limits},
     store::Store,
@@ -413,7 +413,7 @@ pub(crate) fn image(
     source: &crate::device::Source,
     destination: &Root,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(PartitionPhase, u64) -> Result<()>,
 ) -> Result<Backup> {
     if drive.mount.is_some() {
         return Err(
@@ -421,6 +421,7 @@ pub(crate) fn image(
         );
     }
     source.validate()?;
+    progress(PartitionPhase::OpeningImage, 0)?;
     let connection = system_connection()?;
     let path = udisks_path(drive)?;
     let proxy = zbus::blocking::Proxy::new(
@@ -472,7 +473,7 @@ pub(crate) fn image_from(
     destination: &Root,
     input: &File,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(PartitionPhase, u64) -> Result<()>,
     validate_source: impl Fn() -> Result<()>,
 ) -> Result<Backup> {
     if drive.capacity == 0 {
@@ -536,6 +537,7 @@ pub(crate) fn image_from(
         identity: Some(crate::StorageIdentity::pinned(staged.as_file())?),
     };
     let manifest = publication::Manifest::new(&parent)?;
+    progress(PartitionPhase::PublishingImage, drive.capacity)?;
     publication::publish(
         db,
         &parent,
@@ -555,7 +557,7 @@ fn copy_image(
     size: u64,
     delta: bool,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, u64),
+    mut progress: impl FnMut(PartitionPhase, u64) -> Result<()>,
     validate_source: impl Fn() -> Result<()>,
 ) -> Result<(u64, String)> {
     let mut buffer = vec![0; 256 * 1024];
@@ -567,6 +569,12 @@ fn copy_image(
     // Both passes use the same bounded reads and lifetime checks. The second
     // pass checks every output byte against the still-owned source descriptor.
     for verify in [false, true] {
+        let phase = if verify {
+            PartitionPhase::VerifyingImage
+        } else {
+            PartitionPhase::CopyingImage
+        };
+        progress(phase, 0)?;
         let mut offset = 0;
         while offset < size {
             cancelled(cancel)?;
@@ -591,9 +599,9 @@ fn copy_image(
                     output.write_all_at(&buffer[..n], offset)?;
                     written += n as u64;
                 }
-                progress(0, offset + n as u64);
             }
             offset += n as u64;
+            progress(phase, offset)?;
         }
     }
     Ok((written, format!("{:x}", digest.finalize())))
@@ -683,7 +691,7 @@ mod tests {
                         &destination,
                         &input,
                         &cancel,
-                        |_, _| {},
+                        |_, _| Ok(()),
                         || Ok(())
                     )
                     .is_err()
@@ -882,6 +890,8 @@ mod tests {
         fs::write(&source, &bytes).unwrap();
         let input = File::open(source).unwrap();
         let db = Store::open(&temp.path().join("db")).unwrap();
+        let phases = std::cell::RefCell::new(Vec::new());
+        let reject = std::cell::Cell::new(None);
         let make = |validate: &dyn Fn() -> Result<()>| {
             image_from(
                 &db,
@@ -889,7 +899,17 @@ mod tests {
                 &Root::create(&temp.path().join("backups")).unwrap(),
                 &input,
                 &AtomicBool::new(false),
-                |_, _| {},
+                |phase, _| {
+                    let mut phases = phases.borrow_mut();
+                    if phases.last() != Some(&phase) {
+                        phases.push(phase);
+                    }
+                    if reject.get() == Some(phase) {
+                        Err("owned checkpoint write failure".into())
+                    } else {
+                        Ok(())
+                    }
+                },
                 validate,
             )
         };
@@ -898,6 +918,15 @@ mod tests {
         use sha2::{Digest, Sha256};
         assert_eq!(result.sha256, Some(format!("{:x}", Sha256::digest(&bytes))));
         publication::check_manifest(&result).unwrap();
+        assert_eq!(
+            *phases.borrow(),
+            [
+                PartitionPhase::CopyingImage,
+                PartitionPhase::VerifyingImage,
+                PartitionPhase::PublishingImage
+            ]
+        );
+        phases.borrow_mut().clear();
         let checks = std::cell::Cell::new(0);
         let error = make(&|| {
             checks.set(checks.get() + 1);
@@ -914,6 +943,17 @@ mod tests {
                 .contains("lifetime changed during verification")
         );
         assert_eq!(checks.get(), 3);
+        assert_eq!(
+            phases.borrow().last(),
+            Some(&PartitionPhase::VerifyingImage)
+        );
+        reject.set(Some(PartitionPhase::PublishingImage));
+        assert!(
+            make(&|| Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("checkpoint write failure")
+        );
         assert_eq!(
             publication::current(&db, &drive(None).id, BackupKind::Image)
                 .unwrap()
@@ -1006,7 +1046,7 @@ mod btrfs_tests {
                 &destination_root,
                 input,
                 &cancel,
-                |_, _| {},
+                |_, _| Ok(()),
                 || Ok(()),
             )
         };

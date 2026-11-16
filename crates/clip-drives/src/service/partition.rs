@@ -76,13 +76,33 @@ impl Owner {
                 return;
             }
         };
+        let initialized = (|| -> Result<()> {
+            let mut operation = self
+                .db
+                .get::<DriveOperation>("operation", &envelope.id)?
+                .ok_or("Missing accepted partition operation")?;
+            operation.partition = Some(PartitionPreparation {
+                drive: drive.clone(),
+                destination: destination.as_ref().map(|root| root.path.clone()),
+                phase: PartitionPhase::Flushing,
+                unmounted_by_job: false,
+                restore_mounted: false,
+                completed_backup: None,
+                restore_error: None,
+            });
+            self.db.put("operation", &envelope.id, &operation)
+        })();
+        if let Err(error) = initialized {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+            return;
+        }
         let state = self.state.clone();
         let operation = envelope.id.clone();
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.partition_jobs, move || {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
             let mut progress = job_progress(state, operation.clone());
-            phase(&db, &operation, "Flushing enrolled folders before unmount")?;
+            phase(&db, &operation, PartitionPhase::Flushing, None)?;
             for plan in plans {
                 cancelled(&cancel)?;
                 let intent = reconciliation::Intent {
@@ -206,11 +226,7 @@ impl Owner {
                 let source = job.source.clone();
                 job.stage = Stage::Unmount(write_task(&self.partition_jobs, move || {
                     let db = Store::existing(&state.join("drives.sqlite"), false)?;
-                    phase(
-                        &db,
-                        &operation,
-                        "Waiting for partition unmount / authorization",
-                    )?;
+                    phase(&db, &operation, PartitionPhase::Unmounting, None)?;
                     unmount_checked(
                         &drive,
                         &selector,
@@ -239,6 +255,21 @@ impl Owner {
                 return;
             }
         };
+        if let Err(error) = phase(&self.db, &job.envelope.id, PartitionPhase::Unmounted, None) {
+            let message = format!(
+                "Partition is confirmed unmounted; could not record the checkpoint: {error}. No image copy was started; RAM and local edits are retained"
+            );
+            self.finish_operation(
+                &job.envelope.id,
+                &job.cancel,
+                if image {
+                    Err(message.into())
+                } else {
+                    Ok(message)
+                },
+            );
+            return;
+        }
         if image {
             if job.cancel.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
                 self.finish_operation(&job.envelope.id, &job.cancel, Err("Partition is unmounted; image copy cancelled before admission. Local and RAM edits are retained".into()));
@@ -286,13 +317,39 @@ fn selector(request: &DriveRequest) -> Result<&str> {
         _ => Err("Invalid pre-unmount request".into()),
     }
 }
-fn phase(db: &Store, id: &str, message: &str) -> Result<()> {
-    if let Some(mut operation) = db.get::<DriveOperation>("operation", id)? {
-        operation.state = "preparing".into();
-        operation.message = message.into();
-        db.put("operation", id, &operation)?;
+pub(super) fn phase(
+    db: &Store,
+    id: &str,
+    phase: PartitionPhase,
+    backup: Option<&DriveBackup>,
+) -> Result<()> {
+    let mut operation = db
+        .get::<DriveOperation>("operation", id)?
+        .ok_or("Missing accepted partition operation")?;
+    let partition = operation
+        .partition
+        .as_mut()
+        .ok_or("Missing partition preparation journal")?;
+    partition.phase = phase;
+    if phase == PartitionPhase::Unmounted {
+        partition.unmounted_by_job = partition.drive.mount.is_some();
     }
-    Ok(())
+    if let Some(backup) = backup {
+        partition.completed_backup = Some(backup.id.clone());
+        operation.files = 1;
+        operation.bytes = backup.source_size;
+    }
+    operation.state = if matches!(
+        phase,
+        PartitionPhase::Flushing | PartitionPhase::Unmounting | PartitionPhase::Unmounted
+    ) {
+        "preparing"
+    } else {
+        "running"
+    }
+    .into();
+    operation.message = phase.description().into();
+    db.put("operation", id, &operation)
 }
 fn unmount_checked(
     drive: &Drive,
