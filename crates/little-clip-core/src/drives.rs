@@ -59,6 +59,9 @@ pub struct Drive {
     pub filesystem: String,
     pub capacity: u64,
     pub drive_capacity: u64,
+    /// Current kernel disk lifetime; deliberately excluded from enrollment evidence.
+    #[serde(default)]
+    pub disk_sequence: Option<u64>,
     pub removable: bool,
     pub read_only: bool,
     /// Hardware/partition evidence distinguishes cloned filesystem identifiers.

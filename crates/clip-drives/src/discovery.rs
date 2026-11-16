@@ -5,7 +5,23 @@ use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 
 pub fn discover() -> Result<Vec<Drive>> {
-    let output=CommandRequest::new("lsblk").args(["--bytes","--json","--paths","--output","NAME,PATH,TYPE,SIZE,RM,HOTPLUG,RO,FSTYPE,UUID,PARTUUID,LABEL,MOUNTPOINTS,SERIAL,WWN,START"]).timeout(Duration::from_secs(5)).max_output_bytes(2*1024*1024).own_process_group().run().map_err(|e| e.to_string())?;
+    let columns =
+        "NAME,PATH,TYPE,SIZE,RM,HOTPLUG,RO,FSTYPE,UUID,PARTUUID,LABEL,MOUNTPOINTS,SERIAL,WWN,START";
+    let query = |columns: &str| {
+        CommandRequest::new("lsblk")
+            .args(["--bytes", "--json", "--paths", "--output", columns])
+            .timeout(Duration::from_secs(5))
+            .max_output_bytes(2 * 1024 * 1024)
+            .own_process_group()
+            .run()
+            .map_err(|e| e.to_string())
+    };
+    let mut output = query(&format!("{columns},DISK-SEQ"))?;
+    // Older lsblk can still provide browsing/sync inventory. Imaging refuses
+    // admission when this observation is absent rather than weakening its guard.
+    if !output.status.success() && String::from_utf8_lossy(&output.stderr).contains("DISK-SEQ") {
+        output = query(columns)?;
+    }
     if !output.status.success() || output.stdout_truncated {
         return Err("Block inventory failed or exceeded its limit".into());
     }
@@ -118,6 +134,7 @@ fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
             filesystem: text(v, "fstype").into(),
             capacity: number(v, "size"),
             drive_capacity: number(parent, "size"),
+            disk_sequence: Some(number(v, "disk-seq")).filter(|value| *value != 0),
             removable: flag(parent, "rm") || flag(parent, "hotplug"),
             read_only: flag(v, "ro"),
             evidence,
@@ -154,11 +171,26 @@ mod tests {
     use super::*;
     #[test]
     fn inventories_numeric_capacity_and_refuses_duplicate_partition_ids() {
-        let tree = serde_json::json!({"blockdevices":[{"type":"disk","size":3000000000_u64,"rm":true,"serial":"first","children":[{"type":"part","path":"/dev/sdb1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same","mountpoints":["/media/a"]}]},{"type":"disk","size":3000000000_u64,"rm":true,"serial":"second","children":[{"type":"part","path":"/dev/sdc1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same"}]}]});
+        let tree = serde_json::json!({"blockdevices":[{"type":"disk","size":3000000000_u64,"rm":true,"serial":"first","children":[{"type":"part","path":"/dev/sdb1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same","disk-seq":17,"mountpoints":["/media/a"]}]},{"type":"disk","size":3000000000_u64,"rm":true,"serial":"second","children":[{"type":"part","path":"/dev/sdc1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same","disk-seq":"18"}]}]});
         let drives = parse(&tree).unwrap();
         assert_eq!(drives.len(), 2);
         assert!(drives.iter().all(|d| d.ambiguous));
         assert_eq!(drives[0].drive_capacity, 3000000000);
+        assert_eq!(drives[0].disk_sequence, Some(17));
+        assert_eq!(drives[1].disk_sequence, Some(18));
+        let mut reconnected = tree.clone();
+        reconnected["blockdevices"][0]["children"][0]["disk-seq"] = 19.into();
+        let next = parse(&reconnected).unwrap();
+        assert_eq!(next[0].evidence, drives[0].evidence);
+        assert_ne!(next[0], drives[0]);
+        let mut old_record = serde_json::to_value(&drives[0]).unwrap();
+        old_record.as_object_mut().unwrap().remove("disk_sequence");
+        assert_eq!(
+            serde_json::from_value::<Drive>(old_record)
+                .unwrap()
+                .disk_sequence,
+            None
+        );
         assert!(drives[0].removable);
         assert_ne!(drives[0].evidence, drives[1].evidence);
     }

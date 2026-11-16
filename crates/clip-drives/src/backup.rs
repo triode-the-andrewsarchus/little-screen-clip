@@ -12,7 +12,7 @@ use std::{
     fs::{self, File},
     os::{
         fd::{AsRawFd, OwnedFd},
-        unix::fs::{FileExt, FileTypeExt, MetadataExt, PermissionsExt},
+        unix::fs::{FileExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -411,6 +411,7 @@ fn udisks_path(drive: &Drive) -> Result<String> {
 pub(crate) fn image(
     db: &Store,
     drive: &Drive,
+    source: &crate::device::Source,
     destination: &Path,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
@@ -420,6 +421,7 @@ pub(crate) fn image(
             "Unmount the partition before imaging it; flush pending RAM/sync changes first".into(),
         );
     }
+    source.validate()?;
     let connection = system_connection()?;
     let path = udisks_path(drive)?;
     let proxy = zbus::blocking::Proxy::new(
@@ -430,22 +432,14 @@ pub(crate) fn image(
     )
     .map_err(|e| e.to_string())?;
     let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    source.validate()?;
     let descriptor: zbus::zvariant::OwnedFd = proxy
         .call("OpenForBackup", &(options,))
         .map_err(|e| format!("UDisks authorization or exclusive read failed: {e}"))?;
     let fd: OwnedFd = descriptor.into();
     let input = File::from(fd);
-    let identity = input.metadata()?;
-    if !identity.file_type().is_block_device() {
-        return Err("UDisks did not supply a block-device descriptor".into());
-    }
     let validate = || {
-        let current = fs::metadata(&drive.device)?;
-        if (current.dev(), current.ino(), current.rdev())
-            != (identity.dev(), identity.ino(), identity.rdev())
-        {
-            return Err("Partition device was removed or replaced during imaging".into());
-        }
+        source.validate_input(&input)?;
         let mut capacity = 0_u64;
         // SAFETY: BLKGETSIZE64 writes one u64 through a live authorized device descriptor.
         if unsafe {
@@ -516,6 +510,7 @@ pub(crate) fn image_from(
         clone,
         cancel,
         &mut progress,
+        &validate_source,
     )?;
     validate_source()?;
     parent.validate()?;
@@ -562,39 +557,45 @@ fn copy_image(
     delta: bool,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
+    validate_source: impl Fn() -> Result<()>,
 ) -> Result<(u64, String)> {
     let mut buffer = vec![0; 256 * 1024];
     let mut old = vec![0; buffer.len()];
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
-    let mut offset = 0;
     let mut written = 0;
-    while offset < size {
-        cancelled(cancel)?;
-        let n = (size - offset).min(buffer.len() as u64) as usize;
-        input.read_exact_at(&mut buffer[..n], offset)?;
-        digest.update(&buffer[..n]);
-        let equal =
-            delta && output.read_exact_at(&mut old[..n], offset).is_ok() && old[..n] == buffer[..n];
-        if !equal && (buffer[..n].iter().any(|b| *b != 0) || delta) {
-            output.write_all_at(&buffer[..n], offset)?;
-            written += n as u64;
-        }
-        offset += n as u64;
-        progress(0, offset);
-    }
     output.set_len(size)?;
-    // Verify every byte against the still-owned source descriptor before publication.
-    offset = 0;
-    while offset < size {
-        cancelled(cancel)?;
-        let n = (size - offset).min(buffer.len() as u64) as usize;
-        input.read_exact_at(&mut buffer[..n], offset)?;
-        output.read_exact_at(&mut old[..n], offset)?;
-        if old[..n] != buffer[..n] {
-            return Err("Image verification failed; source changed or output is damaged".into());
+    // Both passes use the same bounded reads and lifetime checks. The second
+    // pass checks every output byte against the still-owned source descriptor.
+    for verify in [false, true] {
+        let mut offset = 0;
+        while offset < size {
+            cancelled(cancel)?;
+            if offset % (64 * 1024 * 1024) == 0 {
+                validate_source()?;
+            }
+            let n = (size - offset).min(buffer.len() as u64) as usize;
+            input.read_exact_at(&mut buffer[..n], offset)?;
+            if verify {
+                output.read_exact_at(&mut old[..n], offset)?;
+                if old[..n] != buffer[..n] {
+                    return Err(
+                        "Image verification failed; source changed or output is damaged".into(),
+                    );
+                }
+            } else {
+                digest.update(&buffer[..n]);
+                let equal = delta
+                    && output.read_exact_at(&mut old[..n], offset).is_ok()
+                    && old[..n] == buffer[..n];
+                if !equal && (buffer[..n].iter().any(|b| *b != 0) || delta) {
+                    output.write_all_at(&buffer[..n], offset)?;
+                    written += n as u64;
+                }
+                progress(0, offset + n as u64);
+            }
+            offset += n as u64;
         }
-        offset += n as u64;
     }
     Ok((written, format!("{:x}", digest.finalize())))
 }
@@ -612,6 +613,7 @@ mod tests {
             filesystem: "vfat".into(),
             capacity: 1048576,
             drive_capacity: 1048576,
+            disk_sequence: Some(1),
             removable: true,
             read_only: false,
             evidence: "fixture".into(),
@@ -826,20 +828,46 @@ mod tests {
         fs::write(&source, &bytes).unwrap();
         let input = File::open(source).unwrap();
         let db = Store::open(&temp.path().join("db")).unwrap();
-        let result = image_from(
-            &db,
-            &drive(None),
-            &temp.path().join("backups"),
-            &input,
-            &AtomicBool::new(false),
-            |_, _| {},
-            || Ok(()),
-        )
-        .unwrap();
+        let make = |validate: &dyn Fn() -> Result<()>| {
+            image_from(
+                &db,
+                &drive(None),
+                &temp.path().join("backups"),
+                &input,
+                &AtomicBool::new(false),
+                |_, _| {},
+                validate,
+            )
+        };
+        let result = make(&|| Ok(())).unwrap();
         assert_eq!(fs::read(&result.path).unwrap(), bytes);
         use sha2::{Digest, Sha256};
         assert_eq!(result.sha256, Some(format!("{:x}", Sha256::digest(&bytes))));
         publication::check_manifest(&result).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let error = make(&|| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 3 {
+                Err("owned disk lifetime changed during verification".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("lifetime changed during verification")
+        );
+        assert_eq!(checks.get(), 3);
+        assert_eq!(
+            publication::current(&db, &drive(None).id, BackupKind::Image)
+                .unwrap()
+                .unwrap()
+                .id,
+            result.id
+        );
+        assert_eq!(db.list::<Backup>("backup", 0, 10).unwrap().len(), 1);
     }
 }
 
@@ -896,6 +924,7 @@ mod btrfs_tests {
             filesystem: "vfat".into(),
             capacity: bytes.len() as u64,
             drive_capacity: bytes.len() as u64,
+            disk_sequence: Some(1),
             removable: true,
             read_only: false,
             evidence: "fixture".into(),

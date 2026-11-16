@@ -101,6 +101,7 @@ impl Service {
                     filesystem: "vfat".into(),
                     capacity: 2 * 1024 * 1024,
                     drive_capacity: 2 * 1024 * 1024,
+                    disk_sequence: Some(1),
                     removable: true,
                     read_only: false,
                     evidence: "owned-directory-fixture".into(),
@@ -1194,16 +1195,19 @@ mod tests {
     }
 
     fn fixture_drive(path: &Path, id: &str) -> Drive {
+        let device = path.with_extension("device");
+        fs::write(&device, b"owned metadata-only node stand-in").unwrap();
         Drive {
             id: format!("part:{id}"),
             label: id.into(),
-            device: format!("/dev/not-real-{id}").into(),
+            device,
             mount: Some(path.into()),
             part_uuid: Some(id.into()),
             filesystem_uuid: Some(id.into()),
             filesystem: "vfat".into(),
             capacity: 1024 * 1024,
             drive_capacity: 1024 * 1024,
+            disk_sequence: Some(1),
             removable: true,
             read_only: false,
             evidence: id.into(),
@@ -1350,6 +1354,25 @@ mod tests {
                 fixture_drive(&large, "large"),
             ]));
             Self { temp, drives }
+        }
+        fn held_unmount(&self) -> (Service, mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let drives = self.drives.clone();
+            let (entered, release, gate) = worker_gate();
+            let service = self.start(
+                None,
+                Arc::new(move |drive| {
+                    gate();
+                    drives
+                        .lock()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|candidate| candidate.id == drive.id)
+                        .unwrap()
+                        .mount = None;
+                    Ok(())
+                }),
+            );
+            (service, entered, release)
         }
         fn pair(&self, service: &Service, drive: &str, relative: &str) -> PathBuf {
             let local = self.temp.path().join(format!("paired-{drive}"));
@@ -1505,24 +1528,69 @@ mod tests {
         (entered_rx, release_tx, wait)
     }
     #[test]
+    fn image_admission_requires_a_disk_lifetime_and_authorized_block_descriptor() {
+        let fixture = TestDrives::new(0);
+        let mut drive = fixture.drives.lock().unwrap()[1].clone();
+        drive.disk_sequence = None;
+        assert!(
+            crate::device::Source::capture(&drive)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("disk sequence unavailable")
+        );
+        drive.disk_sequence = Some(1);
+        let source = crate::device::Source::capture(&drive).unwrap();
+        source.validate().unwrap();
+        let ordinary = File::open(&drive.device).unwrap();
+        assert!(
+            source
+                .validate_input(&ordinary)
+                .unwrap_err()
+                .to_string()
+                .contains("Authorized descriptor")
+        );
+        fs::set_permissions(&drive.device, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            source
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("removed or replaced")
+        );
+    }
+    #[test]
+    fn image_refuses_device_node_replacement_while_unmount_is_pending() {
+        let fixture = TestDrives::new(0);
+        let device = fixture.drives.lock().unwrap()[1].device.clone();
+        let (service, entered, release) = fixture.held_unmount();
+        let id = accept(
+            &service,
+            DriveRequest::Backup {
+                drive: "part:large".into(),
+                kind: BackupKind::Image,
+            },
+        );
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        fs::rename(&device, device.with_extension("original")).unwrap();
+        fs::write(&device, b"replacement device node").unwrap();
+        release.send(()).unwrap();
+        let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "failed");
+        assert!(
+            operation.message.contains("removed or replaced"),
+            "{}",
+            operation.message
+        );
+        assert!(operation.message.contains("Unmount completed"));
+        assert!(status(&service).backups.is_empty());
+        assert!(!fixture.temp.path().join("backup/large").exists());
+        service.shutdown().unwrap();
+    }
+    #[test]
     fn cancelled_image_waits_for_unmount_result_and_never_starts_copying() {
         let fixture = TestDrives::new(0);
-        let drives = fixture.drives.clone();
-        let (entered, release, gate) = worker_gate();
-        let service = fixture.start(
-            None,
-            Arc::new(move |drive| {
-                gate();
-                drives
-                    .lock()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|candidate| candidate.device == drive.device)
-                    .unwrap()
-                    .mount = None;
-                Ok(())
-            }),
-        );
+        let (service, entered, release) = fixture.held_unmount();
         let id = accept(
             &service,
             DriveRequest::Backup {

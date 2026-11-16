@@ -1,6 +1,7 @@
 //! Daemon-owned portable media synchronization, backup and offline catalog services.
 mod backup;
 mod catalog;
+mod device;
 mod discovery;
 mod mounts;
 mod ram;

@@ -247,3 +247,28 @@ review hotspot. Report: `.fitness/portable-drives-sync-root-architecture.json`.
 Remaining identity coverage includes real bind/case-fold aliases, live mounted-source
 binding to the selected block device, device-node lifetime checks through authorized
 image open, and the full concurrent relocation/reader matrix. These are still open.
+
+Device-lifetime checkpoint: image jobs now retain an O_PATH metadata pin from
+admission through preflush, unmount, authorization, both image passes and publication.
+The guard reuses core's full metadata fingerprint and namespace/mount observations.
+The authorized descriptor must be a matching block device and return the originally
+observed kernel disk sequence. Discovery keeps this transient sequence separate from
+persistent enrollment evidence; old records deserialize with an unknown sequence.
+An older lsblk can still supply ordinary inventory, but cannot admit an unverified
+image backup.
+
+Owned fixtures reject a device pathname replaced while unmount is pending, reject
+ordinary-file authorization descriptors and unknown sequences, and inject a lifetime
+failure at image verification without replacing the previous completed image. These
+fixtures do not substitute for real PolicyKit/block-device acceptance. Live mounted
+source binding and the full real-media identity matrix remain open.
+
+Validation: 45 ordinary backend tests pass (thirteen explicit fixtures ignored).
+All ten selected native RAM/unmount fixtures also pass (12.25 seconds). Backend
+all-target clippy passes with warnings denied, and the daemon, file manager and CLI
+compile. Sharing the two-pass
+read loop and held-unmount fixture removed the additional clone groups discovered
+during this checkpoint. Architecture still reports REGRESSION against the original
+baseline: seventeen net new clone groups, duplication 7.30% to 7.21%, average CCN
+3.48, max 274 and dependency cycles 143 unchanged. Report:
+`.fitness/portable-drives-device-lifetime-architecture.json`.

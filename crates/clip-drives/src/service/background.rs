@@ -80,7 +80,7 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
-        self.launch_bulk(envelope, drive, self.config.clone(), roots);
+        self.launch_bulk(envelope, drive, self.config.clone(), roots, None);
     }
     pub(super) fn launch_bulk(
         &mut self,
@@ -88,6 +88,7 @@ impl Owner {
         drive: Drive,
         config: DriveConfig,
         roots: Vec<Arc<Root>>,
+        source: Option<Arc<crate::device::Source>>,
     ) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", &envelope.id) {
             operation.state = "running".into();
@@ -120,7 +121,10 @@ impl Owner {
                             backup::files(&db, &drive, destination, &cancel, &mut progress)?
                         }
                         BackupKind::Image => {
-                            backup::image(&db, &drive, destination, &cancel, &mut progress)?
+                            let source = source
+                                .as_ref()
+                                .ok_or("Missing original device admission pin")?;
+                            backup::image(&db, &drive, source, destination, &cancel, &mut progress)?
                         }
                     };
                     Ok(format!(

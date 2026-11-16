@@ -53,6 +53,8 @@ Eject and image preparation use a retained worker for folder flushes and unmount
 
 File and image backups validate their selected destination against managed storage before admission, including when it came from startup configuration. Accepted jobs retain their selected destination and its index exclusion while running; changing preferences does not retarget an accepted image job.
 
+Image admission retains a metadata-only pin to the selected device node before flushing or unmounting. Authorization must return that same block-device object and kernel disk sequence. Both image passes periodically recheck its lifetime, with a final check before publication. Device-path replacement fails the job and preserves the previous completed version. Disk sequences are transient observations, separate from persistent folder enrollment. Older `lsblk` versions can still supply browsing and sync inventory; imaging requires `DISK-SEQ` support and a kernel that supplies `BLKGETDISKSEQ`.
+
 On Btrfs, subsequent file versions start from a writable snapshot of the previous version and become read-only when completed. Reflink staging and changed-range writes also share unchanged blocks in large changed files and images. This shares data between versions; it does not promise global deduplication across unrelated backup trees. Other destination filesystems retain independent full versions.
 
 No completed versions are automatically discarded by default. Configure `backup_keep_versions`, then explicitly invoke pruning to remove older completed versions. Mounted image/catalog providers are retained. Incomplete versions have a distinct name and are never presented as completed backups.

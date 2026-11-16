@@ -13,6 +13,7 @@ pub(super) struct Pending {
     envelope: Envelope,
     snapshot: Drive,
     config: DriveConfig,
+    source: Option<Arc<crate::device::Source>>,
     stage: Stage,
 }
 enum Stage {
@@ -25,6 +26,7 @@ enum Completion {
 }
 struct Admission {
     drive: Drive,
+    source: Option<Arc<crate::device::Source>>,
     destination: Option<Arc<Root>>,
     plans: Vec<reconciliation::Plan>,
     claims: Vec<Scope>,
@@ -63,6 +65,7 @@ impl Owner {
         let prepared = self.partition_plan(&envelope, image);
         let Admission {
             drive,
+            source,
             destination,
             plans,
             claims,
@@ -105,6 +108,7 @@ impl Owner {
             envelope,
             snapshot: drive,
             config: self.config.clone(),
+            source,
             stage: Stage::Flush(task),
         });
     }
@@ -117,6 +121,9 @@ impl Owner {
         if image && drive.capacity == 0 {
             return Err("Partition capacity is unknown; cannot create a complete image".into());
         }
+        let device_source = image
+            .then(|| crate::device::Source::capture(&drive).map(Arc::new))
+            .transpose()?;
         let source = drive
             .mount
             .as_ref()
@@ -147,6 +154,7 @@ impl Owner {
         }
         Ok(Admission {
             drive,
+            source: device_source,
             destination,
             plans,
             claims,
@@ -163,6 +171,12 @@ impl Owner {
             .expect("polled retained partition job");
         match completion {
             Completion::Flush(Ok(())) => {
+                if let Some(source) = &job.source
+                    && let Err(error) = source.validate()
+                {
+                    self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
+                    return;
+                }
                 if job.cancel.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
                     self.finish_operation(
                         &job.envelope.id,
@@ -189,6 +203,7 @@ impl Owner {
                 let cancel = job.cancel.clone();
                 let state = self.state.clone();
                 let operation = job.envelope.id.clone();
+                let source = job.source.clone();
                 job.stage = Stage::Unmount(write_task(&self.partition_jobs, move || {
                     let db = Store::existing(&state.join("drives.sqlite"), false)?;
                     phase(
@@ -196,7 +211,14 @@ impl Owner {
                         &operation,
                         "Waiting for partition unmount / authorization",
                     )?;
-                    unmount_checked(&drive, &selector, &inventory, &unmount, &cancel)
+                    unmount_checked(
+                        &drive,
+                        &selector,
+                        &inventory,
+                        &unmount,
+                        &cancel,
+                        source.as_deref(),
+                    )
                 }));
                 self.partition = Some(job);
             }
@@ -226,6 +248,7 @@ impl Owner {
                     drive,
                     job.config,
                     job.destination.into_iter().collect(),
+                    job.source,
                 );
             }
         } else {
@@ -277,7 +300,11 @@ fn unmount_checked(
     inventory: &Inventory,
     unmount: &Unmounter,
     cancel: &AtomicBool,
+    source: Option<&crate::device::Source>,
 ) -> Result<Drive> {
+    if let Some(source) = source {
+        source.validate()?;
+    }
     if discovery::select(inventory()?, selector)? != *drive {
         return Err("Partition changed before unmount; refusing to unmount a replacement".into());
     }
@@ -292,6 +319,11 @@ fn unmount_checked(
         return Err(
             format!("Unmount request failed: {error}; {state}. No image copy was started").into(),
         );
+    }
+    if let Some(source) = source {
+        source
+            .validate()
+            .map_err(|error| format!("Unmount completed; {error}. No image copy was started"))?;
     }
     let observed = inventory().and_then(|drives| discovery::select(drives, selector))
         .map_err(|error| format!("Unmount completed; could not confirm current partition state: {error}. No image copy was started"))?;
