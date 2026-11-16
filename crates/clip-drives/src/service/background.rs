@@ -27,13 +27,14 @@ impl Owner {
     }
     pub(super) fn unmount_partition(&mut self, drive: &Drive) -> Result<()> {
         if let Some(path) = &drive.mount {
+            let scope = Root::open(path)?.scope();
             self.sync_roots.retain(|_, (portable, local)| {
-                !portable.path.starts_with(path) && !local.path.starts_with(path)
+                !scope.same_filesystem(portable) && !scope.same_filesystem(local)
             });
             self.unidentified_ram
-                .retain(|_, root| !root.path.starts_with(path));
+                .retain(|_, root| !scope.same_filesystem(root));
             if let Some(watch) = &mut self.watch {
-                watch.remove_tree(path);
+                watch.remove_scope(&scope);
             }
         }
         let output = CommandRequest::new("udisksctl")

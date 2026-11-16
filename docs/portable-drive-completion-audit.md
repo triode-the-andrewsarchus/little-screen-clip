@@ -11,7 +11,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush/preparation still needs scheduling off the owner thread. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy now project bind subtrees into observed filesystem coordinates. Pure projection tests pass; real bind/case-fold aliases, managed-root coverage and image destinations still need the complete matrix. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers the entire selected filesystem, including aliases. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; real bind/case-fold aliases, managed-root coverage and image destinations still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
@@ -176,3 +176,11 @@ unchanged. Sharing source validation and mount publication removed repeated poli
 consolidating restart fixtures removed the new test clone. Admission and shared
 mount guards still have CCN 17 and remain review hotspots. Report:
 `.fitness/portable-drives-ram-preparation-architecture.json`.
+
+Unmount-scope checkpoint: mount coordinates are observed once with each pinned root
+and reused only as scheduling evidence. The scope itself owns no file descriptor;
+a real FUSE fixture proves it does not keep a retired mount busy. Unknown same-device
+coordinates conservatively overlap. Four root-policy tests, ordinary backend tests
+and backend all-target clippy pass. The original architecture comparison remains
+REGRESSION with seventeen net new clone groups and average CCN 3.48; this checkpoint
+adds no clone group. Report: `.fitness/portable-drives-unmount-scope-architecture.json`.

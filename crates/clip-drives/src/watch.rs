@@ -64,21 +64,19 @@ impl Watch {
         }
         self.add_tree(root, PathBuf::new());
     }
-    /// Releases every retained directory under a partition before unmounting it.
-    pub fn remove_tree(&mut self, path: &std::path::Path) {
-        self.pending
-            .retain(|(root, _)| !root.path.starts_with(path));
-        if self
-            .walking
-            .as_ref()
-            .is_some_and(|(root, _)| root.path.starts_with(path))
-        {
+    /// Releases retained pins across the partition's filesystem and bind aliases.
+    pub fn remove_scope(&mut self, scope: &crate::root::Scope) {
+        self.remove_matching(|root| scope.same_filesystem(root));
+    }
+    fn remove_matching(&mut self, matches: impl Fn(&Root) -> bool) {
+        self.pending.retain(|(root, _)| !matches(root));
+        if self.walking.as_ref().is_some_and(|(root, _)| matches(root)) {
             self.walking = None;
         }
         let descriptors = self
             .locations
             .iter()
-            .filter_map(|(wd, location)| location.root.path.starts_with(path).then_some(*wd))
+            .filter_map(|(wd, location)| matches(&location.root).then_some(*wd))
             .collect::<Vec<_>>();
         for wd in descriptors {
             // SAFETY: this watch descriptor belongs to our live inotify instance.
@@ -322,7 +320,7 @@ mod tests {
         watch.add(root.clone());
         assert!(Arc::strong_count(&root) > 1);
         watch.changes();
-        watch.remove_tree(&root.path);
+        watch.remove_scope(&root.scope());
         assert_eq!(Arc::strong_count(&root), 1);
         assert_eq!(watch.tracked_bytes, 0);
         assert!(watch.pending.is_empty());

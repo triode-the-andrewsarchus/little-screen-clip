@@ -25,6 +25,38 @@ pub(crate) struct Root {
     file: File,
     identity: MountIdentity,
     namespace: Namespace,
+    physical: Option<PathBuf>,
+}
+/// Scheduling evidence only: this never authorizes content access or keeps a mount busy.
+#[derive(Clone)]
+pub(crate) struct Scope {
+    path: PathBuf,
+    identity: MountIdentity,
+    namespace: Namespace,
+    physical: Option<PathBuf>,
+}
+impl Scope {
+    pub fn overlap(&self, other: &Self) -> bool {
+        if self.namespace != other.namespace
+            || self.path.starts_with(&other.path)
+            || other.path.starts_with(&self.path)
+            || (self.identity.device == other.identity.device
+                && self.identity.inode == other.identity.inode)
+        {
+            return true;
+        }
+        if self.identity.device != other.identity.device {
+            return false;
+        }
+        match (&self.physical, &other.physical) {
+            (Some(a), Some(b)) => a.starts_with(b) || b.starts_with(a),
+            _ => true,
+        }
+    }
+    /// Retire all pins on the selected filesystem, including bind aliases.
+    pub fn same_filesystem(&self, root: &Root) -> bool {
+        self.namespace != root.namespace || self.identity.device == root.identity.device
+    }
 }
 pub(crate) fn anchor(file: &File) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
@@ -38,11 +70,18 @@ impl Root {
         if !namespace.known() {
             return Err("Cannot establish filesystem namespace".into());
         }
+        let physical = crate::mounts::inventory().ok().and_then(|mounts| {
+            mounts
+                .into_iter()
+                .find(|mount| mount.id == identity.mount)
+                .and_then(|mount| project_path(&path, &mount))
+        });
         Ok(Self {
             path,
             file,
             identity,
             namespace,
+            physical,
         })
     }
     pub fn create(path: &Path) -> Result<Self> {
@@ -100,29 +139,15 @@ impl Root {
         self.identity == other.identity && self.namespace == other.namespace
     }
     pub fn overlap(&self, other: &Self) -> bool {
-        if self.path.starts_with(&other.path)
-            || other.path.starts_with(&self.path)
-            || (self.identity.device == other.identity.device
-                && self.identity.inode == other.identity.inode)
-        {
-            return true;
-        }
-        if self.identity.device != other.identity.device {
-            return false;
-        }
-        match (self.physical_path(), other.physical_path()) {
-            (Ok(a), Ok(b)) => a.starts_with(&b) || b.starts_with(&a),
-            _ => true, // Unknown mount context cannot authorize independent writes.
-        }
+        self.scope().overlap(&other.scope())
     }
-    /// Projects bind aliases onto the observed filesystem's root coordinates.
-    pub fn physical_path(&self) -> Result<PathBuf> {
-        self.validate()?;
-        let mount = crate::mounts::inventory()?
-            .into_iter()
-            .find(|m| m.id == self.identity.mount)
-            .ok_or("Root mount context disappeared")?;
-        project_path(&self.path, &mount).ok_or_else(|| "Root is outside its observed mount".into())
+    pub fn scope(&self) -> Scope {
+        Scope {
+            path: self.path.clone(),
+            identity: self.identity,
+            namespace: self.namespace.clone(),
+            physical: self.physical.clone(),
+        }
     }
     pub fn directory(&self, relative: &Path, create: bool) -> Result<File> {
         if !valid_relative(relative) {
@@ -389,6 +414,39 @@ mod tests {
             Some(PathBuf::from("/original/child/nested"))
         );
         assert!(project_path(Path::new("/elsewhere"), &mount).is_none());
+        let namespace = Namespace::current();
+        let source = Scope {
+            path: "/mounted".into(),
+            identity: MountIdentity {
+                device: 7,
+                inode: 1,
+                mount: 1,
+            },
+            namespace: namespace.clone(),
+            physical: Some("/original".into()),
+        };
+        let alias = Scope {
+            path: "/alias/nested".into(),
+            identity: MountIdentity {
+                device: 7,
+                inode: 2,
+                mount: 2,
+            },
+            physical: project_path(Path::new("/alias/nested"), &mount),
+            namespace,
+        };
+        assert!(source.overlap(&alias));
+        let unrelated = Scope {
+            path: "/other".into(),
+            physical: Some("/unrelated".into()),
+            ..alias.clone()
+        };
+        assert!(!source.overlap(&unrelated));
+        let uncertain = Scope {
+            physical: None,
+            ..unrelated
+        };
+        assert!(source.overlap(&uncertain));
     }
     #[test]
     fn coarse_or_external_filesystems_never_authorize_fingerprint_cache_reuse() {

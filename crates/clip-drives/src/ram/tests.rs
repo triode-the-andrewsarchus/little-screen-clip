@@ -83,6 +83,7 @@ fn retiring_watch_pins_allows_a_real_normal_unmount() {
     let mount = Mounted::start(&backing, &id, true, None).unwrap();
     let path = backing.directory.join("contents");
     let root = std::sync::Arc::new(Root::open(&path).unwrap());
+    let scope = root.scope();
     let mut watch = crate::watch::Watch::new().unwrap();
     watch.add(root.clone());
     drop(root);
@@ -99,7 +100,7 @@ fn retiring_watch_pins_allows_a_real_normal_unmount() {
         !unmount().status.success(),
         "live directory pins should keep this owned fixture busy"
     );
-    watch.remove_tree(&path);
+    watch.remove_scope(&scope);
     let result = unmount();
     assert!(result.status.success(), "{}", result.stderr_lossy());
     drop(mount);
