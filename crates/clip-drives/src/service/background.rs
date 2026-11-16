@@ -12,9 +12,13 @@ pub(super) struct Pending {
 impl Owner {
     pub(super) fn check_busy(&self, drive: &str) -> Result<()> {
         if self
-            .background
+            .ram_setup
             .as_ref()
-            .is_some_and(|job| job.drive == drive)
+            .is_some_and(|job| job.drive.id == drive)
+            || self
+                .background
+                .as_ref()
+                .is_some_and(|job| job.drive == drive)
             || self.sync_jobs.values().any(|job| job.drive == drive)
         {
             return Err("This partition has an active storage operation; synchronization resumes when it finishes".into());
@@ -99,10 +103,14 @@ impl Owner {
             return;
         }
         if let Ok(roots) = &resources
-            && self
-                .sync_jobs
-                .values()
-                .any(|job| roots.iter().any(|root| job.plan.overlaps_root(root)))
+            && (self
+                .ram_setup
+                .as_ref()
+                .is_some_and(|job| roots.iter().any(|root| job.source.overlap(root)))
+                || self
+                    .sync_jobs
+                    .values()
+                    .any(|job| roots.iter().any(|root| job.plan.overlaps_root(root))))
         {
             self.defer_operation(envelope);
             return;

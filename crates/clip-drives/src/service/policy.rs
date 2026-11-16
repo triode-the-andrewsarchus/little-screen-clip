@@ -86,30 +86,6 @@ impl Owner {
         }
         Ok(())
     }
-    pub(super) fn ram_size_check(&self, source: &Root, cancel: &AtomicBool) -> Result<(u64, u64)> {
-        let id = "ram-preflight";
-        let coverage = scan::scan(
-            &self.db,
-            source,
-            id,
-            &scan::Limits {
-                hashes: false,
-                entries: self.config.ram_session_max_entries.saturating_sub(128),
-                ..Default::default()
-            },
-            cancel,
-            |_, _| {},
-        )?;
-        if !coverage.complete {
-            return Err(
-                "RAM preflight could not inventory every entry within available inode headroom"
-                    .into(),
-            );
-        }
-        let bytes: u64 = self.db.0.query_row("SELECT coalesce(sum(json_extract(json,'$.size')),0) FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='file'", [id], |r| r.get(0))?;
-        self.db.clear_scan(id)?;
-        Ok((coverage.count, bytes))
-    }
 }
 pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
     if !config.ram_directory.is_absolute()

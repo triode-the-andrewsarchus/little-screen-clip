@@ -36,6 +36,7 @@ mod lifetime;
 mod policy;
 mod ram_save;
 mod ram_sessions;
+mod ram_setup;
 mod reconciliation;
 
 struct Owner {
@@ -49,7 +50,7 @@ struct Owner {
     background: Option<background::Pending>,
     backup_jobs: little_clip_core::jobs::BackgroundJobs,
     inventory: Inventory,
-    unidentified_ram: HashMap<String, Root>,
+    unidentified_ram: HashMap<String, Arc<Root>>,
     sync_roots: HashMap<String, (Arc<Root>, Arc<Root>)>,
     db: Store,
     state: PathBuf,
@@ -61,6 +62,9 @@ struct Owner {
     _lock: File,
     children: HashMap<String, std::process::Child>,
     ram_children: HashMap<String, crate::ram::Mounted>,
+    ram_setup: Option<ram_setup::Pending>,
+    // Keep the creating worker alive until every transferred RAM server has exited.
+    ram_setup_jobs: little_clip_core::jobs::BackgroundJobs,
 }
 
 impl Service {
@@ -169,6 +173,8 @@ impl Service {
             _lock: lock,
             children: HashMap::new(),
             ram_children: HashMap::new(),
+            ram_setup: None,
+            ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
         };
         owner.recover()?;
         owner.discover();
@@ -330,6 +336,7 @@ impl Owner {
             }
             offset += 128;
         }
+        self.recover_ram_allocations();
         for mut session in self.db.list::<RamSession>("ram", 0, 1000)? {
             if let Some(backing) = &mut session.backing {
                 backing.mounted = false;
@@ -402,6 +409,7 @@ impl Owner {
                 discovered = Instant::now();
             }
             self.poll_background();
+            self.poll_ram_setup();
             self.poll_sync();
             for envelope in std::mem::take(&mut self.deferred) {
                 self.operation(envelope);
@@ -467,6 +475,10 @@ impl Owner {
             self.poll_background();
             std::thread::sleep(Duration::from_millis(20));
         }
+        while self.ram_setup.is_some() {
+            self.poll_ram_setup();
+            std::thread::sleep(Duration::from_millis(20));
+        }
         self.ram_children.clear();
         self.mark_ram_unmounted();
         // Unmount before retiring helpers; failed/busy mounts retain a recovery record.
@@ -485,6 +497,15 @@ impl Owner {
                 &envelope.cancel,
                 Err("Cancelled before operation setup".into()),
             );
+            return;
+        }
+        if self.ram_setup.is_some()
+            && matches!(
+                envelope.request,
+                DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
+            )
+        {
+            self.defer_operation(envelope);
             return;
         }
         let drive = self.request_drive(&envelope.request).ok().flatten();
@@ -514,7 +535,10 @@ impl Owner {
                 roots.push(root);
             }
         }
-        let busy = self.sync_jobs.values().any(|job| {
+        let busy = self.ram_setup.as_ref().is_some_and(|job| {
+            drive.as_ref() == Some(&job.drive.id)
+                || roots.iter().any(|root| job.source.overlap(root))
+        }) || self.sync_jobs.values().any(|job| {
             drive.as_ref() == Some(&job.drive)
                 || roots.iter().any(|root| job.plan.overlaps_root(root))
         }) || self.background.as_ref().is_some_and(|job| {
@@ -539,10 +563,13 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
+        if matches!(envelope.request, DriveRequest::CopyToRam { .. }) {
+            self.start_ram_setup(envelope);
+            return;
+        }
         if matches!(
             envelope.request,
             DriveRequest::Pair { .. }
-                | DriveRequest::CopyToRam { .. }
                 | DriveRequest::Sync { .. }
                 | DriveRequest::FlushRam { .. }
                 | DriveRequest::SaveRam { .. }
@@ -609,22 +636,9 @@ impl Owner {
         }
     }
     fn drive(&self, id: &str) -> Result<Drive> {
-        let explicit = id.starts_with("/dev/");
-        let mut matches = (self.inventory)()?.into_iter().filter(|d| {
-            if explicit {
-                d.device == Path::new(id)
-            } else {
-                d.id == id
-            }
-        });
-        let drive = matches.next().ok_or("Drive is not available")?;
-        if (!explicit && drive.ambiguous) || matches.next().is_some() {
-            return Err(
-                "Multiple drives have the same identity; automatic writes are suspended".into(),
-            );
-        }
-        Ok(drive)
+        discovery::select((self.inventory)()?, id)
     }
+
     fn execute(
         &mut self,
         request: DriveRequest,
@@ -852,76 +866,6 @@ impl Owner {
             });
         }
     }
-    fn prepare_ram(&mut self, drive: &Drive, cancel: &AtomicBool) -> Result<String> {
-        self.check_busy(&drive.id)?;
-        if drive.ambiguous {
-            return Err("RAM writeback requires an unambiguous drive identity".into());
-        }
-        ram_reason(&self.config)?;
-        if drive.drive_capacity == 0 || drive.drive_capacity >= self.config.ram_capacity_limit {
-            return Err("Drive capacity exceeds the Copy to RAM limit or is unknown".into());
-        }
-        if self
-            .db
-            .list::<RamSession>("ram", 0, 1000)?
-            .iter()
-            .any(|s| s.drive == drive.id)
-        {
-            return Err("A RAM copy already exists for this partition".into());
-        }
-        let mount = drive
-            .mount
-            .as_ref()
-            .ok_or("Mount the drive before copying it to RAM")?;
-        let source = Root::open(mount)?;
-        let base = crate::ram::directory(&self.config)?;
-        let pin = base.directory(Path::new(""), false)?;
-        let stats = rustix::fs::fstatvfs(&pin)?;
-        let (files, bytes) = self.ram_size_check(&source, cancel)?;
-        let budget = crate::ram::budget(&self.config, drive.capacity, files, bytes)?;
-        crate::ram::admit(
-            &self.config,
-            &budget,
-            &self.db.list("ram", 0, 1000)?,
-            &stats,
-            available_memory()?,
-        )?;
-        let backing = crate::ram::prepare(&base, &budget)?;
-        let path = backing.directory.join("contents");
-        let id = uuid::Uuid::new_v4().to_string();
-        let pair = SyncPair {
-            local_identity: Some(Root::open(&path)?.storage_identity()?),
-            id: id.clone(),
-            drive: drive.id.clone(),
-            evidence: drive.evidence.clone(),
-            relative: PathBuf::new(),
-            local: path.clone(),
-            paused: true,
-            deletions: false,
-            ram: true,
-            last_success: None,
-            status: "Initial RAM copy in progress".into(),
-        };
-        let session = RamSession {
-            identity: little_clip_core::kernel_interface::MountIdentity::directory(&path)?,
-            id: id.clone(),
-            drive: drive.id.clone(),
-            path,
-            ready: false,
-            connected: true,
-            status: pair.status.clone(),
-            backing: Some(backing),
-            last_saved: None,
-            save_status: None,
-        };
-        if drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
-            self.unidentified_ram.insert(id.clone(), source);
-        }
-        self.db.put("ram", &id, &session)?;
-        self.db.put("pair", &id, &pair)?;
-        self.mount_ram(&id)?;
-        Ok(id)
-    }
     fn mount(&mut self, id: &str) -> Result<String> {
         if !Path::new("/dev/fuse").exists() {
             return Err("FUSE is unavailable: /dev/fuse is missing".into());
@@ -1038,6 +982,12 @@ impl Owner {
     }
     fn publish_policy(&self) -> Result<()> {
         let mut excluded = Vec::<PathBuf>::new();
+        excluded.extend(
+            self.db
+                .list::<ram_setup::Allocation>("ram-allocation", 0, 1000)?
+                .into_iter()
+                .filter_map(|allocation| allocation.backing.map(|backing| backing.directory)),
+        );
         if let Some(path) = &self.config.backup_directory {
             excluded.push(path.clone());
         }
@@ -1088,10 +1038,10 @@ impl Owner {
         Ok(())
     }
 }
-fn write_task(
+fn write_task<T: Send + 'static>(
     pool: &little_clip_core::jobs::BackgroundJobs,
-    work: impl FnOnce() -> Result<String> + Send + 'static,
-) -> little_clip_core::jobs::task::Task<Result<String>> {
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> little_clip_core::jobs::task::Task<Result<T>> {
     little_clip_core::jobs::task::Task::start_unbounded(pool, move |_| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
             .unwrap_or_else(|_| Err("Storage worker panicked; completed writes retained".into()))
@@ -1261,7 +1211,7 @@ mod tests {
         let path = temp.path().join("completed");
         let output = path.clone();
         let pool = little_clip_core::jobs::BackgroundJobs::new(1, 1);
-        let task = write_task(&pool, move || {
+        let task = write_task::<String>(&pool, move || {
             fs::write(output, b"completed before panic")?;
             panic!("owned fault injection");
         });
@@ -1275,7 +1225,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(fs::read(&path).unwrap(), b"completed before panic");
-        let next = write_task(&pool, || Ok("worker survived".into()));
+        let next = write_task::<String>(&pool, || Ok("worker survived".into()));
         loop {
             if let Some(result) = next.poll() {
                 assert_eq!(result.unwrap().unwrap(), "worker survived");
@@ -1380,6 +1330,12 @@ mod tests {
         service.shutdown().unwrap();
     }
     fn two_drives(bytes: u64) -> (tempfile::TempDir, Service, PathBuf) {
+        two_drives_observed(bytes, None)
+    }
+    fn two_drives_observed(
+        bytes: u64,
+        observed: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> (tempfile::TempDir, Service, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let small = temp.path().join("small");
         let large = temp.path().join("large");
@@ -1402,7 +1358,12 @@ mod tests {
                 ..Default::default()
             },
             temp.path().join("state"),
-            Arc::new(move || Ok(drives.clone())),
+            Arc::new(move || {
+                if let Some(observe) = &observed {
+                    observe();
+                }
+                Ok(drives.clone())
+            }),
         )
         .unwrap();
         (temp, service, small)
@@ -1521,6 +1482,112 @@ mod tests {
                 .is_some()
         );
     }
+    #[test]
+    #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
+    fn ram_preflight_keeps_other_writeback_responsive_and_cancellation_retains_admission() {
+        let held = Arc::new(AtomicBool::new(false));
+        let hold = held.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let (temp, service, small) = two_drives_observed(
+            1024,
+            Some(Arc::new(move || {
+                if std::thread::current().name() != Some("portable-drive-owner")
+                    && hold.swap(false, Ordering::AcqRel)
+                {
+                    entered_tx.send(()).unwrap();
+                    release_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(20))
+                        .unwrap();
+                }
+            })),
+        );
+        finish(
+            &service,
+            DriveRequest::CopyToRam {
+                drive: "part:small".into(),
+            },
+        );
+        let ram = status(&service).ram.into_iter().next().unwrap();
+        held.store(true, Ordering::Release);
+        let DriveReply::Accepted(id) = service
+            .request(DriveRequest::CopyToRam {
+                drive: "part:large".into(),
+            })
+            .unwrap()
+        else {
+            panic!("accepted");
+        };
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        fs::write(ram.path.join("edit"), b"writeback while preflight is held").unwrap();
+        wait_contents(&small.join("edit"), b"writeback while preflight is held");
+        finish(
+            &service,
+            DriveRequest::Pause {
+                pair: ram.id.clone(),
+                paused: true,
+            },
+        );
+        let mut config = status(&service).config;
+        config.ram_session_max_bytes = 128 * 1024 * 1024;
+        config.ram_total_max_bytes = config.ram_session_max_bytes;
+        let DriveReply::Accepted(reload) =
+            service.request(DriveRequest::Configure { config }).unwrap()
+        else {
+            panic!("accepted");
+        };
+        service
+            .request(DriveRequest::Cancel {
+                operation: id.clone(),
+            })
+            .unwrap();
+        let during = status(&service);
+        assert!(
+            during
+                .operations
+                .iter()
+                .find(|op| op.id == id)
+                .unwrap()
+                .finished
+                .is_none()
+        );
+        assert_eq!(
+            during.config.ram_total_max_bytes,
+            DriveConfig::default().ram_total_max_bytes
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            wait_operation(&service, &id, |op| op.finished.is_some()).state,
+            "cancelled"
+        );
+        assert_eq!(
+            wait_operation(&service, &reload, |op| op.finished.is_some()).state,
+            "complete"
+        );
+        assert_eq!(status(&service).ram.len(), 1);
+        let db = Store::existing(&temp.path().join("state/drives.sqlite"), true).unwrap();
+        assert_eq!(
+            db.0.query_row(
+                "SELECT count(*) FROM entities WHERE kind='ram-allocation'",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        finish(
+            &service,
+            DriveRequest::DiscardRam {
+                session: ram.id,
+                confirmed: true,
+            },
+        );
+        service.shutdown().unwrap();
+    }
+
     #[test]
     #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
     fn large_ram_population_keeps_an_existing_ram_session_promptly_writable() {

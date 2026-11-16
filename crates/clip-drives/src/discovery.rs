@@ -131,6 +131,24 @@ fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
     }
 }
 
+pub(crate) fn select(drives: Vec<Drive>, id: &str) -> Result<Drive> {
+    let explicit = id.starts_with("/dev/");
+    let mut matches = drives.into_iter().filter(|drive| {
+        if explicit {
+            drive.device == std::path::Path::new(id)
+        } else {
+            drive.id == id
+        }
+    });
+    let drive = matches.next().ok_or("Drive is not available")?;
+    if (!explicit && drive.ambiguous) || matches.next().is_some() {
+        return Err(
+            "Multiple drives have the same identity; automatic writes are suspended".into(),
+        );
+    }
+    Ok(drive)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

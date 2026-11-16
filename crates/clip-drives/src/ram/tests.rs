@@ -76,6 +76,7 @@ fn retiring_watch_pins_allows_a_real_normal_unmount() {
             bytes: 128 * MIB,
             inodes: 4096,
         },
+        |_| Ok(()),
     )
     .unwrap();
     let id = uuid::Uuid::new_v4().to_string();
@@ -116,6 +117,7 @@ fn native_ram_quotas_atomic_install_and_open_file_restart_preserve_edits() {
             bytes: 128 * MIB,
             inodes: 4096,
         },
+        |_| Ok(()),
     )
     .unwrap();
     let id = uuid::Uuid::new_v4().to_string();

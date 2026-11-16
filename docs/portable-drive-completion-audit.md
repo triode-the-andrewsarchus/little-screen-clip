@@ -9,8 +9,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.1 | Partial | Numeric inventory/capacity and mount routing exist in discovery.rs; verify stable reconnect with changed device paths on disposable media. |
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
-| 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight and image preflush/preparation still need scheduling off the owner thread; large-export responsiveness needs direct evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
+| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush/preparation still needs scheduling off the owner thread. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy now project bind subtrees into observed filesystem coordinates. Pure projection tests pass; real bind/case-fold aliases, managed-root coverage and image destinations still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
@@ -144,3 +144,35 @@ Architecture still reports REGRESSION: seventeen net new clone groups, duplicati
 configuration save is also reported at CCN 20 and remains a review hotspot;
 the architecture gate has not passed. Report:
 `.fitness/portable-drives-settings-architecture.json`.
+
+
+RAM-preparation checkpoint: source inventory, reservation, formatter and initial
+mount now run on one retained worker. Quota reloads and further RAM admissions
+wait until it exits. A held-preflight native fixture proves that another real RAM
+session still flushes an edit and accepts Pause; cancellation keeps the first
+operation unfinished until its worker is released, then removes its unpublished
+setup before applying a deferred quota reduction. Native removal/reconnect,
+large-population, cancelled-population, quota and unmount-pin fixtures still pass.
+
+Preparation journals its metadata scan before enumeration and its private image
+before formatting. Session/pair publication removes that journal transactionally;
+initial and recovered views share guarded mounting and atomic ready-state updates.
+Fault-state fixtures prove that restart retires only the abandoned scan/empty
+image, refuses replaced allocation directories, and preserves published edits.
+Cancellation cleanup stays on the worker. Startup allocation cleanup and retained
+RAM filesystem recovery still run during coordinator startup and need the separate
+startup responsiveness acceptance matrix.
+
+Validation: 38 ordinary backend tests passed with eleven explicit fixtures ignored;
+eight selected native RAM fixtures passed in 9.70 seconds. Both setup recovery
+fixtures and the updated quota-reduction/preflight fixture passed again after test
+fixture consolidation. The rebuilt test-support IPC host passed all three shutdown
+tests, including SIGTERM durability of an unclosed RAM file created through a
+worker-owned native server. The actual user daemon remains untouched.
+
+Architecture remains REGRESSION against the original baseline: seventeen net new
+clone groups, duplication 7.30% to 7.22%, average CCN 3.48, max 274 and cycles 143
+unchanged. Sharing source validation and mount publication removed repeated policy;
+consolidating restart fixtures removed the new test clone. Admission and shared
+mount guards still have CCN 17 and remain review hotspots. Report:
+`.fitness/portable-drives-ram-preparation-architecture.json`.

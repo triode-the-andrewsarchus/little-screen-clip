@@ -73,10 +73,6 @@ impl Owner {
     ) -> Result<(String, bool, Option<Arc<super::ram_save::Save>>)> {
         cancelled(cancel)?;
         match request {
-            DriveRequest::CopyToRam { drive } => {
-                let drive = self.drive(drive)?;
-                Ok((self.prepare_ram(&drive, cancel)?, true, None))
-            }
             DriveRequest::Sync { pair } | DriveRequest::FlushRam { session: pair } => {
                 let initial = self
                     .db
@@ -309,9 +305,13 @@ impl Owner {
                 continue;
             }
             if self
-                .background
+                .ram_setup
                 .as_ref()
-                .is_some_and(|job| job.roots.iter().any(|root| plan.overlaps_root(root)))
+                .is_some_and(|job| plan.overlaps_root(&job.source))
+                || self
+                    .background
+                    .as_ref()
+                    .is_some_and(|job| job.roots.iter().any(|root| plan.overlaps_root(root)))
                 || self.check_busy(&plan.pair.drive).is_err()
                 || self
                     .sync_jobs

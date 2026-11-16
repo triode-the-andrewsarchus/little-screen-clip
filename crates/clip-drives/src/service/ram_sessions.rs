@@ -1,43 +1,61 @@
 //! RAM helper lifetime and durable sessions remain separate from catalog mounts.
 use super::*;
 
+/// Starts the same identity-checked view for initial preparation and restart recovery.
+pub(super) fn start_view(
+    db: &Store,
+    session: &mut RamSession,
+) -> Result<Option<crate::ram::Mounted>> {
+    let Some(backing) = &mut session.backing else {
+        return Ok(None);
+    };
+    if session.path != backing.directory.join("contents") {
+        return Err("RAM view path differs from its retained backing".into());
+    }
+    let mut pair = db.get::<SyncPair>("pair", &session.id)?;
+    if pair
+        .as_ref()
+        .is_some_and(|pair| !pair.ram || pair.local != session.path || pair.drive != session.drive)
+    {
+        return Err("RAM enrollment differs from retained session; refusing recovery".into());
+    }
+    let helper = crate::ram::Mounted::start(
+        backing,
+        &session.id,
+        // A crash can precede the first ready-record commit after mounting.
+        // Check even a newly formatted image before exposing its view.
+        false,
+        backing.initialized.then_some(session.identity.mount),
+    )?;
+    backing.mounted = true;
+    backing.initialized = true;
+    session.identity = kernel_interface::MountIdentity::directory(&session.path)?;
+    session.status = if session.ready {
+        "RAM view recovered; reconciling connected media"
+    } else {
+        "Initial RAM copy incomplete; use Synchronize to resume"
+    }
+    .into();
+    if let Some(pair) = &mut pair {
+        pair.local_identity = Some(Root::open(&session.path)?.storage_identity()?);
+    }
+    let transaction = db.0.unchecked_transaction()?;
+    db.put("ram", &session.id, session)?;
+    if let Some(pair) = &pair {
+        db.put("pair", &pair.id, pair)?;
+    }
+    transaction.commit()?;
+    Ok(Some(helper))
+}
+
 impl Owner {
     pub(super) fn mount_ram(&mut self, id: &str) -> Result<()> {
         let mut session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
         if self.ram_children.contains_key(id) {
             return self.ram_available(&session);
         }
-        let Some(backing) = &mut session.backing else {
-            return Ok(());
-        };
-        if session.path != backing.directory.join("contents") {
-            return Err("RAM view path differs from its retained backing".into());
-        }
-        let helper = crate::ram::Mounted::start(
-            backing,
-            id,
-            !backing.initialized,
-            backing.initialized.then_some(session.identity.mount),
-        )?;
-        self.ram_children.insert(id.into(), helper);
-        backing.mounted = true;
-        backing.initialized = true;
-        session.identity = kernel_interface::MountIdentity::directory(&session.path)?;
-        session.status = if session.ready {
-            "RAM view recovered; reconciling connected media"
-        } else {
-            "Initial RAM copy incomplete; use Synchronize to resume"
-        }
-        .into();
-        self.db.put("ram", id, &session)?;
-        if let Some(mut pair) = self.db.get::<SyncPair>("pair", id)? {
-            if !pair.ram || pair.local != session.path || pair.drive != session.drive {
-                return Err(
-                    "RAM enrollment differs from retained session; refusing recovery".into(),
-                );
-            }
-            pair.local_identity = Some(Root::open(&session.path)?.storage_identity()?);
-            self.db.put("pair", id, &pair)?;
+        if let Some(helper) = start_view(&self.db, &mut session)? {
+            self.ram_children.insert(id.into(), helper);
         }
         self.sync_roots.remove(id);
         Ok(())

@@ -163,7 +163,11 @@ pub(crate) fn admit(
     Ok(())
 }
 
-pub(crate) fn prepare(base: &Root, budget: &Budget) -> Result<RamBacking> {
+pub(crate) fn prepare(
+    base: &Root,
+    budget: &Budget,
+    record: impl FnOnce(&RamBacking) -> Result<()>,
+) -> Result<RamBacking> {
     base.validate()?;
     let base_pin = base.directory(Path::new(""), false)?;
     let directory = tempfile::Builder::new()
@@ -186,6 +190,16 @@ pub(crate) fn prepare(base: &Root, budget: &Budget) -> Result<RamBacking> {
         rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
     )?);
     image.set_len(budget.bytes)?;
+    let backing = RamBacking {
+        directory: root.path.clone(),
+        directory_identity: root.storage_identity()?,
+        image_identity: StorageIdentity::pinned(&image)?,
+        capacity: budget.bytes,
+        inodes: budget.inodes,
+        mounted: false,
+        initialized: false,
+    };
+    record(&backing)?;
     // Leave room for mke2fs's per-block-group inode rounding, then verify actual limits on mount.
     let padding = budget
         .bytes
@@ -258,15 +272,6 @@ pub(crate) fn prepare(base: &Root, budget: &Budget) -> Result<RamBacking> {
     }
     image.sync_all()?;
     root.validate()?;
-    let backing = RamBacking {
-        directory: root.path.clone(),
-        directory_identity: root.storage_identity()?,
-        image_identity: StorageIdentity::pinned(&image)?,
-        capacity: budget.bytes,
-        inodes: budget.inodes,
-        mounted: false,
-        initialized: false,
-    };
     let _ = directory.keep();
     Ok(backing)
 }
