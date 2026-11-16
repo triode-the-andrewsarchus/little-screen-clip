@@ -271,6 +271,47 @@ pub(crate) fn entry(db: &Store, scan: &str, path: &Path) -> Result<Option<Entry>
         .optional()?;
     Ok(json.map(|s| serde_json::from_str(&s)).transpose()?)
 }
+/// A bounded keyset cursor that remains valid while other scan rows are updated.
+pub(crate) struct Cursor<'a> {
+    db: &'a Store,
+    scan: &'a str,
+    after: Vec<u8>,
+    pending: std::collections::VecDeque<Entry>,
+    failed: bool,
+}
+impl<'a> Cursor<'a> {
+    pub fn new(db: &'a Store, scan: &'a str) -> Self {
+        Self {
+            db,
+            scan,
+            after: Vec::new(),
+            pending: Default::default(),
+            failed: false,
+        }
+    }
+}
+impl Iterator for Cursor<'_> {
+    type Item = Result<Entry>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(entry) = self.pending.pop_front() {
+            return Some(Ok(entry));
+        }
+        if self.failed {
+            return None;
+        }
+        match entries(self.db, self.scan, &self.after, 128) {
+            Ok(batch) => {
+                self.after = batch.last()?.path.as_os_str().as_bytes().to_vec();
+                self.pending.extend(batch);
+                self.pending.pop_front().map(Ok)
+            }
+            Err(error) => {
+                self.failed = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

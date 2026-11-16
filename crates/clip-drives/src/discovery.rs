@@ -9,7 +9,43 @@ pub fn discover() -> Result<Vec<Drive>> {
     if !output.status.success() || output.stdout_truncated {
         return Err("Block inventory failed or exceeded its limit".into());
     }
-    parse(&serde_json::from_slice::<Value>(&output.stdout)?)
+    let mut drives = parse(&serde_json::from_slice::<Value>(&output.stdout)?)?;
+    let mounts = crate::mounts::inventory()?;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    for drive in &mut drives {
+        if drive.mount.is_none() {
+            continue;
+        }
+        let device = std::fs::metadata(&drive.device)?.rdev();
+        let candidates = mounts
+            .iter()
+            .filter(|mount| {
+                std::fs::metadata(&mount.source)
+                    .is_ok_and(|m| m.file_type().is_block_device() && m.rdev() == device)
+            })
+            .collect::<Vec<_>>();
+        let selected = candidates
+            .iter()
+            .find(|mount| Some(&mount.target) == drive.mount.as_ref())
+            .copied()
+            .or_else(|| {
+                if candidates.len() == 1 {
+                    Some(candidates[0])
+                } else {
+                    candidates
+                        .iter()
+                        .find(|mount| mount.root == std::path::Path::new("/"))
+                        .copied()
+                }
+            });
+        if let Some(mount) = selected {
+            drive.mount = Some(mount.target.clone());
+            drive.read_only |= mount.read_only;
+        } else {
+            drive.mount = None;
+        }
+    }
+    Ok(drives)
 }
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
@@ -43,9 +79,7 @@ fn parse(value: &Value) -> Result<Vec<Drive>> {
 fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
     let children = v["children"].as_array();
     let kind = text(v, "type");
-    if !text(v, "fstype").is_empty()
-        && (kind == "part" || kind == "crypt" || (kind == "disk" && children.is_none()))
-    {
+    if matches!(kind, "part" | "crypt" | "rom") || (kind == "disk" && children.is_none()) {
         let part = text(v, "partuuid");
         let uuid = text(v, "uuid");
         let evidence = format!(

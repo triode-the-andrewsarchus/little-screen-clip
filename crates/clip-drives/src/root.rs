@@ -12,6 +12,14 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+pub(crate) struct CopySpec<'a> {
+    pub source: &'a Path,
+    pub destination: &'a Path,
+    pub source_hash: Option<&'a str>,
+    pub destination_hash: Option<&'a str>,
+    pub delta: bool,
+}
+
 pub(crate) struct Root {
     pub path: PathBuf,
     file: File,
@@ -70,7 +78,9 @@ impl Root {
             let child = anchor(&held).join(component.as_os_str());
             if create {
                 match fs::create_dir(&child) {
-                    Ok(()) => (),
+                    Ok(()) => {
+                        File::open(anchor(&held))?.sync_all()?;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
                     Err(e) => return Err(e.into()),
                 }
@@ -119,28 +129,22 @@ impl Root {
         Ok(FileSource::capture_file(&file)?.sha256(&file, cancel, std::time::Duration::MAX)?)
     }
     pub fn ensure_directory(&self, relative: &Path) -> Result<()> {
-        self.directory(relative, true)?;
+        let directory = self.directory(relative, true)?;
+        File::open(anchor(&directory))?.sync_all()?;
         Ok(())
     }
-    pub fn copy(
-        &self,
-        from: &Root,
-        path: &Path,
-        target: &Path,
-        expected: Option<&str>,
-        source_hash: Option<&str>,
-        cancel: &AtomicBool,
-        delta: bool,
-    ) -> Result<u64> {
+    pub fn copy(&self, from: &Root, spec: CopySpec<'_>, cancel: &AtomicBool) -> Result<u64> {
+        let CopySpec {
+            source: path,
+            destination: target,
+            source_hash,
+            destination_hash: expected,
+            delta,
+        } = spec;
         cancelled(cancel)?;
         from.validate()?;
         let mut input = from.input(path)?;
         let observed = FileSource::capture_file(&input)?;
-        if let Some(hash) = source_hash {
-            if observed.sha256(&input, cancel, std::time::Duration::MAX)? != hash {
-                return Err("Source changed after inventory; retry reconciliation".into());
-            }
-        }
         let metadata = input.metadata()?;
         let (parent, destination) = self.parent(target, true)?;
         let previous = self.metadata(target)?;
@@ -155,6 +159,10 @@ impl Root {
             }
         } else if previous.is_some() {
             return Err("Destination appeared during synchronization".into());
+        }
+        if rustix::fs::fstatfs(&parent)?.f_type as u32 == 0x4d44 && metadata.len() > u32::MAX as u64
+        {
+            return Err("FAT32 cannot store a file larger than 4 GB minus one byte".into());
         }
         let mut temporary = tempfile::NamedTempFile::new_in(anchor(&parent))?;
         let cloned = if delta {
@@ -171,7 +179,14 @@ impl Root {
         } else {
             false
         };
-        let stats = copy_checked(&mut input, temporary.as_file_mut(), cancel, cloned, |_| {})?;
+        let stats = copy_checked(
+            &mut input,
+            temporary.as_file_mut(),
+            cancel,
+            cloned,
+            source_hash,
+            |_| {},
+        )?;
         if let Some(expected) = expected {
             if self.digest(target, cancel)? != expected {
                 return Err("Destination changed before installation".into());
@@ -251,19 +266,49 @@ mod tests {
         let name = Path::new("file");
         fs::write(a.join(name), b"original").unwrap();
         target
-            .copy(&source, name, name, None, None, &cancel, false)
+            .copy(
+                &source,
+                CopySpec {
+                    source: name,
+                    destination: name,
+                    source_hash: None,
+                    destination_hash: None,
+                    delta: false,
+                },
+                &cancel,
+            )
             .unwrap();
         let hash = target.digest(name, &cancel).unwrap();
         let old = fs::read(b.join(name)).unwrap();
         fs::write(a.join(name), b"replacement").unwrap();
         assert!(
             target
-                .copy(&source, name, name, None, None, &cancel, false)
+                .copy(
+                    &source,
+                    CopySpec {
+                        source: name,
+                        destination: name,
+                        source_hash: None,
+                        destination_hash: None,
+                        delta: false
+                    },
+                    &cancel
+                )
                 .is_err()
         );
         assert_eq!(fs::read(b.join(name)).unwrap(), old);
         target
-            .copy(&source, name, name, Some(&hash), None, &cancel, true)
+            .copy(
+                &source,
+                CopySpec {
+                    source: name,
+                    destination: name,
+                    source_hash: None,
+                    destination_hash: Some(&hash),
+                    delta: true,
+                },
+                &cancel,
+            )
             .unwrap();
         assert_eq!(fs::read(b.join(name)).unwrap(), b"replacement");
     }

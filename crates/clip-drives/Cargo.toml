@@ -5,6 +5,13 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+test-support = []
+
+[[example]]
+name = "drive_fixture"
+required-features = ["test-support"]
+
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 serde.workspace = true

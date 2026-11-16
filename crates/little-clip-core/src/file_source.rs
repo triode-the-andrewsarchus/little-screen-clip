@@ -250,22 +250,30 @@ impl FileSource {
 
         let started = std::time::Instant::now();
         self.check_file(file)?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("File hashing cancelled".into());
+        }
+        if timeout.is_zero() {
+            return Err("File hashing timed out".into());
+        }
         let mut digest = Sha256::new();
         let mut buffer = [0_u8; 32 * 1024];
         let mut offset = 0;
-        loop {
+        let length = self.version[2];
+        while offset < length {
             if cancelled.load(Ordering::Relaxed) {
                 return Err("File hashing cancelled".into());
             }
             if started.elapsed() >= timeout {
                 return Err("File hashing timed out".into());
             }
-            let read = match file.read_at(&mut buffer, offset) {
+            let amount = (length - offset).min(buffer.len() as u64) as usize;
+            let read = match file.read_at(&mut buffer[..amount], offset) {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 result => result.map_err(|error| error.to_string())?,
             };
             if read == 0 {
-                break;
+                return Err("File shortened while hashing".into());
             }
             digest.update(&buffer[..read]);
             offset += read as u64;

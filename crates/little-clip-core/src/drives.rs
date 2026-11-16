@@ -217,6 +217,8 @@ pub struct DriveOperation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DriveConflict {
+    #[serde(default)]
+    pub complete: bool,
     pub id: String,
     pub pair: String,
     #[serde(with = "crate::path_serde")]

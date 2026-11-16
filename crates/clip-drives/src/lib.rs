@@ -2,6 +2,7 @@
 mod backup;
 mod catalog;
 mod discovery;
+mod mounts;
 mod root;
 mod scan;
 mod service;
@@ -55,3 +56,6 @@ impl From<rustix::io::Errno> for Error {
         Self::Io(value.into())
     }
 }
+
+#[cfg(test)]
+mod sync_edge_tests;

@@ -33,6 +33,7 @@ pub struct Service {
 }
 struct Owner {
     inventory: Inventory,
+    unidentified_ram: HashMap<String, Root>,
     db: Store,
     state: PathBuf,
     config: DriveConfig,
@@ -50,6 +51,35 @@ impl Service {
     /// Returns directory, database, singleton-lock or thread startup failures.
     pub fn start(config: DriveConfig, state: PathBuf) -> Result<Self> {
         Self::start_with_inventory(config, state, Arc::new(discovery::discover))
+    }
+    /// Starts an owned directory fixture without discovering real block devices.
+    #[cfg(feature = "test-support")]
+    pub fn start_fixture(config: DriveConfig, state: PathBuf, source: PathBuf) -> Result<Self> {
+        let source = Root::open(&source)?.path;
+        Self::start_with_inventory(
+            config,
+            state,
+            Arc::new(move || {
+                if !source.exists() {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![Drive {
+                    id: "part:portable-test".into(),
+                    label: "Portable test drive".into(),
+                    device: "/dev/little-clip-owned-fixture".into(),
+                    mount: Some(source.clone()),
+                    part_uuid: Some("portable-test".into()),
+                    filesystem_uuid: Some("fixture".into()),
+                    filesystem: "vfat".into(),
+                    capacity: 2 * 1024 * 1024,
+                    drive_capacity: 2 * 1024 * 1024,
+                    removable: true,
+                    read_only: false,
+                    evidence: "owned-directory-fixture".into(),
+                    ambiguous: false,
+                }])
+            }),
+        )
     }
     fn start_with_inventory(
         config: DriveConfig,
@@ -85,6 +115,7 @@ impl Service {
         let (sender, receiver) = mpsc::sync_channel(16);
         let mut owner = Owner {
             inventory,
+            unidentified_ram: HashMap::new(),
             db,
             state: root.path.clone(),
             config,
@@ -233,8 +264,17 @@ impl Owner {
             offset += 128;
         }
         for mut catalog in self.db.list::<Catalog>("catalog", 0, 1000)? {
-            catalog.mount = None;
-            self.db.put("catalog", &catalog.id, &catalog)?;
+            if let Some(path) = &catalog.mount {
+                let expected = self.state.join("mounts").join(&catalog.id);
+                if *path == expected && crate::mounts::catalog_mount(path, &catalog.id)?.is_some() {
+                    if self.unmount(&catalog.id).is_err() {
+                        continue;
+                    }
+                } else {
+                    catalog.mount = None;
+                    self.db.put("catalog", &catalog.id, &catalog)?;
+                }
+            }
         }
         Ok(())
     }
@@ -281,10 +321,22 @@ impl Owner {
                 synchronized = Instant::now();
                 wake = Instant::now();
             }
-            self.children
-                .retain(|_, child| matches!(child.try_wait(), Ok(None)));
+            let retired = self
+                .children
+                .iter_mut()
+                .filter_map(|(id, child)| {
+                    matches!(child.try_wait(), Ok(Some(_))).then(|| id.clone())
+                })
+                .collect::<Vec<_>>();
+            for id in retired {
+                self.children.remove(&id);
+                let _ = self.unmount(&id);
+            }
         }
-        // Persistent helpers are owned by this daemon, never detached.
+        // Unmount before retiring helpers; failed/busy mounts retain a recovery record.
+        for id in self.children.keys().cloned().collect::<Vec<_>>() {
+            let _ = self.unmount(&id);
+        }
         for child in self.children.values_mut() {
             let _ = child.kill();
             let _ = child.wait();
@@ -346,9 +398,16 @@ impl Owner {
         let _ = self.publish_policy();
     }
     fn drive(&self, id: &str) -> Result<Drive> {
-        let mut matches = (self.inventory)()?.into_iter().filter(|d| d.id == id);
+        let explicit = id.starts_with("/dev/");
+        let mut matches = (self.inventory)()?.into_iter().filter(|d| {
+            if explicit {
+                d.device == Path::new(id)
+            } else {
+                d.id == id
+            }
+        });
         let drive = matches.next().ok_or("Drive is not available")?;
-        if drive.ambiguous || matches.next().is_some() {
+        if (!explicit && drive.ambiguous) || matches.next().is_some() {
             return Err(
                 "Multiple drives have the same identity; automatic writes are suspended".into(),
             );
@@ -464,6 +523,11 @@ impl Owner {
                     return Err("Invalid sync subtree".into());
                 }
                 let drive = self.drive(&drive)?;
+                if drive.ambiguous {
+                    return Err(
+                        "Choose an unambiguous drive before enrolling automatic writes".into(),
+                    );
+                }
                 if drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
                     return Err("Drive has no persistent partition or filesystem identity".into());
                 }
@@ -603,6 +667,7 @@ impl Owner {
                 fs::remove_dir_all(&root.path)?;
                 self.db.remove("pair", &session.id)?;
                 self.db.remove("ram", &session.id)?;
+                self.unidentified_ram.remove(&session.id);
                 Ok("RAM copy discarded".into())
             }
             DriveRequest::Resolve { conflict } => {
@@ -610,6 +675,11 @@ impl Owner {
                     .db
                     .get("conflict", &conflict)?
                     .ok_or("Unknown conflict")?;
+                if !conflict.complete {
+                    return Err(
+                        "Finish preserving both conflict variants before acknowledging it".into(),
+                    );
+                }
                 conflict.resolved = true;
                 self.db.put("conflict", &conflict.id, &conflict)?;
                 Ok("Conflict acknowledged; preserved variants remain available".into())
@@ -640,6 +710,9 @@ impl Owner {
             .as_ref()
             .ok_or("Drive is offline; local contents retained")?;
         let portable = Root::open(&mount.join(&pair.relative))?;
+        if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
+            self.unidentified_ram.get(id).ok_or("No persistent media identity; RAM is retained but writeback needs a new explicit session")?.validate()?;
+        }
         let local = Root::open(&pair.local)?;
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
@@ -689,6 +762,9 @@ impl Owner {
         cancel: &AtomicBool,
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
+        if drive.ambiguous {
+            return Err("RAM writeback requires an unambiguous drive identity".into());
+        }
         ram_reason(&self.config)?;
         if drive.drive_capacity == 0 || drive.drive_capacity >= self.config.ram_capacity_limit {
             return Err("Drive capacity exceeds the Copy to RAM limit or is unknown".into());
@@ -745,9 +821,20 @@ impl Owner {
             connected: true,
             status: pair.status.clone(),
         };
+        if drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
+            self.unidentified_ram.insert(id.clone(), source);
+        }
         self.db.put("ram", &id, &session)?;
         self.db.put("pair", &id, &pair)?;
-        let result = self.synchronize(&id, cancel, progress)?;
+        let result = match self.synchronize(&id, cancel, progress) {
+            Ok(result) => result,
+            Err(error) => {
+                let mut session = session.clone();
+                session.status = format!("Initial RAM copy incomplete: {error}");
+                self.db.put("ram", &id, &session)?;
+                return Err(error);
+            }
+        };
         let mut pair: SyncPair = self.db.get("pair", &id)?.ok_or("RAM pair disappeared")?;
         pair.paused = false;
         self.db.put("pair", &id, &pair)?;
@@ -812,10 +899,28 @@ impl Owner {
         let mounts = Root::create(&self.state.join("mounts"))?;
         mounts.ensure_directory(Path::new(id))?;
         let path = mounts.path.join(id);
-        let helper = std::env::current_exe()?
-            .parent()
-            .ok_or("Missing executable directory")?
-            .join("clip-drive-mount");
+        if crate::mounts::inventory()?
+            .iter()
+            .any(|mount| mount.target == path)
+        {
+            return Err("Catalog mountpoint is already occupied; unmount it first".into());
+        }
+        let helper = std::env::var_os("LITTLE_CLIP_DRIVE_MOUNT_HELPER")
+            .map(PathBuf::from)
+            .unwrap_or(
+                std::env::current_exe()?
+                    .parent()
+                    .ok_or("Missing executable directory")?
+                    .join("clip-drive-mount"),
+            );
+        if !helper.is_absolute() {
+            return Err("Catalog helper override must be an absolute path".into());
+        }
+        if self.children.len() >= 8 {
+            return Err(
+                "Eight catalog mounts are already active; unmount one before adding another".into(),
+            );
+        }
         let mut child = CommandRequest::new(helper)
             .arg(&self.state)
             .arg(id)
@@ -824,9 +929,20 @@ impl Owner {
             .die_with_parent()
             .build_command()
             .spawn()?;
-        std::thread::sleep(Duration::from_millis(200));
-        if let Some(status) = child.try_wait()? {
-            return Err(format!("Catalog mount helper exited: {status}").into());
+        let started = Instant::now();
+        loop {
+            if crate::mounts::catalog_mount(&path, id)?.is_some() {
+                break;
+            }
+            if let Some(status) = child.try_wait()? {
+                return Err(format!("Catalog mount helper exited: {status}").into());
+            }
+            if started.elapsed() >= Duration::from_secs(5) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Catalog helper did not publish a ready FUSE mount".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
         catalog.mount = Some(path.clone());
         self.db.put("catalog", id, &catalog)?;
@@ -836,6 +952,20 @@ impl Owner {
     fn unmount(&mut self, id: &str) -> Result<String> {
         let mut catalog: Catalog = self.db.get("catalog", id)?.ok_or("Unknown catalog")?;
         let path = catalog.mount.as_ref().ok_or("Catalog is not mounted")?;
+        if crate::mounts::catalog_mount(path, id)?.is_none() {
+            if crate::mounts::inventory()?
+                .iter()
+                .any(|mount| mount.target == *path)
+            {
+                return Err(
+                    "Catalog mount ownership changed; refusing to unmount another filesystem"
+                        .into(),
+                );
+            }
+            catalog.mount = None;
+            self.db.put("catalog", id, &catalog)?;
+            return Ok("Catalog is no longer mounted".into());
+        }
         let output = CommandRequest::new("fusermount3")
             .arg("-u")
             .arg(path)

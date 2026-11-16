@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, Metadata};
-use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, symlink};
@@ -319,22 +318,20 @@ fn copy_file(
         .create_new(true)
         .open(target)
         .map_err(|e| e.to_string())?;
-    let mut buffer = vec![0; 256 * 1024];
-    loop {
-        control.check()?;
-        let read = input.read(&mut buffer).map_err(|e| e.to_string())?;
-        if read == 0 {
-            break;
-        }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|e| e.to_string())?;
-        control
-            .progress
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .bytes += read as u64;
-    }
+    little_clip_core::file_source::copy_checked(
+        &mut input,
+        &mut output,
+        &control.cancelled,
+        false,
+        None,
+        |bytes| {
+            control
+                .progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bytes += bytes;
+        },
+    )?;
     preserve_metadata(&output, metadata)?;
     output.sync_all().map_err(|e| e.to_string())?;
     Ok(())

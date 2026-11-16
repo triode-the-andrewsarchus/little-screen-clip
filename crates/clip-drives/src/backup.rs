@@ -45,6 +45,9 @@ fn command(args: &[&str], parent: &File, names: &[&std::ffi::OsStr]) -> Result<(
     Ok(())
 }
 fn last(db: &Store, drive: &Drive, kind: BackupKind) -> Result<Option<Backup>> {
+    if drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
+        return Ok(None);
+    }
     let mut offset = 0;
     loop {
         let versions: Vec<Backup> = db.list("backup", offset, 128)?;
@@ -52,10 +55,7 @@ fn last(db: &Store, drive: &Drive, kind: BackupKind) -> Result<Option<Backup>> {
             return Ok(None);
         }
         for version in versions {
-            if version.drive == drive.id
-                && version.evidence == drive.evidence
-                && version.kind == kind
-            {
+            if version.drive == drive.id && version.kind == kind {
                 return Ok(Some(version));
             }
         }
@@ -63,10 +63,17 @@ fn last(db: &Store, drive: &Drive, kind: BackupKind) -> Result<Option<Backup>> {
     }
 }
 fn backup_parent(destination: &Path, drive: &Drive) -> Result<Root> {
-    let uuid = drive
+    let key = drive
         .part_uuid
-        .as_ref()
-        .ok_or("This partition has no PARTUUID; enroll a stable identity before backing it up")?;
+        .clone()
+        .or_else(|| {
+            drive
+                .filesystem_uuid
+                .as_ref()
+                .map(|uuid| format!("fs-{uuid}"))
+        })
+        .unwrap_or_else(|| format!("unidentified-{}", uuid::Uuid::new_v4()));
+    let uuid = &key;
     if uuid.is_empty() || !uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err("Invalid partition UUID".into());
     }
@@ -424,6 +431,9 @@ pub(crate) fn image_from(
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<Backup> {
+    if drive.capacity == 0 {
+        return Err("Partition capacity is unknown; cannot create a complete image".into());
+    }
     let parent = backup_parent(destination, drive)?;
     let pin = kernel_interface::pin_content_directory(&parent.path)?;
     let mut staged = tempfile::NamedTempFile::new_in(anchor(&pin))?;

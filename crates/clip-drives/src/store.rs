@@ -15,6 +15,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS entities(kind TEXT NOT NULL,id TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(kind,id));
             CREATE TABLE IF NOT EXISTS entries(scan TEXT NOT NULL,path BLOB NOT NULL,parent BLOB NOT NULL,name BLOB NOT NULL,json TEXT NOT NULL,PRIMARY KEY(scan,path));
             CREATE INDEX IF NOT EXISTS entry_parent ON entries(scan,parent,name);
+            CREATE TABLE IF NOT EXISTS conflict_paths(pair TEXT NOT NULL,path BLOB NOT NULL,id TEXT NOT NULL,PRIMARY KEY(pair,path,id));
+            CREATE TABLE IF NOT EXISTS sync_blocked(pair TEXT NOT NULL,prefix BLOB NOT NULL,PRIMARY KEY(pair,prefix));
+            CREATE TABLE IF NOT EXISTS sync_dirs(pair TEXT NOT NULL,path BLOB NOT NULL,PRIMARY KEY(pair,path));
             CREATE TABLE IF NOT EXISTS baseline(pair TEXT NOT NULL,path BLOB NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(pair,path));")?;
         let version: u32 =
             db.query_row("SELECT value FROM version WHERE id=1", [], |r| r.get(0))?;

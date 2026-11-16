@@ -16,7 +16,8 @@ pub struct CopyStats {
 ///
 /// `output` must be an owned unpublished staging file. Delta mode requires read/write
 /// access and preserves equal ranges of a reflink clone. The caller owns destination
-/// admission, metadata, synchronization and atomic installation.
+/// admission, metadata, synchronization and atomic installation. An expected digest
+/// is checked during streaming, before the caller can publish the staged output.
 ///
 /// # Errors
 /// Returns cancellation, changed-source, seek, read or write failures.
@@ -25,6 +26,7 @@ pub fn copy_checked(
     output: &mut File,
     cancelled: &AtomicBool,
     delta: bool,
+    expected_sha256: Option<&str>,
     mut progress: impl FnMut(u64),
 ) -> Result<CopyStats, String> {
     if cancelled.load(Ordering::Relaxed) {
@@ -36,6 +38,8 @@ pub fn copy_checked(
     output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut buffer = vec![0; 256 * 1024];
     let mut previous = vec![0; buffer.len()];
+    use sha2::{Digest, Sha256};
+    let mut digest = expected_sha256.map(|_| Sha256::new());
     let mut stats = CopyStats::default();
     while stats.read < size {
         if cancelled.load(Ordering::Relaxed) {
@@ -45,6 +49,9 @@ pub fn copy_checked(
         input
             .read_exact(&mut buffer[..amount])
             .map_err(|e| e.to_string())?;
+        if let Some(digest) = &mut digest {
+            digest.update(&buffer[..amount]);
+        }
         let equal = delta
             && output.read_exact(&mut previous[..amount]).is_ok()
             && previous[..amount] == buffer[..amount];
@@ -66,6 +73,13 @@ pub fn copy_checked(
     }
     output.set_len(size).map_err(|e| e.to_string())?;
     source.check_file(input)?;
+    if let (Some(digest), Some(expected)) = (digest, expected_sha256) {
+        if format!("{:x}", digest.finalize()) != expected {
+            return Err(
+                "Source contents changed after inventory; staging was not published".into(),
+            );
+        }
+    }
     Ok(stats)
 }
 
@@ -87,6 +101,7 @@ mod tests {
             &mut output,
             &AtomicBool::new(false),
             true,
+            None,
             |_| {},
         )
         .unwrap();
@@ -109,6 +124,7 @@ mod tests {
                 &mut tempfile::tempfile().unwrap(),
                 &AtomicBool::new(true),
                 false,
+                None,
                 |_| {}
             )
             .is_err()

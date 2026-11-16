@@ -1,7 +1,7 @@
 //! Baseline-based union reconciliation; incomplete scans never authorize deletions.
 use crate::{
     DriveConflict, Result, SyncPair, cancelled,
-    root::{Root, anchor},
+    root::{CopySpec, Root, anchor},
     scan::{self, Entry, Limits},
     store::Store,
 };
@@ -51,12 +51,14 @@ pub(crate) fn install(
         }
         "file" => to.copy(
             from,
-            &entry.path,
-            target,
-            existing.and_then(|e| e.hash.as_deref()),
-            entry.hash.as_deref(),
+            CopySpec {
+                source: &entry.path,
+                destination: target,
+                source_hash: entry.hash.as_deref(),
+                destination_hash: existing.and_then(|e| e.hash.as_deref()),
+                delta,
+            },
             cancel,
-            delta,
         ),
         "symlink" => {
             cancelled(cancel)?;
@@ -112,74 +114,7 @@ fn save_baseline(db: &Store, pair: &str, path: &Path, hash: Option<&str>) -> Res
     }
     Ok(())
 }
-fn variant(path: &Path, side: &str, hash: &str) -> PathBuf {
-    let stem = path.file_stem().unwrap_or_default();
-    let mut name = stem.to_os_string();
-    name.push(format!(".{side}-{}", &hash[..12.min(hash.len())]));
-    if let Some(extension) = path.extension() {
-        name.push(".");
-        name.push(extension);
-    }
-    path.with_file_name(name)
-}
-fn preserve_variant(
-    db: &Store,
-    scan: &str,
-    source: &Root,
-    other: &Root,
-    entry: &Entry,
-    side: &str,
-    cancel: &AtomicBool,
-) -> Result<PathBuf> {
-    let hash = signature(entry)?;
-    let name = variant(&entry.path, side, &hash);
-    for (root, original) in [(source, true), (other, false)] {
-        if let Some(existing) = root.metadata(&name)? {
-            let same =
-                entry.kind == "file" && existing.is_file() && root.digest(&name, cancel)? == hash;
-            if !same {
-                return Err(
-                    "Conflict variant name is already occupied; existing file retained".into(),
-                );
-            }
-        } else {
-            let _ = original;
-            install(source, root, entry, &name, None, cancel, false)?;
-        }
-    }
-    let _ = (db, scan);
-    Ok(name)
-}
-fn conflict(
-    db: &Store,
-    pair: &SyncPair,
-    portable: &Root,
-    local: &Root,
-    a: &Entry,
-    b: &Entry,
-    cancel: &AtomicBool,
-) -> Result<()> {
-    let mut digest = Sha256::new();
-    digest.update(pair.id.as_bytes());
-    digest.update(a.path.as_os_str().as_bytes());
-    digest.update(signature(a)?.as_bytes());
-    digest.update(signature(b)?.as_bytes());
-    let id = format!("{:x}", digest.finalize());
-    if db.get::<DriveConflict>("conflict", &id)?.is_some() {
-        return Ok(());
-    }
-    if a.kind == "directory" || b.kind == "directory" {
-        return Err(format!(
-            "File/directory conflict at {}; both trees retained",
-            a.path.display()
-        )
-        .into());
-    }
-    let portable_variant = preserve_variant(db, "", portable, local, a, "portable", cancel)?;
-    let local_variant = preserve_variant(db, "", local, portable, b, "local", cancel)?;
-    db.put("conflict",&id,&DriveConflict{id:id.clone(),pair:pair.id.clone(),path:a.path.clone(),portable:portable_variant,local:local_variant,message:"Both sides changed. Both variants were preserved; edit the original to resolve, then sync.".into(),resolved:false})?;
-    Ok(())
-}
+mod conflicts;
 fn delete(root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
     match entry.kind.as_str() {
         "file" => root.delete_file(
@@ -219,6 +154,10 @@ struct Reconcile<'a> {
 }
 impl Reconcile<'_> {
     fn path(&mut self, path: &Path, a: Option<Entry>, b: Option<Entry>) -> Result<()> {
+        let blocked:bool=self.db.0.query_row("SELECT EXISTS(SELECT 1 FROM sync_blocked WHERE pair=?1 AND substr(?2,1,length(prefix))=prefix)",params![self.pair.id,path.as_os_str().as_bytes()],|r|r.get(0))?;
+        if blocked {
+            return Ok(());
+        }
         cancelled(self.cancel)?;
         self.portable.validate()?;
         self.local.validate()?;
@@ -237,16 +176,7 @@ impl Reconcile<'_> {
             (Some(_), Some(_)) if old == ah => Some(false),
             (Some(_), Some(_)) if old == bh => Some(true),
             (Some(a), Some(b)) => {
-                conflict(
-                    self.db,
-                    self.pair,
-                    self.portable,
-                    self.local,
-                    a,
-                    b,
-                    self.cancel,
-                )?;
-                self.report.conflicts += 1;
+                self.preserve_conflict(a, b)?;
                 None
             }
             _ => None,
@@ -271,6 +201,17 @@ impl Reconcile<'_> {
             };
             if existing.is_none()
                 && self.pair.deletions
+                && old.as_deref() == Some("directory")
+                && entry.kind == "directory"
+            {
+                self.db.0.execute(
+                    "INSERT OR IGNORE INTO sync_dirs VALUES(?1,?2)",
+                    params![self.pair.id, path.as_os_str().as_bytes()],
+                )?;
+                return Ok(());
+            }
+            if existing.is_none()
+                && self.pair.deletions
                 && old.as_deref() == hash
                 && entry.kind != "directory"
             {
@@ -279,6 +220,9 @@ impl Reconcile<'_> {
             } else {
                 self.report.bytes += install(from, to, entry, path, existing, self.cancel, false)?;
                 self.report.files += 1;
+                if existing.is_none() && old.is_some() && old.as_deref() != hash {
+                    self.deleted_edit(path, entry, portable_to_local)?;
+                }
                 save_baseline(self.db, &self.pair.id, path, hash)?;
             }
         }
@@ -308,6 +252,8 @@ pub(crate) fn synchronize(
             .into());
         }
     }
+    db.0.execute("DELETE FROM sync_blocked WHERE pair=?1", [&pair.id])?;
+    db.0.execute("DELETE FROM sync_dirs WHERE pair=?1", [&pair.id])?;
     let mut after = Vec::new();
     let mut reconcile = Reconcile {
         db,
@@ -339,6 +285,7 @@ pub(crate) fn synchronize(
             progress(reconcile.report.files, reconcile.report.bytes);
         }
     }
+    reconcile.finish_directories()?;
     portable.validate()?;
     local.validate()?;
     db.clear_scan(&a)?;
