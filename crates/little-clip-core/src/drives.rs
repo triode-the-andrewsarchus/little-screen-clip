@@ -75,6 +75,26 @@ pub enum BackupKind {
     Image,
 }
 
+/// A short-lived daemon-owned backup selection, reviewed before any unmount.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupPreview {
+    pub token: String,
+    pub drive: Drive,
+    pub kind: BackupKind,
+    #[serde(with = "crate::path_serde")]
+    pub destination: PathBuf,
+    pub space: BackupSpace,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupSpace {
+    pub available_bytes: u64,
+    /// Full independent image plus working headroom; sharing/sparsity can use less.
+    pub full_image_bytes: Option<u64>,
+    /// Destination filesystem capability; actual snapshot/reflink operations can fail.
+    pub btrfs: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DriveRequest {
     Eject {
@@ -101,6 +121,20 @@ pub enum DriveRequest {
     },
     CopyToRam {
         drive: String,
+    },
+    PreviewBackup {
+        drive: String,
+        kind: BackupKind,
+        #[serde(with = "crate::path_serde::optional")]
+        destination: Option<PathBuf>,
+    },
+    StartBackup {
+        token: String,
+        restore_mounted: bool,
+        remember_destination: bool,
+    },
+    DiscardBackupReview {
+        token: String,
     },
     Backup {
         drive: String,
@@ -165,6 +199,7 @@ pub enum DriveRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DriveReply {
     Status(Box<DriveStatus>),
+    BackupPreview(Box<BackupPreview>),
     Accepted(String),
     Done(String),
 }

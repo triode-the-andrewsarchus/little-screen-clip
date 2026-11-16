@@ -8,6 +8,8 @@ impl Dialog {
             Self::Deletions { .. } => "Deletion propagation",
             Self::Policy { .. } => "Catalog and indexing policy",
             Self::Details => "Drive operations and conflicts",
+            Self::BackupLoading { .. } => "Checking backup destination",
+            Self::BackupReview { .. } => "Review partition backup",
         }
     }
     fn show(
@@ -18,6 +20,16 @@ impl Dialog {
         requests: &mut Vec<DriveRequest>,
     ) -> bool {
         match self {
+            Self::BackupLoading { .. } => {
+                ui.spinner();
+                ui.label("Checking the selected partition, destination and available space…");
+                true
+            }
+            Self::BackupReview {
+                preview,
+                restore_mounted,
+                remember_destination,
+            } => backup_review(ui, preview, restore_mounted, remember_destination, requests),
             Self::Path {
                 text,
                 action,
@@ -95,18 +107,11 @@ impl PathAction {
     fn requests(&self, path: PathBuf) -> Vec<DriveRequest> {
         match self {
             Self::Directory => vec![DriveRequest::BackupDirectory { path }],
-            Self::Backup {
-                drive,
-                kind,
-                restore_mounted,
-            } => vec![
-                DriveRequest::BackupDirectory { path },
-                DriveRequest::Backup {
-                    drive: drive.clone(),
-                    kind: *kind,
-                    restore_mounted: *restore_mounted,
-                },
-            ],
+            Self::Backup { drive, kind } => vec![DriveRequest::PreviewBackup {
+                drive: drive.clone(),
+                kind: *kind,
+                destination: Some(path),
+            }],
             Self::Pair { drive, relative } => vec![DriveRequest::Pair {
                 drive: drive.clone(),
                 relative: relative.clone(),
@@ -146,6 +151,66 @@ fn path_dialog(
         ui.colored_label(egui::Color32::LIGHT_RED, error);
     }
     true
+}
+fn backup_review(
+    ui: &mut Ui,
+    preview: &BackupPreview,
+    restore_mounted: &mut bool,
+    remember_destination: &mut bool,
+    requests: &mut Vec<DriveRequest>,
+) -> bool {
+    ui.label(format!(
+        "Partition: {} · {}",
+        preview.drive.label,
+        display_path(&preview.drive.device)
+    ));
+    ui.label(format!("Partition size: {} bytes", preview.drive.capacity));
+    ui.label(format!(
+        "Destination: {}",
+        display_path(&preview.destination)
+    ));
+    ui.label(format!(
+        "Available: {} bytes",
+        preview.space.available_bytes
+    ));
+    if let Some(bytes) = preview.space.full_image_bytes {
+        ui.label(format!(
+            "Full independent image estimate: {bytes} bytes, including 64 MiB working headroom"
+        ));
+    } else {
+        ui.small("File backup allocation depends on file sizes and metadata. Free space is checked again when the job starts.");
+    }
+    if preview.space.btrfs {
+        ui.label("Btrfs destination: completed versions can share unchanged blocks. Actual additional allocation depends on changes; snapshot/reflink permission failures are reported.");
+        if preview
+            .space
+            .full_image_bytes
+            .is_some_and(|bytes| bytes > preview.space.available_bytes)
+        {
+            ui.colored_label(egui::Color32::YELLOW, "A full independent image will not fit. This backup depends on sharing or sparse zero ranges and may run out of space.");
+        }
+    }
+    if preview.kind == BackupKind::Image {
+        ui.label("Enrolled changes will be flushed and the partition unmounted before imaging. Desktop authentication may be required.");
+        ui.add_enabled(
+            preview.drive.mount.is_some(),
+            egui::Checkbox::new(restore_mounted, "Mount again after imaging"),
+        );
+    }
+    ui.checkbox(
+        remember_destination,
+        "Update the backup directory setting for future backups",
+    );
+    ui.small("This review expires after five minutes. Changes to the selected partition or directory require a new review.");
+    let confirmed = ui.button("Start backup").clicked();
+    if confirmed {
+        requests.push(DriveRequest::StartBackup {
+            token: preview.token.clone(),
+            restore_mounted: preview.kind == BackupKind::Image && *restore_mounted,
+            remember_destination: *remember_destination,
+        });
+    }
+    !confirmed
 }
 fn policy_dialog(
     ui: &mut Ui,
@@ -247,6 +312,11 @@ impl Drives {
             return;
         };
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if let Dialog::BackupReview { preview, .. } = &dialog {
+                self.send(DriveRequest::DiscardBackupReview {
+                    token: preview.token.clone(),
+                });
+            }
             return;
         }
         let mut keep = true;
@@ -275,6 +345,11 @@ impl Drives {
                     })
                     .clicked()
                 {
+                    if let Dialog::BackupReview { preview, .. } = &dialog {
+                        requests.push(DriveRequest::DiscardBackupReview {
+                            token: preview.token.clone(),
+                        });
+                    }
                     keep = false;
                 }
             });

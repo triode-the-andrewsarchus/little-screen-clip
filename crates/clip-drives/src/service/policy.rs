@@ -66,6 +66,11 @@ impl Owner {
         }
         let mut managed = vec![(self.state.clone(), false)];
         managed.extend(
+            preflight::managed_backup_paths(&self.db)?
+                .into_iter()
+                .map(|path| (path, false)),
+        );
+        managed.extend(
             self.config
                 .backup_directory
                 .clone()
@@ -100,44 +105,51 @@ impl Owner {
         Ok(())
     }
     pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
-        for session in self.db.list::<RamSession>("ram", 0, 1000)? {
-            if let Some(backing) = session.backing {
-                if let Ok(root) = Root::open(&backing.directory) {
-                    if target.overlap(&root) {
-                        return Err("Destination overlaps private RAM backing storage".into());
-                    }
-                } else if target.path.starts_with(&backing.directory)
-                    || backing.directory.starts_with(&target.path)
-                {
-                    return Err("Destination overlaps unavailable RAM backing storage".into());
-                }
-            }
-        }
-        Ok(())
+        validate_ram_backing_storage(&self.db, target)
     }
     pub(super) fn validate_backup_directory(&self, target: &Root) -> Result<()> {
-        self.validate_ram_backing_target(target)?;
-        if target.overlap(&Root::open(&self.state)?) {
-            return Err("Backup directory overlaps drive-service state".into());
-        }
-        for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-            if let Ok(root) = Root::open(&pair.local)
-                && root.overlap(target)
-            {
-                return Err("Backup directory overlaps a paired local folder or RAM copy".into());
-            }
-        }
-        for catalog in self.db.list::<Catalog>("catalog", 0, 1000)? {
-            if let Some(path) = catalog.mount
-                && let Ok(root) = Root::open(&path)
-                && root.overlap(target)
-            {
-                return Err("Backup directory overlaps a mounted catalog".into());
-            }
-        }
-        Ok(())
+        validate_backup_storage(&self.db, &self.state, target)
     }
 }
+fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
+    for session in db.list::<RamSession>("ram", 0, 1000)? {
+        if let Some(backing) = session.backing {
+            if let Ok(root) = Root::open(&backing.directory) {
+                if target.overlap(&root) {
+                    return Err("Destination overlaps private RAM backing storage".into());
+                }
+            } else if target.path.starts_with(&backing.directory)
+                || backing.directory.starts_with(&target.path)
+            {
+                return Err("Destination overlaps unavailable RAM backing storage".into());
+            }
+        }
+    }
+    Ok(())
+}
+pub(super) fn validate_backup_storage(db: &Store, state: &Path, target: &Root) -> Result<()> {
+    validate_ram_backing_storage(db, target)?;
+    if target.overlap(&Root::open(state)?) {
+        return Err("Backup directory overlaps drive-service state".into());
+    }
+    for pair in db.list::<SyncPair>("pair", 0, 1000)? {
+        if let Ok(root) = Root::open(&pair.local)
+            && root.overlap(target)
+        {
+            return Err("Backup directory overlaps a paired local folder or RAM copy".into());
+        }
+    }
+    for catalog in db.list::<Catalog>("catalog", 0, 1000)? {
+        if let Some(path) = catalog.mount
+            && let Ok(root) = Root::open(&path)
+            && root.overlap(target)
+        {
+            return Err("Backup directory overlaps a mounted catalog".into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
     if !config.ram_directory.is_absolute()
         || config

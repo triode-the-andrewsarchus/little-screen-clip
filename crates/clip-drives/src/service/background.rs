@@ -40,17 +40,7 @@ impl Owner {
         }
         Ok(())
     }
-    pub(super) fn start_background(&mut self, envelope: Envelope) {
-        if matches!(envelope.request, DriveRequest::Backup { .. })
-            && self.config.backup_directory.is_none()
-        {
-            self.finish_operation(
-                &envelope.id,
-                &envelope.cancel,
-                Err("Choose a DriveBackupDir before starting a backup".into()),
-            );
-            return;
-        }
+    pub(super) fn start_background(&mut self, mut envelope: Envelope) {
         if self.background.is_some()
             || self
                 .partition
@@ -71,10 +61,23 @@ impl Owner {
                 .mount
                 .as_ref()
                 .ok_or("Mount the partition before saving a file backup or catalog")?;
-            roots.push(Arc::new(Root::open(path)?));
+            let source = match envelope
+                .review
+                .as_ref()
+                .and_then(|review| review.source.as_ref())
+            {
+                Some(root) => {
+                    root.validate()?;
+                    root.clone()
+                }
+                None => Arc::new(Root::open(path)?),
+            };
+            roots.push(source);
             if matches!(envelope.request, DriveRequest::Backup { .. }) {
                 let source = roots.first().map(Arc::as_ref);
-                roots.push(self.backup_destination(source)?);
+                let destination = self.reviewed_backup_destination(&envelope, source)?;
+                preflight::space(&destination, &drive, BackupKind::Files)?;
+                roots.push(destination);
             } else {
                 roots.push(Arc::new(Root::open(&self.state)?));
             }
@@ -94,6 +97,14 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
+        let destination = matches!(envelope.request, DriveRequest::Backup { .. })
+            .then(|| roots.last().map(Arc::as_ref))
+            .flatten();
+        if let Err(error) = self.admit_backup_destination(&envelope, destination) {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+            return;
+        }
+        drop(envelope.review.take());
         self.launch_bulk(envelope, drive, self.config.clone(), roots, None);
     }
     pub(super) fn launch_bulk(
@@ -113,7 +124,7 @@ impl Owner {
         let cancel = envelope.cancel.clone();
         let drive_id = drive.id.clone();
         let destination = matches!(envelope.request, DriveRequest::Backup { .. })
-            .then(|| config.backup_directory.clone())
+            .then(|| roots.last().map(|root| root.path.clone()))
             .flatten();
         let worker_roots = roots.clone();
         let worker_image = image.clone();
@@ -139,6 +150,7 @@ impl Owner {
                     let destination = worker_roots
                         .last()
                         .ok_or("Missing admitted backup destination")?;
+                    preflight::space(destination, &drive, kind)?;
                     let version = match kind {
                         BackupKind::Files => backup::files(
                             &db,

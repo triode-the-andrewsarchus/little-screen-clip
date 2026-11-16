@@ -23,6 +23,7 @@ struct Envelope {
     id: String,
     request: DriveRequest,
     cancel: Arc<AtomicBool>,
+    review: Option<preflight::Review>,
 }
 #[derive(Clone)]
 pub struct Service {
@@ -30,11 +31,14 @@ pub struct Service {
     shared: Arc<Mutex<DriveStatus>>,
     state: PathBuf,
     runtime: Arc<lifetime::Runtime>,
+    inventory: Inventory,
+    previews: preflight::Previews,
 }
 mod background;
 mod lifetime;
 mod partition;
 mod policy;
+mod preflight;
 mod ram_save;
 mod ram_sessions;
 mod ram_setup;
@@ -52,6 +56,7 @@ struct Owner {
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
     authority: Arc<partition::Authority>,
+    previews: preflight::Previews,
     backup_jobs: little_clip_core::jobs::BackgroundJobs,
     inventory: Inventory,
     unidentified_ram: HashMap<String, Arc<Root>>,
@@ -170,6 +175,7 @@ impl Service {
         let tokens = Arc::new(Mutex::new(HashMap::new()));
         let (sender, receiver) = mpsc::sync_channel(16);
         let closing = Arc::new(AtomicBool::new(false));
+        let previews = Arc::new(Mutex::new(HashMap::new()));
         let mut owner = Owner {
             closing: closing.clone(),
             sync_pool: little_clip_core::jobs::BackgroundJobs::new(4, 4),
@@ -182,8 +188,9 @@ impl Service {
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             authority,
+            previews: previews.clone(),
             backup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
-            inventory,
+            inventory: inventory.clone(),
             unidentified_ram: HashMap::new(),
             sync_roots: HashMap::new(),
             db,
@@ -209,6 +216,8 @@ impl Service {
             sender,
             shared,
             state: root.path,
+            inventory,
+            previews,
             runtime: Arc::new(lifetime::Runtime {
                 closing,
                 tokens,
@@ -221,6 +230,24 @@ impl Service {
     /// # Errors
     /// Returns queue, database or validation failures. Accepted writes retain ownership.
     pub fn request(&self, request: DriveRequest) -> Result<DriveReply> {
+        if let DriveRequest::PreviewBackup {
+            drive,
+            kind,
+            destination,
+        } = request
+        {
+            return self.preview_backup(&drive, kind, destination);
+        }
+        if let DriveRequest::DiscardBackupReview { token } = request {
+            self.previews
+                .lock()
+                .map_err(|_| "Backup review storage unavailable")?
+                .remove(&token);
+            return Ok(DriveReply::Done(
+                "Backup review cancelled; no backup started".into(),
+            ));
+        }
+        let (request, review) = self.take_backup_review(request)?;
         if matches!(
             request,
             DriveRequest::Backup {
@@ -278,6 +305,7 @@ impl Service {
                 id: id.clone(),
                 request,
                 cancel,
+                review,
             })
             .is_err()
         {
@@ -424,6 +452,7 @@ impl Owner {
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
 
         loop {
+            preflight::expire(&self.previews);
             if self.closing.load(Ordering::Acquire) {
                 break;
             }
@@ -476,6 +505,9 @@ impl Owner {
             }
         }
         self.closing.store(true, Ordering::Release);
+        if let Ok(mut previews) = self.previews.lock() {
+            previews.clear();
+        }
         let mut stopping = std::mem::take(&mut self.deferred);
         stopping.extend(receiver.try_iter());
         for envelope in stopping {
@@ -536,6 +568,10 @@ impl Owner {
                 &envelope.cancel,
                 Err("Cancelled before operation setup".into()),
             );
+            return;
+        }
+        if let Err(error) = self.validate_backup_request(&envelope) {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
         }
         if self.ram_setup.is_some()
@@ -723,21 +759,17 @@ impl Owner {
             }
             DriveRequest::BackupDirectory { path } => {
                 let root = Root::create(&path)?;
-                self.validate_backup_directory(&root)?;
-                if let Some(path) = &self.config_path {
-                    little_clip_core::config::save_drive_backup_directory_at(path, &root.path)
-                        .map_err(|error| {
-                            format!("Could not save backup directory preference: {error}")
-                        })?;
-                }
-                self.config.backup_directory = Some(root.path);
-                self.db.put("settings", "config", &self.config)?;
+                self.set_backup_directory(&root)?;
                 Ok("Backup directory configured".into())
             }
             DriveRequest::CopyToRam { .. } => {
                 Err("RAM setup must use retained reconciliation admission".into())
             }
-            DriveRequest::Backup { .. } | DriveRequest::Catalog { .. } => {
+            DriveRequest::Backup { .. }
+            | DriveRequest::Catalog { .. }
+            | DriveRequest::PreviewBackup { .. }
+            | DriveRequest::StartBackup { .. }
+            | DriveRequest::DiscardBackupReview { .. } => {
                 Err("Backup and catalog work must use retained background admission".into())
             }
             DriveRequest::Pair { .. }
@@ -982,7 +1014,7 @@ impl Owner {
         Ok("Catalog unmounted".into())
     }
     fn publish_policy(&self) -> Result<()> {
-        let mut excluded = Vec::<PathBuf>::new();
+        let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
             self.partition
                 .as_ref()
@@ -1116,6 +1148,7 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod backup_review;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
@@ -2173,12 +2206,31 @@ mod tests {
                 paused: true,
             },
         );
-        let operation = completed(
-            &restarted,
-            DriveRequest::Backup {
+        fs::create_dir_all(fixture.temp.path().join("backup")).unwrap();
+        let DriveReply::BackupPreview(review) = restarted
+            .request(DriveRequest::PreviewBackup {
                 drive: "part:large".into(),
                 kind: BackupKind::Image,
+                destination: None,
+            })
+            .unwrap()
+        else {
+            panic!("expected image review");
+        };
+        // A second pending review must not keep our own source mount busy.
+        restarted
+            .request(DriveRequest::PreviewBackup {
+                drive: "part:large".into(),
+                kind: BackupKind::Image,
+                destination: None,
+            })
+            .unwrap();
+        let operation = completed(
+            &restarted,
+            DriveRequest::StartBackup {
+                token: review.token,
                 restore_mounted: true,
+                remember_destination: false,
             },
         );
         assert_eq!(operation.state, "failed");

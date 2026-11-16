@@ -26,13 +26,13 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.5 | Partial | Removal/reconnect conflict fixture passes; interrupted media-write retention needs injected failure coverage. |
 | 3.6 | Partial | Eject/flush/save/discard exist; prove waiting and dirty-session lifetime behavior. |
 | 3.7 | Open | Fixed-size tmpfs images now enforce ongoing byte/inode growth, including external writers. Native ENOSPC for bytes/inodes, live-owner refusal, open-file graceful restart and daemon restart/removal tests pass. Forced exit after directory fsync and cancelled-initial-copy resume are tested. Unflushed-kill/underlying-tmpfs exhaustion/pressure matrix remains. |
-| 4.1 | Partial | Lazy path prompt and pinned destination exist; picker cancellation/alias matrix needs explicit evidence. |
-| 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references now survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Space preflight remains. |
+| 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
+| 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
 | 4.3 | Open | File copy preserves modes/times; bounded live-source retry, omission records and optional quiesced collection remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
-| 5.1 | Partial | Preflush and unmount now run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission now retains the device-node pin and checks its disk sequence across authorized image reads. Exact size/space presentation and real UDisks authorization coordination remain. |
+| 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real UDisks authorization coordination remains. |
 | 5.2 | Host gate | UDisks OpenForBackup implemented; real authorized/declined/busy-device acceptance is blocked by interactive PolicyKit. |
 | 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; typed layout facts and full authorized-device publication evidence remain. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs/device matrix remains. |
@@ -353,3 +353,64 @@ reports REGRESSION against the original baseline: eleven net new clone groups,
 authority and fixture paths remove duplicate logic; the image menu stays below the
 complexity hotspot threshold. Report:
 `.fitness/portable-drives-image-restoration-architecture.json`.
+
+Backup-review follow-up: the destination prompt now requests a read-only daemon
+preview instead of queuing independent preference and backup mutations. A single-use,
+five-minute token retains the selected drive observation and source/destination
+handles. Execution revalidates those facts, uses the captured destination even after
+preferences change, and drops source review pins before unmount. Sixteen pending
+reviews bound retained resources; cancellation, expiry, overlapping unmount and
+shutdown retire them. GUI generations prevent late results/errors from replacing a
+newer selection, and cancelled review cleanup does not emit a status notice.
+
+The review shows exact partition capacity, destination and free bytes. Independent
+images require their full size plus 64 MiB working headroom before unmount; Btrfs
+permits shared/sparse allocation with an explicit full-image estimate and warning.
+File admission checks working headroom without promising a precise allocation
+estimate. Destination effective-user permissions and read-only state are checked,
+and execution repeats space checks. A requested preference save must succeed before
+copy/unmount admission. Full source traversal estimates, destination quota/capability
+faults and final authorized-device acceptance remain under their original gates.
+
+One-shot backup roots are durably registered before collection and policy publication.
+They retain no-index and sync-recursion protection after success, publication failure,
+preference changes and restart. Older completed versions supply historical roots too.
+Real bind/relocation aliases and every recursive consumer still need their full audit.
+In particular, private UI captures show ordinary folder previews rendering backup
+descendant metadata; this alone does not prove payload reads, but that recursive
+entry point still needs policy verification.
+
+UI verification also exposed two independent defects: mount row IDs followed list
+positions, and long notification labels pushed Dismiss outside the window. Commits
+`cc37ec81` and `e42a1e7e` fix these with regression tests that failed beforehand and
+pass afterward. The driver now observes job completion/notice dismissal before
+measuring the next menu position and verifies small bordered captions separately.
+
+Focused dark/light backup-review acceptance passed with nineteen observations each:
+`/tmp/portable-drive-review-focus-dark-verified/report.json` and
+`/tmp/portable-drive-review-focus-light-verified/report.json`. These runs cover lazy
+selection, cancellation without preferences, file publication, and image-review
+cancellation; they do not claim raw-device authorization or the full lifecycle matrix.
+
+Validation for the reviewed-backup checkpoint: 63 ordinary backend tests pass with
+fourteen explicit fixtures ignored; all ten selected RAM/native fixtures pass, as
+does the new real Btrfs shared-allocation review fixture. File-manager tests pass
+965 ordinary cases with six intentionally ignored; two core drive-schema tests and
+three private shutdown/transport tests pass. Affected daemon/file-manager/CLI
+all-target compilation and clippy with warnings denied pass, and CLI review/start
+help exposes the new options. Rustfmt and diff whitespace checks pass for changed
+sources. These are affected-component checks, not a new final-workspace claim.
+
+The expanded full private UI scenario passes in both appearances with 47 observations
+and no cleanup error: `/tmp/portable-drive-full-review-dark-verified/report.json`
+and `/tmp/portable-drive-full-review-light-verified/report.json`. It covers the prior
+RAM/sync/catalog/reconnect flow plus review cancellation, file publication and image
+review, with bounded-caption OCR checks for menu and dismissal controls.
+
+Architecture still reports REGRESSION against the original baseline: eleven net new
+clone groups, 7.19% duplication, average CCN 3.48, max CCN 274 and cycles 143. This
+checkpoint removes its initial extra clone groups by sharing backup admission,
+settings persistence and owned review fixtures, and separates preview capture from
+registration. The new preflight functions stay below the CCN hotspot threshold;
+original feature-wide clone/complexity findings remain for final review. Report:
+`.fitness/portable-drives-backup-review-architecture.json`.

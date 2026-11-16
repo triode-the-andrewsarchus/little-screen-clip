@@ -13,23 +13,16 @@ use std::{
     time::{Duration, Instant},
 };
 mod dialogs;
+#[cfg(test)]
+mod tests;
 
 static IO: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 16));
 
 enum PathAction {
     Directory,
-    Backup {
-        drive: String,
-        kind: BackupKind,
-        restore_mounted: bool,
-    },
-    Pair {
-        drive: String,
-        relative: PathBuf,
-    },
-    SaveRam {
-        session: String,
-    },
+    Backup { drive: String, kind: BackupKind },
+    Pair { drive: String, relative: PathBuf },
+    SaveRam { session: String },
 }
 enum Dialog {
     Path {
@@ -50,12 +43,26 @@ enum Dialog {
         index: bool,
     },
     Details,
+    BackupLoading {
+        generation: u64,
+    },
+    BackupReview {
+        preview: Box<BackupPreview>,
+        restore_mounted: bool,
+        remember_destination: bool,
+    },
+}
+struct PendingRequest {
+    generation: u64,
+    request: DriveRequest,
+    task: Task<Result<DriveReply, String>>,
 }
 pub(super) struct Drives {
     pub status: DriveStatus,
     poll: Option<Task<Result<DriveReply, String>>>,
-    request: Option<Task<Result<DriveReply, String>>>,
-    queue: VecDeque<DriveRequest>,
+    request: Option<PendingRequest>,
+    queue: VecDeque<(u64, DriveRequest)>,
+    preview_generation: u64,
     last_poll: Instant,
     dialog: Option<Dialog>,
     seen: HashSet<String>,
@@ -71,6 +78,7 @@ impl Default for Drives {
             poll: None,
             request: None,
             queue: VecDeque::new(),
+            preview_generation: 0,
             last_poll: Instant::now() - Duration::from_secs(5),
             dialog: None,
             seen: HashSet::new(),
@@ -98,28 +106,41 @@ fn ipc(request: DriveRequest) -> Result<DriveReply, String> {
 impl Drives {
     fn send(&mut self, request: DriveRequest) {
         if self.queue.len() < 16 {
-            self.queue.push_back(request);
+            if matches!(request, DriveRequest::PreviewBackup { .. }) {
+                self.preview_generation = self.preview_generation.wrapping_add(1);
+                self.dialog = Some(Dialog::BackupLoading {
+                    generation: self.preview_generation,
+                });
+            }
+            self.queue.push_back((self.preview_generation, request));
         } else {
             self.notice = Some(("Drive request queue is full".into(), true));
         }
     }
     pub fn tick(&mut self) {
-        if let Some(result) = self.request.as_ref().and_then(Task::poll) {
+        if let Some((generation, request, result)) = self.request.as_ref().and_then(|pending| {
+            pending.task.poll().map(|result| {
+                (
+                    pending.generation,
+                    pending.request.clone(),
+                    result
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result),
+                )
+            })
+        }) {
             self.request = None;
-            match result {
-                Ok(Ok(DriveReply::Accepted(_))) => {
-                    self.last_poll = Instant::now() - Duration::from_secs(2);
-                }
-                Ok(Ok(DriveReply::Done(text))) => self.notice = Some((text, false)),
-                Ok(Err(error)) => self.notice = Some((error, true)),
-                Err(error) => self.notice = Some((error.to_string(), true)),
-                _ => (),
-            }
+            self.accept_reply(generation, request, result);
         }
         if self.request.is_none()
-            && let Some(request) = self.queue.pop_front()
+            && let Some((generation, request)) = self.queue.pop_front()
         {
-            self.request = Some(Task::start_unbounded(&IO, move |_| ipc(request)));
+            let input = request.clone();
+            self.request = Some(PendingRequest {
+                generation,
+                request,
+                task: Task::start_unbounded(&IO, move |_| ipc(input)),
+            });
         }
         if let Some(result) = self.poll.as_ref().and_then(Task::poll) {
             self.poll = None;
@@ -135,6 +156,42 @@ impl Drives {
                 ipc(DriveRequest::Status { offset: 0 })
             }));
             self.last_poll = Instant::now();
+        }
+    }
+    fn accept_reply(
+        &mut self,
+        generation: u64,
+        request: DriveRequest,
+        result: Result<DriveReply, String>,
+    ) {
+        let preview_active = matches!(self.dialog, Some(Dialog::BackupLoading { generation: current }) if current == generation);
+        if matches!(request, DriveRequest::PreviewBackup { .. }) && result.is_err() {
+            if !preview_active {
+                return;
+            }
+            self.dialog = None;
+        }
+        match result {
+            Ok(DriveReply::Accepted(_)) => self.last_poll = Instant::now() - Duration::from_secs(2),
+            Ok(DriveReply::Done(_))
+                if matches!(request, DriveRequest::DiscardBackupReview { .. }) => {}
+            Ok(DriveReply::Done(text)) => self.notice = Some((text, false)),
+            Ok(DriveReply::BackupPreview(preview)) => {
+                if preview_active {
+                    self.dialog = Some(Dialog::BackupReview {
+                        restore_mounted: self.restore_mounted && preview.drive.mount.is_some(),
+                        remember_destination: self.status.backup_directory.as_ref()
+                            != Some(&preview.destination),
+                        preview,
+                    });
+                } else {
+                    self.send(DriveRequest::DiscardBackupReview {
+                        token: preview.token,
+                    });
+                }
+            }
+            Err(error) => self.notice = Some((error, true)),
+            _ => (),
         }
     }
     fn accept_status(&mut self, status: DriveStatus) {
@@ -174,24 +231,21 @@ impl Drives {
         self.dialog.is_some()
     }
     fn backup(&mut self, drive: &Drive, kind: BackupKind) {
-        let restore_mounted =
-            kind == BackupKind::Image && drive.mount.is_some() && self.restore_mounted;
         if self.status.backup_directory.is_none() {
             self.dialog = Some(Dialog::Path {
                 error: None,
                 title: "Choose backup directory".into(),
                 text: String::new(),
                 action: PathAction::Backup {
-                    drive: display_path(&drive.device),
+                    drive: drive.id.clone(),
                     kind,
-                    restore_mounted,
                 },
             });
         } else {
-            self.send(DriveRequest::Backup {
-                drive: display_path(&drive.device),
+            self.send(DriveRequest::PreviewBackup {
+                drive: drive.id.clone(),
                 kind,
-                restore_mounted,
+                destination: None,
             });
         }
     }

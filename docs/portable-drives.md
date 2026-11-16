@@ -43,6 +43,35 @@ DriveBackupDir/
     current-image.json
 ```
 
+Before starting, Files shows the selected partition, exact partition capacity,
+destination and available destination bytes. Image review includes the size of a
+full independent image plus 64 MiB of working headroom. Btrfs sharing and sparse
+zero ranges can reduce actual allocation; shared-image admission requires that
+working headroom and warns when a full independent image would not fit. Other
+image destinations require the full estimate before unmount. File backup admission
+checks working headroom but does not promise a byte-exact allocation estimate.
+Space is checked again at execution; concurrent users can still exhaust it.
+Admission also checks effective-user write/search permissions on the retained
+destination handle and refuses read-only filesystems before requesting unmount.
+
+Reviews retain their selected roots, expire after five minutes, and are limited to
+sixteen pending selections. Replaced directories or changed partition observations
+require a new review. Cancel and Escape release the selection without creating a
+backup or saving a preference. Select an existing destination directory; reviewing
+a missing path does not create it. **Update the backup directory setting for future backups** is
+optional. A failed preference write stops the backup before copying or unmounting.
+Changing preferences later cannot redirect a reviewed job, including a one-time
+destination. Review pins are released before partition unmount.
+Other pending reviews that overlap an explicitly ejected/imaged partition are
+retired as well; they must be reviewed again after the mount changes.
+Late replies from cancelled or superseded file-manager previews are retired without
+replacing a newer selection. Review cleanup does not create a completion notice.
+
+CLI clients can use `clipctl drives preview-backup DRIVE --image --destination DIR`,
+then `clipctl drives start-backup TOKEN` with optional `--restore-mounted` and
+`--remember-destination`. `discard-backup-review TOKEN` releases an unused review.
+The direct `backup` command remains available with execution-time space checks.
+
 Partitions without a PARTUUID use an explicitly disclosed `fs-FILESYSTEM_UUID` bucket. Unidentified media receive a fresh `unidentified-…` bucket for each explicit backup rather than sharing an invented identity.
 
 Each completed version has a checksummed SQLite manifest retaining captured paths, hashes, source metadata and filesystem identity. Publication updates the current-version reference only after the version and manifest are durable. A prepared publication interrupted by a reference or registry failure is reconciled on restart or before the next backup; unresolved recovery issues appear in Drive jobs.
@@ -62,7 +91,7 @@ an originally read-only mount is requested read-only again. A completed backup i
 retained if restoration fails, with a separate warning and recovery details in Jobs.
 The CLI equivalent is `clipctl drives backup DRIVE --image --restore-mounted`.
 
-File and image backups validate their selected destination against managed storage before admission, including when it came from startup configuration. Accepted jobs retain their selected destination and its index exclusion while running; changing preferences does not retarget an accepted image job.
+File and image backups validate their selected destination against managed storage before preparation, including when it came from startup configuration. Prepared jobs retain their selected destination and its index exclusion while running; changing preferences does not retarget a prepared image job. Reviewed requests also retain their selection while queued. Direct `backup` requests resolve configuration when preparation begins.
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
 
@@ -101,6 +130,11 @@ Listing and stat operations work offline. Opening a regular file requires a matc
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
 Catalogs, RAM mirrors, and backup destinations do not automatically enroll in content search. The default catalog budget is 250,000 entries, 256 MiB, depth 64, and ten minutes. The database byte limit is enforced independently of the entry limit (minimum 128 KiB). A budget limit or read failure is disclosed as partial coverage; excluded directories are not represented as known-empty folders. Existing catalogs remain dated versions when policy changes.
+
+Admitted backup destinations remain registered locally even when they are used only
+once or a backup fails. Their index exclusion is published before collection starts,
+and synchronization cannot enroll inside those managed roots after restart. Completed
+versions from older service releases also supply their historical backup roots.
 
 ## Configuration
 

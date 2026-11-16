@@ -30,6 +30,24 @@ pub(super) enum DriveCommand {
         #[arg(long, requires = "image")]
         restore_mounted: bool,
     },
+    /// Review a partition/destination and return a five-minute backup token
+    PreviewBackup {
+        drive: String,
+        #[arg(long)]
+        image: bool,
+        #[arg(long)]
+        destination: Option<PathBuf>,
+    },
+    /// Start the exact reviewed backup without resolving a new destination
+    StartBackup {
+        token: String,
+        #[arg(long)]
+        restore_mounted: bool,
+        #[arg(long)]
+        remember_destination: bool,
+    },
+    /// Release a backup review without starting work or saving preferences
+    DiscardBackupReview { token: String },
     /// Merge a partition/subtree with a folder and keep them synchronized
     Pair {
         drive: String,
@@ -108,6 +126,29 @@ impl DriveCommand {
                     BackupKind::Files
                 },
             },
+            Self::PreviewBackup {
+                drive,
+                image,
+                destination,
+            } => DriveRequest::PreviewBackup {
+                drive,
+                kind: if image {
+                    BackupKind::Image
+                } else {
+                    BackupKind::Files
+                },
+                destination,
+            },
+            Self::StartBackup {
+                token,
+                restore_mounted,
+                remember_destination,
+            } => DriveRequest::StartBackup {
+                token,
+                restore_mounted,
+                remember_destination,
+            },
+            Self::DiscardBackupReview { token } => DriveRequest::DiscardBackupReview { token },
             Self::Pair {
                 drive,
                 local,

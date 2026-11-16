@@ -61,20 +61,20 @@ def click_word(session, shot, word, *, tree=False):
                 break
     if position is None:
         # Rounded small buttons can disappear in full-window segmentation.
-        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (820, 505, 888, 520)]:
+        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (105, 390, 300, 670), (820, 505, 888, 520)]:
             crop = session.output / 'drive-button.png'
             with Image.open(session.output / (shot + '.png')) as screen:
                 region = screen.crop(bounds)
                 region.resize((region.width * 6, region.height * 6)).save(crop)
             data = private.run_checked(['tesseract', str(crop), 'stdout', '--psm', '6', '-c', 'tessedit_create_tsv=1', '-c', 'tessedit_create_txt=0'], env=session.env)
             for item in csv.DictReader(io.StringIO(data), delimiter='\t', quoting=csv.QUOTE_NONE):
-                if item['text'].strip().lower() == word.lower():
+                if item['text'].strip().strip('()[]{}|').lower() == word.lower():
                     position = (bounds[0] + int(item['left']) // 6 + 5, bounds[1] + (int(item['top']) + int(item['height']) // 2) // 6)
                     break
             if position:
                 break
     assert position, (shot, word)
-    session.click(*position)
+    session.click(position[0] + 8, position[1])
 
 
 def drive_menu(session, label):
@@ -86,6 +86,97 @@ def drive_menu(session, label):
         session.observe(shot, ['Portable test drive'])
     right_click(session, shot, 'Portable', tree=True, last=True)
     session.observe(label, ['Back up partition', 'Keep in sync', 'Contents catalog'])
+
+
+def caption(session, shot, bounds):
+    label = session.output / (shot + '-caption-' + str(bounds[1]) + '.png')
+    with Image.open(session.output / (shot + '.png')) as screen:
+        interior = screen.crop(bounds)
+        interior.resize((interior.width * 6, interior.height * 6)).save(label)
+    rendered = private.run_checked(['tesseract', str(label), 'stdout', '--psm', '7'], env=session.env)
+    return ''.join(character for character in rendered.lower() if character.isalpha())
+
+
+def cancel_backup_review(session, shot):
+    # Verify the bordered button's interior instead of accepting its frame as text.
+    x, y = session.word(shot, 'Start', tree=True, required=False) or session.word(shot, 'Start')
+    assert caption(session, shot, (x - 3, y + 43, x + 54, y + 68)) == 'cancel'
+    session.click(x + 20, y + 54)
+    session.observe(shot + '-closed', ['Mounts'])
+
+
+def dismiss_completion_notice(session, shot, title):
+    session.observe(shot, [title])
+    point = session.word(shot, 'Dismiss', required=False) or session.word(shot, 'Dismiss', tree=True, required=False)
+    if point is None:
+        # The status dock height follows its message. Its action stays at the
+        # right, aligned with the first rendered line rather than a fixed y.
+        _, y = session.word(shot, title.split()[0])
+        assert caption(session, shot, (1108, y - 12, 1171, y + 12)) == 'dismiss'
+        session.click(1140, y)
+    else:
+        session.click(point[0] + 8, point[1])
+    session.observe(shot + '-dismissed', ['Mounts'])
+
+
+def backup_review(session, backups):
+    env = session.env
+    session.ocr_regions = [('drive-backup-menu-ocr.png', (306, 450, 475, 775))] + getattr(session, 'ocr_regions', [])
+    drive_menu(session, 'backup-menu')
+    click_word(session, 'backup-menu', 'Back', tree=True)
+    session.observe('backup-actions', ['As files', 'As partition image'], preserve_pointer=True)
+    click_word(session, 'backup-actions', 'As')
+    session.observe('backup-directory', ['Choose backup directory', 'Use current folder'])
+    x, y = session.word('backup-directory', 'Use', tree=True)
+    session.click(x + 70, y - 27)
+    type_text(session, str(backups))
+    click_word(session, 'backup-directory', 'Continue')
+    session.observe('backup-review-cancel', ['Review partition backup', 'Available', 'Start backup'])
+    assert status(env)['backup_directory'] is None
+    assert not status(env)['backups']
+    cancel_backup_review(session, 'backup-review-cancel')
+    assert status(env)['backup_directory'] is None
+    assert not status(env)['backups']
+    drive_menu(session, 'backup-retry-menu')
+    click_word(session, 'backup-retry-menu', 'Back', tree=True)
+    session.observe('backup-retry-actions', ['As files', 'As partition image'], preserve_pointer=True)
+    click_word(session, 'backup-retry-actions', 'As')
+    session.observe('backup-retry-directory', ['Choose backup directory', 'Use current folder'])
+    x, y = session.word('backup-retry-directory', 'Use', tree=True)
+    session.click(x + 70, y - 27)
+    type_text(session, str(backups))
+    click_word(session, 'backup-retry-directory', 'Continue')
+    session.observe('backup-review-start', ['Review partition backup', 'Available', 'Start backup'])
+    click_word(session, 'backup-review-start', 'Start')
+    wait_for(lambda: bool(status(env)['backups']), 'completed file backup through lazy directory prompt')
+    wait_for(lambda: any(job['title'] == 'Back up files' and job['finished'] is not None and job['state'] == 'complete' for job in status(env)['operations']), 'terminal file backup completion')
+    wait_for(lambda: status(env)['backup_directory'] == str(backups), 'published backup directory preference')
+    dismiss_completion_notice(session, 'backup-completion-notice', 'Back up files')
+    saved = status(env)['backups'][0]
+    assert Path(status(env)['backup_directory']) == backups
+
+    drive_menu(session, 'image-review-menu')
+    click_word(session, 'image-review-menu', 'Back', tree=True)
+    session.observe('image-review-actions', ['As files', 'As partition image'], preserve_pointer=True)
+    x, y = session.word('image-review-actions', 'As', required=False) or session.word('image-review-actions', 'As', tree=True)
+    # Full-window OCR merges the adjacent menus. Verify this fixture's image action
+    # separately; its capacity label and mount checkbox occupy the intervening rows.
+    assert caption(session, 'image-review-actions', (x - 1, y + 128, x + 143, y + 156)) == 'aspartitionimage'
+    session.click(x + 50, y + 142)
+    session.observe('image-review-cancel', ['Full independent image estimate', 'Mount again after imaging', 'Start backup'])
+    assert len(status(env)['backups']) == 1
+    cancel_backup_review(session, 'image-review-cancel')
+    assert len(status(env)['backups']) == 1
+
+    return saved
+
+
+def exercise_backup_review(session, root):
+    session.observe('initial', ['Portable test drive', 'portable', 'local'])
+    saved = backup_review(session, root / 'backups')
+    assert (Path(saved['path']) / 'readme.txt').read_text() == 'original portable contents\n'
+    assert not status(session.env)['ram']
+    assert not status(session.env)['catalogs']
 
 
 def exercise(session, root):
@@ -100,6 +191,7 @@ def exercise(session, root):
         session.observe('ram-action', ['Copy to RAM'])
         click_word(session, 'ram-action', 'RAM', tree=True)
         wait_for(lambda: any(item['ready'] for item in status(env)['ram']), 'RAM mirror readiness')
+        dismiss_completion_notice(session, 'ram-completion-notice', 'Copy to RAM')
         ram = next(item for item in status(env)['ram'] if item['ready'])
         ram_path = Path(ram['path'])
         assert (ram_path / 'readme.txt').read_text() == 'original portable contents\n'
@@ -117,20 +209,12 @@ def exercise(session, root):
         session.observe('sync-destination', ['Use current folder'])
         click_word(session, 'sync-destination', 'Continue')
         wait_for(lambda: (portable / 'local-only.txt').exists() and (local / 'readme.txt').exists(), 'initial union through UI enrollment')
+        wait_for(lambda: all(pair['last_success'] is not None for pair in status(env)['pairs']), 'completed initial reconciliation')
+        dismiss_completion_notice(session, 'sync-completion-notice', 'Enroll folder sync')
+        session.observe('union-complete', ['local-only.txt', 'readme.txt', 'many'])
 
-        drive_menu(session, 'backup-menu')
-        click_word(session, 'backup-menu', 'Back', tree=True)
-        session.observe('backup-actions', ['As files', 'As partition image'], preserve_pointer=True)
-        click_word(session, 'backup-actions', 'As')
-        session.observe('backup-directory', ['Choose backup directory', 'Use current folder'])
-        x, y = session.word('backup-directory', 'Use', tree=True)
-        session.click(x + 70, y - 27)
-        type_text(session, str(backups))
-        click_word(session, 'backup-directory', 'Continue')
-        wait_for(lambda: bool(status(env)['backups']), 'completed file backup through lazy directory prompt')
-        saved = status(env)['backups'][0]
+        saved = backup_review(session, backups)
         assert (Path(saved['path']) / 'readme.txt').read_text() == 'online RAM edit\n'
-        assert Path(status(env)['backup_directory']) == backups
 
         session.address(portable)
         session.observe('portable-folder', ['many', 'readme.txt'])
@@ -142,6 +226,7 @@ def exercise(session, root):
         click_word(session, 'folder-policy', 'Allow')
         click_word(session, 'folder-policy', 'Save')
         wait_for(lambda: any(rule['relative'] == 'many' and not rule['catalog'] and not rule['index'] for rule in status(env)['rules']), 'independent subtree policy')
+        dismiss_completion_notice(session, 'policy-completion-notice', 'Drive settings')
         drive_menu(session, 'catalog-menu')
         click_word(session, 'catalog-menu', 'Contents', tree=True)
         session.observe('catalog-actions', ['Save / update'], preserve_pointer=True)
@@ -173,8 +258,7 @@ def exercise(session, root):
                 for folder in [portable, ram_path]:
                     assert (folder / conflict['portable']).read_text() == 'offline portable edit\n'
                     assert (folder / conflict['local']).read_text() == 'offline RAM edit\n'
-        session.observe('reconnected', ['Drive sync conflict'])
-        click_word(session, 'reconnected', 'Dismiss')
+        dismiss_completion_notice(session, 'reconnected', 'Drive sync conflict')
         session.observe('conflict-jobs', ['Jobs'])
         click_word(session, 'conflict-jobs', 'Jobs', tree=True)
         session.observe('conflict-review', ['Drive operations and conflicts', 'Conflict', 'preserved'])
@@ -194,7 +278,7 @@ def exercise(session, root):
 
 def main():
     repository = Path(__file__).resolve().parent.parent
-    args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager')
+    args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=lambda parser: parser.add_argument('--backup-review-only', action='store_true'))
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
         (root / name).mkdir()
@@ -208,8 +292,9 @@ def main():
         env['LITTLE_CLIP_DRIVE_MOUNT_HELPER'] = str(repository / 'target/debug/clip-drive-mount')
         children.start('drive-fixture', [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')], env=env, cwd=output, log_path=output / 'drive-fixture.log')
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
-    return run_application_acceptance(args, output, root, exercise,
-        'Drive context menus, RAM writeback, union enrollment, lazy backups, subtree exclusions, offline FUSE and preserved conflicts', prepare_environment=prepare)
+    scenario = exercise_backup_review if args.backup_review_only else exercise
+    scope = 'Backup review: lazy selection, cancellation, file backup publication and image review' if args.backup_review_only else 'Drive context menus, RAM writeback, union enrollment, lazy backups, subtree exclusions, offline FUSE and preserved conflicts'
+    return run_application_acceptance(args, output, root, scenario, scope, prepare_environment=prepare)
 
 
 if __name__ == '__main__':

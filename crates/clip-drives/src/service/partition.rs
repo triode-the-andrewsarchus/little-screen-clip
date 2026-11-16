@@ -181,16 +181,8 @@ impl Pending {
 }
 
 impl Owner {
-    pub(super) fn start_partition(&mut self, envelope: Envelope) {
+    pub(super) fn start_partition(&mut self, mut envelope: Envelope) {
         let image = matches!(envelope.request, DriveRequest::Backup { .. });
-        if image && self.config.backup_directory.is_none() {
-            self.finish_operation(
-                &envelope.id,
-                &envelope.cancel,
-                Err("Choose a DriveBackupDir before starting a backup".into()),
-            );
-            return;
-        }
         if self.partition.is_some() || (image && self.background.is_some()) {
             self.defer_operation(envelope);
             return;
@@ -209,6 +201,12 @@ impl Owner {
                 return;
             }
         };
+        if let Err(error) = self.admit_backup_destination(&envelope, destination.as_deref()) {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+            return;
+        }
+        // Only the destination and metadata scheduling claims survive unmount.
+        drop(envelope.review.take());
         let initialized = (|| -> Result<()> {
             let mut operation = self
                 .db
@@ -283,13 +281,23 @@ impl Owner {
         let device_source = image
             .then(|| crate::device::Source::capture(&drive).map(Arc::new))
             .transpose()?;
-        let source = drive
-            .mount
-            .as_ref()
-            .map(|path| Root::open(path))
-            .transpose()?;
+        let source = match &envelope.review {
+            Some(review) => {
+                review.validate(&drive)?;
+                review.source.clone()
+            }
+            None => drive
+                .mount
+                .as_ref()
+                .map(|path| Root::open(path).map(Arc::new))
+                .transpose()?,
+        };
         let destination = image
-            .then(|| self.backup_destination(source.as_ref()))
+            .then(|| {
+                let root = self.reviewed_backup_destination(envelope, source.as_deref())?;
+                preflight::space(&root, &drive, BackupKind::Image)?;
+                Ok::<_, Error>(root)
+            })
             .transpose()?;
         let mut plans = Vec::new();
         if source.is_some() {
@@ -300,7 +308,7 @@ impl Owner {
             }
         }
         let mut claims = Vec::new();
-        claims.extend(source.as_ref().map(Root::scope));
+        claims.extend(source.as_ref().map(|root| root.scope()));
         claims.extend(destination.as_ref().map(|root| root.scope()));
         for plan in &plans {
             claims.extend(plan.scopes());
@@ -472,6 +480,16 @@ impl Owner {
     fn retire_partition(&mut self, drive: &Drive) -> Result<()> {
         if let Some(path) = &drive.mount {
             let scope = Root::open(path)?.scope();
+            self.previews
+                .lock()
+                .map_err(|_| "Backup review storage unavailable")?
+                .retain(|_, review| {
+                    !scope.overlap(&review.destination.scope())
+                        && !review
+                            .source
+                            .as_ref()
+                            .is_some_and(|root| scope.overlap(&root.scope()))
+                });
             self.sync_roots
                 .retain(|_, (a, b)| !scope.overlap(&a.scope()) && !scope.overlap(&b.scope()));
             self.unidentified_ram
