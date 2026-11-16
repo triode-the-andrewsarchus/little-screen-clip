@@ -175,8 +175,10 @@ fn drive_index_policy_snapshots_track_replacement_failure_and_removal() {
 
 #[test]
 fn a_policy_poll_is_accepted_even_when_drive_status_ipc_fails() {
-    let mut drives = Drives::default();
-    drives.last_poll = Instant::now();
+    let mut drives = Drives {
+        last_poll: Instant::now(),
+        ..Default::default()
+    };
     let policy = Arc::new(IndexPolicy {
         excluded: vec!["/owned/excluded".into()],
     });
