@@ -1,5 +1,6 @@
 //! Daemon-owned portable media synchronization, backup and offline catalog services.
 mod sync;
+mod catalog;
 mod backup;
 mod discovery;
 mod root;
@@ -7,6 +8,7 @@ mod scan;
 mod store;
 
 pub use discovery::discover;
+pub use catalog::mount_catalog;
 pub use little_clip_core::drives::*;
 
 #[derive(Debug, thiserror::Error)]

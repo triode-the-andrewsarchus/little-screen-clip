@@ -26,6 +26,8 @@ pub(crate) struct Entry {
     pub device: u64,
     pub inode: u64,
     pub hash: Option<String>,
+    #[serde(default)]
+    pub warning: Option<String>,
     #[serde(with = "little_clip_core::path_serde::optional")]
     pub link: Option<PathBuf>,
 }
@@ -71,6 +73,65 @@ impl Frame {
         })
     }
 }
+pub(crate) fn observe(
+    root: &Root,
+    relative: &Path,
+    hashes: bool,
+    cancel: &AtomicBool,
+) -> Result<Option<Entry>> {
+    let Some(metadata) = root.metadata(relative)? else {
+        return Ok(None);
+    };
+    let mut entry = Entry {
+        path: relative.into(),
+        kind: if metadata.is_dir() {
+            "directory"
+        } else if metadata.is_file() {
+            "file"
+        } else if metadata.file_type().is_symlink() {
+            "symlink"
+        } else {
+            "special"
+        }
+        .into(),
+        size: metadata.len(),
+        modified: metadata.mtime(),
+        nanos: metadata.mtime_nsec(),
+        mode: metadata.mode(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        hash: None,
+        warning: None,
+        link: None,
+    };
+    if metadata.is_file() && hashes {
+        entry.hash = Some(root.digest(relative, cancel)?);
+    }
+    if metadata.file_type().is_symlink() {
+        let (_parent, path) = root.parent(relative, false)?;
+        entry.link = Some(fs::read_link(path)?);
+    }
+    Ok(Some(entry))
+}
+fn unavailable(path: PathBuf, error: String) -> Entry {
+    Entry {
+        path,
+        kind: "unavailable".into(),
+        size: 0,
+        modified: 0,
+        nanos: 0,
+        mode: 0,
+        device: 0,
+        inode: 0,
+        hash: None,
+        warning: Some(error),
+        link: None,
+    }
+}
+pub(crate) fn put(db: &Store, id: &str, entry: &Entry) -> Result<()> {
+    db.0.execute("INSERT INTO entries(scan,path,parent,name,json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(scan,path) DO UPDATE SET json=excluded.json",params![id,entry.path.as_os_str().as_bytes(),entry.path.parent().unwrap_or(Path::new("")).as_os_str().as_bytes(),entry.path.file_name().unwrap_or_default().as_bytes(),serde_json::to_string(entry)?])?;
+    Ok(())
+}
 pub(crate) fn scan(
     db: &Store,
     root: &Root,
@@ -85,96 +146,106 @@ pub(crate) fn scan(
     let mut count = 0;
     let mut bytes = 0_u64;
     let mut complete = true;
-    let mut message = String::new();
+    let mut messages = Vec::new();
+    let mut transaction = db.0.unchecked_transaction()?;
     while let Some(frame) = stack.last_mut() {
         cancelled(cancel)?;
-        if count >= limits.entries || bytes >= limits.bytes || started.elapsed() >= limits.timeout {
-            complete = false;
-            message = "Partial: catalog entry, byte or time budget reached".into();
-            break;
-        }
         let Some(child) = frame.reader.next() else {
             stack.pop();
             continue;
         };
-        let child = child?;
+        if count >= limits.entries || bytes >= limits.bytes || started.elapsed() >= limits.timeout {
+            complete = false;
+            messages.push("catalog entry, byte or time budget reached".to_string());
+            break;
+        }
+        let child = match child {
+            Ok(child) => child,
+            Err(e) => {
+                complete = false;
+                messages.push(format!("directory enumeration: {e}"));
+                stack.pop();
+                continue;
+            }
+        };
         let relative = frame.relative.join(child.file_name());
         let excluded = limits.exclusions.iter().any(|p| relative.starts_with(p));
-        let metadata = fs::symlink_metadata(child.path())?;
-        let mut entry = Entry {
-            path: relative.clone(),
-            kind: if metadata.is_dir() {
-                "directory"
-            } else if metadata.is_file() {
-                "file"
-            } else if metadata.file_type().is_symlink() {
-                "symlink"
-            } else {
-                "special"
+        let mut entry = match observe(root, &relative, limits.hashes && !excluded, cancel) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                complete = false;
+                unavailable(
+                    relative.clone(),
+                    "Entry disappeared during collection".into(),
+                )
             }
-            .into(),
-            size: metadata.len(),
-            modified: metadata.mtime(),
-            nanos: metadata.mtime_nsec(),
-            mode: metadata.mode(),
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            hash: None,
-            link: None,
+            Err(e) => {
+                cancelled(cancel)?;
+                complete = false;
+                unavailable(relative.clone(), e.to_string())
+            }
         };
         if excluded {
             entry.kind = "excluded".into();
-        } else if metadata.file_type().is_symlink() {
-            entry.link = Some(fs::read_link(child.path())?);
-        } else if metadata.is_file() && limits.hashes {
-            entry.hash = Some(root.digest(&relative, cancel)?);
-        } else if !metadata.is_dir() && !metadata.is_file() {
+        }
+        if entry.kind == "special" {
             complete = false;
-            message = "Partial: special files were not read".into();
+            entry.warning = Some("Special file was not read".into());
         }
         if entry.kind == "directory" {
             if stack.len() >= limits.depth {
                 entry.kind = "excluded".into();
                 complete = false;
-                message = "Partial: directory depth limit".into();
+                entry.warning = Some("Directory depth limit".into());
             } else {
-                stack.push(Frame::new(root, relative.clone())?);
+                match Frame::new(root, relative.clone()) {
+                    Ok(frame) => stack.push(frame),
+                    Err(e) => {
+                        complete = false;
+                        entry.warning = Some(e.to_string());
+                    }
+                }
             }
         }
         let json = serde_json::to_string(&entry)?;
         bytes = bytes
             .saturating_add((json.len() + relative.as_os_str().as_bytes().len() * 3 + 256) as u64);
-        let parent = relative
-            .parent()
-            .unwrap_or(Path::new(""))
-            .as_os_str()
-            .as_bytes();
-        db.0.execute(
-            "INSERT INTO entries VALUES(?1,?2,?3,?4,?5)",
-            params![
-                id,
-                relative.as_os_str().as_bytes(),
-                parent,
-                relative.file_name().unwrap_or_default().as_bytes(),
-                json
-            ],
-        )?;
+        if bytes > limits.bytes {
+            complete = false;
+            messages.push("catalog byte budget reached".into());
+            break;
+        }
+        if let Some(warning) = &entry.warning {
+            if messages.len() < 8 {
+                messages.push(format!("{}: {warning}", relative.display()));
+            }
+        }
+        put(db, id, &entry)?;
         count += 1;
         if count % 128 == 0 {
+            transaction.commit()?;
             root.validate()?;
             progress(count, bytes);
+            transaction = db.0.unchecked_transaction()?;
         }
     }
+    transaction.commit()?;
     root.validate()?;
     progress(count, bytes);
-    if message.is_empty() {
-        message = if limits.exclusions.is_empty() {
-            "Complete"
-        } else {
-            "Complete with configured exclusions"
-        }
-        .into();
-    }
+    let message = if !complete {
+        format!(
+            "Partial: {}",
+            if messages.is_empty() {
+                "incomplete tree".into()
+            } else {
+                messages.join("; ")
+            }
+        )
+    } else if limits.exclusions.is_empty() {
+        "Complete".into()
+    } else {
+        "Complete with configured exclusions".into()
+    };
     Ok(Coverage {
         count,
         complete,

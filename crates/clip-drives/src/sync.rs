@@ -54,6 +54,7 @@ pub(crate) fn install(
             &entry.path,
             target,
             existing.and_then(|e| e.hash.as_deref()),
+            entry.hash.as_deref(),
             cancel,
             delta,
         ),
@@ -225,7 +226,9 @@ impl Reconcile<'_> {
         let ah = a.as_ref().map(signature).transpose()?;
         let bh = b.as_ref().map(signature).transpose()?;
         if ah == bh {
-            save_baseline(self.db, &self.pair.id, path, ah.as_deref())?;
+            if old != ah {
+                save_baseline(self.db, &self.pair.id, path, ah.as_deref())?;
+            }
             return Ok(());
         }
         let direction = match (&a, &b) {
@@ -348,6 +351,7 @@ mod tests {
     use super::*;
     fn pair() -> SyncPair {
         SyncPair {
+            local_identity: None,
             id: "pair".into(),
             drive: "drive".into(),
             evidence: "test".into(),

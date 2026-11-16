@@ -7,7 +7,6 @@ use crate::{
     sync,
 };
 use little_clip_core::{kernel_interface, process::CommandRequest};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -20,19 +19,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Backup {
-    pub id: String,
-    pub drive: String,
-    pub evidence: String,
-    pub kind: BackupKind,
-    #[serde(with = "little_clip_core::path_serde")]
-    pub path: PathBuf,
-    pub created: u64,
-    pub incremental: bool,
-    pub bytes_written: u64,
-    pub source_size: u64,
-}
+pub(crate) use crate::DriveBackup as Backup;
 fn btrfs(root: &Root) -> Result<bool> {
     let pin = kernel_interface::pin_content_directory(&root.path)?;
     Ok(rustix::fs::fstatfs(&pin)?.f_type as u32 == 0x9123683e)
@@ -150,6 +137,7 @@ pub(crate) fn files(
         }
         for entry in batch {
             cancelled(cancel)?;
+            prepare_entry(db, &target, &entry, cancel)?;
             let existing = target.metadata(&entry.path)?;
             if entry.kind == "directory" {
                 target.ensure_directory(&entry.path)?;
@@ -184,17 +172,7 @@ pub(crate) fn files(
     }
     source.validate()?;
     target.validate()?;
-    for entry in reverse_entries(db, &scan_id)? {
-        if entry.kind == "directory" {
-            let held = target.directory(&entry.path, false)?;
-            let file = File::open(anchor(&held))?;
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;
-            if let Some(time) = time(entry.modified, entry.nanos) {
-                file.set_times(fs::FileTimes::new().set_modified(time))?;
-            }
-        }
-    }
+    finish_directories(db, &scan_id, &target, cancel)?;
     if incremental {
         // Property arguments follow the path, unlike subvolume commands.
         let (request, fd) = CommandRequest::new("btrfs")
@@ -221,11 +199,15 @@ pub(crate) fn files(
         drive: drive.id.clone(),
         evidence: drive.evidence.clone(),
         kind: BackupKind::Files,
-        path: parent.path.join(completed),
+        path: parent.path.join(&completed),
         created: now(),
         incremental,
         bytes_written: written,
         source_size: drive.capacity,
+        mount: None,
+        loop_object: None,
+        revision: None,
+        identity: Some(Root::open(&parent.path.join(&completed))?.storage_identity()?),
     };
     db.put("backup", &id, &backup)?;
     db.clear_scan(&scan_id)?;
@@ -252,6 +234,7 @@ fn snapshot_entry(root: &Root, path: &Path, cancel: &AtomicBool) -> Result<scan:
         mode: m.mode(),
         device: m.dev(),
         inode: m.ino(),
+        warning: None,
         hash: if m.is_file() {
             Some(root.digest(path, cancel)?)
         } else {
@@ -265,17 +248,71 @@ fn snapshot_entry(root: &Root, path: &Path, cancel: &AtomicBool) -> Result<scan:
         },
     })
 }
-fn reverse_entries(db: &Store, id: &str) -> Result<Vec<scan::Entry>> {
-    // Only directory metadata is retained here, bounded independently from file count.
-    let mut statement=db.0.prepare("SELECT json FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='directory' ORDER BY path DESC LIMIT 250001")?;
-    let result = statement
-        .query_map([id], |r| r.get::<_, String>(0))?
-        .map(|j| Ok(serde_json::from_str(&j?)?))
-        .collect::<Result<Vec<_>>>()?;
-    if result.len() > 250000 {
-        return Err("Directory metadata budget exceeded".into());
+fn finish_directories(db: &Store, id: &str, target: &Root, cancel: &AtomicBool) -> Result<()> {
+    let mut statement=db.0.prepare("SELECT json FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='directory' ORDER BY path DESC")?;
+    let rows = statement.query_map([id], |r| r.get::<_, String>(0))?;
+    for row in rows {
+        cancelled(cancel)?;
+        let entry: scan::Entry = serde_json::from_str(&row?)?;
+        let held = target.directory(&entry.path, false)?;
+        let file = File::open(anchor(&held))?;
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;
+        if let Some(time) = time(entry.modified, entry.nanos) {
+            file.set_times(fs::FileTimes::new().set_modified(time))?;
+        }
     }
-    Ok(result)
+    Ok(())
+}
+fn prepare_entry(
+    db: &Store,
+    target: &Root,
+    entry: &scan::Entry,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let Some(metadata) = target.metadata(&entry.path)? else {
+        return Ok(());
+    };
+    let compatible = match entry.kind.as_str() {
+        "file" => metadata.is_file(),
+        "directory" => metadata.is_dir(),
+        "symlink" => metadata.file_type().is_symlink(),
+        _ => false,
+    };
+    if !compatible {
+        let (parent, path) = target.parent(&entry.path, false)?;
+        if metadata.is_dir() {
+            let old = Root::open(&path)?;
+            let coverage = scan::scan(
+                db,
+                &old,
+                "backup-type-check",
+                &Limits {
+                    hashes: false,
+                    ..Default::default()
+                },
+                cancel,
+                |_, _| {},
+            )?;
+            if !coverage.complete {
+                return Err(
+                    "Cannot validate old backup directory before replacing its type".into(),
+                );
+            }
+            old.validate()?;
+            fs::remove_dir_all(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
+        File::open(anchor(&parent))?.sync_all()?;
+    } else if metadata.is_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let held = target.directory(&entry.path, false)?;
+        File::open(anchor(&held))?.set_permissions(fs::Permissions::from_mode(
+            metadata.permissions().mode() | 0o700,
+        ))?;
+    }
+    Ok(())
 }
 fn remove_obsolete(db: &Store, source: &str, target: &Root, cancel: &AtomicBool) -> Result<()> {
     let target_id = format!("{source}:old");
@@ -431,11 +468,17 @@ pub(crate) fn image_from(
         drive: drive.id.clone(),
         evidence: drive.evidence.clone(),
         kind: BackupKind::Image,
-        path,
+        path: path.clone(),
         created: now(),
         incremental: clone,
         bytes_written: written,
         source_size: drive.capacity,
+        mount: None,
+        loop_object: None,
+        revision: Some(little_clip_core::file_source::FileSource::capture(&path)?.revision_key()),
+        identity: Some(crate::StorageIdentity::pinned(&kernel_interface::pin(
+            &path, false,
+        )?)?),
     };
     db.put("backup", &id, &backup)?;
     Ok(backup)
@@ -630,4 +673,202 @@ mod btrfs_tests {
         assert!(output.status.success());
         eprintln!("{}", String::from_utf8_lossy(&output.stdout));
     }
+}
+
+pub(crate) fn mount_image(db: &Store, id: &str) -> Result<String> {
+    let mut backup: Backup = db.get("backup", id)?.ok_or("Unknown backup version")?;
+    if backup.kind != BackupKind::Image {
+        return Err("This backup is a file tree, not an image".into());
+    }
+    if backup.mount.is_some() || backup.loop_object.is_some() {
+        return Err("Image already has a loop mapping; unmount it before retrying".into());
+    }
+    let file = kernel_interface::open_content(&backup.path, false)?;
+    let source = little_clip_core::file_source::FileSource::capture_file(&file)?;
+    verify_image(&backup, &file)?;
+    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let manager = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.UDisks2",
+        "/org/freedesktop/UDisks2",
+        "org.freedesktop.UDisks2.Manager",
+    )
+    .map_err(|e| e.to_string())?;
+    let mut options = HashMap::new();
+    options.insert("read-only", zbus::zvariant::Value::from(true));
+    let object: zbus::zvariant::OwnedObjectPath = manager
+        .call("LoopSetup", &(zbus::zvariant::Fd::from(&file), options))
+        .map_err(|e| e.to_string())?;
+    backup.loop_object = Some(object.to_string());
+    db.put("backup", id, &backup)?;
+    let filesystem = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.UDisks2",
+        object.as_str(),
+        "org.freedesktop.UDisks2.Filesystem",
+    )
+    .map_err(|e| e.to_string())?;
+    let mut options = HashMap::new();
+    options.insert(
+        "options",
+        zbus::zvariant::Value::from("ro,nosuid,nodev,noexec"),
+    );
+    let result = (|| -> Result<String> {
+        let mounted: String = filesystem
+            .call("Mount", &(options,))
+            .map_err(|e| e.to_string())?;
+        let pin = kernel_interface::pin_content_directory(Path::new(&mounted))?;
+        if !rustix::fs::fstatvfs(&pin)?
+            .f_flag
+            .contains(rustix::fs::StatVfsMountFlags::RDONLY)
+        {
+            return Err("Image mount did not become read-only".into());
+        }
+        source.check_file(&file)?;
+        backup.mount = Some(mounted.clone().into());
+        db.put("backup", id, &backup)?;
+        Ok(format!("Image mounted read-only at {mounted}"))
+    })();
+    if result.is_err() {
+        let _ = unmount_image(db, id);
+    }
+    result
+}
+pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
+    let mut backup: Backup = db.get("backup", id)?.ok_or("Unknown backup version")?;
+    let object = backup
+        .loop_object
+        .clone()
+        .ok_or("Image has no managed loop mapping")?;
+    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    if backup.mount.is_some() {
+        let filesystem = zbus::blocking::Proxy::new(
+            &connection,
+            "org.freedesktop.UDisks2",
+            object.as_str(),
+            "org.freedesktop.UDisks2.Filesystem",
+        )
+        .map_err(|e| e.to_string())?;
+        filesystem
+            .call::<_, _, ()>("Unmount", &(options,))
+            .map_err(|e| e.to_string())?;
+        backup.mount = None;
+        db.put("backup", id, &backup)?;
+    }
+    let proxy = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.UDisks2",
+        object.as_str(),
+        "org.freedesktop.UDisks2.Loop",
+    )
+    .map_err(|e| e.to_string())?;
+    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    proxy
+        .call::<_, _, ()>("Delete", &(options,))
+        .map_err(|e| e.to_string())?;
+    backup.loop_object = None;
+    db.put("backup", id, &backup)?;
+    Ok("Read-only backup image unmounted".into())
+}
+pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -> Result<String> {
+    if keep == 0 {
+        return Err("Retain at least one completed backup version".into());
+    }
+    let catalogs: Vec<crate::Catalog> = db.list("catalog", 0, 1000)?;
+    if catalogs
+        .iter()
+        .any(|c| c.drive == drive && c.mount.is_some())
+    {
+        return Err(
+            "Unmount this drive's catalogs before pruning potential content providers".into(),
+        );
+    }
+    let mut versions = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page: Vec<Backup> = db.list("backup", offset, 128)?;
+        if page.is_empty() {
+            break;
+        }
+        versions.extend(page.into_iter().filter(|v| v.drive == drive));
+        offset += 128;
+    }
+    versions.sort_by_key(|v| std::cmp::Reverse(v.created));
+    let mut files = 0;
+    let mut images = 0;
+    let mut removed = 0;
+    for version in versions {
+        let count = if version.kind == BackupKind::Files {
+            &mut files
+        } else {
+            &mut images
+        };
+        *count += 1;
+        if *count <= keep {
+            continue;
+        }
+        cancelled(cancel)?;
+        if version.mount.is_some() || version.loop_object.is_some() {
+            continue;
+        }
+        let parent = Root::open(version.path.parent().ok_or("Missing backup parent")?)?;
+        let name = version.path.file_name().ok_or("Missing backup name")?;
+        if !name
+            .as_encoded_bytes()
+            .windows(version.id.len())
+            .any(|w| w == version.id.as_bytes())
+        {
+            return Err("Backup version path no longer matches its recorded identity".into());
+        }
+        if version.kind == BackupKind::Image {
+            let file = kernel_interface::open_content(&version.path, false)?;
+            verify_image(&version, &file)?;
+            let (_pin, path) = parent.parent(Path::new(name), false)?;
+            fs::remove_file(path)?;
+        } else {
+            let root = Root::open(&version.path)?;
+            if version.identity.as_ref() != Some(&root.storage_identity()?) {
+                return Err("Backup directory identity changed; refusing prune".into());
+            }
+            let coverage = scan::scan(
+                db,
+                &root,
+                "prune-check",
+                &Limits {
+                    hashes: false,
+                    ..Default::default()
+                },
+                cancel,
+                |_, _| {},
+            )?;
+            if !coverage.complete {
+                return Err("Cannot validate backup tree for pruning".into());
+            }
+            root.validate()?;
+            if btrfs(&root)? {
+                let pin = kernel_interface::pin_content_directory(&parent.path)?;
+                command(&["subvolume", "delete"], &pin, &[name])?;
+            } else {
+                fs::remove_dir_all(&root.path)?;
+            }
+        }
+        db.remove("backup", &version.id)?;
+        removed += 1;
+    }
+    Ok(format!("Pruned {removed} old completed backup versions"))
+}
+
+fn verify_image(backup: &Backup, file: &File) -> Result<()> {
+    let source = little_clip_core::file_source::FileSource::capture_file(file)?;
+    let actual = source.revision_key();
+    if backup.identity.as_ref() != Some(&crate::StorageIdentity::pinned(file)?)
+        || backup
+            .revision
+            .as_ref()
+            .is_none_or(|old| old.get(8..) != actual.get(8..))
+    {
+        return Err("Backup image identity or revision changed".into());
+    }
+    Ok(())
 }

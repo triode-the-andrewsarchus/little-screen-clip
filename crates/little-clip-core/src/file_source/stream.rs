@@ -27,6 +27,9 @@ pub fn copy_checked(
     delta: bool,
     mut progress: impl FnMut(u64),
 ) -> Result<CopyStats, String> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Copy cancelled".into());
+    }
     let source = FileSource::capture_file(input)?;
     let size = input.metadata().map_err(|e| e.to_string())?.len();
     input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;

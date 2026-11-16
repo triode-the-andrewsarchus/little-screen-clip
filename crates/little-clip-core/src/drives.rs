@@ -16,6 +16,8 @@ pub struct DriveConfig {
     pub catalog_max_depth: usize,
     pub catalog_timeout_seconds: u64,
     pub sync_interval_seconds: u64,
+    /// None retains completed versions until an explicit pruning request.
+    pub backup_keep_versions: Option<usize>,
 }
 impl Default for DriveConfig {
     fn default() -> Self {
@@ -29,6 +31,7 @@ impl Default for DriveConfig {
             catalog_max_depth: 64,
             catalog_timeout_seconds: 600,
             sync_interval_seconds: 30,
+            backup_keep_versions: None,
         }
     }
 }
@@ -61,6 +64,21 @@ pub enum BackupKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DriveRequest {
+    Eject {
+        drive: String,
+    },
+    MountImage {
+        backup: String,
+    },
+    UnmountImage {
+        backup: String,
+    },
+    PruneBackups {
+        drive: String,
+    },
+    Configure {
+        config: DriveConfig,
+    },
     Status {
         offset: usize,
     },
@@ -138,6 +156,7 @@ pub enum DriveReply {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DriveStatus {
+    pub config: DriveConfig,
     pub drives: Vec<Drive>,
     pub pairs: Vec<SyncPair>,
     pub ram: Vec<RamSession>,
@@ -145,6 +164,7 @@ pub struct DriveStatus {
     pub catalogs: Vec<Catalog>,
     pub conflicts: Vec<DriveConflict>,
     pub rules: Vec<DriveRule>,
+    pub backups: Vec<DriveBackup>,
     #[serde(with = "crate::path_serde::optional")]
     pub backup_directory: Option<PathBuf>,
     pub ram_unavailable: Option<String>,
@@ -154,6 +174,8 @@ pub struct DriveStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncPair {
+    #[serde(default)]
+    pub local_identity: Option<StorageIdentity>,
     pub id: String,
     pub drive: String,
     pub evidence: String,
@@ -170,6 +192,8 @@ pub struct SyncPair {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RamSession {
+    /// Captured RAM directory identity; replacements cannot authorize discard.
+    pub identity: crate::kernel_interface::MountIdentity,
     pub id: String,
     pub drive: String,
     #[serde(with = "crate::path_serde")]
@@ -253,5 +277,128 @@ mod tests {
             config.drives.ram_capacity_limit,
             defaults.ram_capacity_limit
         );
+    }
+}
+
+/// Returns the local persistent drive-service directory, independently from launch cwd.
+pub fn state_directory() -> PathBuf {
+    std::env::var_os("LITTLE_CLIP_DRIVE_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+                })
+                .join("little-screen-clip/drives")
+        })
+}
+
+/// A daemon-published exclusion list; these rules do not affect backups or sync.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IndexPolicy {
+    #[serde(with = "crate::path_serde::list")]
+    pub excluded: Vec<PathBuf>,
+}
+
+/// Checks the bounded local drive-policy registry on background search workers.
+///
+/// An existing unreadable or malformed registry fails closed. This policy only
+/// excludes work and never authorizes payload access or enrolls a search root.
+pub fn index_excluded(path: &std::path::Path) -> bool {
+    use std::{
+        os::unix::fs::MetadataExt,
+        sync::{LazyLock, Mutex},
+    };
+    type Cache = Option<(PathBuf, [u64; 5], Option<IndexPolicy>)>;
+    static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(None));
+    let registry = state_directory().join("index-policy.json");
+    let metadata = match std::fs::symlink_metadata(&registry) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    let signature = [
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime() as u64,
+        metadata.mtime_nsec() as u64,
+    ];
+    let Ok(mut cache) = CACHE.lock() else {
+        return true;
+    };
+    if cache
+        .as_ref()
+        .is_none_or(|(p, s, _)| *p != registry || *s != signature)
+    {
+        let value = crate::kernel_interface::read_content_bounded(&registry, 1024 * 1024)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<IndexPolicy>(&bytes).ok());
+        *cache = Some((registry, signature, value));
+    }
+    cache.as_ref().is_none_or(|(_, _, policy)| {
+        policy
+            .as_ref()
+            .is_none_or(|p| p.excluded.iter().any(|root| path.starts_with(root)))
+    })
+}
+
+/// A completed version; image mounts are explicit and read-only.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DriveBackup {
+    pub id: String,
+    pub drive: String,
+    pub evidence: String,
+    pub kind: BackupKind,
+    #[serde(with = "crate::path_serde")]
+    pub path: PathBuf,
+    pub created: u64,
+    pub incremental: bool,
+    pub bytes_written: u64,
+    pub source_size: u64,
+    #[serde(default, with = "crate::path_serde::optional")]
+    pub mount: Option<PathBuf>,
+    #[serde(default)]
+    pub loop_object: Option<String>,
+    #[serde(default)]
+    pub revision: Option<Vec<u8>>,
+    #[serde(default)]
+    pub identity: Option<StorageIdentity>,
+}
+
+/// Persistent filesystem/object evidence, independent of transient kernel mount IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageIdentity {
+    pub filesystem: u64,
+    pub inode: u64,
+    pub birth: Option<(i64, u32)>,
+}
+impl StorageIdentity {
+    /// Observes filesystem ID, inode and available birth time from a retained handle.
+    ///
+    /// # Errors
+    /// Returns missing metadata or filesystem identity errors.
+    pub fn pinned(file: &std::fs::File) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let filesystem = rustix::fs::fstatvfs(file)?.f_fsid;
+        if filesystem == 0 {
+            return Err(std::io::Error::other(
+                "Filesystem has no persistent identity",
+            ));
+        }
+        let stat = rustix::fs::statx(
+            file,
+            "",
+            rustix::fs::AtFlags::EMPTY_PATH,
+            rustix::fs::StatxFlags::BTIME,
+        )?;
+        let birth = (stat.stx_mask & libc::STATX_BTIME != 0)
+            .then_some((stat.stx_btime.tv_sec, stat.stx_btime.tv_nsec));
+        Ok(Self {
+            filesystem,
+            inode: file.metadata()?.ino(),
+            birth,
+        })
     }
 }

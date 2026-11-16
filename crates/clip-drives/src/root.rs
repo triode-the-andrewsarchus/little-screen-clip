@@ -41,6 +41,11 @@ impl Root {
         let file = kernel_interface::create_content_directory(path)?;
         Self::open(&anchor(&file))
     }
+    pub fn storage_identity(&self) -> Result<little_clip_core::drives::StorageIdentity> {
+        Ok(little_clip_core::drives::StorageIdentity::pinned(
+            &self.file,
+        )?)
+    }
     pub fn validate(&self) -> Result<()> {
         if Namespace::current() != self.namespace
             || MountIdentity::directory(&self.path)? != self.identity
@@ -123,6 +128,7 @@ impl Root {
         path: &Path,
         target: &Path,
         expected: Option<&str>,
+        source_hash: Option<&str>,
         cancel: &AtomicBool,
         delta: bool,
     ) -> Result<u64> {
@@ -130,6 +136,11 @@ impl Root {
         from.validate()?;
         let mut input = from.input(path)?;
         let observed = FileSource::capture_file(&input)?;
+        if let Some(hash) = source_hash {
+            if observed.sha256(&input, cancel, std::time::Duration::MAX)? != hash {
+                return Err("Source changed after inventory; retry reconciliation".into());
+            }
+        }
         let metadata = input.metadata()?;
         let (parent, destination) = self.parent(target, true)?;
         let previous = self.metadata(target)?;
@@ -240,19 +251,19 @@ mod tests {
         let name = Path::new("file");
         fs::write(a.join(name), b"original").unwrap();
         target
-            .copy(&source, name, name, None, &cancel, false)
+            .copy(&source, name, name, None, None, &cancel, false)
             .unwrap();
         let hash = target.digest(name, &cancel).unwrap();
         let old = fs::read(b.join(name)).unwrap();
         fs::write(a.join(name), b"replacement").unwrap();
         assert!(
             target
-                .copy(&source, name, name, None, &cancel, false)
+                .copy(&source, name, name, None, None, &cancel, false)
                 .is_err()
         );
         assert_eq!(fs::read(b.join(name)).unwrap(), old);
         target
-            .copy(&source, name, name, Some(&hash), &cancel, true)
+            .copy(&source, name, name, Some(&hash), None, &cancel, true)
             .unwrap();
         assert_eq!(fs::read(b.join(name)).unwrap(), b"replacement");
     }

@@ -62,6 +62,9 @@ const SYSTEM_DIRECTORIES: &[&str] = &[
 
 /// A path check is useful for UI explanation, but never authorizes a content read.
 pub fn excluded(path: &Path) -> Option<&'static str> {
+    if little_clip_core::drives::index_excluded(path) {
+        return Some("Drive policy excludes this path from indexing");
+    }
     // These exclusions are all children of /. Inspect the leading components
     // once rather than reparsing the same path for every protected root.
     let mut parts = path.components();
@@ -163,6 +166,9 @@ pub fn exclusions(addresses: &[String]) -> Result<Vec<PathBuf>, String> {
 
 /// Checks literal component-prefix exclusions without resolving aliases.
 pub fn excluded_by_user(path: &Path, exclusions: &[PathBuf]) -> bool {
+    if little_clip_core::drives::index_excluded(path) {
+        return true;
+    }
     exclusions.iter().any(|excluded| path.starts_with(excluded))
 }
 
