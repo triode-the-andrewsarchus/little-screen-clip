@@ -1,7 +1,7 @@
 //! Backup review fixtures use private directories and metadata-only device stand-ins.
 use super::*;
 
-fn preview(service: &Service, kind: BackupKind, destination: &Path) -> BackupPreview {
+pub(super) fn preview(service: &Service, kind: BackupKind, destination: &Path) -> BackupPreview {
     match service
         .request(DriveRequest::PreviewBackup {
             drive: "part:large".into(),
@@ -14,20 +14,20 @@ fn preview(service: &Service, kind: BackupKind, destination: &Path) -> BackupPre
         _ => panic!("expected backup review"),
     }
 }
-fn start(preview: &BackupPreview, remember_destination: bool) -> DriveRequest {
+pub(super) fn start(preview: &BackupPreview, remember_destination: bool) -> DriveRequest {
     DriveRequest::StartBackup {
         token: preview.token.clone(),
         restore_mounted: false,
         remember_destination,
     }
 }
-fn destination(fixture: &TestDrives) -> PathBuf {
+pub(super) fn destination(fixture: &TestDrives) -> PathBuf {
     let path = fixture.temp.path().join("reviewed-backup");
     fs::create_dir(&path).unwrap();
     path
 }
 
-fn reviewed_files() -> (TestDrives, Service, PathBuf, BackupPreview) {
+pub(super) fn reviewed_files() -> (TestDrives, Service, PathBuf, BackupPreview) {
     let fixture = TestDrives::new(4096);
     let service = fixture.start_authority(None, fixture.image_authority());
     let path = destination(&fixture);

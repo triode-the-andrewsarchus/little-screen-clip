@@ -50,15 +50,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if bytes.len() > 1024 * 1024 {
                     return Err("Request too large".into());
                 }
-                let reply = match serde_json::from_slice::<IpcRequest>(&bytes) {
-                    Ok(IpcRequest::Drives(request)) => match service.request(request) {
-                        Ok(reply) => IpcResponse::Drives(reply),
-                        Err(error) => IpcResponse::Error {
-                            error: error.to_string(),
-                        },
-                    },
-                    _ => IpcResponse::Error {
-                        error: "Owned drive fixture serves only drive requests".into(),
+                let result = match serde_json::from_slice::<IpcRequest>(&bytes) {
+                    Ok(IpcRequest::Drives(request)) => service.request(request),
+                    Ok(IpcRequest::SubmitDrive {
+                        request_id,
+                        request,
+                    }) => service.submit(request_id, request),
+                    _ => Err("Owned drive fixture serves only drive requests".into()),
+                };
+                let reply = match result {
+                    Ok(reply) => IpcResponse::Drives(reply),
+                    Err(error) => IpcResponse::Error {
+                        error: error.to_string(),
                     },
                 };
                 serde_json::to_writer(&mut writer, &reply)?;

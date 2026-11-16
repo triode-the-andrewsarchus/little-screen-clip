@@ -34,6 +34,7 @@ pub struct Service {
     inventory: Inventory,
     previews: preflight::Previews,
 }
+mod admission;
 mod background;
 mod lifetime;
 mod partition;
@@ -247,17 +248,6 @@ impl Service {
                 "Backup review cancelled; no backup started".into(),
             ));
         }
-        let (request, review) = self.take_backup_review(request)?;
-        if matches!(
-            request,
-            DriveRequest::Backup {
-                kind: BackupKind::Files,
-                restore_mounted: true,
-                ..
-            }
-        ) {
-            return Err("Mounted-state restoration requires a partition image backup".into());
-        }
         if let DriveRequest::Status { offset } = request {
             return self.status(offset).map(|s| DriveReply::Status(Box::new(s)));
         }
@@ -275,46 +265,9 @@ impl Service {
                 "Cancellation requested; completed writes will be retained".into(),
             ));
         }
-        let mut tokens = self
-            .runtime
-            .tokens
-            .lock()
-            .map_err(|_| "Drive admission unavailable")?;
-        if self.runtime.closing.load(Ordering::Acquire) {
-            return Err("Drive services are shutting down; admission is closed".into());
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let db = Store::existing(&self.state.join("drives.sqlite"), false)?;
-        let operation = DriveOperation {
-            id: id.clone(),
-            title: title(&request).into(),
-            state: "queued".into(),
-            message: String::new(),
-            files: 0,
-            bytes: 0,
-            started: now(),
-            finished: None,
-            partition: None,
-        };
-        db.put("operation", &id, &operation)?;
-        tokens.insert(id.clone(), cancel.clone());
-        if self
-            .sender
-            .try_send(Envelope {
-                id: id.clone(),
-                request,
-                cancel,
-                review,
-            })
-            .is_err()
-        {
-            tokens.remove(&id);
-            db.remove("operation", &id)?;
-            return Err("Drive operation queue is full or unavailable; try again".into());
-        }
-        Ok(DriveReply::Accepted(id))
+        self.admit(uuid::Uuid::new_v4(), request)
     }
+
     fn status(&self, offset: usize) -> Result<DriveStatus> {
         let mut status = self
             .shared
@@ -1148,6 +1101,7 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod admission;
     mod backup_review;
     mod native_images;
     use super::*;

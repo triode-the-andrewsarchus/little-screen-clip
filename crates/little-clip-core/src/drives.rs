@@ -196,6 +196,19 @@ pub enum DriveRequest {
     },
 }
 
+impl DriveRequest {
+    /// Returns whether this request starts a retained operation with an operation ID.
+    pub fn is_operation(&self) -> bool {
+        !matches!(
+            self,
+            Self::Status { .. }
+                | Self::PreviewBackup { .. }
+                | Self::DiscardBackupReview { .. }
+                | Self::Cancel { .. }
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DriveReply {
     Status(Box<DriveStatus>),

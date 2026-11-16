@@ -28,6 +28,7 @@ wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [dev-dependencies]
+clip-drives = { path = "../clip-drives", features = ["test-support"] }
 little-clip-render = { path = "../little-clip-render", features = ["test-support"] }
 wayland-server = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["server"] }

@@ -697,13 +697,19 @@ fn build_file_item(paths: Vec<PathBuf>, references_only: bool) -> ClipItem {
 async fn drive_reply(
     service: Option<&clip_drives::Service>,
     request: little_clip_core::drives::DriveRequest,
+    request_id: Option<uuid::Uuid>,
 ) -> IpcResponse {
     let Some(service) = service.cloned() else {
         return IpcResponse::Error {
             error: "Drive services are unavailable; check daemon logs".into(),
         };
     };
-    match tokio::task::spawn_blocking(move || service.request(request)).await {
+    match tokio::task::spawn_blocking(move || match request_id {
+        Some(id) => service.submit(id, request),
+        None => service.request(request),
+    })
+    .await
+    {
         Ok(Ok(reply)) => IpcResponse::Drives(reply),
         Ok(Err(error)) => IpcResponse::Error {
             error: error.to_string(),
@@ -741,7 +747,13 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
         let req: Result<IpcRequest, _> = serde_json::from_slice(&request_bytes);
         let references_only = matches!(&req, Ok(IpcRequest::PushFileReferences { .. }));
         let resp = match req {
-            Ok(IpcRequest::Drives(request)) => drive_reply(ctx.drives.as_ref(), request).await,
+            Ok(IpcRequest::Drives(request)) => {
+                drive_reply(ctx.drives.as_ref(), request, None).await
+            }
+            Ok(IpcRequest::SubmitDrive {
+                request_id,
+                request,
+            }) => drive_reply(ctx.drives.as_ref(), request, Some(request_id)).await,
             Ok(IpcRequest::GetState) => {
                 info!("Processing GetState...");
                 let mgr = ctx.manager.read().await;
@@ -999,6 +1011,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     little_clip_core::drives::DriveRequest::Configure {
                         config: new_config.drives.clone(),
                     },
+                    None,
                 )
                 .await;
                 *config = new_config.clone();
@@ -1818,6 +1831,36 @@ pub fn get_rolling_snapshot_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn identified_drive_dispatch_reconnects_to_one_retained_operation() {
+        use little_clip_core::drives::{DriveConfig, DriveReply, DriveRequest};
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        let service = clip_drives::Service::start_fixture(
+            DriveConfig::default(),
+            temp.path().join("state"),
+            source,
+        )
+        .unwrap();
+        let id = uuid::Uuid::new_v4();
+        let request = DriveRequest::BackupDirectory {
+            path: temp.path().join("backups"),
+        };
+        for _ in 0..2 {
+            let reply = drive_reply(Some(&service), request.clone(), Some(id)).await;
+            assert!(
+                matches!(reply, IpcResponse::Drives(DriveReply::Accepted(operation)) if operation == id.to_string())
+            );
+        }
+        let state = service.request(DriveRequest::Status { offset: 0 }).unwrap();
+        assert!(matches!(state, DriveReply::Status(state) if state.operations.len() == 1));
+        tokio::task::spawn_blocking(move || service.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    }
     use std::io::Cursor;
 
     const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";

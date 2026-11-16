@@ -20,6 +20,11 @@ pub fn socket_path() -> std::path::PathBuf {
 pub enum IpcRequest {
     /// Controls retained portable storage operations.
     Drives(crate::drives::DriveRequest),
+    /// Submits a retained drive operation once, replaying its ID for matching retries.
+    SubmitDrive {
+        request_id: uuid::Uuid,
+        request: crate::drives::DriveRequest,
+    },
     /// Queries the complete `SlotManager` state.
     GetState,
     /// Queries lightweight slot cards for polling; use `GetSlotItem` for changed item details.
@@ -149,6 +154,23 @@ pub enum LastAction {
 
 fn default_left_hand() -> HandSide {
     HandSide::Left
+}
+
+impl IpcRequest {
+    /// Identifies retained drive operations while keeping status and controls independent.
+    ///
+    /// Reuse `request_id` for transport retries of the same operation. It is ignored
+    /// for status, backup review and cancellation requests, which return directly.
+    pub fn drive(request: crate::drives::DriveRequest, request_id: uuid::Uuid) -> Self {
+        if request.is_operation() {
+            Self::SubmitDrive {
+                request_id,
+                request,
+            }
+        } else {
+            Self::Drives(request)
+        }
+    }
 }
 
 /// Response messages returned by `little-clipd` across the IPC socket.
@@ -320,6 +342,46 @@ impl SlotCard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn identified_drive_operations_roundtrip_lossless_paths_and_keep_legacy_controls() {
+        use super::*;
+        use crate::drives::DriveRequest;
+        use std::os::unix::ffi::OsStringExt;
+        let path =
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/owned/backup_\xff".to_vec()));
+        let id = uuid::Uuid::new_v4();
+        let request = IpcRequest::drive(DriveRequest::BackupDirectory { path: path.clone() }, id);
+        let restored: IpcRequest =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert!(
+            matches!(restored, IpcRequest::SubmitDrive { request_id, request: DriveRequest::BackupDirectory { path: restored } } if request_id == id && restored == path)
+        );
+        let old: IpcRequest =
+            serde_json::from_str(r#"{"Drives":{"Status":{"offset":3}}}"#).unwrap();
+        assert!(matches!(
+            old,
+            IpcRequest::Drives(DriveRequest::Status { offset: 3 })
+        ));
+        for request in [
+            DriveRequest::Status { offset: 0 },
+            DriveRequest::Cancel {
+                operation: "owned".into(),
+            },
+            DriveRequest::DiscardBackupReview {
+                token: "owned".into(),
+            },
+            DriveRequest::PreviewBackup {
+                drive: "owned".into(),
+                kind: crate::drives::BackupKind::Files,
+                destination: None,
+            },
+        ] {
+            assert!(matches!(
+                IpcRequest::drive(request, id),
+                IpcRequest::Drives(_)
+            ));
+        }
+    }
     #[test]
     fn history_limits_survive_state_and_summary_roundtrips() {
         let manager = crate::SlotManager {
