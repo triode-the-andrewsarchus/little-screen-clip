@@ -176,11 +176,34 @@ impl CatalogFs {
                 break;
             }
         }
+        let catalog_mounts = crate::mounts::inventory()?
+            .into_iter()
+            .filter(|mount| {
+                mount
+                    .source
+                    .as_os_str()
+                    .as_bytes()
+                    .starts_with(b"little-clip-catalog:")
+            })
+            .map(|mount| mount.target)
+            .collect::<Vec<_>>();
+        let managed_mounts = self.state.join("mounts");
+        let recursive = |path: &Path| {
+            path.starts_with(&managed_mounts)
+                || catalog_mounts.iter().any(|mount| path.starts_with(mount))
+        };
         let mut stale = false;
         for path in providers {
+            // Reject our own FUSE paths before opening even their directory metadata.
+            if recursive(&path) {
+                continue;
+            }
             let Ok(root) = Root::open(&path) else {
                 continue;
             };
+            if recursive(&root.path) {
+                continue;
+            }
             let Ok(file) = root.input(&entry.path) else {
                 continue;
             };
@@ -456,7 +479,14 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 mod tests {
     use super::*;
     fn fixture() -> (tempfile::TempDir, Store, crate::Drive, PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = if let Some(base) = std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE") {
+            tempfile::Builder::new()
+                .prefix("catalog-scale-")
+                .tempdir_in(base)
+                .unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
         let source = temp.path().join("source");
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("file.txt"), b"catalog payload").unwrap();
@@ -507,6 +537,72 @@ mod tests {
             opened: HashMap::new(),
             next_handle: 0,
         }
+    }
+    #[test]
+    #[ignore = "creates one million owned fixture files; select CLIP_DRIVE_CATALOG_FIXTURE explicitly"]
+    fn million_file_catalog_exclusion_and_limits_remain_bounded() {
+        use std::time::Instant;
+        assert!(
+            std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE").is_some(),
+            "Select an owned fixture parent"
+        );
+        let (_temp, db, drive, state) = fixture();
+        let source = drive.mount.as_ref().unwrap();
+        let started = Instant::now();
+        for directory in 0..1000 {
+            let path = source.join("excluded").join(format!("d-{directory:04}"));
+            std::fs::create_dir(&path).unwrap();
+            for file in 0..1000 {
+                File::create(path.join(format!("f-{file:04}"))).unwrap();
+            }
+        }
+        let creation = started.elapsed().as_secs_f64();
+        let started = Instant::now();
+        let cancel = AtomicBool::new(false);
+        let excluded = capture(
+            &db,
+            &state,
+            &drive,
+            &DriveConfig::default(),
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(excluded.complete);
+        assert_eq!(excluded.entries, 2);
+        let exclusion = started.elapsed().as_secs_f64();
+        db.remove("rule", "exclude").unwrap();
+        let started = Instant::now();
+        let limited = capture(
+            &db,
+            &state,
+            &drive,
+            &DriveConfig {
+                catalog_max_entries: 1000,
+                catalog_max_bytes: 1024 * 1024,
+                ..Default::default()
+            },
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(!limited.complete);
+        assert!(limited.entries <= 1000);
+        let path = state
+            .join("catalogs")
+            .join(format!("{}.sqlite", limited.id));
+        let bytes = std::fs::metadata(path).unwrap().len();
+        assert!(bytes <= 1024 * 1024);
+        let peak_rss = std::fs::read_to_string("/proc/self/status")
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with("VmHWM:"))
+            .unwrap_or("unknown")
+            .to_owned();
+        println!(
+            "{}",
+            serde_json::json!({"files":1000000,"creation_seconds":creation,"excluded_catalog_seconds":exclusion,"limited_catalog_seconds":started.elapsed().as_secs_f64(),"limited_entries":limited.entries,"catalog_bytes":bytes,"peak_rss":peak_rss})
+        );
     }
     #[test]
     fn catalog_database_cap_preserves_committed_partial_coverage() {
@@ -609,11 +705,13 @@ mod tests {
         .unwrap();
         let mount = temp.path().join("mount");
         std::fs::create_dir(&mount).unwrap();
+        let fsname = format!("little-clip-catalog:{}", catalog.id);
         let session = fuser::spawn_mount2(
             filesystem(&state, catalog),
             &mount,
             &[
                 fuser::MountOption::RO,
+                fuser::MountOption::FSName(fsname),
                 fuser::MountOption::NoExec,
                 fuser::MountOption::NoDev,
                 fuser::MountOption::NoSuid,
@@ -623,7 +721,7 @@ mod tests {
         assert_eq!(std::fs::metadata(mount.join("file.txt")).unwrap().len(), 15);
         assert!(std::fs::read(mount.join("file.txt")).is_err());
         assert!(std::fs::read_dir(mount.join("excluded")).is_err());
-        backup::files(
+        let mut backup = backup::files(
             &db,
             &drive,
             &temp.path().join("backups"),
@@ -636,6 +734,12 @@ mod tests {
             b"catalog payload"
         );
         assert!(std::fs::write(mount.join("new"), b"no").is_err());
+        backup.path = mount.clone();
+        db.put("backup", &backup.id, &backup).unwrap();
+        assert!(
+            std::fs::read(mount.join("file.txt")).is_err(),
+            "A catalog must never resolve contents through itself"
+        );
         drop(session);
     }
 }

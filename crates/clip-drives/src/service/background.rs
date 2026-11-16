@@ -19,7 +19,25 @@ impl Owner {
         }
         Ok(())
     }
+    pub(super) fn unmount_partition(&self, drive: &Drive) -> Result<()> {
+        let output = CommandRequest::new("udisksctl")
+            .args(["unmount", "--block-device"])
+            .arg(&drive.device)
+            .timeout(Duration::from_secs(60))
+            .own_process_group()
+            .run()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "Could not unmount partition; local and RAM edits retained: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        Ok(())
+    }
     fn prepare_backup(&mut self, drive: &str, image: bool, cancel: &AtomicBool) -> Result<Drive> {
+        let selector = drive.to_owned();
         let mut drive = self.drive(drive)?;
         if image && drive.mount.is_some() {
             for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
@@ -27,21 +45,8 @@ impl Owner {
                     self.synchronize(&pair.id, cancel, &mut |_, _| {})?;
                 }
             }
-            let output = CommandRequest::new("udisksctl")
-                .args(["unmount", "--block-device"])
-                .arg(&drive.device)
-                .timeout(Duration::from_secs(60))
-                .own_process_group()
-                .run()
-                .map_err(|e| e.to_string())?;
-            if !output.status.success() {
-                return Err(format!(
-                    "Cannot unmount partition for imaging: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )
-                .into());
-            }
-            drive = self.drive(&drive.id)?;
+            self.unmount_partition(&drive)?;
+            drive = self.drive(&selector)?;
         }
         Ok(drive)
     }
@@ -64,7 +69,7 @@ impl Owner {
         let drive = match prepared {
             Ok(drive) => drive,
             Err(error) => {
-                self.finish_background(&envelope.id, &envelope.cancel, Err(error));
+                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
                 return;
             }
         };
@@ -79,18 +84,7 @@ impl Owner {
         let drive_id = drive.id.clone();
         let task = Task::start_unbounded(&self.backup_jobs, move |_| {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut last = Instant::now() - Duration::from_secs(1);
-            let mut progress = |files, bytes| {
-                if last.elapsed() < Duration::from_millis(250) {
-                    return;
-                }
-                last = Instant::now();
-                if let Ok(Some(mut operation)) = db.get::<DriveOperation>("operation", &id) {
-                    operation.files = files;
-                    operation.bytes = bytes;
-                    let _ = db.put("operation", &id, &operation);
-                }
-            };
+            let mut progress = job_progress(state.clone(), id);
             cancelled(&cancel)?;
             match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
@@ -137,11 +131,11 @@ impl Owner {
             let result = result.unwrap_or_else(|e| {
                 Err(format!("Storage worker failed: {e}; completed writes retained").into())
             });
-            self.finish_background(&job.id, &job.cancel, result);
+            self.finish_operation(&job.id, &job.cancel, result);
             self.automatic();
         }
     }
-    fn finish_background(&self, id: &str, cancel: &AtomicBool, result: Result<String>) {
+    pub(super) fn finish_operation(&self, id: &str, cancel: &AtomicBool, result: Result<String>) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", id) {
             operation.finished = Some(now());
             match result {

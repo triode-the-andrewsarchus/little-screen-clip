@@ -162,3 +162,64 @@ fn lossless_names_survive_sync_and_baseline_storage() {
     assert_eq!(fs::read(fixture.b.join(&name)).unwrap(), b"raw path");
     fixture.run();
 }
+#[test]
+fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestamp_edits() {
+    let fixture = Fixture::new();
+    fs::write(fixture.a.join("x"), b"0000").unwrap();
+    fixture.run();
+    let time = fs::metadata(fixture.a.join("x"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    fs::write(fixture.a.join("x"), b"1111").unwrap();
+    fs::write(fixture.b.join("x"), b"2222").unwrap();
+    for path in [&fixture.a, &fixture.b] {
+        fs::File::options()
+            .write(true)
+            .open(path.join("x"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(time))
+            .unwrap();
+    }
+    let a = Root::open(&fixture.a).unwrap();
+    let b = Root::open(&fixture.b).unwrap();
+    let result = sync::synchronize_with(
+        &fixture.db,
+        &fixture.pair,
+        (&a, &b),
+        &fixture.cancel,
+        |_, _| {},
+        true,
+    )
+    .unwrap();
+    assert_eq!(result.conflicts, 1);
+    // An unrelated unreadable/special subtree must not cause a full scan for an ordinary file event.
+    let fifo = std::ffi::CString::new(
+        fixture
+            .a
+            .join("unrelated-fifo")
+            .as_os_str()
+            .as_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: the owned fixture pathname is terminated and used only for FIFO creation.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    fs::write(fixture.a.join("event"), b"changed file only").unwrap();
+    let paths = std::collections::HashSet::from([fixture.a.join("event")]);
+    sync::changed(&fixture.db, &fixture.pair, &a, &b, &paths, &fixture.cancel).unwrap();
+    assert_eq!(
+        fs::read(fixture.b.join("event")).unwrap(),
+        b"changed file only"
+    );
+    assert!(
+        sync::synchronize(
+            &fixture.db,
+            &fixture.pair,
+            &a,
+            &b,
+            &fixture.cancel,
+            |_, _| {}
+        )
+        .is_err()
+    );
+}

@@ -33,6 +33,19 @@ pub(crate) struct Entry {
     #[serde(with = "little_clip_core::path_serde::optional")]
     pub link: Option<PathBuf>,
 }
+impl Entry {
+    pub fn same_revision(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.device == other.device
+            && self.inode == other.inode
+            && self.size == other.size
+            && self.modified == other.modified
+            && self.nanos == other.nanos
+            && self.changed.is_some()
+            && self.changed == other.changed
+            && self.mode == other.mode
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Limits {
     pub entries: u64,
@@ -148,6 +161,61 @@ pub(crate) fn put(db: &Store, id: &str, entry: &Entry) -> Result<()> {
     db.0.execute("INSERT INTO entries(scan,path,parent,name,json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(scan,path) DO UPDATE SET json=excluded.json",params![id,entry.path.as_os_str().as_bytes(),entry.path.parent().unwrap_or(Path::new("")).as_os_str().as_bytes(),entry.path.file_name().unwrap_or_default().as_bytes(),serde_json::to_string(entry)?])?;
     Ok(())
 }
+fn collect_entry(
+    db: &Store,
+    root: &Root,
+    relative: &Path,
+    limits: &Limits,
+    cancel: &AtomicBool,
+) -> Result<Entry> {
+    let excluded = limits
+        .exclusions
+        .iter()
+        .any(|path| relative.starts_with(path));
+    let mut entry = observe(
+        root,
+        relative,
+        limits.hashes && !excluded && limits.reuse_scan.is_none(),
+        cancel,
+    )?
+    .ok_or("Entry disappeared during collection")?;
+    if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
+        let cached = limits
+            .reuse_scan
+            .as_ref()
+            .map(|id| self::entry(db, id, relative))
+            .transpose()?
+            .flatten();
+        if let Some(cached) = cached.filter(|old| old.same_revision(&entry)) {
+            entry.hash = cached.hash;
+        }
+        if entry.hash.is_none() {
+            entry = observe(root, relative, true, cancel)?
+                .ok_or("File disappeared during collection")?;
+        }
+    }
+    if excluded {
+        entry.kind = "excluded".into();
+    }
+    if entry.kind == "special" {
+        entry.warning = Some("Special file was not read".into());
+    }
+    Ok(entry)
+}
+fn descend(root: &Root, entry: &mut Entry, stack: &mut Vec<Frame>, depth: usize) {
+    if entry.kind != "directory" {
+        return;
+    }
+    if stack.len() >= depth {
+        entry.kind = "excluded".into();
+        entry.warning = Some("Directory depth limit".into());
+        return;
+    }
+    match Frame::new(root, entry.path.clone()) {
+        Ok(frame) => stack.push(frame),
+        Err(error) => entry.warning = Some(error.to_string()),
+    }
+}
 pub(crate) fn scan(
     db: &Store,
     root: &Root,
@@ -185,74 +253,15 @@ pub(crate) fn scan(
             }
         };
         let relative = frame.relative.join(child.file_name());
-        let excluded = limits.exclusions.iter().any(|p| relative.starts_with(p));
-        let mut entry = match observe(
-            root,
-            &relative,
-            limits.hashes && !excluded && limits.reuse_scan.is_none(),
-            cancel,
-        ) {
-            Ok(Some(entry)) => entry,
-            Ok(None) => {
-                complete = false;
-                unavailable(
-                    relative.clone(),
-                    "Entry disappeared during collection".into(),
-                )
-            }
-            Err(e) => {
+        let mut entry = match collect_entry(db, root, &relative, limits, cancel) {
+            Ok(entry) => entry,
+            Err(error) => {
                 cancelled(cancel)?;
-                complete = false;
-                unavailable(relative.clone(), e.to_string())
+                unavailable(relative.clone(), error.to_string())
             }
         };
-        if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
-            let cached = limits
-                .reuse_scan
-                .as_ref()
-                .map(|id| self::entry(db, id, &relative))
-                .transpose()?
-                .flatten();
-            if let Some(cached) = cached.filter(|old| {
-                old.kind == entry.kind
-                    && old.device == entry.device
-                    && old.inode == entry.inode
-                    && old.size == entry.size
-                    && old.modified == entry.modified
-                    && old.nanos == entry.nanos
-                    && old.changed.is_some()
-                    && old.changed == entry.changed
-                    && old.mode == entry.mode
-            }) {
-                entry.hash = cached.hash;
-            }
-            if entry.hash.is_none() {
-                entry = observe(root, &relative, true, cancel)?
-                    .ok_or("File disappeared during collection")?;
-            }
-        }
-        if excluded {
-            entry.kind = "excluded".into();
-        }
-        if entry.kind == "special" {
-            complete = false;
-            entry.warning = Some("Special file was not read".into());
-        }
-        if entry.kind == "directory" {
-            if stack.len() >= limits.depth {
-                entry.kind = "excluded".into();
-                complete = false;
-                entry.warning = Some("Directory depth limit".into());
-            } else {
-                match Frame::new(root, relative.clone()) {
-                    Ok(frame) => stack.push(frame),
-                    Err(e) => {
-                        complete = false;
-                        entry.warning = Some(e.to_string());
-                    }
-                }
-            }
-        }
+        descend(root, &mut entry, &mut stack, limits.depth);
+        complete &= entry.warning.is_none();
         let json = serde_json::to_string(&entry)?;
         bytes = bytes
             .saturating_add((json.len() + relative.as_os_str().as_bytes().len() * 3 + 256) as u64);

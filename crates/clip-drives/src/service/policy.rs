@@ -39,9 +39,10 @@ impl Owner {
         }
         for pair in pairs {
             if let Ok(root) = Root::open(&pair.local)
-                && local.overlap(&root) {
-                    return Err("This local folder overlaps an existing sync enrollment".into());
-                }
+                && local.overlap(&root)
+            {
+                return Err("This local folder overlaps an existing sync enrollment".into());
+            }
         }
         Ok(())
     }
@@ -51,18 +52,18 @@ impl Owner {
         }
         for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
             if let Ok(root) = Root::open(&pair.local)
-                && root.overlap(target) {
-                    return Err(
-                        "Backup directory overlaps a paired local folder or RAM copy".into(),
-                    );
-                }
+                && root.overlap(target)
+            {
+                return Err("Backup directory overlaps a paired local folder or RAM copy".into());
+            }
         }
         for catalog in self.db.list::<Catalog>("catalog", 0, 1000)? {
             if let Some(path) = catalog.mount
                 && let Ok(root) = Root::open(&path)
-                    && root.overlap(target) {
-                        return Err("Backup directory overlaps a mounted catalog".into());
-                    }
+                && root.overlap(target)
+            {
+                return Err("Backup directory overlaps a mounted catalog".into());
+            }
         }
         Ok(())
     }

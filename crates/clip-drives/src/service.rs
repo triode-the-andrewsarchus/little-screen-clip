@@ -385,52 +385,13 @@ impl Owner {
         };
         op.state = "running".into();
         let _ = self.db.put("operation", id, &op);
-        let progress_db = self.state.join("drives.sqlite");
-        let op_id = id.clone();
-        let mut last = Instant::now() - Duration::from_secs(1);
-        let mut progress = |files, bytes| {
-            if last.elapsed() < Duration::from_millis(250) {
-                return;
-            }
-            last = Instant::now();
-            if let Ok(db) = Store::existing(&progress_db, false)
-                && let Ok(Some(mut op)) = db.get::<DriveOperation>("operation", &op_id)
-            {
-                op.files = files;
-                op.bytes = bytes;
-                let _ = db.put("operation", &op_id, &op);
-            }
-        };
+        let mut progress = job_progress(self.state.clone(), id.clone());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.execute(envelope.request, &envelope.cancel, &mut progress)
         }));
-        op = self.db.get("operation", id).ok().flatten().unwrap_or(op);
-        op.finished = Some(now());
-        match result {
-            Ok(Ok(message)) => {
-                op.state = "complete".into();
-                op.message = message;
-            }
-            Ok(Err(e)) => {
-                op.state = if envelope.cancel.load(Ordering::Acquire) {
-                    "cancelled"
-                } else {
-                    "failed"
-                }
-                .into();
-                op.message = e.to_string();
-            }
-            Err(_) => {
-                op.state = "failed".into();
-                op.message = "Storage worker failed; completed writes retained".into();
-            }
-        }
-        let _ = self.db.put("operation", id, &op);
-        if let Ok(mut tokens) = self.tokens.lock() {
-            tokens.remove(id);
-        }
-        self.discover();
-        let _ = self.publish_policy();
+        let result = result
+            .unwrap_or_else(|_| Err("Storage worker failed; completed writes retained".into()));
+        self.finish_operation(id, &envelope.cancel, result);
     }
     fn drive(&self, id: &str) -> Result<Drive> {
         let explicit = id.starts_with("/dev/");
@@ -465,20 +426,7 @@ impl Owner {
                         self.synchronize(&pair.id, cancel, progress)?;
                     }
                 }
-                let output = CommandRequest::new("udisksctl")
-                    .args(["unmount", "--block-device"])
-                    .arg(&drive.device)
-                    .timeout(Duration::from_secs(60))
-                    .own_process_group()
-                    .run()
-                    .map_err(|e| e.to_string())?;
-                if !output.status.success() {
-                    return Err(format!(
-                        "Unmount failed; RAM copies remain available: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )
-                    .into());
-                }
+                self.unmount_partition(&drive)?;
                 Ok("Partition unmounted; RAM copy retained".into())
             }
             DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
@@ -1074,6 +1022,22 @@ impl Owner {
             little_clip_core::file_source::create_file_in(&path, &json, &root)?;
         }
         Ok(())
+    }
+}
+fn job_progress(state: PathBuf, id: String) -> impl FnMut(u64, u64) {
+    let mut last = Instant::now() - Duration::from_secs(1);
+    move |files, bytes| {
+        if last.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        last = Instant::now();
+        if let Ok(db) = Store::existing(&state.join("drives.sqlite"), false)
+            && let Ok(Some(mut operation)) = db.get::<DriveOperation>("operation", &id)
+        {
+            operation.files = files;
+            operation.bytes = bytes;
+            let _ = db.put("operation", &id, &operation);
+        }
     }
 }
 fn available_memory() -> Result<u64> {

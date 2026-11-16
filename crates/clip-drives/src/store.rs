@@ -19,12 +19,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS sync_blocked(pair TEXT NOT NULL,prefix BLOB NOT NULL,PRIMARY KEY(pair,prefix));
             CREATE TABLE IF NOT EXISTS sync_dirs(pair TEXT NOT NULL,path BLOB NOT NULL,PRIMARY KEY(pair,path));
             CREATE TABLE IF NOT EXISTS baseline(pair TEXT NOT NULL,path BLOB NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(pair,path));")?;
-        let version: u32 =
-            db.query_row("SELECT value FROM version WHERE id=1", [], |r| r.get(0))?;
-        if version != 1 {
-            return Err("Unsupported drive database version".into());
-        }
-        Ok(Self(db))
+        Self::checked(db)
     }
     /// Connects to initialized state without acquiring a schema write lock.
     pub fn existing(path: &Path, read_only: bool) -> Result<Self> {
@@ -38,6 +33,9 @@ impl Store {
         if !read_only {
             db.execute_batch("PRAGMA synchronous=FULL")?;
         }
+        Self::checked(db)
+    }
+    fn checked(db: Connection) -> Result<Self> {
         let version: u32 =
             db.query_row("SELECT value FROM version WHERE id=1", [], |r| r.get(0))?;
         if version != 1 {

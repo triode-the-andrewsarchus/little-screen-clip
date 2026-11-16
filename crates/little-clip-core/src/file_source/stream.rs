@@ -2,7 +2,7 @@
 use super::FileSource;
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::FileExt,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -34,8 +34,6 @@ pub fn copy_checked(
     }
     let source = FileSource::capture_file(input)?;
     let size = input.metadata().map_err(|e| e.to_string())?.len();
-    input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut buffer = vec![0; 256 * 1024];
     let mut previous = vec![0; buffer.len()];
     use sha2::{Digest, Sha256};
@@ -47,26 +45,21 @@ pub fn copy_checked(
         }
         let amount = (size - stats.read).min(buffer.len() as u64) as usize;
         input
-            .read_exact(&mut buffer[..amount])
+            .read_exact_at(&mut buffer[..amount], stats.read)
             .map_err(|e| e.to_string())?;
         if let Some(digest) = &mut digest {
             digest.update(&buffer[..amount]);
         }
         let equal = delta
-            && output.read_exact(&mut previous[..amount]).is_ok()
+            && output
+                .read_exact_at(&mut previous[..amount], stats.read)
+                .is_ok()
             && previous[..amount] == buffer[..amount];
-        output
-            .seek(SeekFrom::Start(stats.read))
-            .map_err(|e| e.to_string())?;
         if !equal {
             output
-                .write_all(&buffer[..amount])
+                .write_all_at(&buffer[..amount], stats.read)
                 .map_err(|e| e.to_string())?;
             stats.written += amount as u64;
-        } else {
-            output
-                .seek(SeekFrom::Current(amount as i64))
-                .map_err(|e| e.to_string())?;
         }
         stats.read += amount as u64;
         progress(amount as u64);
@@ -84,6 +77,7 @@ pub fn copy_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Seek, SeekFrom, Write};
     #[test]
     fn delta_copy_skips_equal_ranges_and_truncates_old_tail() {
         let dir = tempfile::tempdir().unwrap();

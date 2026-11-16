@@ -12,7 +12,7 @@ use std::{
     fs::{self, File},
     os::{
         fd::{AsRawFd, OwnedFd},
-        unix::fs::FileExt,
+        unix::fs::{FileExt, FileTypeExt, MetadataExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -155,7 +155,7 @@ pub(crate) fn files(
                 target.ensure_directory(&entry.path)?;
             } else {
                 let old = if existing.is_some() {
-                    Some(snapshot_entry(&target, &entry.path, cancel)?)
+                    scan::observe(&target, &entry.path, true, cancel)?
                 } else {
                     None
                 };
@@ -171,6 +171,18 @@ pub(crate) fn files(
                         cancel,
                         incremental,
                     )?;
+                } else {
+                    let observed = scan::observe(&source, &entry.path, false, cancel)?
+                        .ok_or("Unchanged source disappeared")?;
+                    if !entry.same_revision(&observed) {
+                        return Err("Source changed before backup publication".into());
+                    }
+                    let file = target.input(&entry.path)?;
+                    file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;
+                    if let Some(time) = time(entry.modified, entry.nanos) {
+                        file.set_times(fs::FileTimes::new().set_modified(time))?;
+                    }
+                    file.sync_all()?;
                 }
             }
             count += 1;
@@ -223,42 +235,6 @@ pub(crate) fn files(
     };
     db.put("backup", &id, &backup)?;
     Ok(backup)
-}
-fn snapshot_entry(root: &Root, path: &Path, cancel: &AtomicBool) -> Result<scan::Entry> {
-    use std::os::unix::fs::MetadataExt;
-    let m = root.metadata(path)?.ok_or("Backup entry disappeared")?;
-    let kind = if m.is_file() {
-        "file"
-    } else if m.is_dir() {
-        "directory"
-    } else if m.file_type().is_symlink() {
-        "symlink"
-    } else {
-        return Err("Special file in backup destination".into());
-    };
-    Ok(scan::Entry {
-        path: path.into(),
-        kind: kind.into(),
-        size: m.len(),
-        modified: m.mtime(),
-        nanos: m.mtime_nsec(),
-        mode: m.mode(),
-        device: m.dev(),
-        inode: m.ino(),
-        warning: None,
-        changed: Some((m.ctime(), m.ctime_nsec())),
-        hash: if m.is_file() {
-            Some(root.digest(path, cancel)?)
-        } else {
-            None
-        },
-        link: if m.file_type().is_symlink() {
-            let (_p, p) = root.parent(path, false)?;
-            Some(fs::read_link(p)?)
-        } else {
-            None
-        },
-    })
 }
 fn finish_directories(db: &Store, id: &str, target: &Root, cancel: &AtomicBool) -> Result<()> {
     let mut statement=db.0.prepare("SELECT json FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='directory' ORDER BY path DESC")?;
@@ -433,7 +409,43 @@ pub(crate) fn image(
         .map_err(|e| format!("UDisks authorization or exclusive read failed: {e}"))?;
     let fd: OwnedFd = descriptor.into();
     let input = File::from(fd);
-    image_from(db, drive, destination, &input, cancel, &mut progress)
+    let identity = input.metadata()?;
+    if !identity.file_type().is_block_device() {
+        return Err("UDisks did not supply a block-device descriptor".into());
+    }
+    let validate = || {
+        let current = fs::metadata(&drive.device)?;
+        if (current.dev(), current.ino(), current.rdev())
+            != (identity.dev(), identity.ino(), identity.rdev())
+        {
+            return Err("Partition device was removed or replaced during imaging".into());
+        }
+        let mut capacity = 0_u64;
+        // SAFETY: BLKGETSIZE64 writes one u64 through a live authorized device descriptor.
+        if unsafe {
+            libc::ioctl(
+                input.as_raw_fd(),
+                0x80081272_u64 as libc::c_ulong,
+                &mut capacity,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if capacity != drive.capacity {
+            return Err("Partition capacity changed before image publication".into());
+        }
+        Ok(())
+    };
+    image_from(
+        db,
+        drive,
+        destination,
+        &input,
+        cancel,
+        &mut progress,
+        validate,
+    )
 }
 pub(crate) fn image_from(
     db: &Store,
@@ -442,10 +454,12 @@ pub(crate) fn image_from(
     input: &File,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
+    validate_source: impl Fn() -> Result<()>,
 ) -> Result<Backup> {
     if drive.capacity == 0 {
         return Err("Partition capacity is unknown; cannot create a complete image".into());
     }
+    validate_source()?;
     let parent = backup_parent(destination, drive)?;
     let pin = kernel_interface::pin_content_directory(&parent.path)?;
     let mut staged = tempfile::NamedTempFile::new_in(anchor(&pin))?;
@@ -477,6 +491,8 @@ pub(crate) fn image_from(
         cancel,
         &mut progress,
     )?;
+    validate_source()?;
+    parent.validate()?;
     staged.as_file().sync_all()?;
     let id = uuid::Uuid::new_v4().to_string();
     let name = format!("{}-{id}.img", now());
@@ -597,6 +613,7 @@ mod tests {
             &input,
             &AtomicBool::new(false),
             |_, _| {},
+            || Ok(()),
         )
         .unwrap();
         assert_eq!(fs::read(result.path).unwrap(), bytes);
@@ -673,11 +690,29 @@ mod btrfs_tests {
         assert_ne!(fs::read(first.path.join("large")).unwrap(), bytes);
         assert_eq!(fs::read(second.path.join("large")).unwrap(), bytes);
         let source = File::open(data.join("large")).unwrap();
-        let image1 = image_from(&db, &drive, &destination, &source, &cancel, |_, _| {}).unwrap();
+        let image1 = image_from(
+            &db,
+            &drive,
+            &destination,
+            &source,
+            &cancel,
+            |_, _| {},
+            || Ok(()),
+        )
+        .unwrap();
         bytes[1024 * 1024..1024 * 1024 + 4096].fill(19);
         fs::write(data.join("large"), &bytes).unwrap();
         let source = File::open(data.join("large")).unwrap();
-        let image2 = image_from(&db, &drive, &destination, &source, &cancel, |_, _| {}).unwrap();
+        let image2 = image_from(
+            &db,
+            &drive,
+            &destination,
+            &source,
+            &cancel,
+            |_, _| {},
+            || Ok(()),
+        )
+        .unwrap();
         assert!(image2.incremental);
         assert!(image2.bytes_written <= 256 * 1024);
         assert_eq!(fs::read(&image2.path).unwrap(), bytes);
