@@ -31,7 +31,7 @@ def status(env):
     return request(env, {'Status': {'offset': 0}})['Status']
 
 
-def completed(env, reply):
+def completed(env, reply, expected_state='complete'):
     operation = reply['Accepted']
     result = {}
     def ready():
@@ -41,12 +41,17 @@ def completed(env, reply):
                 return True
         return False
     wait_for(ready, 'retained drive operation completion')
-    assert result['state'] == 'complete', result
+    assert result['state'] == expected_state, result
     return result
 
 
 def right_click(session, shot, word, *, tree=False, last=False):
-    x, y = session.word(shot, word, tree=tree, last=last)
+    point = session.word(shot, word, tree=tree, last=last, required=False)
+    if point is None and word.endswith(':'):
+        point = session.word(shot, word[:-1], tree=tree, last=last, required=False)
+    if point is None:
+        raise RuntimeError(f'{shot}: no right-click target {word!r}')
+    x, y = point
     private.run_checked([str(session.pointer), 'right-click', *map(str, session.logical_size), str(x + 5), str(y)], env=session.env)
 
 
@@ -111,7 +116,8 @@ def dismiss_completion_notice(session, shot, title):
     if point is None:
         # The status dock height follows its message. Its action stays at the
         # right, aligned with the first rendered line rather than a fixed y.
-        _, y = session.word(shot, title.split()[0])
+        anchor = title.split()[0]
+        _, y = session.word(shot, anchor, required=False, last=True) or session.word(shot, anchor, tree=True, last=True)
         assert caption(session, shot, (1108, y - 12, 1171, y + 12)) == 'dismiss'
         session.click(1140, y)
     else:
@@ -304,12 +310,91 @@ def exercise_catalog_boundary(session, root):
         completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
 
+def catalog_context_menu(session, name, expected):
+    # Status notices and ancestor inventories move Mounts after navigation.
+    # Refresh and retry only this read-only menu opening if the row moved.
+    target = name + '-target'
+    def visible():
+        text = session.capture_text(name, session.output / (name + '.png'), [])
+        if 'opensavedcatalog' not in ''.join(text.lower().split()):
+            return False
+        session.observe(name, expected)
+        return True
+    def opened():
+        if visible():
+            return True
+        session.observe(target, ['Catalog: Portable test drive'])
+        right_click(session, target, 'Catalog:', tree=True)
+        return visible()
+    wait_for(opened, 'catalog context menu after sidebar movement')
+
+
+def exercise_catalog_redaction(session, root):
+    """Keep a real FUSE snapshot open while excluding and compacting its metadata."""
+    # Exclude the popup border and surrounding list from paragraph OCR.
+    session.ocr_regions = [('catalog-menu-interior-ocr.png', (126, 415, 530, 640))]
+    env = session.env
+    drive = status(env)['drives'][0]['id']
+    completed(env, request(env, {'BackupDirectory': {'path': str(root / 'backups')}}))
+    completed(env, request(env, {'Backup': {'drive': drive, 'kind': 'Files', 'restore_mounted': False}}))
+    backup = status(env)['backups'][0]
+    completed(env, request(env, {'Catalog': {'drive': drive}}))
+    catalog = status(env)['catalogs'][0]
+    completed(env, request(env, {'MountCatalog': {'catalog': catalog['id']}}))
+    mount = Path(next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])['mount'])
+    held = (mount / 'many/hidden.txt').open('rb')
+    try:
+        session.address(root / 'portable')
+        session.observe('catalog-source', ['many', 'readme.txt'])
+        right_click(session, 'catalog-source', 'many')
+        session.observe('catalog-folder-actions', ['Catalog / indexing'])
+        click_word(session, 'catalog-folder-actions', 'Catalog')
+        session.observe('catalog-redaction-policy', ['Include metadata', 'removes saved descendant catalog records', 'redaction date'])
+        click_word(session, 'catalog-redaction-policy', 'Include')
+        click_word(session, 'catalog-redaction-policy', 'Allow')
+        click_word(session, 'catalog-redaction-policy', 'Save')
+        wait_for(lambda: any(item['pending_redactions'] for item in status(env)['catalogs']), 'durable pending redaction')
+        session.observe('catalog-policy-notice', ['Catalog exclusion saved'])
+        assert (mount / 'many/hidden.txt').stat().st_size > 0
+        catalog_context_menu(session, 'catalog-pending-menu', ['Captured', 'Metadata cleanup pending', 'Unmount saved catalog'])
+        click_word(session, 'catalog-pending-menu', 'Open', tree=True)
+        session.address(root / 'portable')
+        session.observe('catalog-before-release', ['many', 'readme.txt'])
+        # A still-open FUSE file keeps the old snapshot busy, without losing its bytes.
+        completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}), expected_state='failed')
+        assert held.read() == (root / 'portable/many/hidden.txt').read_bytes()
+        assert next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])['pending_redactions'] > 0
+        held.close()
+        completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+        wait_for(lambda: any(item['id'] == catalog['id'] and item['pending_redactions'] == 0 and item['redacted'] is not None for item in status(env)['catalogs']), 'redaction after snapshot release')
+        updated = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+        assert updated['captured'] == catalog['captured']
+        with sqlite3.connect(Path(env['LITTLE_CLIP_DRIVE_STATE_DIR']) / 'catalogs' / (catalog['id'] + '.sqlite')) as db:
+            assert db.execute("SELECT count(*) FROM entries WHERE scan='catalog' AND path=?", (b'many/hidden.txt',)).fetchone()[0] == 0
+        assert (root / 'portable/many/hidden.txt').is_file()
+        assert (Path(backup['path']) / 'many/hidden.txt').is_file()
+        completed(env, request(env, {'MountCatalog': {'catalog': catalog['id']}}))
+        session.address(mount)
+        session.observe('catalog-redacted-view', ['many', 'Not catalogued', 'readme.txt'])
+        session.address(root / 'portable')
+        session.observe('catalog-redacted-source', ['many', 'readme.txt', 'Catalog: Portable test drive'])
+        catalog_context_menu(session, 'catalog-redacted-menu', ['Captured', 'Redacted', 'descendant records removed'])
+        click_word(session, 'catalog-redacted-menu', 'Open', tree=True)
+    finally:
+        held.close()
+        session.address(root / 'portable')
+        session.observe('catalog-cleanup-source', ['many', 'readme.txt'])
+        if any(item['id'] == catalog['id'] and item['mount'] for item in status(env)['catalogs']):
+            completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+
+
 def main():
     repository = Path(__file__).resolve().parent.parent
     def configure(parser):
         scenarios = parser.add_mutually_exclusive_group()
         scenarios.add_argument('--backup-review-only', action='store_true')
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
+        scenarios.add_argument('--catalog-redaction-only', action='store_true')
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
@@ -326,7 +411,9 @@ def main():
         env['LITTLE_CLIP_DRIVE_MOUNT_HELPER'] = str(repository / 'target/debug/clip-drive-mount')
         children.start('drive-fixture', [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')], env=env, cwd=output, log_path=output / 'drive-fixture.log')
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
-    if args.catalog_boundary_only:
+    if args.catalog_redaction_only:
+        scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'
+    elif args.catalog_boundary_only:
         scenario, scope = exercise_catalog_boundary, 'Offline catalog exclusion labels, empty folders and navigation errors'
     elif args.backup_review_only:
         scenario, scope = exercise_backup_review, 'Backup review: lazy selection, cancellation, file backup publication and image review'

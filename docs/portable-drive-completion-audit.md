@@ -41,7 +41,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
-| 6.4 | Partial | Future scans honor subtree rules. Real FUSE coverage metadata distinguishes Not catalogued from empty folders; Files displays the label and explanatory navigation error. Removal of saved descendant records after readers release remains unfinished. |
+| 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
 | 6.7 | Partial | Provider metadata/digests checked where captured; reuse available sync/backup hashes and uncertain revision handling need stronger evidence. |
@@ -86,9 +86,50 @@ own method. Reusing `pin_content_directory` removed the new detector hotspot;
 the broader clone/complexity review stays open. Raw report:
 `.fitness/portable-drives-catalog-boundary-reviewed-architecture.json`.
 
-Requirement 6.4 is still partial: durable saved-record redaction, reader leases,
-and explicit redaction dates are the next implementation work. No saved catalog
-records are removed by this checkpoint.
+At this boundary checkpoint, saved-record redaction was still unfinished. The
+following redaction checkpoint implements that work.
+
+## Saved catalog redaction checkpoint
+
+Excluding a subtree now transactionally queues saved metadata cleanup. Mounted
+catalog helpers retain shared file leases; cleanup takes an exclusive lease and
+also checks legacy catalog mounts before changing a database. Busy readers retain
+their original snapshot. The existing bounded bulk worker applies cleanup after
+unmount, preserves original capture/source times and coverage, records a separate
+redaction date/revision, compacts the database and retires the durable intent.
+Restart replays incomplete work idempotently, even with the source absent. Older
+rules are migrated once and repeated pending requests coalesce. Historical catalog
+enumeration is paginated without a first-thousand limit. Source files, backup
+payloads/manifests and enrolled sync baselines are retained.
+
+Files discloses capture/redaction dates, pending reader release and retry failures.
+Its catalog context-menu identity survives transient status-row changes; a real
+egui regression test fails without the persistent menu key and passes with it.
+Private dark/light `--catalog-redaction-only` runs both passed, including a held
+FUSE file, busy-unmount refusal, cleanup after release and remounted Not catalogued
+coverage. Reports: `/tmp/portable-drive-catalog-redaction-accepted-dark/report.json`
+and `/tmp/portable-drive-catalog-redaction-accepted-light/report.json`.
+
+Final serial affected-package tests passed: backend 78 (26 ignored), Files 979
+(six ignored), core 451 (three ignored), CLI six, daemon 35, selected integrations
+and twelve core doctests. Log:
+`/tmp/portable-drive-catalog-redaction-tests-serial.log`. One earlier concurrent
+system-observation test saw source identity invalidation; isolated and full serial
+runs subsequently passed. Selected-package build and all-target clippy with
+warnings denied, core/backend documentation, Python compilation and repository
+`cargo fmt --check` passed. The earlier `cargo fmt --all --check` result included
+141 unchanged vendored dependency files; bare repository formatting passes.
+Explicit native FUSE/legacy-helper tests pass. Compaction of 4096 actual file
+records reduced the catalog from 1,810,432 to 61,440 bytes and retained all source
+files (`/tmp/portable-drive-catalog-redaction-compaction-final.log`).
+
+The original-baseline architecture result remains REGRESSION: duplication 7.30%
+to 7.16%, average CCN 3.44 to 3.48, maximum 274 unchanged, twelve net additional
+clone groups and reported cycles 143 to 144. No new UI test clone was reported;
+the extra cycle is the previously documented cleanup-name false match. Reused
+transactional entity visiting removed duplicate pagination. The broader gate
+remains open. Raw report:
+`.fitness/portable-drives-catalog-redaction-ui-architecture.json`.
 
 ## Cross-cutting gates
 

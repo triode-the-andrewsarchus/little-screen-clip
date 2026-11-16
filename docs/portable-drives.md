@@ -149,6 +149,12 @@ Re-enabling catalog admission does not recreate deleted metadata; capture a new
 catalog to include it again. Backup payloads/manifests and enrolled synchronization
 baselines remain independent of this optional catalog cleanup.
 
+The saved-catalog menu shows the capture date, any later redaction date, pending
+snapshot release and cleanup failures. Its policy dialog explains this before
+saving an exclusion. The focused private acceptance scenario is available with
+`scripts/portable_drive_acceptance.py --catalog-redaction-only --appearance dark`
+(or `--appearance light`), using the same owned fixture setup described below.
+
 Cleanup compacts the local catalog database on the bounded bulk worker after its
 readers retire. Compaction can require temporary free disk space; failed cleanup
 retains its intent for retry. SQLite can change implicit rowids during compaction,

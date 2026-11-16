@@ -229,7 +229,7 @@ fn policy_dialog(
     ));
     ui.checkbox(catalog, "Include metadata in future contents catalogs");
     ui.checkbox(index, "Allow explicitly configured search indexing");
-    ui.label("These settings do not exclude files from backups or folder synchronization. Existing catalog snapshots keep their captured date.");
+    ui.label("Excluding metadata also removes saved descendant catalog records after mounted catalog views are unmounted. Catalogs retain their capture date and show a separate redaction date. These settings do not exclude files from backups or folder synchronization.");
     ui.small(format!(
         "Catalog limit: {} entries, {} MiB. Parent exclusions also apply.",
         status.config.catalog_max_entries,

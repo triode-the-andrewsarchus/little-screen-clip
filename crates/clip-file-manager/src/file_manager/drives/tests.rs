@@ -1,6 +1,103 @@
 //! Read-only reply handoff tests never start IPC or open the fixture device paths.
 use super::*;
 
+fn saved_catalog() -> Catalog {
+    Catalog {
+        id: "saved".into(),
+        drive: "portable".into(),
+        evidence: "observed".into(),
+        label: "Card".into(),
+        captured: 123,
+        entries: 9,
+        complete: true,
+        coverage: "Complete".into(),
+        mount: None,
+        redacted: None,
+        redaction_generation: 0,
+        pending_redactions: 0,
+        redaction_error: None,
+        root_excluded: false,
+    }
+}
+
+#[test]
+fn catalog_descriptions_disclose_original_capture_pending_cleanup_and_explicit_redaction() {
+    let mut catalog = saved_catalog();
+    assert!(catalog_description(&catalog).starts_with("Captured "));
+    assert!(!catalog_description(&catalog).contains("Redacted"));
+    catalog.pending_redactions = 1;
+    catalog.redaction_error = Some("Free space is needed".into());
+    let pending = catalog_description(&catalog);
+    assert!(pending.contains("Metadata cleanup pending"));
+    assert!(pending.contains("Unmount this catalog's existing view"));
+    assert!(pending.contains("Cleanup will retry: Free space is needed"));
+    catalog.redacted = Some(456);
+    assert!(catalog_description(&catalog).contains("\nRedacted "));
+    assert_eq!(catalog.captured, 123);
+    assert_eq!(recorded_time(u64::MAX), "unknown time");
+}
+
+#[test]
+fn an_open_catalog_menu_survives_removing_a_transient_status_widget() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = FileManager::new(temp.path().into());
+    manager.drives.status.catalogs.push(saved_catalog());
+    let ctx = egui::Context::default();
+    let mut render = |extra: bool, events: Vec<egui::Event>| {
+        let mut point = egui::Pos2::ZERO;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if extra {
+                        ui.label("Transient storage status");
+                    }
+                    point = ui.next_widget_position() + egui::vec2(10.0, 8.0);
+                    manager.catalog_mounts_ui(ui, &mut None);
+                });
+            },
+        );
+        (output, point)
+    };
+    let (_, point) = render(true, Vec::new());
+    render(
+        true,
+        vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let has_menu = |output: &egui::FullOutput| {
+        output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Captured")))
+    };
+    assert!(
+        has_menu(&render(true, Vec::new()).0),
+        "the catalog menu must first open"
+    );
+    assert!(
+        has_menu(&render(false, Vec::new()).0),
+        "a status update must not discard the open catalog menu"
+    );
+}
+
 #[test]
 fn lost_admission_reply_retries_the_identical_request_identity_and_parameters() {
     let mut attempts = Vec::new();

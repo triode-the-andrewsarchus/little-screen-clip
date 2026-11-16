@@ -18,6 +18,37 @@ mod tests;
 
 static IO: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 16));
 
+fn recorded_time(timestamp: u64) -> String {
+    i64::try_from(timestamp)
+        .ok()
+        .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+        .map(|date| {
+            date.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown time".into())
+}
+
+fn catalog_description(catalog: &Catalog) -> String {
+    let mut text = format!(
+        "Captured {} · {} entries · {}",
+        recorded_time(catalog.captured),
+        catalog.entries,
+        catalog.coverage
+    );
+    if let Some(redacted) = catalog.redacted {
+        text.push_str(&format!("\nRedacted {}", recorded_time(redacted)));
+    }
+    if catalog.pending_redactions != 0 {
+        text.push_str("\nMetadata cleanup pending. Unmount this catalog's existing view to release its saved snapshot.");
+    }
+    if let Some(error) = &catalog.redaction_error {
+        text.push_str(&format!("\nCleanup will retry: {error}"));
+    }
+    text
+}
+
 enum PathAction {
     Directory,
     Backup { drive: String, kind: BackupKind },
@@ -464,10 +495,7 @@ impl Drives {
             .collect::<Vec<_>>();
         for catalog in catalogs {
             ui.separator();
-            ui.small(format!(
-                "{} entries · {}",
-                catalog.entries, catalog.coverage
-            ));
+            ui.small(catalog_description(&catalog));
             if let Some(path) = &catalog.mount {
                 if ui.button("Browse mounted catalog").clicked() {
                     *open = Some(path.clone());
@@ -552,13 +580,7 @@ impl Drives {
         if !images.is_empty() {
             ui.menu_button("Read-only image backups", |ui| {
                 for version in images {
-                    let date = chrono::DateTime::from_timestamp(version.created as i64, 0)
-                        .map(|d| {
-                            d.with_timezone(&chrono::Local)
-                                .format("%Y-%m-%d %H:%M")
-                                .to_string()
-                        })
-                        .unwrap_or_default();
+                    let date = recorded_time(version.created);
                     ui.menu_button(date, |ui| {
                         if let Some(path) = &version.mount {
                             if ui.button("Browse image contents").clicked() {
@@ -759,11 +781,16 @@ impl FileManager {
                     });
                 }
             }
-            response.clone().on_hover_text(format!(
-                "{} entries · {}",
-                catalog.entries, catalog.coverage
-            ));
-            response.context_menu(|ui| {
+            response
+                .clone()
+                .on_hover_text(catalog_description(&catalog));
+            // egui 0.27 keys context menus by Response::id. Keep that key
+            // independent of the label's ordinal auto-ID as status rows change.
+            let mut menu_response = response.clone();
+            menu_response.id = ui.make_persistent_id(("saved-catalog-menu", &catalog.id));
+            menu_response.context_menu(|ui| {
+                ui.set_width((ui.ctx().screen_rect().width() - 32.0).clamp(0.0, 400.0));
+                ui.small(catalog_description(&catalog));
                 if let Some(path) = &catalog.mount {
                     if ui.button("Open saved catalog").clicked() {
                         *open = Some(path.clone());
