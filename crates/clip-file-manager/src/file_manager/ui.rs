@@ -690,17 +690,23 @@ impl FileManager {
             colors.text_secondary
         };
         let dismiss = ui
-            .horizontal_wrapped(|ui| {
-                ui.add(
-                    last.icon
-                        .label(egui::RichText::new(&last.text).color(color)),
-                );
-                ui.add(
-                    clip_ui::buttons::ButtonRole::Secondary
-                        .button("Dismiss", palette)
-                        .small(),
-                )
-                .clicked()
+            .horizontal_top(|ui| {
+                last.icon.ui(ui, clip_ui::ui_ext::CONTROL_ICON_SIZE, color);
+                // Reserve the action first so a long path cannot push it offscreen.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    let dismiss = ui
+                        .add(
+                            clip_ui::buttons::ButtonRole::Secondary
+                                .button("Dismiss", palette)
+                                .small(),
+                        )
+                        .clicked();
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&last.text).color(color)).wrap(true),
+                    );
+                    dismiss
+                })
+                .inner
             })
             .inner;
         if dismiss {
@@ -2064,6 +2070,83 @@ pub(super) fn information_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_drive_notifications_keep_dismiss_visible_and_clickable() {
+        for width in [320.0, 800.0] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut browser = FileManager::new(temp.path().into());
+            browser.pending = None;
+            browser.set_status(
+                Icon::Drive,
+                format!(
+                    "Back up files: backup completed: /mnt/{}/{}.manifest.sqlite",
+                    "long-directory/".repeat(12),
+                    "x".repeat(255)
+                ),
+                false,
+            );
+            let context = egui::Context::default();
+            let palette = AppPalette::default();
+            let bounds = Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 260.0));
+            let mut render = |events| {
+                context.run(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let available = ui.available_rect_before_wrap();
+                            browser.last_status_ui(
+                                ui,
+                                WorkbenchColors::from_palette(&palette),
+                                &palette,
+                            );
+                            assert!(
+                                ui.min_rect().right() <= available.right() + 1.0,
+                                "notification expanded beyond the window: {:?}",
+                                ui.min_rect()
+                            );
+                            assert!(ui.min_rect().left() >= available.left() - 1.0);
+                        });
+                    },
+                )
+            };
+            let output = render(vec![]);
+            let dismiss = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    let egui::epaint::Shape::Text(text) = &shape.shape else {
+                        return None;
+                    };
+                    (text.galley.job.text == "Dismiss").then(|| {
+                        let rect = Rect::from_min_size(text.pos, text.galley.size());
+                        assert!(bounds.contains_rect(rect));
+                        assert!(shape.clip_rect.contains_rect(rect));
+                        rect.center()
+                    })
+                })
+                .expect("Dismiss caption must be painted");
+            for pressed in [true, false] {
+                render(vec![
+                    egui::Event::PointerMoved(dismiss),
+                    egui::Event::PointerButton {
+                        pos: dismiss,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ]);
+            }
+            assert!(
+                browser.last_status.is_none(),
+                "visible Dismiss action must work"
+            );
+        }
+    }
 
     #[test]
     fn long_sort_labels_keep_fixed_bounds_in_narrow_cells() {
