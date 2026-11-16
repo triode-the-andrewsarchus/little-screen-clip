@@ -18,6 +18,8 @@ pub fn socket_path() -> std::path::PathBuf {
 /// Request command messages sent from clients (`clipctl`, `clip-workbench`) to `little-clipd`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcRequest {
+    /// Controls retained portable storage operations.
+    Drives(crate::drives::DriveRequest),
     /// Queries the complete `SlotManager` state.
     GetState,
     /// Queries lightweight slot cards for polling; use `GetSlotItem` for changed item details.
@@ -152,6 +154,8 @@ fn default_left_hand() -> HandSide {
 /// Response messages returned by `little-clipd` across the IPC socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
+    /// Acknowledges a portable storage operation or supplies a status page.
+    Drives(crate::drives::DriveReply),
     /// Identity-scoped acknowledgement or terminal route observation.
     ClipboardRoute {
         request_id: uuid::Uuid,

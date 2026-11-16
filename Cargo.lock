@@ -6362,6 +6362,7 @@ dependencies = [
 name = "little-clipd"
 version = "0.1.0"
 dependencies = [
+ "clip-drives",
  "futures-util",
  "libc",
  "little-clip-core",

@@ -1,15 +1,18 @@
 //! Daemon-owned portable media synchronization, backup and offline catalog services.
-mod sync;
-mod catalog;
 mod backup;
+mod catalog;
 mod discovery;
 mod root;
 mod scan;
+mod service;
 mod store;
+mod sync;
+mod watch;
 
-pub use discovery::discover;
 pub use catalog::mount_catalog;
+pub use discovery::discover;
 pub use little_clip_core::drives::*;
+pub use service::Service;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -48,5 +51,7 @@ pub(crate) fn cancelled(token: &std::sync::atomic::AtomicBool) -> Result<()> {
 }
 
 impl From<rustix::io::Errno> for Error {
-    fn from(value: rustix::io::Errno) -> Self { Self::Io(value.into()) }
+    fn from(value: rustix::io::Errno) -> Self {
+        Self::Io(value.into())
+    }
 }

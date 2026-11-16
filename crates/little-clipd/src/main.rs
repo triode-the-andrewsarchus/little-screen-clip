@@ -80,6 +80,8 @@ struct DisplayLock {
 
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
+    /// Retained portable storage owner, independent from desktop clients.
+    drives: Option<clip_drives::Service>,
     /// Active application configuration.
     pub config: RwLock<little_clip_core::AppConfig>,
     /// Multi-slot clipboard inventory state.
@@ -404,6 +406,16 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let mut manager = SlotManager::default();
     manager.apply_config(&config.slots);
     let ctx = Arc::new(DaemonContext {
+        drives: match clip_drives::Service::start(
+            config.drives.clone(),
+            clip_drives::state_directory(),
+        ) {
+            Ok(service) => Some(service),
+            Err(error) => {
+                warn!("Drive services unavailable: {error}");
+                None
+            }
+        },
         config: RwLock::new(config.clone()),
         manager: RwLock::new(manager),
         renderer: RwLock::new(renderer),
@@ -687,6 +699,24 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
         let req: Result<IpcRequest, _> = serde_json::from_slice(&request_bytes);
         let references_only = matches!(&req, Ok(IpcRequest::PushFileReferences { .. }));
         let resp = match req {
+            Ok(IpcRequest::Drives(request)) => {
+                if let Some(service) = &ctx.drives {
+                    let service = service.clone();
+                    match tokio::task::spawn_blocking(move || service.request(request)).await {
+                        Ok(Ok(reply)) => IpcResponse::Drives(reply),
+                        Ok(Err(error)) => IpcResponse::Error {
+                            error: error.to_string(),
+                        },
+                        Err(error) => IpcResponse::Error {
+                            error: error.to_string(),
+                        },
+                    }
+                } else {
+                    IpcResponse::Error {
+                        error: "Drive services are unavailable; check daemon logs".into(),
+                    }
+                }
+            }
             Ok(IpcRequest::GetState) => {
                 info!("Processing GetState...");
                 let mgr = ctx.manager.read().await;
@@ -939,6 +969,11 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 let mut config = ctx.config.write().await;
                 let new_config = little_clip_core::config::AppConfig::load();
                 let new_audio_config = new_config.audio.clone();
+                if let Some(service) = &ctx.drives {
+                    let _ = service.request(little_clip_core::drives::DriveRequest::Configure {
+                        config: new_config.drives.clone(),
+                    });
+                }
                 *config = new_config.clone();
                 ctx.manager.write().await.apply_config(&new_config.slots);
                 match ctx.rolling_capture_config.write() {
@@ -1768,6 +1803,7 @@ mod tests {
         // An isolated handler: no daemon startup, USB thread, capture thread,
         // external clipboard process or user's socket is involved.
         Arc::new(DaemonContext {
+            drives: None,
             config: RwLock::new(config.clone()),
             manager: RwLock::new(manager),
             renderer: RwLock::new(ScreenRenderer::fallback(config.clone())),

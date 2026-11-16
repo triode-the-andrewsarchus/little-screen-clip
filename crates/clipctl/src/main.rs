@@ -4,6 +4,7 @@
 //! execute pipeline recipes, and simulate capture/paste actions.
 
 mod copy;
+mod drives;
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -25,6 +26,11 @@ struct Cli {
 /// Available CLI subcommands for controlling daemon state and operations.
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage portable drives, RAM copies, backups, folder sync and offline catalogs
+    Drives {
+        #[command(subcommand)]
+        action: drives::DriveCommand,
+    },
     /// Show current slots state across both hands and stacks
     Status,
     /// Push text to a hand (left or right, defaults to left)
@@ -231,6 +237,7 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         }
+        Commands::Drives { action } => IpcRequest::Drives(action.request()),
         Commands::Status => IpcRequest::GetState,
         Commands::Push { text, hand } => {
             let hand_side = if hand.to_lowercase().starts_with('r') {
@@ -286,6 +293,7 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
 
     let resp = send_ipc_req(&mut writer, &mut lines, &request).await?;
     match resp {
+        IpcResponse::Drives(reply) => println!("{}", serde_json::to_string_pretty(&reply)?),
         IpcResponse::State(mgr) => {
             println!("{}", "=== LITTLE SCREEN CLIP SLOTS ===".cyan().bold());
             print_slot(SlotId::Undo, mgr.get(SlotId::Undo));
