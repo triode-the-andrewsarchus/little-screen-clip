@@ -32,12 +32,12 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
-| 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real UDisks authorization coordination remains. |
+| 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real guest UDisks/PolicyKit authorization, busy-source refusal and successful preflush/unmount/image/restoration now pass. Interactive password-agent and hotplug/replacement races remain. |
 | 5.2 | Partial | Isolated real UDisks/PolicyKit tests now prove authorized image reads, unprivileged denial and busy-device refusal on FAT32/exFAT/NTFS partitions. The desktop authentication-agent/password interaction remains a separate UI gate. |
 | 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; Full authorized-device hashes, exact partition image sizes and publication pass on real guest partitions; typed partition-layout facts remain. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs partition images now pass on FAT32/exFAT/NTFS with exact source SHA-256 and retained earlier images. Mount-option and interrupted-device matrices remain. |
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
-| 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Catalog-through-image and concurrent-provider matrices remain. |
+| 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
@@ -565,3 +565,30 @@ The original-baseline architecture comparison still reports REGRESSION: duplicat
 net new clone groups. This checkpoint adds no new reported hotspot. The remaining
 branch-wide architecture review is still open. Report:
 `.fitness/portable-drives-native-images-architecture.json`.
+
+
+Image/catalog-provider checkpoint: the current helper build and complete guest
+flow pass in `/tmp/portable-drive-vm-image-catalog-final/report.json`. Each source
+profile exercises exact image/manifest checksums, the captured Drive record and
+published current-image pointer, live FUSE metadata while the source is unmounted,
+image-backed payload reads, EROFS, ENOMEDIUM after provider retirement, and explicit
+catalog unmounting before source remount. The guest now supplies util-linux's
+`/bin/umount` path because fusermount3 uses options absent from BusyBox umount.
+Core/backend/file-manager all-target clippy passes again with warnings denied;
+changed Rust files pass rustfmt checks, and Python/shell syntax checks pass.
+
+**Still unfinished:** UDisks on this system selects exFAT FUSE when restoring or
+mounting an image. It reports zero fractional mtime where the original kernel
+exFAT mount reported 120 ms. Metadata-only catalog entries with that precision
+loss are rejected with ESTALE; whole-second entries remain readable. The native
+fixture explicitly exercises both outcomes rather than silently relaxing revision
+validation. This does not establish full cross-driver catalog compatibility, and
+that requirement remains open alongside the other rows. The source files and
+images still retain their original bytes.
+
+
+The final image/catalog architecture checkpoint retains the same material gate
+result: REGRESSION, twelve net new clone groups, duplication 7.18%, average CCN
+3.48, max 274 and cycles 143. The native image/provider test adds no new reported
+hotspot or clone group. Raw report:
+`.fitness/portable-drives-image-catalog-architecture.json`.

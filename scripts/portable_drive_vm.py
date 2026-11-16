@@ -51,6 +51,8 @@ def make_initrd(output, args, repo):
     shutil.copy2(args.busybox, root / 'bin/busybox')
     for applet in APPLETS:
         (root / 'bin' / applet).symlink_to('busybox')
+    # fusermount3 invokes this absolute path with util-linux-only options.
+    (root / 'bin/umount').symlink_to('/usr/bin/umount')
     (root / 'lib').symlink_to('usr/lib')
     (root / 'lib64').symlink_to('usr/lib64')
     (root / 'etc/mtab').symlink_to('/proc/mounts')

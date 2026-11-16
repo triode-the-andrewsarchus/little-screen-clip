@@ -125,7 +125,7 @@ The daemon validates partition identity and additional device evidence before wr
 
 **Save / update catalog…** stores hierarchy, names, sizes, types, available modification times, and coverage status without copying file contents. **Mount saved catalog** exposes a read-only ordinary filesystem view. Saved catalogs remain accessible from the sidebar after the original drive is removed.
 
-Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Symlink targets outside the captured tree remain metadata-only.
+Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 

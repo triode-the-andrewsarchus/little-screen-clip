@@ -121,3 +121,51 @@ service diagnostics in the console log.
 GPT partition format/mount/remount probes and production-format `lsblk` inventory
 with PARTUUID, capacity and disk sequence. It does not by itself prove image
 backup or authorized/denied `OpenForBackup` calls.
+
+
+The `service::tests::native_images::` ignored cases exercise the production
+inventory and authority paths. Build the current helper, then the test binary,
+serially:
+
+```bash
+cargo build -j 2 -p clip-drives --bin clip-drive-mount
+cargo test -j 2 -p clip-file-manager -p clip-drives --lib --no-run
+```
+
+Select `vm_images.sh`, allow 4096 MiB guest memory for retained image versions,
+and append the following command after the runner's `--` (use absolute paths from
+the completed build):
+
+```text
+/usr/bin/env LITTLE_CLIP_DRIVE_MOUNT_HELPER=/absolute/repo/target/debug/clip-drive-mount /absolute/backend-test-binary service::tests::native_images:: --ignored --test-threads=1 --nocapture
+```
+
+The parent test invokes a UID-65534 child with an exact test selector and requires
+its explicit denial marker; a zero-test child run cannot pass. Guest root is
+allowed by the private PolicyKit fixture, and the unprivileged user is denied.
+The test also creates/replaces only an owned alias node in a temporary `/dev`
+subdirectory, checking that the same rdev does not authorize a replacement inode.
+It verifies a wrong kernel disk sequence against a real authorized descriptor.
+
+`/tmp/portable-drive-vm-authorized-images-final/report.json` passed the initial
+full authority/device/image flow for all three source formats: denied access,
+busy unmount, exact full-partition hashes and sizes, read-only image mounting,
+source mount restoration and preserved prior versions. Catalog-through-image
+coverage is a follow-up run requiring the current helper. The source format may
+be mounted through a different driver when UDisks restores it (this host selected
+exFAT FUSE after an initial kernel exFAT mount); record actual mount facts and do
+not infer driver coverage from a volume label.
+
+
+The expanded run `/tmp/portable-drive-vm-image-catalog-final/report.json` uses the
+current helper and verifies live FUSE listing, no-provider ENOMEDIUM, image-backed
+payloads, provider retirement, catalog unmounting and image manifest publication.
+The runner supplies `/bin/umount` as a symlink to util-linux's `/usr/bin/umount`;
+BusyBox does not support the arguments fusermount3 uses.
+
+The test fixes one file's fractional timestamp and another to a whole second.
+On this host exFAT FUSE drops the fractional part, so the first entry correctly
+returns ESTALE while the whole-second entry opens. FAT32 and NTFS3 provider reads
+retain their comparable timestamps. The test reports precision loss explicitly;
+a green run covers conservative refusal, not complete cross-driver compatibility.
+That limitation remains in the completion audit.

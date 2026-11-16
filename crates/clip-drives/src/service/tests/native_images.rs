@@ -1,0 +1,304 @@
+//! Real guest UDisks/PolicyKit acceptance; no host bus or block device is exposed.
+use super::*;
+use crate::sync_edge_tests::native_fs;
+use sha2::{Digest, Sha256};
+use std::io::Read;
+
+fn selected(fixture: &Drive) -> Drive {
+    assert_eq!(
+        std::env::var("LITTLE_CLIP_DRIVE_TEST_AUTHORITY").unwrap(),
+        "1"
+    );
+    assert!(
+        fixture.part_uuid.is_some(),
+        "Use the partitioned guest fixture"
+    );
+    let actual = discovery::select(discovery::discover().unwrap(), &fixture.id).unwrap();
+    assert_eq!(actual.device, fixture.device);
+    assert_eq!(actual.capacity, fixture.capacity);
+    assert_eq!(actual.disk_sequence, fixture.disk_sequence);
+    assert_eq!(actual.filesystem_uuid, fixture.filesystem_uuid);
+    actual
+}
+
+fn digest(mut file: File) -> String {
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).unwrap();
+        if count == 0 {
+            return format!("{:x}", hash.finalize());
+        }
+        hash.update(&buffer[..count]);
+    }
+}
+
+fn replaced_node_is_refused(drive: &Drive) {
+    use std::os::unix::fs::MetadataExt;
+    let nodes = tempfile::tempdir_in("/dev").unwrap();
+    let alias = nodes.path().join("partition");
+    fs::hard_link(&drive.device, &alias).unwrap();
+    let mut aliased = drive.clone();
+    aliased.device = alias.clone();
+    let source = crate::device::Source::capture(&aliased).unwrap();
+    let number = fs::metadata(&alias).unwrap().rdev();
+    fs::rename(&alias, nodes.path().join("held-original")).unwrap();
+    let created = little_clip_core::process::CommandRequest::new("mknod")
+        .arg(&alias)
+        .arg("b")
+        .arg(libc::major(number).to_string())
+        .arg(libc::minor(number).to_string())
+        .run()
+        .unwrap();
+    assert!(created.status.success());
+    assert_eq!(fs::metadata(&alias).unwrap().rdev(), number);
+    let error = source.validate().unwrap_err();
+    assert!(error.to_string().contains("removed or replaced"), "{error}");
+}
+
+#[test]
+#[ignore = "requires the isolated partition/authority guest"]
+fn native_image_authorization_is_denied_to_unprivileged_fixture() {
+    if std::env::var_os("LITTLE_CLIP_DRIVE_TEST_DENIAL").is_none() {
+        return;
+    }
+    assert_eq!(rustix::process::geteuid().as_raw(), 65534);
+    let drive = selected(&native_fs::guest_drive());
+    let source = crate::device::Source::capture(&drive).unwrap();
+    let error = backup::open_image(&drive, &source).unwrap_err();
+    assert!(
+        error.to_string().contains("UDisks authorization"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("NotAuthorized"), "{error}");
+    println!("\nGUEST_IMAGE_AUTHORIZATION_DENIED");
+}
+
+#[test]
+#[ignore = "requires the isolated partition/authority guest"]
+fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
+    let original = selected(&native_fs::guest_drive());
+    replaced_node_is_refused(&original);
+    let denied = little_clip_core::process::CommandRequest::new("env")
+        .args(["LITTLE_CLIP_DRIVE_TEST_DENIAL=1", "setpriv", "--reuid=65534", "--regid=65534", "--clear-groups"])
+        .arg(std::env::current_exe().unwrap())
+        .args(["service::tests::native_images::native_image_authorization_is_denied_to_unprivileged_fixture", "--exact", "--ignored", "--nocapture"])
+        .timeout(Duration::from_secs(15))
+        .own_process_group()
+        .run()
+        .unwrap();
+    assert!(
+        denied.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&denied.stdout),
+        String::from_utf8_lossy(&denied.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&denied.stdout)
+            .lines()
+            .filter(|line| *line == "GUEST_IMAGE_AUTHORIZATION_DENIED")
+            .count(),
+        1,
+        "The unprivileged child must execute its authorization check"
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let source_path = original.mount.as_ref().unwrap().join("image-source.txt");
+    fs::write(&source_path, b"first authorized partition backup").unwrap();
+    let seconds_path = original.mount.as_ref().unwrap().join("seconds.txt");
+    fs::write(&seconds_path, b"whole-second payload").unwrap();
+    for (path, nanos) in [(&source_path, 120_000_000), (&seconds_path, 0)] {
+        File::open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::new(1_600_000_000, nanos)),
+            )
+            .unwrap();
+    }
+    let service = Service::start_with_inventory(
+        DriveConfig {
+            backup_directory: Some(temp.path().join("backups")),
+            ..Default::default()
+        },
+        temp.path().join("state"),
+        Arc::new(discovery::discover),
+    )
+    .unwrap();
+    finish(
+        &service,
+        DriveRequest::Catalog {
+            drive: original.id.clone(),
+        },
+    );
+    let catalog = status(&service).catalogs.pop().unwrap();
+    let request = || DriveRequest::Backup {
+        drive: original.id.clone(),
+        kind: BackupKind::Image,
+        restore_mounted: false,
+    };
+    let busy = File::open(&source_path).unwrap();
+    let refused = completed(&service, request());
+    assert_eq!(refused.state, "failed", "{}", refused.message);
+    assert!(
+        refused.message.to_lowercase().contains("busy"),
+        "{}",
+        refused.message
+    );
+    assert!(status(&service).backups.is_empty());
+    assert!(selected(&original).mount.is_some());
+    drop(busy);
+    finish(&service, request());
+    let drive = selected(&original);
+    assert!(drive.mount.is_none());
+    let first = status(&service).backups.pop().unwrap();
+    assert_eq!(
+        first.path.parent().unwrap().file_name().unwrap(),
+        original.part_uuid.as_ref().unwrap().as_str()
+    );
+    assert_eq!(fs::metadata(&first.path).unwrap().len(), original.capacity);
+    let source = crate::device::Source::capture(&drive).unwrap();
+    let input = backup::open_image(&drive, &source).unwrap();
+    source.validate_input(&input).unwrap();
+    let mut stale = drive.clone();
+    stale.disk_sequence = Some(drive.disk_sequence.unwrap() + 1);
+    let stale = crate::device::Source::capture(&stale).unwrap();
+    let error = stale.validate_input(&input).unwrap_err();
+    assert!(
+        error.to_string().contains("Disk lifetime changed"),
+        "{error}"
+    );
+    let expected = digest(input);
+    assert_eq!(first.sha256.as_deref(), Some(expected.as_str()));
+    assert_eq!(digest(File::open(&first.path).unwrap()), expected);
+    let manifest_path = first.manifest.as_ref().unwrap();
+    assert_eq!(
+        digest(File::open(manifest_path).unwrap()),
+        first.manifest_sha256.as_ref().unwrap().as_str()
+    );
+    let manifest = Store::existing(manifest_path, true).unwrap();
+    let captured: Drive = manifest.get("source", "drive").unwrap().unwrap();
+    assert_eq!(captured, drive);
+    let current: DriveBackup = serde_json::from_slice(
+        &fs::read(first.path.parent().unwrap().join("current-image.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current.id, first.id);
+    finish(
+        &service,
+        DriveRequest::MountCatalog {
+            catalog: catalog.id.clone(),
+        },
+    );
+    let catalog_mount = status(&service)
+        .catalogs
+        .into_iter()
+        .find(|c| c.id == catalog.id)
+        .unwrap()
+        .mount
+        .unwrap();
+    let catalog_file = catalog_mount.join("image-source.txt");
+    assert_eq!(fs::metadata(&catalog_file).unwrap().len(), 33);
+    assert_eq!(
+        fs::read(&catalog_file).unwrap_err().raw_os_error(),
+        Some(libc::ENOMEDIUM)
+    );
+    finish(
+        &service,
+        DriveRequest::MountImage {
+            backup: first.id.clone(),
+        },
+    );
+    let mounted = status(&service)
+        .backups
+        .into_iter()
+        .find(|b| b.id == first.id)
+        .unwrap()
+        .mount
+        .unwrap();
+    assert_eq!(
+        fs::read(mounted.join("image-source.txt")).unwrap(),
+        b"first authorized partition backup"
+    );
+    let catalog_db = Store::existing(
+        &temp
+            .path()
+            .join("state/catalogs")
+            .join(format!("{}.sqlite", catalog.id)),
+        true,
+    )
+    .unwrap();
+    let entry = crate::scan::entry(&catalog_db, "catalog", Path::new("image-source.txt"))
+        .unwrap()
+        .unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(mounted.join("image-source.txt")).unwrap();
+    if (entry.modified, entry.nanos) == (metadata.mtime(), metadata.mtime_nsec()) {
+        assert_eq!(
+            fs::read(&catalog_file).unwrap(),
+            b"first authorized partition backup"
+        );
+    } else {
+        // Metadata-only catalogs cannot prove equivalence after a provider
+        // loses timestamp precision. Never silently accept an uncertain file.
+        assert_eq!(
+            fs::read(&catalog_file).unwrap_err().raw_os_error(),
+            Some(libc::ESTALE)
+        );
+        eprintln!(
+            "Catalog provider lost timestamp precision: {}.{} versus {}.{}",
+            entry.modified,
+            entry.nanos,
+            metadata.mtime(),
+            metadata.mtime_nsec()
+        );
+    }
+    assert_eq!(
+        fs::read(catalog_mount.join("seconds.txt")).unwrap(),
+        b"whole-second payload"
+    );
+    assert_eq!(
+        fs::write(mounted.join("must-not-write"), b"x")
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::EROFS)
+    );
+    finish(
+        &service,
+        DriveRequest::UnmountImage {
+            backup: first.id.clone(),
+        },
+    );
+    assert_eq!(
+        fs::read(&catalog_file).unwrap_err().raw_os_error(),
+        Some(libc::ENOMEDIUM)
+    );
+    finish(
+        &service,
+        DriveRequest::UnmountCatalog {
+            catalog: catalog.id,
+        },
+    );
+    let authority = partition::Authority::default();
+    (authority.mount)(&original).unwrap();
+    let mounted_source = selected(&original).mount.unwrap();
+    fs::write(mounted_source.join("image-source.txt"), b"second version").unwrap();
+    finish(
+        &service,
+        DriveRequest::Backup {
+            drive: original.id.clone(),
+            kind: BackupKind::Image,
+            restore_mounted: true,
+        },
+    );
+    assert!(selected(&original).mount.is_some());
+    let versions = status(&service).backups;
+    assert_eq!(versions.len(), 2);
+    let second = versions.iter().find(|b| b.id != first.id).unwrap();
+    assert_ne!(second.sha256, first.sha256);
+    assert_eq!(digest(File::open(&first.path).unwrap()), expected);
+    assert_eq!(
+        fs::read(selected(&original).mount.unwrap().join("image-source.txt")).unwrap(),
+        b"second version"
+    );
+    service.shutdown().unwrap();
+}

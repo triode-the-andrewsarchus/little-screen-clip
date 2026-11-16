@@ -1149,6 +1149,7 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     mod backup_review;
+    mod native_images;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
