@@ -99,3 +99,25 @@ establish partition identity, interactive authentication, ntfs-3g or every mount
 option. The guest's default NTFS3 mount is case-sensitive; FAT32 and exFAT fold
 ASCII case. A pass does not imply every requested Unix filename is representable:
 the invariant is exact-name success or explicit refusal with originals retained.
+
+
+For real device-authority tests, select `vm_images.sh` as the guest script. It
+starts private guest D-Bus, udev, UDisks2 and PolicyKit services, then uses GPT
+partition fixtures through `vm_filesystems.sh --partitioned`. Guest-only PolicyKit
+rules allow root and deny the unprivileged fixture user. `/run`, `/etc` and `/dev`
+are created inside the guest; the host bus and host block devices are never shared.
+This exercises real service decisions, not the desktop's interactive password UI.
+The native authority services must be installed in the read-only `/usr` tool tree.
+
+Additional environment observations are `LITTLE_CLIP_DRIVE_TEST_PARTUUID` (empty
+for whole-volume fixtures), `LITTLE_CLIP_DRIVE_TEST_DISK_SEQUENCE`, and, for the
+partition/authority wrapper, `LITTLE_CLIP_DRIVE_TEST_AUTHORITY=1`. The wrapper
+refreshes udev metadata after formatting so unprivileged inventory can use the
+same observed UUIDs. Cleanup finds the source by device even if an application
+remounted it at another directory. Failed application cases retain bounded guest
+service diagnostics in the console log.
+
+`/tmp/portable-drive-vm-partition-authority-smoke/report.json` proves all three
+GPT partition format/mount/remount probes and production-format `lsblk` inventory
+with PARTUUID, capacity and disk sequence. It does not by itself prove image
+backup or authorized/denied `OpenForBackup` calls.
