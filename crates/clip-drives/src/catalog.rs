@@ -56,6 +56,7 @@ pub(crate) fn capture(
         .map(|r| r.relative)
         .collect();
     let limits = Limits {
+        hash_bytes: u64::MAX,
         entries: config.catalog_max_entries,
         bytes: config.catalog_max_bytes,
         depth: config.catalog_max_depth,
@@ -215,7 +216,7 @@ impl CatalogFs {
                 continue;
             }
             if let Some(hash) = &entry.hash
-                && root.digest(&entry.path, &AtomicBool::new(false))? != *hash
+                && root.digest(&entry.path, entry.size, &AtomicBool::new(false))? != *hash
             {
                 stale = true;
                 continue;

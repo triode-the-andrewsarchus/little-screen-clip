@@ -59,6 +59,7 @@ pub(crate) struct Limits {
     pub depth: usize,
     pub timeout: Duration,
     pub hashes: bool,
+    pub hash_bytes: u64,
     pub exclusions: Vec<PathBuf>,
     pub reuse_scan: Option<String>,
 }
@@ -70,6 +71,7 @@ impl Default for Limits {
             depth: 256,
             timeout: Duration::MAX,
             hashes: true,
+            hash_bytes: u64::MAX,
             exclusions: vec![],
             reuse_scan: None,
         }
@@ -100,6 +102,7 @@ pub(crate) fn observe(
     root: &Root,
     relative: &Path,
     hashes: bool,
+    max_bytes: u64,
     cancel: &AtomicBool,
 ) -> Result<Option<Entry>> {
     let Some(metadata) = root.metadata(relative)? else {
@@ -131,7 +134,7 @@ pub(crate) fn observe(
         link: None,
     };
     if metadata.is_file() && hashes {
-        entry.hash = Some(root.digest(relative, cancel)?);
+        entry.hash = Some(root.digest(relative, max_bytes, cancel)?);
         let after = root.metadata(relative)?.ok_or("Hashed file disappeared")?;
         if after.dev() != entry.device
             || after.ino() != entry.inode
@@ -176,20 +179,21 @@ fn collect_entry(
     root: &Root,
     relative: &Path,
     limits: &Limits,
+    remaining: u64,
     cancel: &AtomicBool,
 ) -> Result<Entry> {
     let excluded = limits
         .exclusions
         .iter()
         .any(|path| relative.starts_with(path));
-    let mut entry = observe(
-        root,
-        relative,
-        limits.hashes && !excluded && limits.reuse_scan.is_none(),
-        cancel,
-    )?
-    .ok_or("Entry disappeared during collection")?;
+    let mut entry = observe(root, relative, false, remaining, cancel)?
+        .ok_or("Entry disappeared during collection")?;
     if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
+        if entry.size > remaining {
+            return Err(
+                "RAM logical contents exceed the session hash budget; sparse data retained".into(),
+            );
+        }
         let cached = limits
             .reuse_scan
             .as_ref()
@@ -200,7 +204,7 @@ fn collect_entry(
             entry.hash = cached.hash;
         }
         if entry.hash.is_none() {
-            entry = observe(root, relative, true, cancel)?
+            entry = observe(root, relative, true, remaining, cancel)?
                 .ok_or("File disappeared during collection")?;
         }
     }
@@ -239,6 +243,7 @@ pub(crate) fn scan(
     let started = Instant::now();
     let mut count = 0;
     let mut bytes = 0_u64;
+    let mut payload = 0_u64;
     let mut complete = true;
     let mut messages = Vec::new();
     let mut pending = Vec::with_capacity(128);
@@ -263,13 +268,23 @@ pub(crate) fn scan(
             }
         };
         let relative = frame.relative.join(child.file_name());
-        let mut entry = match collect_entry(db, root, &relative, limits, cancel) {
+        let mut entry = match collect_entry(
+            db,
+            root,
+            &relative,
+            limits,
+            limits.hash_bytes.saturating_sub(payload),
+            cancel,
+        ) {
             Ok(entry) => entry,
             Err(error) => {
                 cancelled(cancel)?;
                 unavailable(relative.clone(), error.to_string())
             }
         };
+        if entry.kind == "file" && limits.hashes {
+            payload = payload.saturating_add(entry.size);
+        }
         descend(root, &mut entry, &mut stack, limits.depth);
         complete &= entry.warning.is_none();
         let json = serde_json::to_string(&entry)?;
@@ -413,6 +428,41 @@ impl Iterator for Cursor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ram_hash_budget_rejects_sparse_growth_before_reading_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir(&source).unwrap();
+        File::create(source.join("huge-sparse"))
+            .unwrap()
+            .set_len(10 * 1024 * 1024 * 1024 * 1024)
+            .unwrap();
+        let db = Store::open(&temp.path().join("scan.sqlite")).unwrap();
+        let root = Root::open(&source).unwrap();
+        let start = Instant::now();
+        let coverage = scan(
+            &db,
+            &root,
+            "ram",
+            &Limits {
+                hash_bytes: 128 * 1024 * 1024,
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(!coverage.complete);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(coverage.message.contains("RAM logical contents"));
+        assert_eq!(
+            root.metadata(Path::new("huge-sparse"))
+                .unwrap()
+                .unwrap()
+                .len(),
+            10 * 1024 * 1024 * 1024 * 1024
+        );
+    }
     #[test]
     fn bounded_catalog_excludes_subtrees_without_reading_payloads() {
         let temp = tempfile::tempdir().unwrap();

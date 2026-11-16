@@ -11,6 +11,11 @@ pub struct DriveConfig {
     pub ram_min_available: u64,
     #[serde(with = "crate::path_serde")]
     pub ram_directory: PathBuf,
+    pub ram_session_max_bytes: u64,
+    pub ram_total_max_bytes: u64,
+    pub ram_session_max_entries: u64,
+    pub ram_total_max_entries: u64,
+    pub ram_max_sessions: usize,
     pub catalog_max_entries: u64,
     pub catalog_max_bytes: u64,
     pub catalog_max_depth: usize,
@@ -26,6 +31,11 @@ impl Default for DriveConfig {
             ram_capacity_limit: 4_000_000_000,
             ram_min_available: 8_000_000_000,
             ram_directory: PathBuf::from("/tmp"),
+            ram_session_max_bytes: 6_000_000_000,
+            ram_total_max_bytes: 16_000_000_000,
+            ram_session_max_entries: 2_000_000,
+            ram_total_max_entries: 4_000_000,
+            ram_max_sessions: 8,
             catalog_max_entries: 250_000,
             catalog_max_bytes: 256 * 1024 * 1024,
             catalog_max_depth: 64,
@@ -203,6 +213,29 @@ pub struct RamSession {
     pub ready: bool,
     pub connected: bool,
     pub status: String,
+    /// Absent only for legacy, unbounded directory sessions.
+    #[serde(default)]
+    pub backing: Option<RamBacking>,
+}
+
+impl RamSession {
+    /// Reports whether initial population and the current RAM mount are ready.
+    pub fn browsable(&self) -> bool {
+        self.ready && self.backing.as_ref().is_none_or(|b| b.mounted)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RamBacking {
+    #[serde(with = "crate::path_serde")]
+    pub directory: PathBuf,
+    pub directory_identity: StorageIdentity,
+    pub image_identity: StorageIdentity,
+    pub capacity: u64,
+    pub inodes: u64,
+    pub mounted: bool,
+    #[serde(default)]
+    pub initialized: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -281,6 +314,29 @@ mod tests {
             config.drives.ram_capacity_limit,
             defaults.ram_capacity_limit
         );
+    }
+    #[test]
+    fn legacy_ram_records_recover_without_requiring_a_new_backing_format() {
+        let session = RamSession {
+            identity: crate::kernel_interface::MountIdentity {
+                device: 1,
+                inode: 2,
+                mount: 3,
+            },
+            id: "legacy".into(),
+            drive: "fixture".into(),
+            path: "/tmp/little-clip-ram-legacy".into(),
+            ready: true,
+            connected: false,
+            status: "retained".into(),
+            backing: None,
+        };
+        let mut json = serde_json::to_value(&session).unwrap();
+        json.as_object_mut().unwrap().remove("backing");
+        let recovered: RamSession = serde_json::from_value(json).unwrap();
+        assert_eq!(recovered.path, session.path);
+        assert!(recovered.backing.is_none());
+        assert!(recovered.browsable());
     }
 }
 

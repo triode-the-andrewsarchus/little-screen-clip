@@ -69,7 +69,9 @@ fn matches_variant(
         return Ok(true);
     };
     match entry.kind.as_str() {
-        "file" => Ok(metadata.is_file() && root.digest(name, cancel)? == signature(entry)?),
+        "file" => {
+            Ok(metadata.is_file() && root.digest(name, entry.size, cancel)? == signature(entry)?)
+        }
         "symlink" => {
             if !metadata.file_type().is_symlink() {
                 return Ok(false);
@@ -140,7 +142,8 @@ impl Reconcile<'_> {
             }
             for child in scan::Cursor::new(db, &tree.scan) {
                 let child = child?;
-                if let Some(existing) = scan::observe(&target, &child.path, true, cancel)? {
+                if let Some(existing) = scan::observe(&target, &child.path, true, u64::MAX, cancel)?
+                {
                     if signature(&existing)? != signature(&child)? {
                         return Err(
                             "A preserved variant was edited; both originals retained".into()
@@ -158,7 +161,7 @@ impl Reconcile<'_> {
                     )?;
                 }
             }
-        } else if let Some(existing) = scan::observe(to, name, true, cancel)? {
+        } else if let Some(existing) = scan::observe(to, name, true, u64::MAX, cancel)? {
             if signature(&existing)? != signature(entry)? {
                 return Err("A preserved variant was edited; both originals retained".into());
             }

@@ -50,6 +50,33 @@ impl Root {
         Self::open(&anchor(&file))
     }
     pub fn storage_identity(&self) -> Result<little_clip_core::drives::StorageIdentity> {
+        // Linux's FUSE statfs protocol omits f_fsid, even when the server supplies it.
+        // Our owned RAM mount has a persistent session namespace; callers additionally
+        // validate its retained tmpfs image and live mount before authorizing writes.
+        if rustix::fs::fstatvfs(&self.file)?.f_fsid == 0 {
+            let mount = crate::mounts::inventory()?
+                .into_iter()
+                .find(|m| m.id == self.identity.mount && m.filesystem == "fuse.clip-ram")
+                .ok_or("Filesystem has no persistent identity")?;
+            let id = mount
+                .source
+                .to_str()
+                .and_then(|s| s.strip_prefix("little-clip-ram:"))
+                .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                .ok_or("Unknown RAM mount identity")?;
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(id.as_bytes());
+            return Ok(little_clip_core::drives::StorageIdentity {
+                filesystem: u64::from_le_bytes(
+                    digest[..8]
+                        .try_into()
+                        .map_err(|_| "Invalid identity digest")?,
+                )
+                .max(1),
+                inode: self.file.metadata()?.ino(),
+                birth: None,
+            });
+        }
         Ok(little_clip_core::drives::StorageIdentity::pinned(
             &self.file,
         )?)
@@ -138,9 +165,13 @@ impl Root {
         let (_parent, path) = self.parent(relative, false)?;
         Ok(kernel_interface::open_content(&path, false)?)
     }
-    pub fn digest(&self, relative: &Path, cancel: &AtomicBool) -> Result<String> {
+    pub fn digest(&self, relative: &Path, max_bytes: u64, cancel: &AtomicBool) -> Result<String> {
         let file = self.input(relative)?;
-        Ok(FileSource::capture_file(&file)?.sha256(&file, cancel, std::time::Duration::MAX)?)
+        let source = FileSource::capture_file(&file)?;
+        if file.metadata()?.len() > max_bytes {
+            return Err("File exceeds the permitted fingerprint byte budget; data retained".into());
+        }
+        Ok(source.sha256(&file, cancel, std::time::Duration::MAX)?)
     }
     pub fn ensure_directory(&self, relative: &Path) -> Result<()> {
         let directory = self.directory(relative, true)?;
@@ -168,7 +199,7 @@ impl Root {
         let old = previous.as_ref().map(|_| self.input(target)).transpose()?;
         let old_source = old.as_ref().map(FileSource::capture_file).transpose()?;
         if let Some(expected) = expected {
-            if self.digest(target, cancel)? != expected {
+            if self.digest(target, u64::MAX, cancel)? != expected {
                 return Err("Destination changed during synchronization".into());
             }
         } else if previous.is_some() {
@@ -202,7 +233,7 @@ impl Root {
             |_| {},
         )?;
         if let Some(expected) = expected
-            && self.digest(target, cancel)? != expected
+            && self.digest(target, u64::MAX, cancel)? != expected
         {
             return Err("Destination changed before installation".into());
         }
@@ -371,7 +402,7 @@ mod tests {
                 &cancel,
             )
             .unwrap();
-        let hash = target.digest(name, &cancel).unwrap();
+        let hash = target.digest(name, u64::MAX, &cancel).unwrap();
         let old = fs::read(b.join(name)).unwrap();
         fs::write(a.join(name), b"replacement").unwrap();
         assert!(

@@ -210,7 +210,7 @@ impl Drives {
             .cloned();
         if let Some(session) = ram {
             if ui
-                .add_enabled(session.ready, egui::Button::new("Browse RAM copy"))
+                .add_enabled(session.browsable(), egui::Button::new("Browse RAM copy"))
                 .clicked()
             {
                 *open = Some(session.path);
@@ -541,7 +541,7 @@ impl FileManager {
                     if session.connected { "" } else { " (offline)" }
                 ),
             ));
-            if response.clicked() && session.ready {
+            if response.clicked() && session.browsable() {
                 open = Some(session.path.clone());
             }
             response.clone().on_hover_text(&session.status);

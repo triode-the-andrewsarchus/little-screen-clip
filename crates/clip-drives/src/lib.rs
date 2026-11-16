@@ -3,6 +3,7 @@ mod backup;
 mod catalog;
 mod discovery;
 mod mounts;
+mod ram;
 mod root;
 mod scan;
 mod service;

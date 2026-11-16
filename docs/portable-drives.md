@@ -5,7 +5,8 @@ The file manager's drive context menu controls RAM copies, versioned backups, au
 Build the daemon, CLI, file manager, and catalog helper together:
 
 ```sh
-cargo build -p little-clipd -p clipctl -p clip-file-manager -p clip-drives
+cargo build -j 2 -p little-clipd -p clipctl -p clip-file-manager -p clip-drives
+python3 scripts/build_drive_tools.py --profile debug
 ```
 
 Keep `clip-drive-mount` beside `little-clipd`. Catalog mounts use FUSE and `fusermount3`; partition imaging and read-only image mounts use UDisks2 with the desktop's PolicyKit authentication agent. Btrfs destinations also need the `btrfs` utility. Ordinary file backups do not require Btrfs on either side.
@@ -16,7 +17,13 @@ Keep `clip-drive-mount` beside `little-clipd`. Catalog mounts use FUSE and `fuse
 
 A completed copy appears as a separate **RAM** entry. Browse and edit that entry to commit locally first; the daemon reconciles those edits back to the connected partition. Ejecting or physically removing the partition leaves the RAM entry accessible. Reconnection compares both copies with the last common state before propagating edits.
 
-Use the RAM entry's menu to flush, save a durable copy elsewhere, or explicitly discard it. Unsynchronized contents remain temporary: a daemon restart can recover its directory, but rebooting or losing tmpfs loses RAM-only data. Tmpfs can use swap.
+Each RAM view uses a fixed-size image on verified tmpfs, served by the separately packaged `fuse2fs` helper. This bounds allocated bytes and inodes even when an external editor writes to it. The image grows sparsely within its reservation; session admission reserves future growth across existing sessions. Default ceilings are 6 GB and two million inodes per session, 16 GB and four million inodes in total, and eight sessions. Small cards reserve less. Expanded contents and formatting overhead must fit as well. Memory admission additionally reserves each native helper’s 512 MiB address-space limit. Reload refuses quota reductions below retained session reservations.
+
+The default RAM location is `/tmp`. If it is not tmpfs, the daemon tries the verified tmpfs at `XDG_RUNTIME_DIR`, then `/dev/shm`. An explicitly configured disk-backed directory is refused. Internal RAM images and views are excluded from indexing and managed backup/sync destinations.
+
+Use the RAM entry's menu to flush, save a durable copy elsewhere, or explicitly discard it. A normal daemon shutdown flushes and retires its filesystem server; restart verifies the retained image and checks its filesystem before remounting. Existing open view handles must be reopened after a restart. An unavailable or changed backing image is reported explicitly and is never treated as an empty folder. Initial population installs watches and performs a catch-up reconciliation before declaring the view ready.
+
+Unsynchronized contents remain temporary: rebooting or losing tmpfs loses RAM-only data. Tmpfs can use swap. Legacy directory sessions remain recoverable, but must be saved/discarded before admitting another bounded session.
 
 ## Backups
 
@@ -76,6 +83,11 @@ Add overrides to the existing application configuration. The backup destination 
 ram_capacity_limit = 4000000000
 ram_min_available = 8000000000
 ram_directory = "/tmp"
+ram_session_max_bytes = 6000000000
+ram_total_max_bytes = 16000000000
+ram_session_max_entries = 2000000
+ram_total_max_entries = 4000000
+ram_max_sessions = 8
 catalog_max_entries = 250000
 catalog_max_bytes = 268435456
 catalog_max_depth = 64

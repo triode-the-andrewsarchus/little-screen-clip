@@ -130,7 +130,7 @@ pub(crate) fn files(
     let target = Root::open(&parent.path.join(&temporary))?;
     // The same disk-backed scan becomes the durable completed manifest.
     let manifest = publication::Manifest::new(&parent)?;
-    let root_metadata = scan::observe(&source, Path::new(""), false, cancel)?
+    let root_metadata = scan::observe(&source, Path::new(""), false, u64::MAX, cancel)?
         .ok_or("Missing source root metadata")?;
     manifest.db.put("source", "root", &root_metadata)?;
     manifest.db.put(
@@ -166,7 +166,7 @@ pub(crate) fn files(
                 target.ensure_directory(&entry.path)?;
             } else {
                 let old = if existing.is_some() {
-                    scan::observe(&target, &entry.path, true, cancel)?
+                    scan::observe(&target, &entry.path, true, u64::MAX, cancel)?
                 } else {
                     None
                 };
@@ -183,7 +183,7 @@ pub(crate) fn files(
                         incremental,
                     )?;
                 } else {
-                    let observed = scan::observe(&source, &entry.path, false, cancel)?
+                    let observed = scan::observe(&source, &entry.path, false, u64::MAX, cancel)?
                         .ok_or("Unchanged source disappeared")?;
                     if !entry.same_revision(&observed) {
                         return Err("Source changed before backup publication".into());

@@ -2,6 +2,8 @@
 use super::*;
 impl Owner {
     pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
+        self.validate_ram_backing_target(source)?;
+        self.validate_ram_backing_target(local)?;
         if source.overlap(local) {
             return Err("Sync roots overlap".into());
         }
@@ -46,7 +48,24 @@ impl Owner {
         }
         Ok(())
     }
+    pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
+        for session in self.db.list::<RamSession>("ram", 0, 1000)? {
+            if let Some(backing) = session.backing {
+                if let Ok(root) = Root::open(&backing.directory) {
+                    if target.overlap(&root) {
+                        return Err("Destination overlaps private RAM backing storage".into());
+                    }
+                } else if target.path.starts_with(&backing.directory)
+                    || backing.directory.starts_with(&target.path)
+                {
+                    return Err("Destination overlaps unavailable RAM backing storage".into());
+                }
+            }
+        }
+        Ok(())
+    }
     pub(super) fn validate_backup_directory(&self, target: &Root) -> Result<()> {
+        self.validate_ram_backing_target(target)?;
         if target.overlap(&Root::open(&self.state)?) {
             return Err("Backup directory overlaps drive-service state".into());
         }
@@ -67,12 +86,7 @@ impl Owner {
         }
         Ok(())
     }
-    pub(super) fn ram_size_check(
-        &self,
-        source: &Root,
-        stats: &rustix::fs::StatVfs,
-        cancel: &AtomicBool,
-    ) -> Result<()> {
+    pub(super) fn ram_size_check(&self, source: &Root, cancel: &AtomicBool) -> Result<(u64, u64)> {
         let id = "ram-preflight";
         let coverage = scan::scan(
             &self.db,
@@ -80,7 +94,7 @@ impl Owner {
             id,
             &scan::Limits {
                 hashes: false,
-                entries: stats.f_favail.saturating_sub(1024),
+                entries: self.config.ram_session_max_entries.saturating_sub(128),
                 ..Default::default()
             },
             cancel,
@@ -94,14 +108,7 @@ impl Owner {
         }
         let bytes: u64 = self.db.0.query_row("SELECT coalesce(sum(json_extract(json,'$.size')),0) FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='file'", [id], |r| r.get(0))?;
         self.db.clear_scan(id)?;
-        if bytes.saturating_add(64 * 1024 * 1024) > stats.f_bavail.saturating_mul(stats.f_frsize)
-            || bytes.saturating_add(1024 * 1024 * 1024) > available_memory()?
-        {
-            return Err(
-                "Expanded file contents exceed safe tmpfs or available RAM headroom".into(),
-            );
-        }
-        Ok(())
+        Ok((coverage.count, bytes))
     }
 }
 pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
@@ -119,6 +126,15 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
         || config.sync_interval_seconds == 0
     {
         return Err("Catalogs require at least 128 KiB, a nonzero depth/time budget and nonzero sync interval".into());
+    }
+    if config.ram_session_max_bytes < 128 * 1024 * 1024
+        || config.ram_session_max_entries < 4096
+        || config.ram_total_max_bytes < config.ram_session_max_bytes
+        || config.ram_total_max_entries < config.ram_session_max_entries
+        || config.ram_max_sessions == 0
+        || config.ram_max_sessions > 32
+    {
+        return Err("RAM quotas require at least 128 MiB/4096 entries, aggregate limits at least one session, and 1..32 sessions".into());
     }
     if config.backup_keep_versions == Some(0) {
         return Err("Backup retention must keep at least one completed version".into());

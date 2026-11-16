@@ -228,6 +228,14 @@ impl Reconcile<'_> {
 }
 /// Reconcile only named file changes while both retained root identities are current.
 /// Directory changes and unknown coverage deliberately take the complete scan path.
+fn comparison_limits(pair: &SyncPair, local: &Root) -> Result<Limits> {
+    let mut limits = Limits::default();
+    if pair.ram {
+        let stats = rustix::fs::fstatvfs(local.directory(Path::new(""), false)?)?;
+        limits.hash_bytes = stats.f_blocks.saturating_mul(stats.f_frsize);
+    }
+    Ok(limits)
+}
 pub(crate) fn changed(
     db: &Store,
     pair: &SyncPair,
@@ -245,12 +253,21 @@ pub(crate) fn changed(
         }
     }
     let mut entries = Vec::new();
+    let max_bytes = comparison_limits(pair, local)?.hash_bytes;
+    let mut remaining = max_bytes.saturating_mul(2);
     for path in relative {
         if path.as_os_str().is_empty() {
             return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, true);
         }
-        let a = scan::observe(portable, &path, true, cancel)?;
-        let b = scan::observe(local, &path, true, cancel)?;
+        let mut observe = |root: &Root| -> Result<Option<Entry>> {
+            let entry = scan::observe(root, &path, true, remaining.min(max_bytes), cancel)?;
+            if let Some(file) = entry.as_ref().filter(|e| e.kind == "file") {
+                remaining = remaining.saturating_sub(file.size);
+            }
+            Ok(entry)
+        };
+        let a = observe(portable)?;
+        let b = observe(local)?;
         if baseline(db, &pair.id, &path)?.as_deref() == Some("directory")
             || a.as_ref().is_some_and(|e| e.kind == "directory")
             || b.as_ref().is_some_and(|e| e.kind == "directory")
@@ -300,11 +317,9 @@ pub(crate) fn synchronize_with(
     }
     let a = format!("{}:portable:next", pair.id);
     let b = format!("{}:local:next", pair.id);
+    let mut limits = comparison_limits(pair, local)?;
     for (root, id) in [(portable, &a), (local, &b)] {
-        let limits = Limits {
-            reuse_scan: reuse.then(|| id.strip_suffix(":next").unwrap_or(id).to_owned()),
-            ..Default::default()
-        };
+        limits.reuse_scan = reuse.then(|| id.strip_suffix(":next").unwrap_or(id).to_owned());
         let coverage = scan::scan(db, root, id, &limits, cancel, &mut progress)?;
         if !coverage.complete {
             return Err(format!(
