@@ -31,7 +31,7 @@ impl Owner {
             || self
                 .background
                 .as_ref()
-                .is_some_and(|job| job.roots.iter().any(|root| overlaps(&root.scope())))
+                .is_some_and(|job| job.scopes().any(|scope| overlaps(&scope)))
     }
     pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
         self.validate_sync_storage(source, local, None)?;

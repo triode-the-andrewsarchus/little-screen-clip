@@ -105,6 +105,8 @@ pub enum DriveRequest {
     Backup {
         drive: String,
         kind: BackupKind,
+        #[serde(default)]
+        restore_mounted: bool,
     },
     Pair {
         drive: String,

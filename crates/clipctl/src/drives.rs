@@ -26,6 +26,9 @@ pub(super) enum DriveCommand {
         drive: String,
         #[arg(long)]
         image: bool,
+        /// Restore the mounted state only if this image job unmounted it
+        #[arg(long, requires = "image")]
+        restore_mounted: bool,
     },
     /// Merge a partition/subtree with a folder and keep them synchronized
     Pair {
@@ -92,8 +95,13 @@ impl DriveCommand {
             Self::Status { offset } => DriveRequest::Status { offset },
             Self::BackupDirectory { path } => DriveRequest::BackupDirectory { path },
             Self::Ram { drive } => DriveRequest::CopyToRam { drive },
-            Self::Backup { drive, image } => DriveRequest::Backup {
+            Self::Backup {
                 drive,
+                image,
+                restore_mounted,
+            } => DriveRequest::Backup {
+                drive,
+                restore_mounted,
                 kind: if image {
                     BackupKind::Image
                 } else {

@@ -3,7 +3,135 @@ use super::*;
 use crate::root::Scope;
 use little_clip_core::jobs::task::Task;
 
-pub(super) type Unmounter = Arc<dyn Fn(&Drive) -> Result<()> + Send + Sync>;
+pub(super) type FilesystemAction = Arc<dyn Fn(&Drive) -> Result<()> + Send + Sync>;
+pub(super) struct Authority {
+    pub unmount: FilesystemAction,
+    pub mount: FilesystemAction,
+    pub open_image: backup::ImageOpener,
+}
+impl Default for Authority {
+    fn default() -> Self {
+        Self {
+            unmount: Arc::new(unmount),
+            mount: Arc::new(|drive| filesystem_action(drive, true)),
+            open_image: Arc::new(backup::open_image),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ImageContext {
+    pub original: Drive,
+    pub source: Arc<crate::device::Source>,
+    pub claims: Vec<Scope>,
+    pub restore_mounted: bool,
+    pub unmounted_by_job: bool,
+}
+impl ImageContext {
+    pub fn finish(
+        &self,
+        db: &Store,
+        id: &str,
+        inventory: &Inventory,
+        authority: &Authority,
+        result: Result<String>,
+    ) -> Result<String> {
+        if !self.restore_mounted || !self.unmounted_by_job {
+            return result;
+        }
+        // Restoration is accepted cleanup: cancellation cannot discard a mount
+        // already requested, nor erase the completed backup result.
+        let restored = phase(db, id, PartitionPhase::RestoringMount, None)
+            .and_then(|()| self.restore(inventory, authority));
+        let message = match &restored {
+            Ok(drive) => format!(
+                "Partition mounted again at {}",
+                drive
+                    .mount
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            ),
+            Err(error) => format!("Mounted-state restoration failed: {error}"),
+        };
+        let recorded = (|| -> Result<()> {
+            let mut operation = db
+                .get::<DriveOperation>("operation", id)?
+                .ok_or("Missing partition operation during restoration")?;
+            let partition = operation
+                .partition
+                .as_mut()
+                .ok_or("Missing partition restoration context")?;
+            partition.phase = if restored.is_ok() {
+                PartitionPhase::MountRestored
+            } else {
+                PartitionPhase::MountRestoreFailed
+            };
+            partition.restore_error = restored.as_ref().err().map(ToString::to_string);
+            db.put("operation", id, &operation)
+        })();
+        let message = match recorded {
+            Ok(()) => message,
+            Err(error) => format!("{message}; restoration journal update failed: {error}"),
+        };
+        match result {
+            Ok(result) => Ok(format!("{result}; {message}")),
+            Err(error) => Err(format!("{error}; {message}").into()),
+        }
+    }
+    fn restore(&self, inventory: &Inventory, authority: &Authority) -> Result<Drive> {
+        self.source.validate()?;
+        let before = self.observed(inventory)?;
+        if before.mount.is_none()
+            && let Err(error) = (authority.mount)(&self.original)
+        {
+            return Err(format!(
+                "Remount request failed: {error}; {}",
+                mount_state(self.observed(inventory))
+            )
+            .into());
+        }
+        self.source.validate()?;
+        let after = self.observed(inventory)?;
+        if after.mount.is_none() || (self.original.read_only && !after.read_only) {
+            return Err(
+                "Mount request returned, but the restored mount/access mode could not be confirmed"
+                    .into(),
+            );
+        }
+        Ok(after)
+    }
+    fn observed(&self, inventory: &Inventory) -> Result<Drive> {
+        let mut drives = inventory()?
+            .into_iter()
+            .filter(|drive| drive.device == self.original.device);
+        let observed = drives
+            .next()
+            .ok_or("Original partition is no longer available for remount")?;
+        if drives.next().is_some() || !same_partition(&observed, &self.original) {
+            return Err(
+                "Partition lifetime or identity changed; refusing to mount a replacement".into(),
+            );
+        }
+        Ok(observed)
+    }
+}
+
+fn same_partition(actual: &Drive, expected: &Drive) -> bool {
+    let mut comparison = actual.clone();
+    comparison.mount = expected.mount.clone();
+    // A read-only mount can become an unmounted writable block device; these
+    // access observations are checked separately from the partition's lifetime.
+    comparison.read_only = expected.read_only;
+    comparison == *expected
+}
+fn mount_state(observed: Result<Drive>) -> &'static str {
+    match observed {
+        Ok(drive) if drive.mount.is_none() => "partition now appears unmounted",
+        Ok(_) => "partition still appears mounted",
+        Err(_) => "current partition state is unavailable",
+    }
+}
 
 pub(super) struct Pending {
     pub drive: String,
@@ -19,10 +147,12 @@ pub(super) struct Pending {
 enum Stage {
     Flush(Task<Result<()>>),
     Unmount(Task<Result<Drive>>),
+    Restore(Task<Result<String>>),
 }
 enum Completion {
     Flush(Result<()>),
     Unmount(Result<Drive>),
+    Restored(Result<String>),
 }
 struct Admission {
     drive: Drive,
@@ -43,6 +173,9 @@ impl Pending {
             Stage::Unmount(task) => task
                 .poll()
                 .map(|result| Completion::Unmount(write_result(result))),
+            Stage::Restore(task) => task
+                .poll()
+                .map(|result| Completion::Restored(write_result(result))),
         }
     }
 }
@@ -86,7 +219,13 @@ impl Owner {
                 destination: destination.as_ref().map(|root| root.path.clone()),
                 phase: PartitionPhase::Flushing,
                 unmounted_by_job: false,
-                restore_mounted: false,
+                restore_mounted: matches!(
+                    envelope.request,
+                    DriveRequest::Backup {
+                        restore_mounted: true,
+                        ..
+                    }
+                ),
                 completed_backup: None,
                 restore_error: None,
             });
@@ -219,7 +358,7 @@ impl Owner {
                     .expect("validated partition request")
                     .to_owned();
                 let inventory = self.inventory.clone();
-                let unmount = self.unmounter.clone();
+                let unmount = self.authority.unmount.clone();
                 let cancel = job.cancel.clone();
                 let state = self.state.clone();
                 let operation = job.envelope.id.clone();
@@ -242,54 +381,92 @@ impl Owner {
                 self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
             }
             Completion::Unmount(result) => self.partition_ready(job, result.map(Some)),
+            Completion::Restored(result) => {
+                self.finish_operation(&job.envelope.id, &job.cancel, result);
+                self.automatic();
+            }
         }
     }
 
     fn partition_ready(&mut self, job: Pending, result: Result<Option<Drive>>) {
         let image = job.is_image();
+        let unmounted_by_job =
+            result.as_ref().is_ok_and(|drive| drive.is_some()) && job.snapshot.mount.is_some();
         let drive = match result {
-            Ok(drive) => drive.unwrap_or(job.snapshot),
+            Ok(drive) => drive.unwrap_or_else(|| job.snapshot.clone()),
             Err(error) => {
                 self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
                 self.automatic();
                 return;
             }
         };
-        if let Err(error) = phase(&self.db, &job.envelope.id, PartitionPhase::Unmounted, None) {
-            let message = format!(
-                "Partition is confirmed unmounted; could not record the checkpoint: {error}. No image copy was started; RAM and local edits are retained"
-            );
-            self.finish_operation(
-                &job.envelope.id,
-                &job.cancel,
-                if image {
-                    Err(message.into())
-                } else {
-                    Ok(message)
-                },
-            );
-            return;
-        }
+        let checkpoint = phase(&self.db, &job.envelope.id, PartitionPhase::Unmounted, None);
         if image {
-            if job.cancel.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
-                self.finish_operation(&job.envelope.id, &job.cancel, Err("Partition is unmounted; image copy cancelled before admission. Local and RAM edits are retained".into()));
+            let Some(source) = job.source.clone() else {
+                self.finish_operation(&job.envelope.id, &job.cancel, Err("Partition unmounted; missing retained device pin; no image or remount was started".into()));
+                return;
+            };
+            let context = ImageContext {
+                original: job.snapshot.clone(),
+                source,
+                claims: job.claims.clone(),
+                restore_mounted: matches!(
+                    job.envelope.request,
+                    DriveRequest::Backup {
+                        restore_mounted: true,
+                        ..
+                    }
+                ),
+                unmounted_by_job,
+            };
+            let stopped = checkpoint.map_err(|error| format!("Partition is confirmed unmounted; checkpoint failed: {error}; no image copy was started").into())
+                .and_then(|()| {
+                    if job.cancel.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
+                        Err("Partition is unmounted; image copy cancelled before admission. Local and RAM edits are retained".into())
+                    } else { Ok(()) }
+                });
+            if let Err(error) = stopped {
+                self.finish_partition_image(job, context, Err(error));
             } else {
                 self.launch_bulk(
                     job.envelope,
                     drive,
                     job.config,
                     job.destination.into_iter().collect(),
-                    job.source,
+                    Some(context),
                 );
             }
         } else {
-            self.finish_operation(
-                &job.envelope.id,
-                &job.cancel,
-                Ok("Partition unmounted; RAM copy retained".into()),
-            );
+            let message = match checkpoint {
+                Ok(()) => "Partition unmounted; RAM copy retained".into(),
+                Err(error) => format!(
+                    "Partition is confirmed unmounted; checkpoint failed: {error}; RAM copy retained"
+                ),
+            };
+            self.finish_operation(&job.envelope.id, &job.cancel, Ok(message));
         }
         self.automatic();
+    }
+
+    fn finish_partition_image(
+        &mut self,
+        mut job: Pending,
+        context: ImageContext,
+        result: Result<String>,
+    ) {
+        if !context.restore_mounted || !context.unmounted_by_job {
+            self.finish_operation(&job.envelope.id, &job.cancel, result);
+            return;
+        }
+        let state = self.state.clone();
+        let operation = job.envelope.id.clone();
+        let inventory = self.inventory.clone();
+        let authority = self.authority.clone();
+        job.stage = Stage::Restore(write_task(&self.partition_jobs, move || {
+            let db = Store::existing(&state.join("drives.sqlite"), false)?;
+            context.finish(&db, &operation, &inventory, &authority, result)
+        }));
+        self.partition = Some(job);
     }
 
     fn retire_partition(&mut self, drive: &Drive) -> Result<()> {
@@ -313,6 +490,7 @@ fn selector(request: &DriveRequest) -> Result<&str> {
         | DriveRequest::Backup {
             drive,
             kind: BackupKind::Image,
+            ..
         } => Ok(drive),
         _ => Err("Invalid pre-unmount request".into()),
     }
@@ -355,7 +533,7 @@ fn unmount_checked(
     drive: &Drive,
     selector: &str,
     inventory: &Inventory,
-    unmount: &Unmounter,
+    unmount: &FilesystemAction,
     cancel: &AtomicBool,
     source: Option<&crate::device::Source>,
 ) -> Result<Drive> {
@@ -368,11 +546,7 @@ fn unmount_checked(
     cancelled(cancel)?;
     if let Err(error) = unmount(drive) {
         let observed = inventory().and_then(|drives| discovery::select(drives, selector));
-        let state = match observed {
-            Ok(drive) if drive.mount.is_none() => "partition now appears unmounted",
-            Ok(_) => "partition still appears mounted",
-            Err(_) => "current partition state is unavailable",
-        };
+        let state = mount_state(observed);
         return Err(
             format!("Unmount request failed: {error}; {state}. No image copy was started").into(),
         );
@@ -384,17 +558,23 @@ fn unmount_checked(
     }
     let observed = inventory().and_then(|drives| discovery::select(drives, selector))
         .map_err(|error| format!("Unmount completed; could not confirm current partition state: {error}. No image copy was started"))?;
-    let mut comparison = observed.clone();
-    comparison.mount = drive.mount.clone();
-    if comparison != *drive || observed.mount.is_some() {
+    if !same_partition(&observed, drive) || observed.mount.is_some() {
         return Err("Unmount returned, but partition identity or mount state could not be confirmed; image copy was not started".into());
     }
     Ok(observed)
 }
 pub(super) fn unmount(drive: &Drive) -> Result<()> {
-    let output = CommandRequest::new("udisksctl")
-        .args(["unmount", "--block-device"])
-        .arg(&drive.device)
+    filesystem_action(drive, false)
+}
+fn filesystem_action(drive: &Drive, mounting: bool) -> Result<()> {
+    let verb = if mounting { "mount" } else { "unmount" };
+    let mut request = CommandRequest::new("udisksctl")
+        .args([verb, "--block-device"])
+        .arg(&drive.device);
+    if mounting && drive.read_only {
+        request = request.args(["--options", "ro"]);
+    }
+    let output = request
         // Keep the accepted authority request until its actual reply/child exit.
         .timeout(Duration::MAX)
         .max_output_bytes(64 * 1024)
@@ -404,7 +584,7 @@ pub(super) fn unmount(drive: &Drive) -> Result<()> {
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(format!(
-            "Could not unmount partition; local and RAM edits retained: {}",
+            "Could not {verb} partition; local and RAM edits retained: {}",
             output.stderr_lossy()
         )
         .into());

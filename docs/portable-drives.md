@@ -53,6 +53,15 @@ Eject and image preparation use a retained worker for folder flushes and unmount
 
 Partition jobs retain their selected drive, destination and typed preparation phase. Image progress distinguishes copying from full verification. After restart, an unfinished job reports its last durable checkpoint and any confirmed unmount/completed-image facts. An interrupted authority request may already have taken effect; its message asks you to inspect current state. Restart does not replay mount actions automatically.
 
+**Mount again after imaging** is an optional image-backup setting, off by default.
+It restores a previously mounted partition only when this job confirmed its unmount,
+including after cancellation or an imaging failure. Restoration remains owned work
+until the mount request returns, and checks the original device lifetime before
+requesting or accepting a restored mount. A changed or replaced partition is refused;
+an originally read-only mount is requested read-only again. A completed backup is
+retained if restoration fails, with a separate warning and recovery details in Jobs.
+The CLI equivalent is `clipctl drives backup DRIVE --image --restore-mounted`.
+
 File and image backups validate their selected destination against managed storage before admission, including when it came from startup configuration. Accepted jobs retain their selected destination and its index exclusion while running; changing preferences does not retarget an accepted image job.
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
@@ -117,6 +126,16 @@ sync_interval_seconds = 30
 ```
 
 Reload the application configuration through `clipctl reload`. Removing the backup-directory setting and reloading clears the selection; older SQLite preferences cannot restore it on restart. Drive enrollment, deletion decisions, baselines, operation results, conflicts, and catalogs are operational state under the XDG user-data directory in `little-screen-clip/drives`. Paths retain their original Unix bytes. Devices need no marker files or Git repositories.
+
+The on-disk formats are ordinary file trees and raw partition `.img` files for
+backup payloads, SQLite for per-version manifests and local operational/catalog
+databases, and JSON for the current-version references alongside backups. RAM
+sessions use a fixed-size ext4 image on verified tmpfs and expose its files through
+FUSE; saving a RAM session elsewhere exports an ordinary file tree. Paired removable
+folders contain ordinary synchronized files and any preserved conflict variants,
+without service databases or Git metadata. Catalog databases contain metadata, not
+file payloads. Btrfs snapshots/reflinks apply only at a compatible backup destination;
+the removable filesystem does not need Btrfs support.
 
 ## CLI
 

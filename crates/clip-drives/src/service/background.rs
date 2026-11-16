@@ -6,9 +6,19 @@ pub(super) struct Pending {
     pub(super) drive: String,
     pub(super) roots: Vec<Arc<Root>>,
     pub(super) destination: Option<PathBuf>,
+    image: Option<partition::ImageContext>,
     id: String,
     pub(super) cancel: Arc<AtomicBool>,
     task: Task<Result<String>>,
+}
+impl Pending {
+    pub(super) fn scopes(&self) -> impl Iterator<Item = crate::root::Scope> + '_ {
+        self.roots.iter().map(|root| root.scope()).chain(
+            self.image
+                .iter()
+                .flat_map(|image| image.claims.iter().cloned()),
+        )
+    }
 }
 impl Owner {
     pub(super) fn check_busy(&self, drive: &str) -> Result<()> {
@@ -92,7 +102,7 @@ impl Owner {
         drive: Drive,
         config: DriveConfig,
         roots: Vec<Arc<Root>>,
-        source: Option<Arc<crate::device::Source>>,
+        image: Option<partition::ImageContext>,
     ) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", &envelope.id) {
             operation.state = "running".into();
@@ -106,14 +116,24 @@ impl Owner {
             .then(|| config.backup_directory.clone())
             .flatten();
         let worker_roots = roots.clone();
+        let worker_image = image.clone();
+        let authority = self.authority.clone();
+        let inventory = self.inventory.clone();
         let task = write_task(&self.backup_jobs, move || {
-            cancelled(&cancel)?;
-            for root in &worker_roots {
-                root.validate()?;
-            }
+            let validation = (|| -> Result<()> {
+                cancelled(&cancel)?;
+                for root in &worker_roots {
+                    root.validate()?;
+                }
+                Ok(())
+            })();
+            let validation = match validation {
+                Err(error) if worker_image.is_none() => return Err(error),
+                other => other,
+            };
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
             let mut progress = job_progress(state.clone(), id.clone());
-            match envelope.request {
+            let result = validation.and_then(|()| match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
                     backup::recover_publications(&db)?;
                     let destination = worker_roots
@@ -131,9 +151,10 @@ impl Owner {
                             &mut progress,
                         )?,
                         BackupKind::Image => {
-                            let source = source
+                            let context = worker_image
                                 .as_ref()
-                                .ok_or("Missing original device admission pin")?;
+                                .ok_or("Missing original device admission context")?;
+                            let source = &context.source;
                             let mut previous = None;
                             let version = backup::image(
                                 &db,
@@ -141,6 +162,7 @@ impl Owner {
                                 source,
                                 destination,
                                 &cancel,
+                                &authority.open_image,
                                 |phase, bytes| {
                                     if previous != Some(phase) {
                                         partition::phase(&db, &id, phase, None)?;
@@ -190,12 +212,17 @@ impl Owner {
                     ))
                 }
                 _ => Err("Invalid bulk operation".into()),
+            });
+            match &worker_image {
+                Some(context) => context.finish(&db, &id, &inventory, &authority, result),
+                None => result,
             }
         });
         self.background = Some(Pending {
             drive: drive_id,
             roots,
             destination,
+            image,
             id: envelope.id,
             cancel: envelope.cancel,
             task,
@@ -211,24 +238,8 @@ impl Owner {
         }
     }
     pub(super) fn finish_operation(&self, id: &str, cancel: &AtomicBool, result: Result<String>) {
-        if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", id) {
-            operation.finished = Some(now());
-            match result {
-                Ok(message) => {
-                    operation.state = "complete".into();
-                    operation.message = message;
-                }
-                Err(error) => {
-                    operation.state = if cancel.load(Ordering::Acquire) {
-                        "cancelled"
-                    } else {
-                        "failed"
-                    }
-                    .into();
-                    operation.message = error.to_string();
-                }
-            }
-            let _ = self.db.put("operation", id, &operation);
+        if let Err(error) = finish_record(&self.db, id, cancel, result) {
+            tracing::error!(operation = id, %error, "Could not persist storage operation completion");
         }
         if let Ok(mut tokens) = self.tokens.lock() {
             tokens.remove(id);
@@ -236,4 +247,41 @@ impl Owner {
         self.discover();
         let _ = self.publish_policy();
     }
+}
+
+pub(super) fn finish_record(
+    db: &Store,
+    id: &str,
+    cancel: &AtomicBool,
+    result: Result<String>,
+) -> Result<()> {
+    if let Some(mut operation) = db.get::<DriveOperation>("operation", id)? {
+        operation.finished = Some(now());
+        match result {
+            Ok(message) => {
+                operation.state = if operation
+                    .partition
+                    .as_ref()
+                    .is_some_and(|p| p.restore_error.is_some())
+                {
+                    "complete_with_warning"
+                } else {
+                    "complete"
+                }
+                .into();
+                operation.message = message;
+            }
+            Err(error) => {
+                operation.state = if cancel.load(Ordering::Acquire) {
+                    "cancelled"
+                } else {
+                    "failed"
+                }
+                .into();
+                operation.message = error.to_string();
+            }
+        }
+        db.put("operation", id, &operation)?;
+    }
+    Ok(())
 }

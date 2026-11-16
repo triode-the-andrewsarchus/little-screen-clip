@@ -18,9 +18,18 @@ static IO: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 16
 
 enum PathAction {
     Directory,
-    Backup { drive: String, kind: BackupKind },
-    Pair { drive: String, relative: PathBuf },
-    SaveRam { session: String },
+    Backup {
+        drive: String,
+        kind: BackupKind,
+        restore_mounted: bool,
+    },
+    Pair {
+        drive: String,
+        relative: PathBuf,
+    },
+    SaveRam {
+        session: String,
+    },
 }
 enum Dialog {
     Path {
@@ -52,6 +61,7 @@ pub(super) struct Drives {
     seen: HashSet<String>,
     pub notice: Option<(String, bool)>,
     initialized: bool,
+    restore_mounted: bool,
     pub error: Option<String>,
 }
 impl Default for Drives {
@@ -66,6 +76,7 @@ impl Default for Drives {
             seen: HashSet::new(),
             notice: None,
             initialized: false,
+            restore_mounted: false,
             error: None,
         }
     }
@@ -163,6 +174,8 @@ impl Drives {
         self.dialog.is_some()
     }
     fn backup(&mut self, drive: &Drive, kind: BackupKind) {
+        let restore_mounted =
+            kind == BackupKind::Image && drive.mount.is_some() && self.restore_mounted;
         if self.status.backup_directory.is_none() {
             self.dialog = Some(Dialog::Path {
                 error: None,
@@ -171,12 +184,14 @@ impl Drives {
                 action: PathAction::Backup {
                     drive: display_path(&drive.device),
                     kind,
+                    restore_mounted,
                 },
             });
         } else {
             self.send(DriveRequest::Backup {
                 drive: display_path(&drive.device),
                 kind,
+                restore_mounted,
             });
         }
     }
@@ -374,6 +389,29 @@ impl Drives {
             ui.close_menu();
         }
     }
+    fn image_menu(&mut self, ui: &mut Ui, drive: &Drive) {
+        ui.separator();
+        ui.label(format!("Partition image: {} bytes", drive.capacity));
+        let mut restore = self.restore_mounted && drive.mount.is_some();
+        if ui
+            .add_enabled(
+                drive.mount.is_some(),
+                egui::Checkbox::new(&mut restore, "Mount again after imaging"),
+            )
+            .on_hover_text("Only if this image job unmounted the partition. Restoration also runs after image failure or cancellation; changed devices are refused.")
+            .changed()
+        {
+            self.restore_mounted = restore;
+        }
+        if ui
+            .add_enabled(!drive.ambiguous, egui::Button::new("As partition image…"))
+            .on_hover_text("Flushes enrolled changes and unmounts the partition before imaging. Desktop authentication may be required.")
+            .clicked()
+        {
+            self.backup(drive, BackupKind::Image);
+            ui.close_menu();
+        }
+    }
     fn backup_menu(&mut self, ui: &mut Ui, drive: &Drive, open: &mut Option<PathBuf>) {
         if ui
             .add_enabled(drive.mount.is_some(), egui::Button::new("As files…"))
@@ -382,7 +420,7 @@ impl Drives {
             self.backup(drive, BackupKind::Files);
             ui.close_menu();
         }
-        if ui.add_enabled(!drive.ambiguous,egui::Button::new("As partition image…")).on_hover_text("Flushes enrolled changes and unmounts the partition before imaging. Desktop authentication may be required.").clicked(){self.backup(drive,BackupKind::Image);ui.close_menu();}
+        self.image_menu(ui, drive);
         if ui
             .add_enabled(
                 self.status.backup_directory.is_some(),

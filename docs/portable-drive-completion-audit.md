@@ -36,7 +36,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.2 | Host gate | UDisks OpenForBackup implemented; real authorized/declined/busy-device acceptance is blocked by interactive PolicyKit. |
 | 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; typed layout facts and full authorized-device publication evidence remain. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs/device matrix remains. |
-| 5.5 | Partial | No automatic remount is performed; explicit restoration option and typed recovery details need completion. |
+| 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; full successful authorized raw-device and final UI acceptance remain. |
 | 5.6 | Host gate | Explicit read-only loop mount implemented; provider reads and recursion refusal need real image-loop acceptance. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
@@ -325,3 +325,31 @@ net new clone groups, 7.21% duplication, average CCN 3.48, max CCN 274 and cycle
 Separating the existing operation-row renderer keeps the new partition context from
 introducing a details-list complexity hotspot. Report:
 `.fitness/portable-drives-partition-checkpoints-architecture.json`.
+
+Mounted-state restoration follow-up: image requests expose an opt-in setting in the
+drive menu and `--image --restore-mounted` in the CLI. Legacy requests default to
+false; file backups reject the flag. Cleanup runs on retained workers after a
+confirmed job-owned unmount, even after cancellation or an imaging failure. It
+revalidates the original device lifetime and observed partition before and after
+mount authority, preserves original read-only access, and does not mount an
+originally unmounted or already restored partition. Scheduling claims survive the
+image/cleanup handoff while independent drives continue reconciling.
+
+Typed restoration checkpoints retain separate errors. A completed backup with a
+remount failure remains published and ends with `complete_with_warning`. Owned
+fixtures cover held mount authority, cancellation after actual unmount, changed
+device/node refusal, declined image open, readonly restoration, legacy requests,
+and a real owned image publication whose later remount fails. The extended native
+FUSE fixture performs a real unmount/remount around an injected image-open refusal;
+this does not prove successful authorized raw-device imaging. Pre-admission space
+estimates and reviewed selection/destination binding remain unfinished.
+
+Validation: 54 ordinary backend tests pass, with thirteen explicit fixtures ignored;
+all ten selected RAM/native fixtures pass separately. All three private shutdown
+transport tests also pass after rebuilding the owned fixture. Backend all-target
+clippy with warnings denied and daemon/file-manager/CLI compilation passed. Architecture still
+reports REGRESSION against the original baseline: eleven net new clone groups,
+7.20% duplication, average CCN 3.48, max CCN 274 and cycles 143. Shared completion,
+authority and fixture paths remove duplicate logic; the image menu stays below the
+complexity hotspot threshold. Report:
+`.fitness/portable-drives-image-restoration-architecture.json`.

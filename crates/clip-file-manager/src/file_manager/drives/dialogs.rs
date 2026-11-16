@@ -95,11 +95,16 @@ impl PathAction {
     fn requests(&self, path: PathBuf) -> Vec<DriveRequest> {
         match self {
             Self::Directory => vec![DriveRequest::BackupDirectory { path }],
-            Self::Backup { drive, kind } => vec![
+            Self::Backup {
+                drive,
+                kind,
+                restore_mounted,
+            } => vec![
                 DriveRequest::BackupDirectory { path },
                 DriveRequest::Backup {
                     drive: drive.clone(),
                     kind: *kind,
+                    restore_mounted: *restore_mounted,
                 },
             ],
             Self::Pair { drive, relative } => vec![DriveRequest::Pair {

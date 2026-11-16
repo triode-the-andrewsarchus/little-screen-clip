@@ -15,7 +15,7 @@ use std::{
         unix::fs::{FileExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -407,21 +407,10 @@ fn udisks_path(drive: &Drive) -> Result<String> {
     }
     Err("Partition no longer exists in UDisks".into())
 }
-pub(crate) fn image(
-    db: &Store,
-    drive: &Drive,
-    source: &crate::device::Source,
-    destination: &Root,
-    cancel: &AtomicBool,
-    mut progress: impl FnMut(PartitionPhase, u64) -> Result<()>,
-) -> Result<Backup> {
-    if drive.mount.is_some() {
-        return Err(
-            "Unmount the partition before imaging it; flush pending RAM/sync changes first".into(),
-        );
-    }
-    source.validate()?;
-    progress(PartitionPhase::OpeningImage, 0)?;
+pub(crate) type ImageOpener =
+    Arc<dyn Fn(&Drive, &crate::device::Source) -> Result<File> + Send + Sync>;
+
+pub(crate) fn open_image(drive: &Drive, source: &crate::device::Source) -> Result<File> {
     let connection = system_connection()?;
     let path = udisks_path(drive)?;
     let proxy = zbus::blocking::Proxy::new(
@@ -437,7 +426,25 @@ pub(crate) fn image(
         .call("OpenForBackup", &(options,))
         .map_err(|e| format!("UDisks authorization or exclusive read failed: {e}"))?;
     let fd: OwnedFd = descriptor.into();
-    let input = File::from(fd);
+    Ok(File::from(fd))
+}
+pub(crate) fn image(
+    db: &Store,
+    drive: &Drive,
+    source: &crate::device::Source,
+    destination: &Root,
+    cancel: &AtomicBool,
+    opener: &ImageOpener,
+    mut progress: impl FnMut(PartitionPhase, u64) -> Result<()>,
+) -> Result<Backup> {
+    if drive.mount.is_some() {
+        return Err(
+            "Unmount the partition before imaging it; flush pending RAM/sync changes first".into(),
+        );
+    }
+    source.validate()?;
+    progress(PartitionPhase::OpeningImage, 0)?;
+    let input = opener(drive, source)?;
     let validate = || {
         source.validate_input(&input)?;
         let mut capacity = 0_u64;
