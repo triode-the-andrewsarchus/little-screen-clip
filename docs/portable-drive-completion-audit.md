@@ -11,7 +11,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers overlapping observed filesystem regions, including bind aliases, while retaining unrelated watches. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; a restarted native fixture also proves startup-configured file backups refuse private RAM backing. Real bind/case-fold aliases, remaining managed-root coverage, image destinations and device-node lifetime binding still need the complete matrix. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers overlapping observed filesystem regions, including bind aliases, while retaining unrelated watches. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; a restarted native fixture also proves startup-configured file backups refuse private RAM backing. Real bind/case-fold aliases, remaining managed-root coverage, image destinations and the full authorized-device lifetime checks still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
@@ -32,7 +32,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
-| 5.1 | Partial | Preflush and unmount now run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Exact size/space presentation, device lifetime binding and real UDisks authorization coordination remain. |
+| 5.1 | Partial | Preflush and unmount now run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission now retains the device-node pin and checks its disk sequence across authorized image reads. Exact size/space presentation and real UDisks authorization coordination remain. |
 | 5.2 | Host gate | UDisks OpenForBackup implemented; real authorized/declined/busy-device acceptance is blocked by interactive PolicyKit. |
 | 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; typed layout facts and full authorized-device publication evidence remain. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs/device matrix remains. |
@@ -272,3 +272,29 @@ during this checkpoint. Architecture still reports REGRESSION against the origin
 baseline: seventeen net new clone groups, duplication 7.30% to 7.21%, average CCN
 3.48, max 274 and dependency cycles 143 unchanged. Report:
 `.fitness/portable-drives-device-lifetime-architecture.json`.
+
+Bulk-root checkpoint: file backup and catalog collection receive their admitted
+source roots instead of reopening mount pathnames inside the helper. File and
+image backups similarly receive the admitted destination root; UUID folders are
+resolved through its retained directory walk. Btrfs commands and image staging use
+the selected backup parent's retained handle. Catalog collection receives its
+admitted state root and creates the catalog database through that handle.
+
+Owned source/destination/state replacement fixtures refuse collection without
+touching replacement canaries or publishing a new completed artifact. These are
+admitted-root checks; they do not prove the remaining mounted-block binding,
+concurrent bind-alias or all operational SQLite state-path replacement cases.
+File/catalog fixtures now retain their roots across invocations, sharing admission
+and version setup rather than repeating pathname opens at every call.
+
+Validation: 47 ordinary backend tests pass (thirteen explicit fixtures ignored).
+The real Btrfs file/image test passes with each 4 KiB edit allocating 256 KiB
+exclusively in an 8 MiB version and preserving the original bytes. The real FUSE
+catalog fixture passes offline metadata, unavailable-content errors, backup reads,
+excluded directories, write rejection and provider recursion refusal. The native
+concurrent-backup fixture also passes independent RAM writeback and cancellation.
+Daemon, file-manager and CLI compilation passes. Backend
+all-target clippy passes with warnings denied. Architecture remains REGRESSION,
+with twelve net new clone groups (down from seventeen at the previous checkpoint),
+7.21% duplication and average CCN 3.48; max CCN 274 and cycles 143 are unchanged.
+Report: `.fitness/portable-drives-bulk-roots-architecture.json`.

@@ -57,12 +57,16 @@ impl Owner {
             };
             let drive = self.drive(selector)?;
             let mut roots = Vec::new();
-            if let Some(path) = &drive.mount {
-                roots.push(Arc::new(Root::open(path)?));
-            }
+            let path = drive
+                .mount
+                .as_ref()
+                .ok_or("Mount the partition before saving a file backup or catalog")?;
+            roots.push(Arc::new(Root::open(path)?));
             if matches!(envelope.request, DriveRequest::Backup { .. }) {
                 let source = roots.first().map(Arc::as_ref);
                 roots.push(self.backup_destination(source)?);
+            } else {
+                roots.push(Arc::new(Root::open(&self.state)?));
             }
             if self.drive(selector)? != drive {
                 return Err("Drive changed while pinning bulk-operation roots".into());
@@ -103,23 +107,29 @@ impl Owner {
             .flatten();
         let worker_roots = roots.clone();
         let task = write_task(&self.backup_jobs, move || {
-            let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut progress = job_progress(state.clone(), id);
             cancelled(&cancel)?;
-            for root in worker_roots {
+            for root in &worker_roots {
                 root.validate()?;
             }
+            let db = Store::existing(&state.join("drives.sqlite"), false)?;
+            let mut progress = job_progress(state.clone(), id);
             match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
                     backup::recover_publications(&db)?;
-                    let destination = config
-                        .backup_directory
-                        .as_ref()
-                        .ok_or("Backup directory unset")?;
+                    let destination = worker_roots
+                        .last()
+                        .ok_or("Missing admitted backup destination")?;
                     let version = match kind {
-                        BackupKind::Files => {
-                            backup::files(&db, &drive, destination, &cancel, &mut progress)?
-                        }
+                        BackupKind::Files => backup::files(
+                            &db,
+                            &drive,
+                            worker_roots
+                                .first()
+                                .ok_or("Missing admitted partition root")?,
+                            destination,
+                            &cancel,
+                            &mut progress,
+                        )?,
                         BackupKind::Image => {
                             let source = source
                                 .as_ref()
@@ -134,8 +144,19 @@ impl Owner {
                     ))
                 }
                 DriveRequest::Catalog { .. } => {
-                    let catalog =
-                        catalog::capture(&db, &state, &drive, &config, &cancel, &mut progress)?;
+                    let catalog = catalog::capture(
+                        &db,
+                        worker_roots
+                            .last()
+                            .ok_or("Missing admitted catalog state root")?,
+                        &drive,
+                        worker_roots
+                            .first()
+                            .ok_or("Missing admitted partition root")?,
+                        &config,
+                        &cancel,
+                        &mut progress,
+                    )?;
                     Ok(format!(
                         "Catalog saved: {} · {}",
                         catalog.id, catalog.coverage

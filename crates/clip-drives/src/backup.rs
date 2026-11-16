@@ -24,7 +24,7 @@ pub(crate) use publication::recover as recover_publications;
 
 pub(crate) use crate::DriveBackup as Backup;
 fn btrfs(root: &Root) -> Result<bool> {
-    let pin = kernel_interface::pin_content_directory(&root.path)?;
+    let pin = root.directory(Path::new(""), false)?;
     Ok(rustix::fs::fstatfs(&pin)?.f_type as u32 == 0x9123683e)
 }
 fn command(args: &[&str], parent: &File, names: &[&std::ffi::OsStr]) -> Result<()> {
@@ -68,7 +68,7 @@ fn last(db: &Store, drive: &Drive, kind: BackupKind) -> Result<Option<Backup>> {
         offset += 128;
     }
 }
-fn backup_parent(destination: &Path, drive: &Drive) -> Result<Root> {
+fn backup_parent(destination: &Root, drive: &Drive) -> Result<Root> {
     let key = drive
         .part_uuid
         .clone()
@@ -83,23 +83,18 @@ fn backup_parent(destination: &Path, drive: &Drive) -> Result<Root> {
     if uuid.is_empty() || !uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err("Invalid partition UUID".into());
     }
-    let base = Root::create(destination)?;
-    base.ensure_directory(Path::new(uuid))?;
-    Root::open(&base.path.join(uuid))
+    let pin = destination.directory(Path::new(uuid), true)?;
+    Root::open(&anchor(&pin))
 }
 pub(crate) fn files(
     db: &Store,
     drive: &Drive,
-    destination: &Path,
+    source: &Root,
+    destination: &Root,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<Backup> {
-    let source = Root::open(
-        drive
-            .mount
-            .as_deref()
-            .ok_or("Mount the partition before a file backup")?,
-    )?;
+    source.validate()?;
     let parent = backup_parent(destination, drive)?;
     if source.overlap(&parent) {
         return Err("Backup destination overlaps the source".into());
@@ -107,7 +102,7 @@ pub(crate) fn files(
     let id = uuid::Uuid::new_v4().to_string();
     let temporary = format!(".incomplete-{id}");
     let completed = format!("{}-{id}", now());
-    let pin = kernel_interface::pin_content_directory(&parent.path)?;
+    let pin = parent.directory(Path::new(""), false)?;
     let prior = last(db, drive, BackupKind::Files)?;
     let incremental = btrfs(&parent)?;
     if incremental {
@@ -127,10 +122,14 @@ pub(crate) fn files(
     } else {
         parent.ensure_directory(Path::new(&temporary))?;
     }
-    let target = Root::open(&parent.path.join(&temporary))?;
+    let staged = kernel_interface::pin(&anchor(&pin).join(&temporary), false)?;
+    if !staged.metadata()?.is_dir() {
+        return Err("Backup staging directory was replaced".into());
+    }
+    let target = Root::open(&anchor(&staged))?;
     // The same disk-backed scan becomes the durable completed manifest.
     let manifest = publication::Manifest::new(&parent)?;
-    let root_metadata = scan::observe(&source, Path::new(""), false, u64::MAX, cancel)?
+    let root_metadata = scan::observe(source, Path::new(""), false, u64::MAX, cancel)?
         .ok_or("Missing source root metadata")?;
     manifest.db.put("source", "root", &root_metadata)?;
     manifest.db.put(
@@ -141,7 +140,7 @@ pub(crate) fn files(
     let scan_id = format!("backup:{id}");
     let coverage = scan::scan(
         &manifest.db,
-        &source,
+        source,
         &scan_id,
         &Limits::default(),
         cancel,
@@ -174,7 +173,7 @@ pub(crate) fn files(
                     || entry.kind != "file"
                 {
                     written += sync::install(
-                        &source,
+                        source,
                         &target,
                         &entry,
                         &entry.path,
@@ -183,7 +182,7 @@ pub(crate) fn files(
                         incremental,
                     )?;
                 } else {
-                    let observed = scan::observe(&source, &entry.path, false, u64::MAX, cancel)?
+                    let observed = scan::observe(source, &entry.path, false, u64::MAX, cancel)?
                         .ok_or("Unchanged source disappeared")?;
                     if !entry.same_revision(&observed) {
                         return Err("Source changed before backup publication".into());
@@ -412,7 +411,7 @@ pub(crate) fn image(
     db: &Store,
     drive: &Drive,
     source: &crate::device::Source,
-    destination: &Path,
+    destination: &Root,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<Backup> {
@@ -470,7 +469,7 @@ pub(crate) fn image(
 pub(crate) fn image_from(
     db: &Store,
     drive: &Drive,
-    destination: &Path,
+    destination: &Root,
     input: &File,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
@@ -481,7 +480,7 @@ pub(crate) fn image_from(
     }
     validate_source()?;
     let parent = backup_parent(destination, drive)?;
-    let pin = kernel_interface::pin_content_directory(&parent.path)?;
+    let pin = parent.directory(Path::new(""), false)?;
     let mut staged = tempfile::NamedTempFile::new_in(anchor(&pin))?;
     let prior = last(db, drive, BackupKind::Image)?;
     let incremental = btrfs(&parent)?;
@@ -620,19 +619,90 @@ mod tests {
             ambiguous: false,
         }
     }
+    struct FileFixture {
+        db: Store,
+        source: Root,
+        destination: Root,
+        drive: Drive,
+        cancel: AtomicBool,
+        temp: tempfile::TempDir,
+    }
+    impl FileFixture {
+        fn backup(&self, progress: impl FnMut(u64, u64)) -> Result<Backup> {
+            files(
+                &self.db,
+                &self.drive,
+                &self.source,
+                &self.destination,
+                &self.cancel,
+                progress,
+            )
+        }
+        fn new(contents: &[u8]) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let source = Root::create(&temp.path().join("source")).unwrap();
+            let destination = Root::create(&temp.path().join("backups")).unwrap();
+            fs::write(source.path.join("file"), contents).unwrap();
+            let db = Store::open(&temp.path().join("db")).unwrap();
+            let drive = drive(Some(source.path.clone()));
+            Self {
+                db,
+                source,
+                destination,
+                drive,
+                cancel: AtomicBool::new(false),
+                temp,
+            }
+        }
+    }
+    #[test]
+    fn bulk_backups_refuse_replacements_of_their_admitted_roots() {
+        for replaced in ["source", "destination"] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = Root::create(&temp.path().join("source")).unwrap();
+            let destination = Root::create(&temp.path().join("destination")).unwrap();
+            fs::write(source.path.join("file"), b"admitted source").unwrap();
+            let drive = drive(Some(source.path.clone()));
+            let db = Store::open(&temp.path().join("db")).unwrap();
+            let path = temp.path().join(replaced);
+            fs::rename(&path, path.with_extension("original")).unwrap();
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("canary"), b"unrelated replacement").unwrap();
+            let cancel = AtomicBool::new(false);
+            let error = files(&db, &drive, &source, &destination, &cancel, |_, _| {}).unwrap_err();
+            assert!(
+                error.to_string().contains("replaced or removed"),
+                "{replaced}: {error}"
+            );
+            if replaced == "destination" {
+                let input = File::open(source.path.join("file")).unwrap();
+                assert!(
+                    image_from(
+                        &db,
+                        &drive,
+                        &destination,
+                        &input,
+                        &cancel,
+                        |_, _| {},
+                        || Ok(())
+                    )
+                    .is_err()
+                );
+            }
+            assert!(!destination.path.join("test").exists());
+            assert_eq!(
+                fs::read(path.join("canary")).unwrap(),
+                b"unrelated replacement"
+            );
+            assert!(db.list::<Backup>("backup", 0, 10).unwrap().is_empty());
+        }
+    }
     #[test]
     fn filesystem_backup_versions_are_complete_and_independent() {
-        let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("source");
-        fs::create_dir(&data).unwrap();
-        fs::write(data.join("file"), b"first").unwrap();
-        let db = Store::open(&temp.path().join("db")).unwrap();
-        let drive = drive(Some(data.clone()));
-        let cancel = AtomicBool::new(false);
-        let destination = temp.path().join("backups");
-        let first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
-        fs::write(data.join("file"), b"second").unwrap();
-        let second = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let fixture = FileFixture::new(b"first");
+        let first = fixture.backup(|_, _| {}).unwrap();
+        fs::write(fixture.source.path.join("file"), b"second").unwrap();
+        let second = fixture.backup(|_, _| {}).unwrap();
         assert_ne!(first.path, second.path);
         assert_eq!(fs::read(first.path.join("file")).unwrap(), b"first");
         assert_eq!(fs::read(second.path.join("file")).unwrap(), b"second");
@@ -647,7 +717,7 @@ mod tests {
         use sha2::{Digest, Sha256};
         assert_eq!(entry.hash, Some(format!("{:x}", Sha256::digest(b"second"))));
         assert_eq!(
-            publication::current(&db, &drive.id, BackupKind::Files)
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
                 .unwrap()
                 .id,
@@ -663,77 +733,73 @@ mod tests {
     }
     #[test]
     fn interrupted_reference_installation_is_recovered_without_recopying_or_advancing_early() {
-        let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("source");
-        fs::create_dir(&data).unwrap();
-        fs::write(data.join("file"), b"first").unwrap();
-        let db = Store::open(&temp.path().join("db")).unwrap();
-        let drive = drive(Some(data.clone()));
-        let cancel = AtomicBool::new(false);
-        let destination = temp.path().join("backups");
-        let first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let fixture = FileFixture::new(b"first");
+        let first = fixture.backup(|_, _| {}).unwrap();
         let pointer = first.path.parent().unwrap().join("current-files.json");
-        let retained = temp.path().join("old-current.json");
+        let retained = fixture.temp.path().join("old-current.json");
         fs::rename(&pointer, &retained).unwrap();
         fs::create_dir(&pointer).unwrap();
-        fs::write(data.join("file"), b"second").unwrap();
-        assert!(files(&db, &drive, &destination, &cancel, |_, _| {}).is_err());
+        fs::write(fixture.source.path.join("file"), b"second").unwrap();
+        assert!(fixture.backup(|_, _| {}).is_err());
         assert_eq!(
-            publication::current(&db, &drive.id, BackupKind::Files)
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
                 .unwrap()
                 .id,
             first.id
         );
-        assert_eq!(db.list::<Backup>("backup", 0, 100).unwrap().len(), 1);
+        assert_eq!(
+            fixture.db.list::<Backup>("backup", 0, 100).unwrap().len(),
+            1
+        );
         fs::remove_dir(&pointer).unwrap();
         fs::rename(&retained, &pointer).unwrap();
-        recover_publications(&db).unwrap();
-        let second = publication::current(&db, &drive.id, BackupKind::Files)
+        recover_publications(&fixture.db).unwrap();
+        let second = publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
             .unwrap()
             .unwrap();
         assert_ne!(second.id, first.id);
         assert_eq!(fs::read(first.path.join("file")).unwrap(), b"first");
         assert_eq!(fs::read(second.path.join("file")).unwrap(), b"second");
-        recover_publications(&db).unwrap();
-        assert_eq!(db.list::<Backup>("backup", 0, 100).unwrap().len(), 2);
+        recover_publications(&fixture.db).unwrap();
+        assert_eq!(
+            fixture.db.list::<Backup>("backup", 0, 100).unwrap().len(),
+            2
+        );
         let recorded: Backup = serde_json::from_slice(&fs::read(pointer).unwrap()).unwrap();
         assert_eq!(recorded.id, second.id);
     }
     #[test]
     fn recovery_refuses_a_modified_manifest_and_exposes_the_retained_artifact() {
-        let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("source");
-        fs::create_dir(&data).unwrap();
-        fs::write(data.join("file"), b"first").unwrap();
-        let db = Store::open(&temp.path().join("db")).unwrap();
-        let drive = drive(Some(data.clone()));
-        let cancel = AtomicBool::new(false);
-        let destination = temp.path().join("backups");
-        let first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let fixture = FileFixture::new(b"first");
+        let first = fixture.backup(|_, _| {}).unwrap();
         let pointer = first.path.parent().unwrap().join("current-files.json");
-        let retained = temp.path().join("old-current.json");
+        let retained = fixture.temp.path().join("old-current.json");
         fs::rename(&pointer, &retained).unwrap();
         fs::create_dir(&pointer).unwrap();
-        fs::write(data.join("file"), b"second").unwrap();
-        assert!(files(&db, &drive, &destination, &cancel, |_, _| {}).is_err());
-        let pending: serde_json::Value =
-            db.list("backup-publication", 0, 1).unwrap().pop().unwrap();
+        fs::write(fixture.source.path.join("file"), b"second").unwrap();
+        assert!(fixture.backup(|_, _| {}).is_err());
+        let pending: serde_json::Value = fixture
+            .db
+            .list("backup-publication", 0, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
         let prepared: Backup = serde_json::from_value(pending["backup"].clone()).unwrap();
         let manifest = Store::existing(prepared.manifest.as_ref().unwrap(), false).unwrap();
         manifest.put("tampered", "test", &true).unwrap();
         drop(manifest);
         fs::remove_dir(&pointer).unwrap();
         fs::rename(&retained, &pointer).unwrap();
-        recover_publications(&db).unwrap();
+        recover_publications(&fixture.db).unwrap();
         assert_eq!(
-            publication::current(&db, &drive.id, BackupKind::Files)
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
                 .unwrap()
                 .id,
             first.id
         );
-        let failures: Vec<crate::DriveRecovery> = db.list("recovery", 0, 10).unwrap();
+        let failures: Vec<crate::DriveRecovery> = fixture.db.list("recovery", 0, 10).unwrap();
         assert_eq!(failures.len(), 1);
         assert!(matches!(
             failures[0].cause,
@@ -744,28 +810,21 @@ mod tests {
     }
     #[test]
     fn pruning_removes_matching_manifests_and_preserves_current_across_clock_changes() {
-        let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("source");
-        fs::create_dir(&data).unwrap();
-        fs::write(data.join("file"), b"one").unwrap();
-        let db = Store::open(&temp.path().join("db")).unwrap();
-        let drive = drive(Some(data.clone()));
-        let cancel = AtomicBool::new(false);
-        let destination = temp.path().join("backups");
-        let mut first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
-        fs::write(data.join("file"), b"two").unwrap();
-        let second = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
-        fs::write(data.join("file"), b"three").unwrap();
-        let third = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let fixture = FileFixture::new(b"one");
+        let mut first = fixture.backup(|_, _| {}).unwrap();
+        fs::write(fixture.source.path.join("file"), b"two").unwrap();
+        let second = fixture.backup(|_, _| {}).unwrap();
+        fs::write(fixture.source.path.join("file"), b"three").unwrap();
+        let third = fixture.backup(|_, _| {}).unwrap();
         first.created = u64::MAX;
-        db.put("backup", &first.id, &first).unwrap();
-        prune(&db, &drive.id, 1, &cancel).unwrap();
+        fixture.db.put("backup", &first.id, &first).unwrap();
+        prune(&fixture.db, &fixture.drive.id, 1, &fixture.cancel).unwrap();
         assert!(!second.path.exists());
         assert!(!second.manifest.unwrap().exists());
         assert!(third.path.exists());
         assert!(third.manifest.as_ref().unwrap().exists());
         assert_eq!(
-            publication::current(&db, &drive.id, BackupKind::Files)
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
                 .unwrap()
                 .id,
@@ -779,17 +838,10 @@ mod tests {
     }
     #[test]
     fn cancellation_after_a_completed_copy_keeps_old_current_and_retains_partial_data() {
-        let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("source");
-        fs::create_dir(&data).unwrap();
-        fs::write(data.join("file"), b"first").unwrap();
-        let db = Store::open(&temp.path().join("db")).unwrap();
-        let drive = drive(Some(data.clone()));
-        let cancel = AtomicBool::new(false);
-        let destination = temp.path().join("backups");
-        let first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
-        fs::write(data.join("file"), b"changed").unwrap();
-        fs::write(data.join("later"), b"later").unwrap();
+        let fixture = FileFixture::new(b"first");
+        let first = fixture.backup(|_, _| {}).unwrap();
+        fs::write(fixture.source.path.join("file"), b"changed").unwrap();
+        fs::write(fixture.source.path.join("later"), b"later").unwrap();
         let parent = first.path.parent().unwrap();
         let progress = |_, _| {
             let completed_partial = fs::read_dir(parent).unwrap().flatten().any(|entry| {
@@ -800,13 +852,15 @@ mod tests {
                     && entry.path().join("file").is_file()
             });
             if completed_partial {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
+                fixture
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
         };
-        assert!(files(&db, &drive, &destination, &cancel, progress).is_err());
-        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(fixture.backup(progress).is_err());
+        assert!(fixture.cancel.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(
-            publication::current(&db, &drive.id, BackupKind::Files)
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
                 .unwrap()
                 .id,
@@ -832,7 +886,7 @@ mod tests {
             image_from(
                 &db,
                 &drive(None),
-                &temp.path().join("backups"),
+                &Root::create(&temp.path().join("backups")).unwrap(),
                 &input,
                 &AtomicBool::new(false),
                 |_, _| {},
@@ -933,38 +987,43 @@ mod btrfs_tests {
         let db = Store::open(&fixture.0.path().join("db")).unwrap();
         let destination = fixture.0.path().join("backups");
         let cancel = AtomicBool::new(false);
-        let first = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let source_root = Root::open(&data).unwrap();
+        let destination_root = Root::create(&destination).unwrap();
+        let make_files = || {
+            files(
+                &db,
+                &drive,
+                &source_root,
+                &destination_root,
+                &cancel,
+                |_, _| {},
+            )
+        };
+        let make_image = |input: &File| {
+            image_from(
+                &db,
+                &drive,
+                &destination_root,
+                input,
+                &cancel,
+                |_, _| {},
+                || Ok(()),
+            )
+        };
+        let first = make_files().unwrap();
         bytes[4096..8192].fill(42);
         fs::write(data.join("large"), &bytes).unwrap();
-        let second = files(&db, &drive, &destination, &cancel, |_, _| {}).unwrap();
+        let second = make_files().unwrap();
         assert!(first.incremental && second.incremental);
         assert!(second.bytes_written <= 256 * 1024);
         assert_ne!(fs::read(first.path.join("large")).unwrap(), bytes);
         assert_eq!(fs::read(second.path.join("large")).unwrap(), bytes);
         let source = File::open(data.join("large")).unwrap();
-        let image1 = image_from(
-            &db,
-            &drive,
-            &destination,
-            &source,
-            &cancel,
-            |_, _| {},
-            || Ok(()),
-        )
-        .unwrap();
+        let image1 = make_image(&source).unwrap();
         bytes[1024 * 1024..1024 * 1024 + 4096].fill(19);
         fs::write(data.join("large"), &bytes).unwrap();
         let source = File::open(data.join("large")).unwrap();
-        let image2 = image_from(
-            &db,
-            &drive,
-            &destination,
-            &source,
-            &cancel,
-            |_, _| {},
-            || Ok(()),
-        )
-        .unwrap();
+        let image2 = make_image(&source).unwrap();
         assert!(image2.incremental);
         assert!(image2.bytes_written <= 256 * 1024);
         assert_eq!(fs::read(&image2.path).unwrap(), bytes);
@@ -1160,7 +1219,7 @@ pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -
             }
             root.validate()?;
             if btrfs(&root)? {
-                let pin = kernel_interface::pin_content_directory(&parent.path)?;
+                let pin = parent.directory(Path::new(""), false)?;
                 command(&["subvolume", "delete"], &pin, &[name])?;
             } else {
                 fs::remove_dir_all(&root.path)?;

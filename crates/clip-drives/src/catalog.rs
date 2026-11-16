@@ -28,21 +28,17 @@ use std::{
 
 pub(crate) fn capture(
     db: &Store,
-    state: &Path,
+    state: &Root,
     drive: &crate::Drive,
+    root: &Root,
     config: &DriveConfig,
     cancel: &AtomicBool,
     progress: impl FnMut(u64, u64),
 ) -> Result<Catalog> {
-    let root = Root::open(
-        drive
-            .mount
-            .as_deref()
-            .ok_or("Mount the drive before saving a catalog")?,
-    )?;
+    root.validate()?;
     let id = uuid::Uuid::new_v4().to_string();
-    let catalogs = Root::create(&state.join("catalogs"))?;
-    let path = catalogs.path.join(format!("{id}.sqlite"));
+    let catalogs = state.directory(Path::new("catalogs"), true)?;
+    let path = crate::root::anchor(&catalogs).join(format!("{id}.sqlite"));
     let rules: Vec<DriveRule> = db.list("rule", 0, 1000)?;
     if rules
         .iter()
@@ -75,7 +71,7 @@ pub(crate) fn capture(
     cat_db
         .0
         .pragma_update(None, "max_page_count", pages.saturating_sub(16))?;
-    let coverage = scan::scan(&cat_db, &root, "catalog", &limits, cancel, progress)?;
+    let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
     cat_db.0.pragma_update(None, "max_page_count", pages)?;
     let catalog = Catalog {
         id: id.clone(),
@@ -479,7 +475,37 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (tempfile::TempDir, Store, crate::Drive, PathBuf) {
+    struct Fixture {
+        db: Store,
+        drive: crate::Drive,
+        source: Root,
+        state: Root,
+        temp: tempfile::TempDir,
+    }
+    impl Fixture {
+        fn capture(&self, config: &DriveConfig) -> Result<Catalog> {
+            capture(
+                &self.db,
+                &self.state,
+                &self.drive,
+                &self.source,
+                config,
+                &AtomicBool::new(false),
+                |_, _| {},
+            )
+        }
+        fn backup(&self) -> Result<Backup> {
+            backup::files(
+                &self.db,
+                &self.drive,
+                &self.source,
+                &Root::create(&self.temp.path().join("backups"))?,
+                &AtomicBool::new(false),
+                |_, _| {},
+            )
+        }
+    }
+    fn fixture() -> Fixture {
         let temp = if let Some(base) = std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE") {
             tempfile::Builder::new()
                 .prefix("catalog-scale-")
@@ -500,7 +526,7 @@ mod tests {
             id: "part:catalog-fixture".into(),
             label: "Catalog fixture".into(),
             device: "/dev/not-real".into(),
-            mount: Some(source),
+            mount: Some(source.clone()),
             part_uuid: Some("catalog-fixture".into()),
             filesystem_uuid: None,
             filesystem: "vfat".into(),
@@ -524,7 +550,13 @@ mod tests {
             },
         )
         .unwrap();
-        (temp, db, drive, state)
+        Fixture {
+            db,
+            drive,
+            source: Root::open(&source).unwrap(),
+            state: Root::open(&state).unwrap(),
+            temp,
+        }
     }
     fn filesystem(state: &Path, catalog: Catalog) -> CatalogFs {
         CatalogFs {
@@ -548,11 +580,14 @@ mod tests {
             std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE").is_some(),
             "Select an owned fixture parent"
         );
-        let (_temp, db, drive, state) = fixture();
-        let source = drive.mount.as_ref().unwrap();
+        let fixture = fixture();
         let started = Instant::now();
         for directory in 0..1000 {
-            let path = source.join("excluded").join(format!("d-{directory:04}"));
+            let path = fixture
+                .source
+                .path
+                .join("excluded")
+                .join(format!("d-{directory:04}"));
             std::fs::create_dir(&path).unwrap();
             for file in 0..1000 {
                 File::create(path.join(format!("f-{file:04}"))).unwrap();
@@ -560,37 +595,24 @@ mod tests {
         }
         let creation = started.elapsed().as_secs_f64();
         let started = Instant::now();
-        let cancel = AtomicBool::new(false);
-        let excluded = capture(
-            &db,
-            &state,
-            &drive,
-            &DriveConfig::default(),
-            &cancel,
-            |_, _| {},
-        )
-        .unwrap();
+        let excluded = fixture.capture(&DriveConfig::default()).unwrap();
         assert!(excluded.complete);
         assert_eq!(excluded.entries, 2);
         let exclusion = started.elapsed().as_secs_f64();
-        db.remove("rule", "exclude").unwrap();
+        fixture.db.remove("rule", "exclude").unwrap();
         let started = Instant::now();
-        let limited = capture(
-            &db,
-            &state,
-            &drive,
-            &DriveConfig {
+        let limited = fixture
+            .capture(&DriveConfig {
                 catalog_max_entries: 1000,
                 catalog_max_bytes: 1024 * 1024,
                 ..Default::default()
-            },
-            &cancel,
-            |_, _| {},
-        )
-        .unwrap();
+            })
+            .unwrap();
         assert!(!limited.complete);
         assert!(limited.entries <= 1000);
-        let path = state
+        let path = fixture
+            .state
+            .path
             .join("catalogs")
             .join(format!("{}.sqlite", limited.id));
         let bytes = std::fs::metadata(path).unwrap().len();
@@ -608,45 +630,19 @@ mod tests {
     }
     #[test]
     fn catalog_database_cap_preserves_committed_partial_coverage() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        std::fs::create_dir(&source).unwrap();
+        let fixture = fixture();
         for index in 0..2000 {
-            File::create(source.join(format!("file-{index:06}"))).unwrap();
+            File::create(fixture.source.path.join(format!("file-{index:06}"))).unwrap();
         }
-        let drive = crate::Drive {
-            id: "part:cap".into(),
-            label: "cap".into(),
-            device: "/dev/not-real".into(),
-            mount: Some(source),
-            part_uuid: Some("cap".into()),
-            filesystem_uuid: None,
-            filesystem: "vfat".into(),
-            capacity: 1024 * 1024,
-            drive_capacity: 1024 * 1024,
-            disk_sequence: Some(1),
-            removable: true,
-            read_only: false,
-            evidence: "fixture".into(),
-            ambiguous: false,
-        };
-        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
         let config = DriveConfig {
             catalog_max_bytes: 128 * 1024,
             ..Default::default()
         };
-        let catalog = capture(
-            &db,
-            temp.path(),
-            &drive,
-            &config,
-            &AtomicBool::new(false),
-            |_, _| {},
-        )
-        .unwrap();
+        let catalog = fixture.capture(&config).unwrap();
         assert!(!catalog.complete);
-        let path = temp
-            .path()
+        let path = fixture
+            .state
+            .path
             .join("catalogs")
             .join(format!("{}.sqlite", catalog.id));
         assert!(std::fs::metadata(&path).unwrap().len() <= config.catalog_max_bytes);
@@ -659,19 +655,38 @@ mod tests {
         assert!(count < 2000);
     }
     #[test]
+    fn catalog_refuses_replacements_of_admitted_source_and_state_roots() {
+        for replace_source in [true, false] {
+            let fixture = fixture();
+            let path = if replace_source {
+                &fixture.source.path
+            } else {
+                &fixture.state.path
+            };
+            std::fs::rename(path, path.with_extension("original")).unwrap();
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("canary"), b"unrelated replacement").unwrap();
+            let error = fixture.capture(&DriveConfig::default()).unwrap_err();
+            assert!(error.to_string().contains("replaced or removed"), "{error}");
+            assert!(!fixture.state.path.join("catalogs").exists());
+            assert_eq!(
+                std::fs::read(path.join("canary")).unwrap(),
+                b"unrelated replacement"
+            );
+            assert!(
+                fixture
+                    .db
+                    .list::<Catalog>("catalog", 0, 10)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+    #[test]
     fn metadata_listing_works_offline_and_matching_backup_supplies_content() {
-        let (temp, db, drive, state) = fixture();
-        let cancel = AtomicBool::new(false);
-        let catalog = capture(
-            &db,
-            &state,
-            &drive,
-            &DriveConfig::default(),
-            &cancel,
-            |_, _| {},
-        )
-        .unwrap();
-        let fs = filesystem(&state, catalog);
+        let fixture = fixture();
+        let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+        let fs = filesystem(&fixture.state.path, catalog);
         let (ino, entry) = fs.lookup_path(Path::new("file.txt")).unwrap().unwrap();
         assert_eq!(fs.attr(ino, Some(&entry)).size, 15);
         assert!(fs.resolve(&entry).is_err());
@@ -680,14 +695,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        backup::files(
-            &db,
-            &drive,
-            &temp.path().join("backups"),
-            &cancel,
-            |_, _| {},
-        )
-        .unwrap();
+        fixture.backup().unwrap();
         let open = fs.resolve(&entry).unwrap();
         let mut bytes = [0; 15];
         open.file.read_exact_at(&mut bytes, 0).unwrap();
@@ -696,21 +704,13 @@ mod tests {
     #[test]
     #[ignore = "requires /dev/fuse and fusermount3"]
     fn real_fuse_mount_lists_offline_metadata_and_returns_media_errors() {
-        let (temp, db, drive, state) = fixture();
-        let catalog = capture(
-            &db,
-            &state,
-            &drive,
-            &DriveConfig::default(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        )
-        .unwrap();
-        let mount = temp.path().join("mount");
+        let fixture = fixture();
+        let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+        let mount = fixture.temp.path().join("mount");
         std::fs::create_dir(&mount).unwrap();
         let fsname = format!("little-clip-catalog:{}", catalog.id);
         let session = fuser::spawn_mount2(
-            filesystem(&state, catalog),
+            filesystem(&fixture.state.path, catalog),
             &mount,
             &[
                 fuser::MountOption::RO,
@@ -724,21 +724,14 @@ mod tests {
         assert_eq!(std::fs::metadata(mount.join("file.txt")).unwrap().len(), 15);
         assert!(std::fs::read(mount.join("file.txt")).is_err());
         assert!(std::fs::read_dir(mount.join("excluded")).is_err());
-        let mut backup = backup::files(
-            &db,
-            &drive,
-            &temp.path().join("backups"),
-            &AtomicBool::new(false),
-            |_, _| {},
-        )
-        .unwrap();
+        let mut backup = fixture.backup().unwrap();
         assert_eq!(
             std::fs::read(mount.join("file.txt")).unwrap(),
             b"catalog payload"
         );
         assert!(std::fs::write(mount.join("new"), b"no").is_err());
         backup.path = mount.clone();
-        db.put("backup", &backup.id, &backup).unwrap();
+        fixture.db.put("backup", &backup.id, &backup).unwrap();
         assert!(
             std::fs::read(mount.join("file.txt")).is_err(),
             "A catalog must never resolve contents through itself"
