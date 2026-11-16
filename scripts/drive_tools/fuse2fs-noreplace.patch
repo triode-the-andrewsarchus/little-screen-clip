@@ -1,0 +1,29 @@
+--- a/misc/fuse2fs.c
++++ b/misc/fuse2fs.c
+@@ -1971,9 +1971,9 @@
+ 	int ret = 0;
+ 
+ #if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 0)
+-	/* renameat2 is not supported */
+-	if (flags)
+-		return -ENOSYS;
++	/* Serialize NOREPLACE with every directory mutation under ff->bfl. */
++	if (flags & ~RENAME_NOREPLACE)
++		return -EINVAL;
+ #endif
+ 
+ 	FUSE2FS_CHECK_CONTEXT(ff);
+@@ -1999,6 +1999,13 @@
+ 
+ 	if (err == EXT2_ET_FILE_NOT_FOUND)
+ 		to_ino = 0;
++
++#if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 0)
++	if ((flags & RENAME_NOREPLACE) && to_ino) {
++		ret = -EEXIST;
++		goto out;
++	}
++#endif
+ 
+ 	/* Already the same file? */
+ 	if (to_ino != 0 && to_ino == from_ino) {

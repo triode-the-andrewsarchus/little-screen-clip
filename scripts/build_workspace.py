@@ -116,4 +116,7 @@ if __name__ == "__main__":
         package_multisample_helper(skip_build=True)
         from build_media_helper import build as package_media_helper
         package_media_helper(skip_build=True)
+        from build_drive_tools import build as package_drive_tools
+        repo = Path(__file__).resolve().parents[1]
+        package_drive_tools(repo / "target/release/drive-tools", repo / "target/drive-tools-source")
     sys.exit(result)

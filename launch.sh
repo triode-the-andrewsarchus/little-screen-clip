@@ -254,15 +254,17 @@ function build_if_needed() {
 function ensure_drive_helper() {
     local profile_dir
     profile_dir=$(dirname "$1")
-    if [ -n "${LITTLE_CLIP_DRIVE_MOUNT_HELPER:-}" ] || [ -x "$profile_dir/clip-drive-mount" ]; then
-        return 0
-    fi
     local profile
     profile=$(basename "$profile_dir")
-    if [ "$profile" = "debug" ]; then
-        cargo build -p clip-drives --bin clip-drive-mount
-    else
-        cargo build --release -p clip-drives --bin clip-drive-mount
+    if [ -z "${LITTLE_CLIP_DRIVE_MOUNT_HELPER:-}" ] && [ ! -x "$profile_dir/clip-drive-mount" ]; then
+        if [ "$profile" = "debug" ]; then
+            cargo build -j 2 -p clip-drives --bin clip-drive-mount
+        else
+            cargo build -j 2 --release -p clip-drives --bin clip-drive-mount
+        fi
+    fi
+    if [ -z "${LITTLE_CLIP_RAM_FS_HELPER:-}" ]; then
+        python3 "$SCRIPT_DIR/scripts/build_drive_tools.py" --profile "$profile" --output-dir "$profile_dir/drive-tools"
     fi
 }
 
