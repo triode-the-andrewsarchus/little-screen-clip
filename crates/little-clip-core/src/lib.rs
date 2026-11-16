@@ -11,6 +11,7 @@ pub mod color;
 pub mod config;
 pub mod diagram;
 pub mod document;
+pub mod drives;
 pub mod ebook;
 pub mod email;
 pub mod file_format;

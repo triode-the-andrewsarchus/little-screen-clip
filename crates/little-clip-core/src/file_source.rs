@@ -1,6 +1,8 @@
 //! Source identity and guarded atomic saves for file-backed desktop editors.
 mod rename;
+mod stream;
 pub use rename::{rename_at_noreplace, rename_noreplace};
+pub use stream::{CopyStats, copy_checked};
 
 use std::fs::File;
 use std::io::{Read, Write};

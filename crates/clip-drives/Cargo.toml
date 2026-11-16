@@ -1,0 +1,21 @@
+[package]
+name = "clip-drives"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+little-clip-core = { path = "../little-clip-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+rustix.workspace = true
+tracing.workspace = true
+libc = "0.2"
+tempfile = "3.27"
+rusqlite = { version = "0.35", features = ["bundled"] }
+sha2 = "0.10"
+fuser = { version = "0.14", default-features = false, features = ["abi-7-31"] }
+zbus = { version = "5.19.0", features = ["blocking-api"] }

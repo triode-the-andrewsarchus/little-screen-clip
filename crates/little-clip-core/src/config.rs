@@ -10,6 +10,9 @@ use tracing::{info, warn};
 /// Root application configuration holding all sub-configurations.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
+    /// Daemon-owned portable drive services; all enrollment is explicit.
+    #[serde(default)]
+    pub drives: crate::drives::DriveConfig,
     /// Display options (rotation, animations, debug badges, elision character).
     #[serde(default)]
     pub display: DisplayConfig,

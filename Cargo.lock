@@ -1402,6 +1402,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clip-drives"
+version = "0.1.0"
+dependencies = [
+ "fuser",
+ "libc",
+ "little-clip-core",
+ "rusqlite",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+ "zbus",
+]
+
+[[package]]
 name = "clip-file-manager"
 version = "0.1.0"
 dependencies = [
