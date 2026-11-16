@@ -9,7 +9,7 @@ use little_clip_core::{
 use std::{
     collections::{HashSet, VecDeque},
     path::PathBuf,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 mod dialogs;
@@ -57,9 +57,16 @@ struct PendingRequest {
     request: DriveRequest,
     task: Task<Result<DriveReply, String>>,
 }
+struct StatusPoll {
+    reply: Result<DriveReply, String>,
+    policy: Option<Arc<IndexPolicy>>,
+}
 pub(super) struct Drives {
     pub status: DriveStatus,
-    poll: Option<Task<Result<DriveReply, String>>>,
+    poll: Option<Task<StatusPoll>>,
+    policy: Option<Arc<IndexPolicy>>,
+    policy_observed: bool,
+    policy_changed: bool,
     request: Option<PendingRequest>,
     queue: VecDeque<(u64, DriveRequest)>,
     preview_generation: u64,
@@ -76,6 +83,9 @@ impl Default for Drives {
         Self {
             status: Default::default(),
             poll: None,
+            policy: None,
+            policy_observed: false,
+            policy_changed: false,
             request: None,
             queue: VecDeque::new(),
             preview_generation: 0,
@@ -145,18 +155,41 @@ impl Drives {
         if let Some(result) = self.poll.as_ref().and_then(Task::poll) {
             self.poll = None;
             match result {
-                Ok(Ok(DriveReply::Status(status))) => self.accept_status(*status),
-                Ok(Err(error)) => self.error = Some(error),
+                Ok(result) => {
+                    self.accept_policy(result.policy);
+                    match result.reply {
+                        Ok(DriveReply::Status(status)) => self.accept_status(*status),
+                        Err(error) => self.error = Some(error),
+                        _ => self.error = Some("Drive service did not return its status".into()),
+                    }
+                }
                 Err(error) => self.error = Some(error.to_string()),
-                _ => self.error = Some("Drive service did not return its status".into()),
             }
         }
         if self.poll.is_none() && self.last_poll.elapsed() >= Duration::from_secs(1) {
             self.poll = Some(Task::start(&IO, Duration::from_secs(5), |_| {
-                ipc(DriveRequest::Status { offset: 0 })
+                let reply = ipc(DriveRequest::Status { offset: 0 });
+                StatusPoll {
+                    reply,
+                    policy: index_policy(),
+                }
             }));
             self.last_poll = Instant::now();
         }
+    }
+    fn accept_policy(&mut self, policy: Option<Arc<IndexPolicy>>) {
+        let unchanged = match (&self.policy, &policy) {
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        let initial_empty = !self.policy_observed
+            && policy
+                .as_ref()
+                .is_some_and(|policy| policy.excluded.is_empty());
+        self.policy_changed |= !initial_empty && (!self.policy_observed || !unchanged);
+        self.policy_observed = true;
+        self.policy = policy;
     }
     fn accept_reply(
         &mut self,
@@ -548,6 +581,11 @@ impl Drives {
 impl FileManager {
     pub(super) fn tick_drives(&mut self) {
         self.drives.tick();
+        if std::mem::take(&mut self.drives.policy_changed) {
+            self.shelf.invalidate_index_policy();
+            self.similarity_canvas = Default::default();
+            self.constellation.invalidate_index_policy();
+        }
         // The daemon is authoritative for managed volumes; keep the standalone
         // scanner as the fallback and for non-block/FUSE mounts.
         for drive in &self.drives.status.drives {

@@ -138,6 +138,10 @@ impl Shelf {
         self.notice = None;
     }
 
+    pub(super) fn invalidate_index_policy(&mut self) {
+        self.previews.clear();
+    }
+
     pub fn tick(&mut self) {
         self.tick_inventory();
         let Some(pending) = &self.pending else {
@@ -341,6 +345,45 @@ fn send_request(payload: Payload, hand: HandSide) -> Result<IpcRequest, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_refresh_retires_previews_and_keeps_an_accepted_send() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("child"), b"fixture").unwrap();
+        let mut shelf = Shelf::default();
+        let payload = Payload::Files {
+            paths: vec![root.path().into()],
+            cut: false,
+        };
+        shelf.add(payload.clone(), "kept folder".into());
+        let id = shelf.entries[0].id;
+        assert!(
+            shelf
+                .previews
+                .request(id, preview::Source::Payload(payload))
+        );
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while shelf.previews.get(id).is_none() {
+            shelf.previews.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        shelf.pending = Some(Pending {
+            receiver,
+            sending: true,
+        });
+        shelf.checked_at = std::time::Instant::now();
+        shelf.invalidate_index_policy();
+        assert_eq!(shelf.len(), 1);
+        assert!(shelf.previews.needs(id));
+        assert!(shelf.sending());
+        sender.send(Ok(Ok(ResultValue::Sent))).unwrap();
+        shelf.tick();
+        assert!(!shelf.sending());
+        assert_eq!(shelf.notice.as_deref(), Some("Sent to the shared hand."));
+    }
 
     #[test]
     fn shelf_send_never_hydrates_file_references_including_single_images() {

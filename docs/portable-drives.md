@@ -133,8 +133,10 @@ Shelf reference summaries, recursive photo similarity discovery/features, and au
 constellation discovery/cache reads honor drive indexing exclusions. Explicit folder
 browsing and individual-file opening remain available. Recursive photo discovery does
 not follow child symlinks. Newly excluded observations are rejected before decoding or
-publishing a new index snapshot; existing displayed UI caches do not yet have a
-policy-change retirement guarantee.
+publishing a new index snapshot. The periodic drive worker observes policy changes
+and retires cached Shelf summaries, photo similarity state and audio map discovery.
+Accepted saves/sends and collected items remain owned. This refresh does not yet cover
+every search/answer/image-order cache.
 
 Catalogs, RAM mirrors, and backup destinations do not automatically enroll in content search. The default catalog budget is 250,000 entries, 256 MiB, depth 64, and ten minutes. The database byte limit is enforced independently of the entry limit (minimum 128 KiB). A budget limit or read failure is disclosed as partial coverage; excluded directories are not represented as known-empty folders. Existing catalogs remain dated versions when policy changes.
 

@@ -558,6 +558,25 @@ mod tests {
     }
 
     #[test]
+    fn policy_refresh_rejects_an_older_folder_result_without_reading_on_the_ui_thread() {
+        let mut state = ConstellationState::new();
+        let folder = PathBuf::from("/owned/policy-fixture");
+        state.current_indexed_folder = Some(folder.clone());
+        let generation = state.folder_generation;
+        let cancelled = state.folder_scan_cancelled.clone();
+        state.folder_has_audio = Some(true);
+        state.invalidate_index_policy();
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert_eq!(state.folder_has_audio, None);
+        assert_eq!(state.background.len(), 1);
+        state.accept_background(
+            Task::Folder(folder, generation),
+            Output::Samples(vec![], Some(true), Default::default()),
+        );
+        assert_eq!(state.folder_has_audio, None);
+    }
+
+    #[test]
     fn refreshed_browser_rejects_older_listing() {
         let mut state = ConstellationState::new();
         state.current_indexed_folder = Some(PathBuf::from("/samples"));
@@ -587,6 +606,7 @@ mod tests {
         });
         state.stop_playback();
         state.clear_bank();
+        state.invalidate_index_policy();
         assert!(state.writing_pack());
         sender
             .send(Ok(Ok(Output::Saved(PathBuf::from("/saved/Kit")))))

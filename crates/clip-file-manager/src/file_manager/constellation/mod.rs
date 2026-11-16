@@ -402,6 +402,15 @@ impl ConstellationState {
         );
     }
 
+    // Refresh only the discovery/map state. Accepted pack writes, the bank and
+    // explicit playback keep their existing owners and completion delivery.
+    pub(super) fn invalidate_index_policy(&mut self) {
+        self.cancel_indexing();
+        if let Some(folder) = self.current_indexed_folder.take() {
+            self.check_and_load_folder(&folder);
+        }
+    }
+
     /// Install one accepted folder snapshot, keeping range filters only when useful.
     fn install_samples(
         &mut self,

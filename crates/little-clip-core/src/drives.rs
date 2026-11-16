@@ -493,47 +493,62 @@ pub struct IndexPolicy {
     pub excluded: Vec<PathBuf>,
 }
 
-/// Checks the bounded local drive-policy registry on background search workers.
+/// Returns a cached, immutable snapshot of the local drive exclusion policy.
 ///
-/// An existing unreadable or malformed registry fails closed. This policy only
-/// excludes work and never authorizes payload access or enrolls a search root.
-pub fn index_excluded(path: &std::path::Path) -> bool {
-    use std::{
-        os::unix::fs::MetadataExt,
-        sync::{LazyLock, Mutex},
-    };
-    type Cache = Option<(PathBuf, [u64; 5], Option<IndexPolicy>)>;
+/// This reads filesystem metadata and belongs on background workers. A missing
+/// registry returns an empty policy. A non-regular, unreadable or malformed
+/// registry returns `None`, which excludes all background indexing.
+/// Equivalent rules share an [`std::sync::Arc`] so UI handoffs can detect
+/// changes without filesystem access. A snapshot never authorizes payload access.
+pub fn index_policy() -> Option<std::sync::Arc<IndexPolicy>> {
+    use std::sync::{Arc, LazyLock, Mutex};
+    type Cache = Option<(
+        PathBuf,
+        crate::file_inventory::Identity,
+        Option<Arc<IndexPolicy>>,
+    )>;
     static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(None));
+    static EMPTY: LazyLock<Arc<IndexPolicy>> = LazyLock::new(|| Arc::new(IndexPolicy::default()));
     let registry = state_directory().join("index-policy.json");
     let metadata = match std::fs::symlink_metadata(&registry) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(EMPTY.clone()),
+        Err(_) => return None,
     };
-    let signature = [
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mtime() as u64,
-        metadata.mtime_nsec() as u64,
-    ];
-    let Ok(mut cache) = CACHE.lock() else {
-        return true;
-    };
+    if !metadata.is_file() {
+        return None;
+    }
+    let signature = crate::file_inventory::identity(&metadata);
+    let mut cache = CACHE.lock().ok()?;
     if cache
         .as_ref()
         .is_none_or(|(p, s, _)| *p != registry || *s != signature)
     {
         let value = crate::kernel_interface::read_content_bounded(&registry, 1024 * 1024)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<IndexPolicy>(&bytes).ok());
+            .and_then(|bytes| serde_json::from_slice::<IndexPolicy>(&bytes).ok())
+            .map(|mut policy| {
+                policy.excluded.sort();
+                policy.excluded.dedup();
+                if policy.excluded.is_empty() {
+                    return EMPTY.clone();
+                }
+                match cache.as_ref().and_then(|(_, _, policy)| policy.as_ref()) {
+                    Some(old) if old.excluded == policy.excluded => old.clone(),
+                    _ => Arc::new(policy),
+                }
+            });
         *cache = Some((registry, signature, value));
     }
-    cache.as_ref().is_none_or(|(_, _, policy)| {
-        policy
-            .as_ref()
-            .is_none_or(|p| p.excluded.iter().any(|root| path.starts_with(root)))
-    })
+    cache.as_ref()?.2.clone()
+}
+
+/// Checks the bounded local drive-policy registry on background workers.
+///
+/// An existing unreadable or malformed registry fails closed. This policy only
+/// excludes work and never authorizes payload access or enrolls a search root.
+pub fn index_excluded(path: &std::path::Path) -> bool {
+    index_policy().is_none_or(|policy| policy.excluded.iter().any(|root| path.starts_with(root)))
 }
 
 /// A prepared durable operation that could not finish publication automatically.

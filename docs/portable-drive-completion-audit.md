@@ -40,7 +40,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.6 | Host gate | Explicit read-only loop mount implemented; provider reads and recursion refusal need real image-loop acceptance. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
-| 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Live UI cache retirement, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
+| 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Open | Future scans honor subtree rules; removal of saved descendant records after readers release and explicit Not catalogued presentation remain. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
@@ -48,7 +48,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.8 | Partial | Pinned per-open files and self-mount refusal tested; alias, replacement and concurrent provider change matrix remains. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; migration/idempotent admission and completed-item cancellation tests still needed. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
-| 7.3 | Host gate | Disposable FAT32/exFAT/NTFS partition matrix not run; requires authorized loop/mount facility, never attached user media. |
+| 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Application sync/backup/catalog and filename/metadata cases remain to be run on those native guest filesystems. |
 | 7.4 | Partial | Real FUSE and Btrfs tests pass; authorized image-loop tests remain. |
 | 7.5 | Partial | Dark/light private acceptance passed; add pending-count/resource/coverage/recovery flows as completed. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup and RAM byte/inode exhaustion tests pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, pressure and underlying-tmpfs exhaustion remain. |
@@ -457,3 +457,52 @@ backup-review checkpoint), 7.19% duplication, average CCN 3.48, maximum 274 and
 added policy/symlink boundaries are necessary; broader feature-wide clone and
 complexity cleanup remains unfinished. The saved report is
 `.fitness/portable-drives-noindex-architecture.json`.
+
+
+Live-policy follow-up: core exposes an immutable view of its existing bounded policy
+cache. Metadata observation stays on the drive-status polling worker, including when
+status IPC returns an error. Core reuses the shared inventory identity (device, inode,
+size, precise mtime/ctime and mode), rejects non-regular policy registries, preserves
+fail-closed malformed/unreadable handling, and normalizes equivalent rule lists to
+retain their snapshot identity. The first observed empty policy leaves existing views
+alone; unavailable or changed policies generate a UI invalidation once per observation.
+
+The file-manager handoff clears Shelf preview caches and retires photo similarity
+jobs/features. Audio discovery cancels its active index and refreshes the current map
+with a new generation, rejecting old folder completions. Explicit playback, the sample
+bank, collected Shelf items and accepted save/send completions retain their owners.
+This is observation-driven through the existing periodic status worker; it does not
+claim synchronous notification at the instant another process replaces the policy.
+Broader search/answer/image-order retirement remains under item 6.3, along with aliases.
+
+
+Disposable-guest checkpoint: `6b876b69` adds a reusable QEMU/KVM runner and native
+FAT32/exFAT/NTFS fixture script. This host's kernel/modules and signature-verified
+temporary QEMU/BusyBox/ntfsprogs packages boot successfully. Host `/usr`, repository
+code and optional tools are read-only exports; the guest has no network or host block
+devices, and its writable loop images live in guest RAM. No live daemon was restarted
+and no attached user media were mounted or written.
+
+Native format/write/unmount/remount probes pass for all three drivers. An injected
+failed command is rejected even though QEMU exits zero; an injected sleep produces a
+retained timeout report after its first mounted filesystem. Ordinary host execution
+is refused before fixture creation. See `scripts/drive_tools/VM_TESTING.md` and the
+three reports under `/tmp/portable-drive-vm-harness-{smoke,refusal,timeout}`. These
+prove the environment, not application sync, backup, catalog or authorization behavior;
+those acceptance cases remain unfinished. The harness's five Python functions have
+maximum CCN 10 and introduce no reported clone in the scripts measurement. The full
+feature checkpoint remains REGRESSION: eleven net new clone groups, duplication
+7.18%, average CCN 3.48, maximum 274 and cycles 143. Reports:
+`.fitness/portable-drive-vm-harness-measure.json` and
+`.fitness/portable-drives-vm-policy-architecture.json`.
+
+Live-policy validation: all seventeen policy-focused file-manager tests pass against
+the final core implementation, and the complete library suite passes 975 tests with
+six intentionally ignored. These include immutable/equivalent/malformed/removed
+registry snapshots, policy handoff despite failed status IPC, one-time UI retirement,
+rejected stale map completions, retained Shelf send completion and retained sample-pack
+save completion. Changed-source rustfmt and whitespace checks pass. Logs:
+`/tmp/portable-drive-live-policy-tests-final.log` and
+`/tmp/portable-drive-live-policy-files-tests.log`. All-target clippy and rendered API
+documentation remain to be checked before the final feature gate; the current backend
+native-test compilation is still in progress.
