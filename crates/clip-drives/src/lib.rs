@@ -1,4 +1,5 @@
 //! Daemon-owned portable media synchronization, backup and offline catalog services.
+mod sync;
 mod discovery;
 mod root;
 mod scan;
