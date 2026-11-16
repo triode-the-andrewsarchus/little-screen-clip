@@ -1,5 +1,6 @@
 //! Daemon-owned portable media synchronization, backup and offline catalog services.
 mod sync;
+mod backup;
 mod discovery;
 mod root;
 mod scan;
@@ -42,4 +43,8 @@ pub(crate) fn cancelled(token: &std::sync::atomic::AtomicBool) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+impl From<rustix::io::Errno> for Error {
+    fn from(value: rustix::io::Errno) -> Self { Self::Io(value.into()) }
 }
