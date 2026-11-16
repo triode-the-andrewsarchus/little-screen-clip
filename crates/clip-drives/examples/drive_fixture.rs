@@ -2,11 +2,13 @@
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::unix::net::UnixListener,
     path::PathBuf,
     time::Duration,
 };
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.len() != 2 {
         return Err("Usage: drive_fixture STATE_DIRECTORY SOURCE_DIRECTORY".into());
@@ -23,10 +25,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source,
     )?;
     let socket = little_clip_core::ipc::socket_path();
-    let listener = UnixListener::bind(&socket)?;
+    let listener = tokio::net::UnixListener::bind(&socket)?;
     let jobs = little_clip_core::BackgroundJobs::new(4, 16);
-    for stream in listener.incoming() {
-        let stream = stream?;
+    loop {
+        let stream = tokio::select! {
+            result = listener.accept() => Some(result?),
+            _ = terminate.recv() => None,
+            _ = interrupt.recv() => None,
+        };
+        let Some((stream, _)) = stream else {
+            break;
+        };
+        let stream = stream.into_std()?;
+        stream.set_nonblocking(false)?;
         let service = service.clone();
         jobs.submit(Duration::MAX, move || {
             let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -59,5 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    drop(listener);
+    tokio::task::spawn_blocking(move || service.shutdown()).await??;
     Ok(())
 }

@@ -28,14 +28,16 @@ struct Envelope {
 pub struct Service {
     sender: mpsc::SyncSender<Envelope>,
     shared: Arc<Mutex<DriveStatus>>,
-    tokens: Tokens,
     state: PathBuf,
+    runtime: Arc<lifetime::Runtime>,
 }
 mod background;
+mod lifetime;
 mod policy;
 mod ram_sessions;
 
 struct Owner {
+    closing: Arc<AtomicBool>,
     background: Option<background::Pending>,
     backup_jobs: little_clip_core::jobs::BackgroundJobs,
     inventory: Inventory,
@@ -122,7 +124,9 @@ impl Service {
         }));
         let tokens = Arc::new(Mutex::new(HashMap::new()));
         let (sender, receiver) = mpsc::sync_channel(16);
+        let closing = Arc::new(AtomicBool::new(false));
         let mut owner = Owner {
+            closing: closing.clone(),
             background: None,
             backup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             inventory,
@@ -141,14 +145,18 @@ impl Service {
         owner.recover()?;
         owner.discover();
         owner.publish_policy()?;
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("portable-drive-owner".into())
             .spawn(move || owner.run(receiver))?;
         Ok(Self {
             sender,
             shared,
-            tokens,
             state: root.path,
+            runtime: Arc::new(lifetime::Runtime {
+                closing,
+                tokens,
+                thread: Mutex::new(Some(thread)),
+            }),
         })
     }
     /// Admits an operation or returns a bounded status page without waiting for writes.
@@ -161,6 +169,7 @@ impl Service {
         }
         if let DriveRequest::Cancel { operation } = request {
             let tokens = self
+                .runtime
                 .tokens
                 .lock()
                 .map_err(|_| "Drive cancellation state unavailable")?;
@@ -171,6 +180,14 @@ impl Service {
             return Ok(DriveReply::Done(
                 "Cancellation requested; completed writes will be retained".into(),
             ));
+        }
+        let mut tokens = self
+            .runtime
+            .tokens
+            .lock()
+            .map_err(|_| "Drive admission unavailable")?;
+        if self.runtime.closing.load(Ordering::Acquire) {
+            return Err("Drive services are shutting down; admission is closed".into());
         }
         let id = uuid::Uuid::new_v4().to_string();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -186,10 +203,7 @@ impl Service {
             finished: None,
         };
         db.put("operation", &id, &operation)?;
-        self.tokens
-            .lock()
-            .map_err(|_| "Drive cancellation state unavailable")?
-            .insert(id.clone(), cancel.clone());
+        tokens.insert(id.clone(), cancel.clone());
         if self
             .sender
             .try_send(Envelope {
@@ -199,7 +213,7 @@ impl Service {
             })
             .is_err()
         {
-            self.tokens.lock().ok().map(|mut t| t.remove(&id));
+            tokens.remove(&id);
             db.remove("operation", &id)?;
             return Err("Drive operation queue is full or unavailable; try again".into());
         }
@@ -342,6 +356,9 @@ impl Owner {
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
 
         loop {
+            if self.closing.load(Ordering::Acquire) {
+                break;
+            }
             match receiver.recv_timeout(Duration::from_millis(200)) {
                 Ok(envelope) => self.operation(envelope),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -381,6 +398,15 @@ impl Owner {
                 self.children.remove(&id);
                 let _ = self.unmount(&id);
             }
+        }
+        self.closing.store(true, Ordering::Release);
+        for envelope in receiver.try_iter() {
+            envelope.cancel.store(true, Ordering::Release);
+            self.finish_operation(
+                &envelope.id,
+                &envelope.cancel,
+                Err("Daemon stopping; queued operation cancelled before execution".into()),
+            );
         }
         // Retain accepted bulk ownership and the singleton lock until actual completion.
         while let Some(job) = &self.background {
@@ -738,10 +764,13 @@ impl Owner {
             Err(_) => return,
         };
         for mut pair in pairs {
+            if self.closing.load(Ordering::Acquire) {
+                break;
+            }
             if pair.paused || self.check_busy(&pair.drive).is_err() {
                 continue;
             }
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = self.closing.clone();
             if let Err(error) = self.synchronize_changed(&pair.id, &cancel, &mut |_, _| {}, paths) {
                 self.sync_roots.remove(&pair.id);
                 pair.status = error.to_string();
@@ -1157,6 +1186,65 @@ mod tests {
         }
     }
     #[test]
+    fn shutdown_closes_admission_finishes_accepted_records_and_releases_singleton() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir(&source).unwrap();
+        File::create(source.join("large-sparse"))
+            .unwrap()
+            .set_len(100 * 1024 * 1024 * 1024)
+            .unwrap();
+        let drive = fixture_drive(&source, "shutdown");
+        let inventory: Inventory = Arc::new(move || Ok(vec![drive.clone()]));
+        let config = DriveConfig {
+            backup_directory: Some(temp.path().join("backup")),
+            ..Default::default()
+        };
+        let state = temp.path().join("state");
+        let service =
+            Service::start_with_inventory(config.clone(), state.clone(), inventory.clone())
+                .unwrap();
+        let mut ids = Vec::new();
+        for request in [
+            DriveRequest::Backup {
+                drive: "part:shutdown".into(),
+                kind: BackupKind::Files,
+            },
+            DriveRequest::Rule {
+                drive: "part:shutdown".into(),
+                relative: "folder".into(),
+                catalog: false,
+                index: false,
+            },
+        ] {
+            let DriveReply::Accepted(id) = service.request(request).unwrap() else {
+                panic!("accepted");
+            };
+            ids.push(id);
+        }
+        service.shutdown().unwrap();
+        service.shutdown().unwrap();
+        let current = status(&service);
+        for id in ids {
+            let operation = current.operations.iter().find(|o| o.id == id).unwrap();
+            assert!(operation.finished.is_some());
+            assert!(matches!(operation.state.as_str(), "complete" | "cancelled"));
+        }
+        assert!(current.backups.is_empty());
+        assert!(
+            service
+                .request(DriveRequest::CopyToRam {
+                    drive: "part:shutdown".into()
+                })
+                .unwrap_err()
+                .to_string()
+                .contains("admission is closed")
+        );
+        // No sleep or dropping the old client is needed to release storage ownership.
+        let restarted = Service::start_with_inventory(config, state, inventory).unwrap();
+        restarted.shutdown().unwrap();
+    }
+    #[test]
     #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
     fn daemon_sync_and_ram_survive_client_closure_and_media_removal() {
         let temp = tempfile::tempdir().unwrap();
@@ -1236,8 +1324,12 @@ mod tests {
             },
         );
         assert!(!status(&service).conflicts.is_empty());
+        use std::io::Write;
+        let mut held = File::create(ram.path.join("daemon-held-open")).unwrap();
+        held.write_all(b"accepted before graceful shutdown")
+            .unwrap();
+        service.shutdown().unwrap();
         drop(service);
-        std::thread::sleep(Duration::from_millis(300));
         let service = Service::start_with_inventory(
             DriveConfig {
                 sync_interval_seconds: 1,
@@ -1249,6 +1341,16 @@ mod tests {
         )
         .unwrap();
         assert!(status(&service).ram.iter().any(|s| s.path == ram.path));
+        let start = Instant::now();
+        while !status(&service).ram.iter().any(|s| s.browsable()) {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            fs::read(ram.path.join("daemon-held-open")).unwrap(),
+            b"accepted before graceful shutdown"
+        );
+        drop(held);
         finish(
             &service,
             DriveRequest::DiscardRam {
@@ -1257,8 +1359,8 @@ mod tests {
             },
         );
         assert!(!ram.path.exists());
+        service.shutdown().unwrap();
         drop(service);
-        std::thread::sleep(Duration::from_millis(300));
     }
     #[test]
     #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
@@ -1350,8 +1452,8 @@ mod tests {
                 confirmed: true,
             },
         );
+        service.shutdown().unwrap();
         drop(service);
-        std::thread::sleep(Duration::from_millis(300));
     }
     #[test]
     #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM filesystem helper"]
@@ -1442,8 +1544,8 @@ mod tests {
                 confirmed: true,
             },
         );
+        service.shutdown().unwrap();
         drop(service);
-        std::thread::sleep(Duration::from_millis(250));
     }
     #[test]
     fn unset_backup_directory_and_duplicate_identity_fail_without_side_effects() {
@@ -1483,7 +1585,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(status(&service).backup_directory.is_none());
+        service.shutdown().unwrap();
         drop(service);
-        std::thread::sleep(Duration::from_millis(250));
     }
 }

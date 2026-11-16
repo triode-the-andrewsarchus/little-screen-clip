@@ -377,6 +377,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     info!("Starting Little Screen Clip Daemon (little-clipd)...");
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
     let config = little_clip_core::config::AppConfig::load();
     let renderer = ScreenRenderer::new(config.clone()).unwrap_or_else(|e| {
@@ -482,22 +484,42 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let listener = UnixListener::bind(&sock_path)?;
+    let listener = match UnixListener::bind(&sock_path) {
+        Ok(listener) => listener,
+        Err(error) => {
+            shutdown_drive_services(&ctx).await?;
+            return Err(error.into());
+        }
+    };
     info!("IPC server listening on {}", sock_path.display());
 
     loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
+        let accepted = tokio::select! {
+            result = listener.accept() => Some(result),
+            _ = terminate.recv() => None,
+            _ = interrupt.recv() => None,
+        };
+        match accepted {
+            Some(Ok((stream, _))) => {
                 let client_ctx = Arc::clone(&ctx);
                 tokio::spawn(async move {
                     handle_client(stream, client_ctx).await;
                 });
             }
-            Err(e) => {
-                error!("Socket accept error: {}", e);
-            }
+            Some(Err(e)) => error!("Socket accept error: {}", e),
+            None => break,
         }
     }
+    drop(listener);
+    shutdown_drive_services(&ctx).await
+}
+
+async fn shutdown_drive_services(ctx: &DaemonContext) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(service) = ctx.drives.clone() {
+        info!("Draining accepted drive operations and RAM filesystems...");
+        tokio::task::spawn_blocking(move || service.shutdown()).await??;
+    }
+    Ok(())
 }
 
 fn evaluate_op(

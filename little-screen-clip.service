@@ -5,6 +5,10 @@ PartOf=graphical-session.target
 
 [Service]
 Type=forking
+# Let the storage owner flush RAM and retain accepted write results before exit.
+KillMode=mixed
+TimeoutStopSec=infinity
+Environment=LITTLE_CLIP_STOP_TIMEOUT_SECONDS=0
 Environment=LITTLE_SCREEN_CLIP_SYSTEMD=1
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 ExecStart=%h/Documents/git/local/little-screen-clip/launch.sh start

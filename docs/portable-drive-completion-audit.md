@@ -10,7 +10,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; backup selection uses SQLite rather than the existing setting-preserving writer. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Initial RAM population, Save RAM and periodic full sync still run on the owner thread and need independent-drive scheduling. Normal daemon signal handling must explicitly drain the storage owner before process exit. |
+| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Initial RAM population, Save RAM and periodic full sync still run on the owner thread and need independent-drive scheduling. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy exist; re-audit alias/managed-root coverage and image destinations. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
@@ -68,7 +68,7 @@ The goal remains active while any row or cross-cutting gate lacks direct complet
 
 The standalone filesystem companion is packaged in commit `9c41da5c` with source,
 license, pinned upstream checksum and local atomic-NOREPLACE patch. Ordinary backend
-checks passed 29 tests with seven explicit host fixtures ignored. Explicit native runs
+checks passed 30 tests with seven explicit host fixtures ignored. Explicit native runs
 passed RAM byte/inode exhaustion, aggregate reservation refusal, live-helper ownership,
 open-file graceful restart, forced-exit directory-fsync durability, daemon removal/reconnect/restart and concurrent-backup
 writeback tests. Sparse logical growth is rejected before reading its payload. A cancellation test first reproduced stale enrollment metadata overwriting a live mount record, then passed after preserving the updated backing identity.
@@ -79,3 +79,23 @@ cycles 143 unchanged, thirteen net new clone groups. Shared comparison limits an
 owned-mount recognition remove repeated policy. Remaining backup/publication and
 process-adapter duplication/complexity stays an open review item; the result is not
 represented as a passing gate. Raw report: `.fitness/portable-drives-ram-architecture.json`.
+
+
+Shutdown follow-up: native test-support IPC verifies that SIGTERM exits successfully
+and a still-open, un-fsynced RAM file survives restart while its sync pair stays
+paused (the original source never receives the file). Launcher mocks verify that a
+busy stop retains its PID/socket and never sends SIGKILL. `systemd-analyze --user
+verify little-screen-clip.service` and shell syntax checks pass. The actual running
+user daemon and installed systemd configuration have not been changed.
+
+Latest shutdown architecture checkpoint: duplication 7.30% → 7.23%, average CCN
+3.44 → 3.47, max 274 unchanged, cycles 143 unchanged. Fourteen net new clone groups
+still make the original-baseline comparison a REGRESSION; adapter duplication and
+new hotspots remain unfinished review work. Report:
+`.fitness/portable-drives-shutdown-architecture.json`.
+
+RAM pressure follow-up also needs a worst-case single-directory listing test:
+upstream fuse2fs uses high-level readdir buffering. The native process is capped at
+512 MiB, but successful paging/controlled failure for very large, long-name RAM
+directories is not yet proven. The million-file catalog fixture does not prove
+that separate RAM-server case.

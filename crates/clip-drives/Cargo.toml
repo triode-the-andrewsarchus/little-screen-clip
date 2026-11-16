@@ -26,3 +26,6 @@ rusqlite = { version = "0.35", features = ["bundled"] }
 sha2 = "0.10"
 fuser = { version = "0.14", default-features = false, features = ["abi-7-31"] }
 zbus = { version = "5.19.0", features = ["blocking-api"] }
+
+[dev-dependencies]
+tokio.workspace = true

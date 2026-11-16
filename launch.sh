@@ -324,6 +324,10 @@ function start_daemon() {
 }
 
 function stop_daemon() {
+    local timeout_seconds="${LITTLE_CLIP_STOP_TIMEOUT_SECONDS:-60}"
+    case "$timeout_seconds" in
+        ''|*[!0-9]*) echo "LITTLE_CLIP_STOP_TIMEOUT_SECONDS must be a nonnegative integer" >&2; return 2 ;;
+    esac
     if ! is_systemd_run && command -v systemctl >/dev/null 2>&1; then
         if systemctl --user is-active --quiet "$SYSTEMD_SERVICE_NAME" 2>/dev/null; then
             echo -e "${YELLOW}Stopping systemd service '$SYSTEMD_SERVICE_NAME'...${NC}"
@@ -345,15 +349,14 @@ function stop_daemon() {
     pkill -x "little-clipd" 2>/dev/null || true
 
     local count=0
-    while is_running && [ $count -lt 10 ]; do
+    while is_running; do
+        if [ "$timeout_seconds" -gt 0 ] && [ "$count" -ge "$((timeout_seconds * 5))" ]; then
+            echo -e "${YELLOW}little-clipd is still draining accepted operations; retry stop when it finishes.${NC}" >&2
+            return 1
+        fi
         sleep 0.2
         count=$((count + 1))
     done
-
-    if is_running; then
-        echo -e "${RED}Force killing little-clipd...${NC}"
-        pkill -9 -x "little-clipd" 2>/dev/null || true
-    fi
 
     rm -f "$PID_FILE" "$SOCKET_PATH"
     echo -e "${GREEN}little-clipd stopped.${NC}"
