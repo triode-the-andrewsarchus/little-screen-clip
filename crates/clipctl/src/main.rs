@@ -28,6 +28,9 @@ struct Cli {
 enum Commands {
     /// Manage portable drives, RAM copies, backups, folder sync and offline catalogs
     Drives {
+        /// Reuse this identity when retrying the same operation after a lost reply
+        #[arg(long, global = true)]
+        request_id: Option<uuid::Uuid>,
         #[command(subcommand)]
         action: drives::DriveCommand,
     },
@@ -237,7 +240,13 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         }
-        Commands::Drives { action } => IpcRequest::Drives(action.request()),
+        Commands::Drives { action, request_id } => {
+            let request = action.request();
+            if request_id.is_some() && !request.is_operation() {
+                return Err("--request-id applies only to retained drive operations".into());
+            }
+            IpcRequest::drive(request, request_id.unwrap_or_else(uuid::Uuid::new_v4))
+        }
         Commands::Status => IpcRequest::GetState,
         Commands::Push { text, hand } => {
             let hand_side = if hand.to_lowercase().starts_with('r') {
@@ -291,7 +300,12 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         Commands::RollingAudio => IpcRequest::GetRollingAudio,
     };
 
-    let resp = send_ipc_req(&mut writer, &mut lines, &request).await?;
+    let resp = send_ipc_req(&mut writer, &mut lines, &request).await.map_err(|error| {
+        match &request {
+            IpcRequest::SubmitDrive { request_id, .. } => format!("Drive admission reply unavailable: {error}. Retry the same command with --request-id {request_id}; inspect its status before starting new work"),
+            _ => error.to_string(),
+        }
+    })?;
     match resp {
         IpcResponse::Drives(reply) => println!("{}", serde_json::to_string_pretty(&reply)?),
         IpcResponse::State(mgr) => {
@@ -463,6 +477,54 @@ use little_clip_core::ipc::socket_path as get_socket_path;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_request_identity_can_be_reused_before_or_after_the_operation_subcommand() {
+        let id = uuid::Uuid::new_v4();
+        let text = id.to_string();
+        for args in [
+            vec![
+                "clipctl",
+                "drives",
+                "--request-id",
+                &text,
+                "backup",
+                "part:owned",
+            ],
+            vec![
+                "clipctl",
+                "drives",
+                "backup",
+                "part:owned",
+                "--request-id",
+                &text,
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Commands::Drives {
+                request_id: Some(restored),
+                action,
+            } = cli.command
+            else {
+                panic!("expected identified drive command")
+            };
+            assert_eq!(restored, id);
+            assert!(
+                matches!(IpcRequest::drive(action.request(), restored), IpcRequest::SubmitDrive { request_id, .. } if request_id == id)
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "clipctl",
+                "drives",
+                "backup",
+                "part:owned",
+                "--request-id",
+                "invalid"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn op_accepts_ordered_slots_and_rejects_ambiguous_operands() {

@@ -100,14 +100,34 @@ impl Default for Drives {
     }
 }
 fn ipc(request: DriveRequest) -> Result<DriveReply, String> {
-    match crate::desktop_ipc::request(
-        &IpcRequest::Drives(request),
-        Some(Duration::from_secs(3)),
-        4 * 1024 * 1024,
-        1024 * 1024,
-    )
-    .map_err(|e| e.to_string())?
-    {
+    ipc_with(request, |request| {
+        crate::desktop_ipc::request(
+            request,
+            Some(Duration::from_secs(3)),
+            4 * 1024 * 1024,
+            1024 * 1024,
+        )
+        .map_err(|error| error.to_string())
+    })
+}
+fn ipc_with(
+    request: DriveRequest,
+    mut transport: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+) -> Result<DriveReply, String> {
+    let request = IpcRequest::drive(request, uuid::Uuid::new_v4());
+    let first = transport(&request);
+    let response = if first.is_err() && matches!(request, IpcRequest::SubmitDrive { .. }) {
+        // Only transport failure is retried, with the identical identity/payload.
+        // A server rejection is a response and never authorizes another operation.
+        transport(&request)
+    } else {
+        first
+    };
+    let response = response.map_err(|error| match &request {
+        IpcRequest::SubmitDrive { request_id, .. } => format!("Drive admission reply unavailable: {error}. Request {request_id} can be retried with the same identity; inspect Jobs before starting new work"),
+        _ => error,
+    })?;
+    match response {
         IpcResponse::Drives(reply) => Ok(reply),
         IpcResponse::Error { error } => Err(error),
         _ => Err("Unexpected drive service response".into()),

@@ -180,9 +180,30 @@ without service databases or Git metadata. Catalog databases contain metadata, n
 file payloads. Btrfs snapshots/reflinks apply only at a compatible backup destination;
 the removable filesystem does not need Btrfs support.
 
+The standalone `scripts/test_drive_admission.py` acceptance test uses a private
+runtime/socket, source and SQLite state with the test-support `drive_fixture`
+example and current `clipctl`. Build those binaries before running
+`python3 scripts/test_drive_admission.py -v`. It drops acknowledgements, exercises
+concurrent retries and restarts the owned host; it never connects to the user daemon
+or inspects real block devices.
+
 ## CLI
 
 Commands return an accepted operation ID promptly. Inspect its completion through `status`; client disconnection does not revoke an accepted write. Substitute IDs from the JSON status output in these examples.
+
+Files assigns a UUID to each mutation request and retries one lost transport reply
+with the same identity and parameters. Server errors are not retried. The daemon
+atomically stores the request fingerprint and operation record before delivery;
+repeating that identity returns the original operation, including its completed,
+failed or interrupted result after restart. It never starts the work again.
+
+CLI mutation commands accept `--request-id UUID`, before or after their subcommand.
+Use the same UUID and exact parameters to recover a lost acknowledgement. If a CLI
+reply is lost, its error includes the generated UUID. A different request using an
+existing UUID is refused. A new intended operation needs a new UUID; inspect and
+reconcile an interrupted result before starting it. Status, backup review and
+cancellation remain direct controls and do not accept this flag. Legacy drive IPC
+requests remain supported; new clients use the `SubmitDrive` envelope.
 
 ```sh
 clipctl drives status

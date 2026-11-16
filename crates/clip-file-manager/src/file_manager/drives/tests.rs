@@ -1,6 +1,63 @@
 //! Read-only reply handoff tests never start IPC or open the fixture device paths.
 use super::*;
 
+#[test]
+fn lost_admission_reply_retries_the_identical_request_identity_and_parameters() {
+    let mut attempts = Vec::new();
+    let result = ipc_with(
+        DriveRequest::CopyToRam {
+            drive: "owned-retry".into(),
+        },
+        |request| {
+            let IpcRequest::SubmitDrive { request_id, .. } = request else {
+                panic!("mutation needs an identity")
+            };
+            attempts.push(serde_json::to_vec(request).unwrap());
+            if attempts.len() == 1 {
+                Err("owned lost reply".into())
+            } else {
+                Ok(IpcResponse::Drives(DriveReply::Accepted(
+                    request_id.to_string(),
+                )))
+            }
+        },
+    )
+    .unwrap();
+    assert!(matches!(result, DriveReply::Accepted(_)));
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0], attempts[1]);
+}
+
+#[test]
+fn server_rejections_and_read_only_transport_failures_do_not_repeat_operations() {
+    let mut attempts = 0;
+    let rejected = ipc_with(
+        DriveRequest::CopyToRam {
+            drive: "owned-rejection".into(),
+        },
+        |_| {
+            attempts += 1;
+            Ok(IpcResponse::Error {
+                error: "owned server rejection".into(),
+            })
+        },
+    )
+    .unwrap_err();
+    assert_eq!(attempts, 1);
+    assert_eq!(rejected, "owned server rejection");
+    let failed = ipc_with(DriveRequest::Status { offset: 0 }, |request| {
+        assert!(matches!(
+            request,
+            IpcRequest::Drives(DriveRequest::Status { .. })
+        ));
+        attempts += 1;
+        Err("owned status failure".into())
+    })
+    .unwrap_err();
+    assert_eq!(attempts, 2);
+    assert_eq!(failed, "owned status failure");
+}
+
 fn preview(name: &str) -> BackupPreview {
     BackupPreview {
         token: name.into(),

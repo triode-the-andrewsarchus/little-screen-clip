@@ -10,7 +10,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers overlapping observed filesystem regions, including bind aliases, while retaining unrelated watches. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; a restarted native fixture also proves startup-configured file backups refuse private RAM backing. Real bind/case-fold aliases, remaining managed-root coverage, image destinations and the full authorized-device lifetime checks still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Remaining remount/event-loss and fault matrices still need evidence. |
@@ -46,7 +46,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
 | 6.7 | Partial | Provider metadata/digests checked where captured; reuse available sync/backup hashes and uncertain revision handling need stronger evidence. |
 | 6.8 | Partial | Pinned per-open files and self-mount refusal tested; alias, replacement and concurrent provider change matrix remains. |
-| 7.1 | Partial | Core guarded/source and drive tests pass; migration/idempotent admission and completed-item cancellation tests still needed. |
+| 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE and Btrfs tests pass; authorized image-loop tests remain. |
@@ -592,3 +592,49 @@ result: REGRESSION, twelve net new clone groups, duplication 7.18%, average CCN
 3.48, max 274 and cycles 143. The native image/provider test adds no new reported
 hotspot or clone group. Raw report:
 `.fitness/portable-drives-image-catalog-architecture.json`.
+
+
+Request-admission checkpoint: retained mutations now share one durable UUID namespace
+for client-chosen and legacy server-generated identities. SQLite commits the
+operation and SHA-256 fingerprint of the typed request together under the existing
+admission lock. Matching retries return the existing ID before consuming a backup
+review; changed parameters, missing records and unbound older operations fail
+closed. Known queue rejection atomically removes both new records and restores the
+review. If cleanup itself fails, a terminal failed operation is retained. Replaying
+an unfinished record with no live owner marks it interrupted without executing it.
+
+Files retries one transport failure with an identical SubmitDrive envelope, while
+server errors and direct status/review/cancel controls are not repeated. The CLI
+accepts an explicit --request-id and reports its generated identity if a reply is
+lost. The real daemon dispatch, CLI parser, lossless protocol roundtrip and the
+owned IPC fixture cover this path without touching a user daemon or device.
+
+Evidence: `/tmp/portable-drive-admission-ipc-final.log` loses the first socket reply,
+repeats it through twelve concurrent connections, checks one complete backup with
+its original bytes, refuses changed parameters, restarts the host and obtains the
+same completed operation/version. Backend fault fixtures cover rollback and failed
+cleanup, pending and terminal replay, restart and live orphan recovery. Before consolidating the two ownership-loss scenarios, full
+checks passed 71 backend tests (25 explicit fixtures ignored), 977 file-manager tests
+(six ignored), 448 core tests (three ignored), all nine core IPC tests, the CLI parser
+and daemon dispatch tests, and twelve doctests. The final consolidated suite passes 70 backend tests (25 ignored), with both
+restart and live-owner-loss branches still executed. The current all-target build
+and clippy (warnings denied) pass across backend, core, file manager, CLI and daemon.
+Rendered submit/constructor/classification documentation was inspected, including
+its resolved Self::request link; rustfmt and Python compilation checks pass.
+
+
+Final admission evidence: `/tmp/portable-drive-admission-cli-ipc.log` contains two
+passing owned socket tests. The second forwards the actual CLI request to the host
+but discards its acknowledgement, verifies the CLI prints the request identity,
+and retries the same command successfully without another operation. The first
+also replays a consumed backup review through the actual CLI after host restart.
+Native FAT32/exFAT/NTFS image, restoration and catalog-provider fixtures pass again
+in `/tmp/portable-drive-vm-admission-images/report.json`; the separately documented
+exFAT fractional-timestamp limitation is unchanged.
+
+The original-baseline architecture result remains REGRESSION: duplication 7.30% to
+7.17%, average CCN 3.44 to 3.48, max 274 and cycles 143 unchanged, twelve net new
+clone groups. The admission implementation introduces no reported hotspot or clone;
+shared cold/live ownership-loss scenarios removed the extra test clone. The broader
+architecture gate remains open. Report:
+`.fitness/portable-drives-admission-final-architecture.json`.
