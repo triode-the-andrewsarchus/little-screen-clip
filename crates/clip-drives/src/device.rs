@@ -20,6 +20,7 @@ pub(crate) struct Source {
     mount: MountIdentity,
     namespace: Namespace,
     rdev: u64,
+    block: bool,
     sequence: u64,
 }
 impl Source {
@@ -39,6 +40,7 @@ impl Source {
             identity: identity(&metadata),
             mount: MountIdentity::pinned(&pin)?,
             rdev: metadata.rdev(),
+            block: metadata.file_type().is_block_device(),
             pin,
             namespace,
             sequence,
@@ -46,14 +48,26 @@ impl Source {
         source.validate()?;
         Ok(source)
     }
+    fn same_node(&self, metadata: &std::fs::Metadata) -> bool {
+        if self.block {
+            // UDisks/udev update block-node timestamps during unmount. The held
+            // O_PATH pin prevents inode reuse; rdev and BLKGETDISKSEQ additionally
+            // validate the backing device before reading and during both passes.
+            metadata.file_type().is_block_device()
+                && metadata.rdev() == self.rdev
+                && identity(metadata).object() == self.identity.object()
+        } else {
+            identity(metadata) == self.identity
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         if Namespace::current() != self.namespace {
             return Err("Device namespace changed during image preparation".into());
         }
         let current = kernel_interface::pin(&self.path, true)?;
         if MountIdentity::pinned(&current)? != self.mount
-            || identity(&current.metadata()?) != self.identity
-            || identity(&self.pin.metadata()?) != self.identity
+            || !self.same_node(&current.metadata()?)
+            || !self.same_node(&self.pin.metadata()?)
         {
             return Err("Partition device was removed or replaced during image preparation".into());
         }
@@ -62,10 +76,7 @@ impl Source {
     pub fn validate_input(&self, input: &File) -> Result<()> {
         self.validate()?;
         let metadata = input.metadata()?;
-        if !metadata.file_type().is_block_device()
-            || metadata.rdev() != self.rdev
-            || identity(&metadata) != self.identity
-        {
+        if !metadata.file_type().is_block_device() || !self.same_node(&metadata) {
             return Err(
                 "Authorized descriptor does not match the admitted partition device".into(),
             );

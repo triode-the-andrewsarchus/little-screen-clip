@@ -382,7 +382,7 @@ fn udisks_path(drive: &Drive) -> Result<String> {
     let manager = zbus::blocking::Proxy::new(
         &connection,
         "org.freedesktop.UDisks2",
-        "/org/freedesktop/UDisks2",
+        "/org/freedesktop/UDisks2/Manager",
         "org.freedesktop.UDisks2.Manager",
     )
     .map_err(|e| e.to_string())?;
@@ -1104,7 +1104,7 @@ pub(crate) fn mount_image(db: &Store, id: &str) -> Result<String> {
     let manager = zbus::blocking::Proxy::new(
         &connection,
         "org.freedesktop.UDisks2",
-        "/org/freedesktop/UDisks2",
+        "/org/freedesktop/UDisks2/Manager",
         "org.freedesktop.UDisks2.Manager",
     )
     .map_err(|e| e.to_string())?;

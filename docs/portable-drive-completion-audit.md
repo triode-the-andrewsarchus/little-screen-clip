@@ -33,11 +33,11 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
 | 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real UDisks authorization coordination remains. |
-| 5.2 | Host gate | UDisks OpenForBackup implemented; real authorized/declined/busy-device acceptance is blocked by interactive PolicyKit. |
-| 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; typed layout facts and full authorized-device publication evidence remain. |
-| 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs/device matrix remains. |
-| 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; full successful authorized raw-device and final UI acceptance remain. |
-| 5.6 | Host gate | Explicit read-only loop mount implemented; provider reads and recursion refusal need real image-loop acceptance. |
+| 5.2 | Partial | Isolated real UDisks/PolicyKit tests now prove authorized image reads, unprivileged denial and busy-device refusal on FAT32/exFAT/NTFS partitions. The desktop authentication-agent/password interaction remains a separate UI gate. |
+| 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; Full authorized-device hashes, exact partition image sizes and publication pass on real guest partitions; typed partition-layout facts remain. |
+| 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs partition images now pass on FAT32/exFAT/NTFS with exact source SHA-256 and retained earlier images. Mount-option and interrupted-device matrices remain. |
+| 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
+| 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Catalog-through-image and concurrent-provider matrices remain. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
 | 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
@@ -538,3 +538,30 @@ Evidence: `/tmp/portable-drive-vm-fat-image-size/report.json` (the FAT32-specifi
 assertions return early on exFAT/NTFS3). All 64 ordinary backend tests pass, with
 25 explicit fixtures ignored. All twelve core doctests pass; rendered docs and
 post-change clippy are still pending.
+
+
+Authorized imaging checkpoint: `/tmp/portable-drive-vm-authorized-images-final/report.json`
+passes all three GPT partition profiles using real guest UDisks and PolicyKit.
+A UID-65534 child proves actual NotAuthorized denial with an explicit execution
+marker. An open source file proves busy-unmount refusal. Successful images have
+exact partition sizes and independently checked full-device SHA-256 values.
+Read-only loop mounts supply original file bytes and reject writes with EROFS;
+a second backup restores the original mount and leaves the first image unchanged.
+A replacement block node with the same rdev is refused, as is an authorized
+file descriptor with a mismatched kernel disk sequence.
+
+These tests exposed and fixed the incorrect UDisks Manager object path and an
+incorrect full-file timestamp comparison for block nodes. UDisks/udev update node
+mtime/ctime while retaining the same inode and device. The O_PATH admission pin,
+mount/object identity, block type, rdev and authorized BLKGETDISKSEQ remain checked;
+ordinary-file fingerprints retain their full revision checks. Existing replacement
+and namespace/disk-lifetime tests remain intact. Ordinary backend tests: 64 pass,
+25 ignored; core/backend/file-manager all-target clippy passes with warnings denied.
+Core doctests pass all twelve examples, and `cargo doc --no-deps` renders the
+immutable policy API with its resolved Arc link and no warnings.
+
+The original-baseline architecture comparison still reports REGRESSION: duplication
+7.30% to 7.18%, average CCN 3.44 to 3.48, max 274 and cycles 143 unchanged, twelve
+net new clone groups. This checkpoint adds no new reported hotspot. The remaining
+branch-wide architecture review is still open. Report:
+`.fitness/portable-drives-native-images-architecture.json`.
