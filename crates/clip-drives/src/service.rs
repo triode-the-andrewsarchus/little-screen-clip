@@ -216,6 +216,7 @@ impl Service {
         status.conflicts = db.list("conflict", offset, 100)?;
         status.rules = db.list("rule", offset, 100)?;
         status.backups = db.list("backup", offset, 100)?;
+        status.recovery = db.list("recovery", offset, 100)?;
         if [
             status.pairs.len(),
             status.ram.len(),
@@ -224,6 +225,7 @@ impl Service {
             status.conflicts.len(),
             status.rules.len(),
             status.backups.len(),
+            status.recovery.len(),
         ]
         .contains(&100)
         {
@@ -316,6 +318,10 @@ impl Owner {
         previous != status.drives
     }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
+        // Manifest verification can involve substantial disk I/O; keep it off daemon startup.
+        if let Err(error) = backup::recover_publications(&self.db) {
+            tracing::warn!("Prepared backup recovery failed: {error}");
+        }
         let mut discovered = Instant::now();
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
 

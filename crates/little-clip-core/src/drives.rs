@@ -165,6 +165,8 @@ pub struct DriveStatus {
     pub conflicts: Vec<DriveConflict>,
     pub rules: Vec<DriveRule>,
     pub backups: Vec<DriveBackup>,
+    #[serde(default)]
+    pub recovery: Vec<DriveRecovery>,
     #[serde(with = "crate::path_serde::optional")]
     pub backup_directory: Option<PathBuf>,
     pub ram_unavailable: Option<String>,
@@ -346,9 +348,33 @@ pub fn index_excluded(path: &std::path::Path) -> bool {
     })
 }
 
+/// A prepared durable operation that could not finish publication automatically.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DriveRecovery {
+    pub id: String,
+    pub drive: String,
+    pub cause: RecoveryCause,
+    #[serde(with = "crate::path_serde")]
+    pub artifact: PathBuf,
+    pub message: String,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum RecoveryCause {
+    Unavailable,
+    PermissionDenied,
+    ChangedIdentityOrContent,
+    Storage,
+}
+
 /// A completed version; image mounts are explicit and read-only.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DriveBackup {
+    #[serde(default, with = "crate::path_serde::optional")]
+    pub manifest: Option<PathBuf>,
+    #[serde(default)]
+    pub manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub id: String,
     pub drive: String,
     pub evidence: String,

@@ -117,6 +117,10 @@ impl Root {
         Ok((parent, path))
     }
     pub fn metadata(&self, relative: &Path) -> Result<Option<Metadata>> {
+        if relative.as_os_str().is_empty() {
+            self.validate()?;
+            return Ok(Some(self.file.metadata()?));
+        }
         let (_parent, path) = match self.parent(relative, false) {
             Ok(value) => value,
             Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {

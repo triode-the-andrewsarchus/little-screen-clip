@@ -23,6 +23,10 @@ pub(crate) struct Entry {
     pub modified: i64,
     pub nanos: i64,
     pub mode: u32,
+    #[serde(default)]
+    pub uid: Option<u32>,
+    #[serde(default)]
+    pub gid: Option<u32>,
     pub device: u64,
     pub inode: u64,
     pub hash: Option<String>,
@@ -44,6 +48,8 @@ impl Entry {
             && self.changed.is_some()
             && self.changed == other.changed
             && self.mode == other.mode
+            && self.uid == other.uid
+            && self.gid == other.gid
     }
 }
 #[derive(Clone)]
@@ -115,6 +121,8 @@ pub(crate) fn observe(
         modified: metadata.mtime(),
         nanos: metadata.mtime_nsec(),
         mode: metadata.mode(),
+        uid: Some(metadata.uid()),
+        gid: Some(metadata.gid()),
         device: metadata.dev(),
         inode: metadata.ino(),
         hash: None,
@@ -149,6 +157,8 @@ fn unavailable(path: PathBuf, error: String) -> Entry {
         modified: 0,
         nanos: 0,
         mode: 0,
+        uid: None,
+        gid: None,
         device: 0,
         inode: 0,
         hash: None,

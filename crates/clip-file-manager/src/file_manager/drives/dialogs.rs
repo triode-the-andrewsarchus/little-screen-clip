@@ -168,6 +168,14 @@ fn policy_dialog(
 }
 fn details(ui: &mut Ui, status: &DriveStatus, requests: &mut Vec<DriveRequest>) {
     egui::ScrollArea::vertical().max_height(450.0).show(ui, |ui| {
+        for recovery in &status.recovery {
+            ui.group(|ui| {
+                ui.label("Prepared backup needs recovery");
+                ui.label(&recovery.message);
+                ui.small(format!("Retained data: {}", display_path(&recovery.artifact)));
+                ui.label("Correct the reported problem and retry the backup. Prepared versions are checked before another backup starts.");
+            });
+        }
         for conflict in status.conflicts.iter().filter(|c| !c.resolved) {
             ui.group(|ui| {
                 ui.label(format!("Conflict: {}", display_path(&conflict.path)));

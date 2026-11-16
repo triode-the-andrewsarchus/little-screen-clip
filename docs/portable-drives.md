@@ -27,9 +27,14 @@ DriveBackupDir/
   PARTUUID/
     completed-file-version/
     completed-image-version.img
+    VERSION_UUID.manifest.sqlite
+    current-files.json
+    current-image.json
 ```
 
 Partitions without a PARTUUID use an explicitly disclosed `fs-FILESYSTEM_UUID` bucket. Unidentified media receive a fresh `unidentified-…` bucket for each explicit backup rather than sharing an invented identity.
+
+Each completed version has a checksummed SQLite manifest retaining captured paths, hashes, source metadata and filesystem identity. Publication updates the current-version reference only after the version and manifest are durable. A prepared publication interrupted by a reference or registry failure is reconciled on restart or before the next backup; unresolved recovery issues appear in Drive jobs.
 
 File backups copy ordinary files, hierarchy, available modes and timestamps. A writable source is collected with revision checks rather than an atomic source-filesystem snapshot. A partition image captures the entire selected partition, including unused sectors. Imaging flushes enrolled changes and unmounts the partition before requesting exclusive read access. A busy partition or declined authentication leaves an actionable failed job.
 

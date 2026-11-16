@@ -88,6 +88,7 @@ impl Owner {
             cancelled(&cancel)?;
             match envelope.request {
                 DriveRequest::Backup { kind, .. } => {
+                    backup::recover_publications(&db)?;
                     let destination = config
                         .backup_directory
                         .as_ref()
