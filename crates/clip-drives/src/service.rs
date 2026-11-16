@@ -54,6 +54,7 @@ struct Owner {
     db: Store,
     state: PathBuf,
     config: DriveConfig,
+    config_path: Option<PathBuf>,
     shared: Arc<Mutex<DriveStatus>>,
     tokens: Tokens,
     watch: Option<Watch>,
@@ -68,7 +69,8 @@ impl Service {
     /// # Errors
     /// Returns directory, database, singleton-lock or thread startup failures.
     pub fn start(config: DriveConfig, state: PathBuf) -> Result<Self> {
-        Self::start_with_inventory(config, state, Arc::new(discovery::discover))
+        let path = std::path::absolute(little_clip_core::config::find_config_file_path())?;
+        Self::start_with_settings(config, state, Arc::new(discovery::discover), Some(path))
     }
     /// Starts an owned directory fixture without discovering real block devices.
     #[cfg(feature = "test-support")]
@@ -99,10 +101,19 @@ impl Service {
             }),
         )
     }
+    #[cfg(any(test, feature = "test-support"))]
     fn start_with_inventory(
         config: DriveConfig,
         state: PathBuf,
         inventory: Inventory,
+    ) -> Result<Self> {
+        Self::start_with_settings(config, state, inventory, None)
+    }
+    fn start_with_settings(
+        config: DriveConfig,
+        state: PathBuf,
+        inventory: Inventory,
+        config_path: Option<PathBuf>,
     ) -> Result<Self> {
         policy::validate_config(&config)?;
         let root = Root::create(&state)?;
@@ -120,7 +131,9 @@ impl Service {
         }
         let db = Store::open(&root.path.join("drives.sqlite"))?;
         let mut config = config;
-        if config.backup_directory.is_none() {
+        // In production the settings file is authoritative, including an unset
+        // destination. Fixture hosts have no settings file and retain SQLite preferences.
+        if config_path.is_none() && config.backup_directory.is_none() {
             config.backup_directory = db
                 .get::<DriveConfig>("settings", "config")?
                 .and_then(|c| c.backup_directory);
@@ -149,6 +162,7 @@ impl Service {
             db,
             state: root.path.clone(),
             config,
+            config_path,
             shared: shared.clone(),
             tokens: tokens.clone(),
             watch: Watch::new().ok(),
@@ -642,10 +656,7 @@ impl Owner {
                     .ok_or("Set drives.backup_keep_versions before explicitly pruning backups")?;
                 backup::prune(&self.db, &drive, keep, cancel)
             }
-            DriveRequest::Configure { mut config } => {
-                if config.backup_directory.is_none() {
-                    config.backup_directory = self.config.backup_directory.clone();
-                }
+            DriveRequest::Configure { config } => {
                 policy::validate_config(&config)?;
                 let budgets = self
                     .db
@@ -660,12 +671,19 @@ impl Owner {
                 if let Some(path) = &config.backup_directory {
                     self.validate_backup_directory(&Root::create(path)?)?;
                 }
+                self.db.put("settings", "config", &config)?;
                 self.config = config;
                 Ok("Drive configuration reloaded".into())
             }
             DriveRequest::BackupDirectory { path } => {
                 let root = Root::create(&path)?;
                 self.validate_backup_directory(&root)?;
+                if let Some(path) = &self.config_path {
+                    little_clip_core::config::save_drive_backup_directory_at(path, &root.path)
+                        .map_err(|error| {
+                            format!("Could not save backup directory preference: {error}")
+                        })?;
+                }
                 self.config.backup_directory = Some(root.path);
                 self.db.put("settings", "config", &self.config)?;
                 Ok("Backup directory configured".into())
@@ -1131,6 +1149,95 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let state = temp.path().join("state");
+        let inventory: Inventory = Arc::new(|| Ok(Vec::new()));
+        let service = Service::start_with_settings(
+            DriveConfig::default(),
+            state.clone(),
+            inventory.clone(),
+            Some(path.clone()),
+        )
+        .unwrap();
+        assert!(
+            !path.exists(),
+            "starting without using backups must not write preferences"
+        );
+        assert!(status(&service).backup_directory.is_none());
+        std::fs::write(
+            &path,
+            "# keep preferences\n[drives]\nram_capacity_limit = 3000000000\n",
+        )
+        .unwrap();
+        let destination = temp.path().join("backup");
+        finish(
+            &service,
+            DriveRequest::BackupDirectory {
+                path: destination.clone(),
+            },
+        );
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# keep preferences"));
+        let config = little_clip_core::AppConfig::load_from_path(&path).unwrap();
+        assert_eq!(config.drives.ram_capacity_limit, 3_000_000_000);
+        assert_eq!(config.drives.backup_directory.as_ref(), Some(&destination));
+        std::fs::write(&path, "invalid [").unwrap();
+        let DriveReply::Accepted(id) = service
+            .request(DriveRequest::BackupDirectory {
+                path: temp.path().join("other-backup"),
+            })
+            .unwrap()
+        else {
+            panic!("accepted");
+        };
+        let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+        assert_eq!(operation.state, "failed");
+        assert!(
+            operation
+                .message
+                .contains("Could not save backup directory preference")
+        );
+        assert_eq!(
+            status(&service).backup_directory.as_ref(),
+            Some(&destination)
+        );
+        std::fs::write(&path, saved).unwrap();
+        service.shutdown().unwrap();
+        let restarted =
+            Service::start_with_settings(config.drives.clone(), state, inventory, Some(path))
+                .unwrap();
+        assert_eq!(status(&restarted).backup_directory, Some(destination));
+        assert_eq!(status(&restarted).config.ram_capacity_limit, 3_000_000_000);
+        let mut unset = status(&restarted).config;
+        unset.backup_directory = None;
+        finish(
+            &restarted,
+            DriveRequest::Configure {
+                config: unset.clone(),
+            },
+        );
+        assert!(status(&restarted).backup_directory.is_none());
+        restarted.shutdown().unwrap();
+        // A cleared file preference must not be resurrected by old SQLite settings.
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "# destination deliberately unset\n").unwrap();
+        let db = Store::existing(&temp.path().join("state/drives.sqlite"), false).unwrap();
+        db.put("settings", "config", &config.drives).unwrap();
+        drop(db);
+        let final_service = Service::start_with_settings(
+            unset,
+            temp.path().join("state"),
+            Arc::new(|| Ok(Vec::new())),
+            Some(path),
+        )
+        .unwrap();
+        assert!(status(&final_service).backup_directory.is_none());
+        final_service.shutdown().unwrap();
+    }
+
     fn fixture_drive(path: &Path, id: &str) -> Drive {
         Drive {
             id: format!("part:{id}"),

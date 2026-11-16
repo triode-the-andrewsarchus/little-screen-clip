@@ -934,18 +934,84 @@ fn save_setting_to_file(
 fn save_settings_to_file(
     settings: &[(&str, &str, toml::Value)],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let path = find_config_file_path();
-    let mut current = if path.exists() {
-        std::fs::read_to_string(&path)?
-    } else {
-        String::new()
-    };
-    for (table, setting, value) in settings {
-        current = update_setting_in_text(&current, table, setting, value.clone())?;
+    save_settings_at(&find_config_file_path(), |mut current| {
+        for (table, setting, value) in settings {
+            current = update_setting_in_text(&current, table, setting, value.clone())?;
+        }
+        Ok(current)
+    })
+}
+
+/// Saves an explicitly selected backup directory, preserving unrelated preferences.
+///
+/// The host supplies its active configuration path so a service does not select a
+/// different file after a working-directory change. A symlink keeps pointing to
+/// its guarded target. Existing revisions are checked before atomic replacement.
+///
+/// # Errors
+/// Returns invalid TOML, changed/protected sources, missing parents or write errors.
+pub fn save_drive_backup_directory_at(
+    path: &Path,
+    destination: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #[derive(Serialize)]
+    struct Directory<'a> {
+        #[serde(with = "crate::path_serde")]
+        backup_directory: &'a Path,
     }
-    // Validate combined edits before replacing the active configuration.
+    let value = toml::Value::try_from(Directory {
+        backup_directory: destination,
+    })?;
+    let value = value
+        .get("backup_directory")
+        .ok_or("Missing backup directory")?
+        .clone();
+    save_settings_at(path, |current| {
+        update_setting_in_text(&current, "drives", "backup_directory", value)
+    })
+}
+
+fn save_settings_at(
+    path: &Path,
+    edit: impl FnOnce(String) -> Result<String, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::{file_source, kernel_interface};
+    use std::os::fd::AsRawFd;
+
+    let path = std::path::absolute(path)?;
+    let observed = match std::fs::symlink_metadata(&path) {
+        Ok(_) => Some(file_source::read_file_snapshot_with_source(
+            &path,
+            16 * 1024 * 1024,
+        )?),
+        // Inspect the link itself so dangling symlinks are never unused names.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let destination = observed
+        .as_ref()
+        .map_or(path.as_path(), |(_, source)| source.path());
+    let parent = destination.parent().ok_or("Missing configuration parent")?;
+    let directory = kernel_interface::pin_content_directory(parent)?;
+    let identity = kernel_interface::MountIdentity::pinned(&directory)?;
+    let current = observed.as_ref().map_or(Ok(String::new()), |(bytes, _)| {
+        String::from_utf8(bytes.clone())
+    })?;
+    let current = edit(current)?;
     let _: toml::Value = toml::from_str(&current)?;
-    std::fs::write(&path, current)?;
+    if kernel_interface::MountIdentity::directory(parent)? != identity {
+        return Err("Configuration directory changed while saving".into());
+    }
+    if let Some((_, source)) = &observed {
+        if file_source::FileSource::capture(&path)? != *source {
+            return Err("Configuration target changed while saving".into());
+        }
+        source.write_in(destination, current.as_bytes(), &directory)?;
+    } else {
+        file_source::create_file_in(destination, current.as_bytes(), &directory)?;
+    }
+    // Staging fsyncs the file; persist the containing-directory installation too.
+    std::fs::File::open(format!("/proc/self/fd/{}", directory.as_raw_fd()))?.sync_all()?;
     Ok(())
 }
 
@@ -998,6 +1064,93 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_directory_save_preserves_comments_modes_links_and_raw_path_bytes() {
+        use std::os::unix::{
+            ffi::OsStringExt,
+            fs::{PermissionsExt, symlink},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("settings.toml");
+        let path = temp.path().join("config.toml");
+        let original = "# personal settings\n[audio]\nsample_rate = 48000 # retain this\n\n[drives]\nram_capacity_limit = 2000000000\n";
+        std::fs::write(&target, original).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let held = temp.path().join("old-hard-link");
+        std::fs::hard_link(&target, &held).unwrap();
+        symlink(&target, &path).unwrap();
+        let destination = PathBuf::from(std::ffi::OsString::from_vec(b"/backup/\xff".to_vec()));
+        save_drive_backup_directory_at(&path, &destination).unwrap();
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(std::fs::read_to_string(&held).unwrap(), original);
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("# personal settings"));
+        assert!(updated.contains("sample_rate = 48000 # retain this"));
+        let config: AppConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.drives.backup_directory, Some(destination));
+        assert_eq!(config.drives.ram_capacity_limit, 2_000_000_000);
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[test]
+    fn settings_save_refuses_invalid_text_and_external_edits_without_overwriting() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "invalid [").unwrap();
+        assert!(save_drive_backup_directory_at(&path, Path::new("/backup")).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid [");
+        std::fs::write(&path, "# old\n").unwrap();
+        let result = save_settings_at(&path, |_| {
+            std::fs::write(&path, "# concurrent\n")?;
+            Ok("# pending\n".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# concurrent\n");
+        std::fs::remove_file(&path).unwrap();
+        let result = save_settings_at(&path, |_| {
+            std::fs::write(&path, "# appeared during edit\n")?;
+            Ok("# pending\n".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# appeared during edit\n"
+        );
+    }
+
+    #[test]
+    fn settings_save_refuses_replaced_directories_and_retargeted_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join("config.toml");
+        let result = save_settings_at(&path, |_| {
+            std::fs::rename(&parent, temp.path().join("old-parent"))?;
+            std::fs::create_dir(&parent)?;
+            Ok("# pending\n".into())
+        });
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert!(!temp.path().join("old-parent/config.toml").exists());
+        let first = temp.path().join("first.toml");
+        let second = temp.path().join("second.toml");
+        std::fs::write(&first, "# first\n").unwrap();
+        std::fs::write(&second, "# second\n").unwrap();
+        symlink(&first, &path).unwrap();
+        let result = save_settings_at(&path, |_| {
+            std::fs::remove_file(&path)?;
+            symlink(&second, &path)?;
+            Ok("# pending\n".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "# first\n");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "# second\n");
+    }
 
     #[test]
     fn constellation_pad_keys_support_direct_hardware_remaps_and_reject_ambiguity() {

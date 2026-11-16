@@ -8,9 +8,9 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | --- | --- | --- |
 | 1.1 | Partial | Numeric inventory/capacity and mount routing exist in discovery.rs; verify stable reconnect with changed device paths on disposable media. |
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
-| 1.3 | Partial | Reloadable DriveConfig exists; backup selection uses SQLite rather than the existing setting-preserving writer. |
+| 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation and RAM data population now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, Save RAM and image preflush/preparation still need scheduling off the owner thread. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.5 | Partial | Bounded admission, one bulk worker and retained operations exist; request idempotency and interrupted-operation reconciliation need work. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight and image preflush/preparation still need scheduling off the owner thread; large-export responsiveness needs direct evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy now project bind subtrees into observed filesystem coordinates. Pure projection tests pass; real bind/case-fold aliases, managed-root coverage and image destinations still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Union/equality/conflict fixtures pass; real case-insensitive destination behavior remains unverified. |
@@ -22,7 +22,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
 | 3.2 | Partial | Verified tmpfs path now falls back from the default /tmp to XDG_RUNTIME_DIR and /dev/shm. Explicit disk-backed override refusal is tested; fallback branch still needs an isolated non-tmpfs-/tmp acceptance environment. |
 | 3.3 | Partial | Streaming initial population and incomplete state exist; a second reconciliation after installing watches catches earlier edits. Deterministic mid-population change/failure injection remains. |
-| 3.4 | Open | RAM sidebar exists; separate pending counts and RAM-save/media-flush state are missing. |
+| 3.4 | Partial | RAM sidebar and separate persisted RAM-save/media-flush state exist. Pending counts and final UI acceptance remain. |
 | 3.5 | Partial | Removal/reconnect conflict fixture passes; interrupted media-write retention needs injected failure coverage. |
 | 3.6 | Partial | Eject/flush/save/discard exist; prove waiting and dirty-session lifetime behavior. |
 | 3.7 | Open | Fixed-size tmpfs images now enforce ongoing byte/inode growth, including external writers. Native ENOSPC for bytes/inodes, live-owner refusal, open-file graceful restart and daemon restart/removal tests pass. Forced exit after directory fsync and cancelled-initial-copy resume are tested. Unflushed-kill/underlying-tmpfs exhaustion/pressure matrix remains. |
@@ -114,8 +114,9 @@ already-written fixture and leaves the pool able to execute its next job.
 Watch registration reuses the scan's descriptor-backed frame, advances in 4096-entry /
 five-millisecond slices, and discloses incomplete coverage through a forced full scan.
 Event reads also yield after bounded bytes/time. This does not establish a hard deadline
-for an individual filesystem metadata syscall. Remaining owner-thread setup and Save RAM
-work is still unfinished, as are all previously listed plan and host gates.
+for an individual filesystem metadata syscall. Remaining owner-thread setup is still
+unfinished, as are the other listed plan and host gates. Save RAM subsequently moved
+to the retained pool (see the export follow-up).
 
 
 The scheduler architecture checkpoint remains REGRESSION against the initial baseline:
@@ -126,3 +127,20 @@ The remaining domain guards/adapters and hotspots still need the final architect
 review. Report: `.fitness/portable-drives-scheduler-final-architecture.json`.
 A queued-cancellation fixture additionally verifies that a cancelled Save RAM request
 never creates its destination during admission.
+
+Preference-persistence checkpoint: the backup picker writes only its selected path
+through core's comment-preserving TOML editor and guarded atomic file installation.
+The daemon captures its configuration path at startup; owned fixtures inject a
+private path or disable preference-file writes. Selection/restart, failed writes,
+explicit reload-to-unset and stale-SQLite refusal pass the service fixture. Core
+tests cover retained comments, modes, hard links, symlinks, raw path bytes,
+concurrent edits and parent replacement. Validation: 447 core tests passed (three
+host fixtures ignored), all fourteen configuration tests passed again after the
+final read-admission simplification, 37 backend tests passed (nine explicit fixtures
+ignored), and core/backend all-target clippy passed with warnings denied.
+
+Architecture still reports REGRESSION: seventeen net new clone groups, duplication
+7.30% to 7.23%, average CCN 3.48, max 274 and cycles 143 unchanged. The new guarded
+configuration save is also reported at CCN 20 and remains a review hotspot;
+the architecture gate has not passed. Report:
+`.fitness/portable-drives-settings-architecture.json`.

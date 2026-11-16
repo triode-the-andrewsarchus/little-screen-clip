@@ -77,7 +77,7 @@ Catalogs, RAM mirrors, and backup destinations do not automatically enroll in co
 
 ## Configuration
 
-Add overrides to the existing application configuration. The backup destination can also be selected through the UI or CLI; leave it unset to retain the lazy prompt.
+Add overrides to the existing application configuration. The backup destination can also be selected through the UI or CLI; leave it unset to retain the lazy prompt. Explicit selection saves only `drives.backup_directory` to the daemon's active configuration file, preserving comments and unrelated settings. It uses a guarded, revision-checked atomic replacement and flushes the file and containing directory. Starting the daemon or browsing drives does not create or rewrite the configuration. Failed preference writes leave the previous runtime destination selected and report the error.
 
 ```toml
 [drives]
@@ -98,7 +98,7 @@ sync_interval_seconds = 30
 # backup_keep_versions = 3
 ```
 
-Reload the application configuration through `clipctl reload`. Drive enrollment, baselines, operation results, conflicts, and catalogs live under the XDG user-data directory in `little-screen-clip/drives`. Paths retain their original Unix bytes. Devices need no marker files or Git repositories.
+Reload the application configuration through `clipctl reload`. Removing the backup-directory setting and reloading clears the selection; older SQLite preferences cannot restore it on restart. Drive enrollment, deletion decisions, baselines, operation results, conflicts, and catalogs are operational state under the XDG user-data directory in `little-screen-clip/drives`. Paths retain their original Unix bytes. Devices need no marker files or Git repositories.
 
 ## CLI
 
