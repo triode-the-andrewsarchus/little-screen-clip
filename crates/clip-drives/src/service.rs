@@ -34,6 +34,7 @@ pub struct Service {
 mod background;
 mod lifetime;
 mod policy;
+mod ram_save;
 mod ram_sessions;
 mod reconciliation;
 
@@ -530,6 +531,7 @@ impl Owner {
                 | DriveRequest::CopyToRam { .. }
                 | DriveRequest::Sync { .. }
                 | DriveRequest::FlushRam { .. }
+                | DriveRequest::SaveRam { .. }
         ) {
             if self.sync_waiting.len() >= 16 {
                 self.finish_operation(
@@ -546,13 +548,14 @@ impl Owner {
                 Err("Reconciliation setup failed; retained storage needs recovery".into())
             });
             match prepared {
-                Ok((pair, initialize)) => self.queue_sync(reconciliation::Intent {
+                Ok((pair, initialize, save)) => self.queue_sync(reconciliation::Intent {
                     queued: Instant::now(),
                     pair,
                     initialize,
                     operation: Some(envelope.id),
                     cancel: envelope.cancel,
                     paths: None,
+                    save,
                 }),
                 Err(error) => self.finish_operation(&envelope.id, &envelope.cancel, Err(error)),
             }
@@ -724,12 +727,8 @@ impl Owner {
                 self.db.put("rule", &id, &rule)?;
                 Ok("Catalog and indexing policy updated; existing catalog versions remain dated snapshots".into())
             }
-            DriveRequest::SaveRam {
-                session,
-                destination,
-            } => {
-                self.mount_ram(&session)?;
-                self.save_ram(&session, &destination, cancel, progress)
+            DriveRequest::SaveRam { .. } => {
+                Err("RAM saves require retained worker admission".into())
             }
             DriveRequest::DiscardRam { session, confirmed } => {
                 if !confirmed {
@@ -781,6 +780,7 @@ impl Owner {
             cancel: Arc::new(AtomicBool::new(cancel.load(Ordering::Acquire))),
             paths: None,
             initialize: false,
+            save: None,
         };
         // Synchronous pre-unmount reconciliation uses the accepted caller's token.
         let result = plan.run_with_cancel(&self.db, &intent, cancel, progress);
@@ -830,6 +830,7 @@ impl Owner {
                 cancel: Arc::new(AtomicBool::new(false)),
                 paths: shared_paths.clone(),
                 initialize: false,
+                save: None,
             });
         }
     }
@@ -892,6 +893,8 @@ impl Owner {
             connected: true,
             status: pair.status.clone(),
             backing: Some(backing),
+            last_saved: None,
+            save_status: None,
         };
         if drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
             self.unidentified_ram.insert(id.clone(), source);
@@ -900,61 +903,6 @@ impl Owner {
         self.db.put("pair", &id, &pair)?;
         self.mount_ram(&id)?;
         Ok(id)
-    }
-    fn save_ram(
-        &self,
-        id: &str,
-        destination: &Path,
-        cancel: &AtomicBool,
-        progress: &mut impl FnMut(u64, u64),
-    ) -> Result<String> {
-        let session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
-        self.ram_available(&session)?;
-        let source = Root::open(&session.path)?;
-        if little_clip_core::kernel_interface::MountIdentity::directory(&source.path)?
-            != session.identity
-        {
-            return Err("RAM directory identity changed; refusing save".into());
-        }
-        let base = Root::create(destination)?;
-        self.validate_ram_backing_target(&base)?;
-        let name = format!("ram-copy-{}", uuid::Uuid::new_v4());
-        base.ensure_directory(Path::new(&name))?;
-        let target = Root::open(&base.path.join(&name))?;
-        if source.overlap(&target) {
-            return Err("Save destination overlaps RAM source".into());
-        }
-        let scan_id = format!("save:{id}");
-        let coverage = scan::scan(
-            &self.db,
-            &source,
-            &scan_id,
-            &scan::Limits {
-                hash_bytes: session.backing.as_ref().map_or(u64::MAX, |b| b.capacity),
-                ..Default::default()
-            },
-            cancel,
-            &mut *progress,
-        )?;
-        if !coverage.complete {
-            return Err("RAM copy could not be fully inventoried".into());
-        }
-        let mut after = Vec::new();
-        let mut count = 0;
-        let mut bytes = 0;
-        loop {
-            let entries = scan::entries(&self.db, &scan_id, &after, 128)?;
-            if entries.is_empty() {
-                break;
-            }
-            for entry in entries {
-                bytes += sync::install(&source, &target, &entry, &entry.path, None, cancel, false)?;
-                count += 1;
-                after = entry.path.as_os_str().as_encoded_bytes().to_vec();
-                progress(count, bytes);
-            }
-        }
-        Ok(format!("RAM copy saved to {}", target.path.display()))
     }
     fn mount(&mut self, id: &str) -> Result<String> {
         if !Path::new("/dev/fuse").exists() {
@@ -1586,6 +1534,12 @@ mod tests {
         fs::rename(&source, temp.path().join("removed")).unwrap();
         fs::write(ram.path.join("x"), b"RAM offline").unwrap();
         assert_eq!(fs::read(ram.path.join("x")).unwrap(), b"RAM offline");
+        let baseline = status(&service)
+            .pairs
+            .into_iter()
+            .find(|p| p.id == ram.id)
+            .unwrap()
+            .last_success;
         let saved = temp.path().join("saved");
         finish(
             &service,
@@ -1601,6 +1555,27 @@ mod tests {
             .unwrap()
             .path();
         assert_eq!(fs::read(saved_copy.join("x")).unwrap(), b"RAM offline");
+        let after_save = status(&service);
+        assert_eq!(
+            after_save
+                .pairs
+                .iter()
+                .find(|p| p.id == ram.id)
+                .unwrap()
+                .last_success,
+            baseline
+        );
+        let saved_session = after_save.ram.iter().find(|s| s.id == ram.id).unwrap();
+        let export = saved_session.last_saved.as_ref().unwrap();
+        assert_eq!(export.path, saved_copy);
+        assert!(export.populated);
+        assert!(
+            saved_session
+                .save_status
+                .as_ref()
+                .unwrap()
+                .contains("RAM copy saved")
+        );
         std::thread::sleep(Duration::from_millis(1200));
         assert!(ram.path.exists());
         fs::rename(temp.path().join("removed"), &source).unwrap();

@@ -216,6 +216,19 @@ pub struct RamSession {
     /// Absent only for legacy, unbounded directory sessions.
     #[serde(default)]
     pub backing: Option<RamBacking>,
+    #[serde(default)]
+    pub last_saved: Option<RamSave>,
+    #[serde(default)]
+    pub save_status: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RamSave {
+    #[serde(with = "crate::path_serde")]
+    pub path: PathBuf,
+    pub completed: u64,
+    /// False when an explicitly saved initial RAM population was incomplete.
+    pub populated: bool,
 }
 
 impl RamSession {
@@ -330,12 +343,18 @@ mod tests {
             connected: false,
             status: "retained".into(),
             backing: None,
+            last_saved: None,
+            save_status: None,
         };
         let mut json = serde_json::to_value(&session).unwrap();
         json.as_object_mut().unwrap().remove("backing");
+        json.as_object_mut().unwrap().remove("last_saved");
+        json.as_object_mut().unwrap().remove("save_status");
         let recovered: RamSession = serde_json::from_value(json).unwrap();
         assert_eq!(recovered.path, session.path);
         assert!(recovered.backing.is_none());
+        assert!(recovered.last_saved.is_none());
+        assert!(recovered.save_status.is_none());
         assert!(recovered.browsable());
     }
 }

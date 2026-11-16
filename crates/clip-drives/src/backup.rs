@@ -253,7 +253,12 @@ pub(crate) fn files(
         cancel,
     )
 }
-fn finish_directories(db: &Store, id: &str, target: &Root, cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn finish_directories(
+    db: &Store,
+    id: &str,
+    target: &Root,
+    cancel: &AtomicBool,
+) -> Result<()> {
     let mut statement=db.0.prepare("SELECT json FROM entries WHERE scan=?1 AND json_extract(json,'$.kind')='directory' ORDER BY path DESC")?;
     let rows = statement.query_map([id], |r| r.get::<_, String>(0))?;
     for row in rows {
@@ -263,7 +268,7 @@ fn finish_directories(db: &Store, id: &str, target: &Root, cancel: &AtomicBool) 
     }
     Ok(())
 }
-fn apply_directory_metadata(target: &Root, entry: &scan::Entry) -> Result<()> {
+pub(crate) fn apply_directory_metadata(target: &Root, entry: &scan::Entry) -> Result<()> {
     let held = target.directory(&entry.path, false)?;
     let file = File::open(anchor(&held))?;
     file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;

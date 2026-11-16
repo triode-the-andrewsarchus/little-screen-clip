@@ -64,6 +64,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 
 The goal remains active while any row or cross-cutting gate lacks direct completion evidence.
 
+RAM-export follow-up: Save RAM now uses the retained reconciliation pool and held source/output roots. Cancellation retains completed output; a retry into a new destination preserves directory modes/times. Export status and the last successful export are separate persisted fields from media writeback, with backward-compatible record defaults. The native removal/reconnect/restart fixture proves that an offline export leaves the media baseline unchanged and reports its saved location. Backend tests: 36 passed, nine explicit fixtures ignored; the selected native lifecycle fixture, two core drive-schema tests and file-manager compilation passed. Pending writeback counts, large-export responsiveness acceptance and the other remaining audit gates still need direct evidence. Architecture comparison is unchanged in its material result: REGRESSION, seventeen net new clone groups, 7.23% duplication and average CCN 3.48. Report: `.fitness/portable-drives-ram-export-architecture.json`.
+
 ## RAM follow-up verification
 
 The standalone filesystem companion is packaged in commit `9c41da5c` with source,

@@ -18,6 +18,7 @@ pub(super) struct Intent {
     pub cancel: Arc<AtomicBool>,
     pub paths: Option<Arc<HashSet<PathBuf>>>,
     pub initialize: bool,
+    pub save: Option<Arc<super::ram_save::Save>>,
 }
 pub(super) struct Pending {
     pub drive: String,
@@ -35,6 +36,9 @@ impl Plan {
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
         cancelled(cancel)?;
+        if let Some(save) = &intent.save {
+            return save.run(db, cancel, progress);
+        }
         self.portable.validate()?;
         self.local.validate()?;
         let passes = if intent.initialize { 2 } else { 1 };
@@ -66,12 +70,12 @@ impl Owner {
         &mut self,
         request: &DriveRequest,
         cancel: &AtomicBool,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(String, bool, Option<Arc<super::ram_save::Save>>)> {
         cancelled(cancel)?;
         match request {
             DriveRequest::CopyToRam { drive } => {
                 let drive = self.drive(drive)?;
-                Ok((self.prepare_ram(&drive, cancel)?, true))
+                Ok((self.prepare_ram(&drive, cancel)?, true, None))
             }
             DriveRequest::Sync { pair } | DriveRequest::FlushRam { session: pair } => {
                 let initial = self
@@ -81,7 +85,7 @@ impl Owner {
                 if self.db.get::<RamSession>("ram", pair)?.is_some() {
                     self.mount_ram(pair)?;
                 }
-                Ok((pair.clone(), initial))
+                Ok((pair.clone(), initial, None))
             }
             DriveRequest::Pair {
                 drive,
@@ -123,7 +127,20 @@ impl Owner {
                         status: "Waiting for initial union sync".into(),
                     },
                 )?;
-                Ok((id, false))
+                Ok((id, false, None))
+            }
+            DriveRequest::SaveRam {
+                session,
+                destination,
+            } => {
+                if self.db.get::<SyncPair>("pair", session)?.is_none() {
+                    return Err("RAM enrollment is missing".into());
+                }
+                Ok((
+                    session.clone(),
+                    false,
+                    Some(self.prepare_ram_save(session, destination)?),
+                ))
             }
             _ => Err("Invalid reconciliation request".into()),
         }
@@ -259,7 +276,20 @@ impl Owner {
                 self.queue_sync(intent);
                 continue;
             }
-            let plan = match self.prepare_sync(&intent.pair) {
+            let prepared = if let Some(save) = &intent.save {
+                self.db
+                    .get::<SyncPair>("pair", &intent.pair)
+                    .and_then(|pair| pair.ok_or_else(|| "RAM enrollment disappeared".into()))
+                    .map(|pair| Plan {
+                        pair,
+                        portable: save.source.clone(),
+                        local: save.target.clone(),
+                        cached: false,
+                    })
+            } else {
+                self.prepare_sync(&intent.pair)
+            };
+            let plan = match prepared {
                 Ok(plan) => plan,
                 Err(error) => {
                     self.sync_result(&intent, Err(error), None);
@@ -292,7 +322,9 @@ impl Owner {
                 continue;
             }
             // Watch before population, retaining/coalescing notifications while the task runs.
-            if let Some(watch) = &mut self.watch {
+            if let Some(watch) = &mut self.watch
+                && intent.save.is_none()
+            {
                 watch.add(plan.portable.clone());
                 watch.add(plan.local.clone());
             }
@@ -300,6 +332,9 @@ impl Owner {
                 && let Ok(Some(mut op)) = self.db.get::<DriveOperation>("operation", id)
             {
                 op.state = "running".into();
+                if let Some(save) = &intent.save {
+                    op.message = format!("Saving RAM copy to {}", save.target.path.display());
+                }
                 let _ = self.db.put("operation", id, &op);
             }
             let state = self.state.clone();
@@ -340,6 +375,22 @@ impl Owner {
         result: Result<String>,
         plan: Option<Plan>,
     ) {
+        if let Some(save) = &intent.save {
+            let result = match self.saved_ram_result(save, &result) {
+                Ok(()) => result,
+                Err(error) => Err(format!(
+                    "{}; could not persist RAM save status: {error}",
+                    result
+                        .as_ref()
+                        .map_or_else(|error| error.to_string(), Clone::clone)
+                )
+                .into()),
+            };
+            if let Some(id) = &intent.operation {
+                self.finish_operation(id, &intent.cancel, result);
+            }
+            return;
+        }
         if let Ok(Some(mut pair)) = self.db.get::<SyncPair>("pair", &intent.pair) {
             match &result {
                 Ok(message) => {

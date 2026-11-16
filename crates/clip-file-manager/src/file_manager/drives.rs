@@ -546,7 +546,10 @@ impl FileManager {
             }
             response.clone().on_hover_text(&session.status);
             response.context_menu(|ui| {
-                if ui.button("Open").clicked() {
+                if ui
+                    .add_enabled(session.browsable(), egui::Button::new("Open"))
+                    .clicked()
+                {
                     open = Some(session.path.clone());
                     ui.close_menu();
                 }
