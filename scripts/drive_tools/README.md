@@ -15,7 +15,10 @@ build native tools. `launch.sh` and full workspace packaging include the compani
 The small GPL-2.0 patch implements `RENAME_NOREPLACE` while holding the server's
 existing directory-mutation lock. Other rename flags remain rejected. The original
 server rejects all nonzero rename flags, preventing the application's atomic
-no-overwrite installations.
+no-overwrite installations. The patch also makes directory/read-handle fsync flush
+namespace metadata; the original skips flushing on handles opened read-only. A native
+fault test creates a directory, fsyncs its parent, kills the server and checks the
+recovered hierarchy. The unmodified fsync loses that directory; the patch preserves it.
 
 Every generated `drive-tools/` directory includes the executable, original source
 archive, patch, upstream license notice, source hashes and a rebuild script. The

@@ -1,0 +1,2 @@
+# Unified patches require a context prefix before upstream C tab indentation.
+/scripts/drive_tools/*.patch -whitespace

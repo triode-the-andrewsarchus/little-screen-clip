@@ -68,7 +68,7 @@ def build(output, cache, source_archive=None, jobs=2):
         (stage / 'README.md').write_text(
             '# RAM filesystem helper\n\n'
             'This standalone GPL-2.0 e2fsprogs helper reads and writes bounded ext4 images. '
-            'It is not linked into the application. The source archive, local atomic-NOREPLACE '
+            'It is not linked into the application. The source archive, local atomic-NOREPLACE/directory-fsync '
             'patch and rebuild instructions are included under source/. Native libfuse3, libblkid '
             'and libuuid dependencies must be available on the host.\n\n'
             'Rebuild: cd source && sh rebuild.sh\n')
