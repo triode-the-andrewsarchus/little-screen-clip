@@ -27,7 +27,7 @@ impl FileManager {
                 self.ram_mounts_ui(ui);
                 for index in 0..self.mounts.entries.len() {
                     let entry = self.mounts.entries[index].clone();
-                    let (o, m, u) = self.mount_row_ui(ui, &entry, index, colors);
+                    let (o, m, u) = self.mount_row_ui(ui, &entry, colors);
                     if o.is_some() {
                         open = o;
                     }
@@ -69,7 +69,6 @@ impl FileManager {
         &mut self,
         ui: &mut Ui,
         entry: &MountEntry,
-        index: usize,
         colors: WorkbenchColors,
     ) -> (Option<PathBuf>, Option<MountEntry>, Option<MountEntry>) {
         let mut open = None;
@@ -79,8 +78,10 @@ impl FileManager {
         let (rect, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
         let has_eject = entry.is_mounted && entry.is_removable;
+        // An open popup must follow its mount across inventory reordering.
+        let identity = Id::new((&entry.id, &entry.device_path, &entry.mount_point));
         let (body_rect, eject_rect, eject_response, response) =
-            allocate_mount_row(ui, rect, has_eject, index);
+            allocate_mount_row(ui, rect, has_eject, identity);
 
         let is_active = entry
             .mount_point
@@ -131,7 +132,7 @@ fn allocate_mount_row(
     ui: &mut Ui,
     rect: Rect,
     has_eject: bool,
-    index: usize,
+    identity: Id,
 ) -> (Rect, Option<Rect>, Option<egui::Response>, egui::Response) {
     let (body_rect, eject_rect, eject_response) = if has_eject {
         let eject_width = 24.0;
@@ -140,12 +141,12 @@ fn allocate_mount_row(
             pos2(rect.max.x - 4.0, rect.max.y - 2.0),
         );
         let b_rect = Rect::from_min_max(rect.min, pos2(e_rect.min.x, rect.max.y));
-        let e_resp = ui.interact(e_rect, Id::new(("mount_eject", index)), Sense::click());
+        let e_resp = ui.interact(e_rect, identity.with("eject"), Sense::click());
         (b_rect, Some(e_rect), Some(e_resp))
     } else {
         (rect, None, None)
     };
-    let response = ui.interact(body_rect, Id::new(("mount_row", index)), Sense::click());
+    let response = ui.interact(body_rect, identity.with("row"), Sense::click());
     (body_rect, eject_rect, eject_response, response)
 }
 
@@ -272,5 +273,58 @@ fn mount_context_menu(
     {
         ui.output_mut(|o| o.copied_text = target.display().to_string());
         ui.close_menu();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_mount_menu_keeps_its_partition_when_inventory_reorders() {
+        let context = egui::Context::default();
+        let mut frame = 0;
+        let mut render = |order: [&str; 2], events: Vec<egui::Event>| {
+            frame += 1;
+            let mut open = Vec::new();
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 300.0))),
+                time: Some(frame as f64 * 0.1),
+                events,
+                ..Default::default()
+            };
+            let _ = context.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for partition in &order {
+                        let (rect, _) = ui.allocate_exact_size(vec2(250.0, 32.0), Sense::hover());
+                        let (_, _, _, response) =
+                            allocate_mount_row(ui, rect, true, Id::new(partition));
+                        response.context_menu(|ui| {
+                            open.push((*partition).to_owned());
+                            ui.label(*partition);
+                        });
+                    }
+                });
+            });
+            open
+        };
+        let position = pos2(40.0, 20.0);
+        render(["portable", "other"], vec![]);
+        for pressed in [true, false] {
+            render(
+                ["portable", "other"],
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(render(["portable", "other"], vec![]), vec!["portable"]);
+        assert_eq!(render(["other", "portable"], vec![]), vec!["portable"]);
     }
 }
