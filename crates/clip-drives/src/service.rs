@@ -36,6 +36,7 @@ pub struct Service {
 }
 mod admission;
 mod background;
+mod catalog_cleanup;
 mod lifetime;
 mod partition;
 mod policy;
@@ -54,6 +55,7 @@ struct Owner {
     deferred: std::collections::VecDeque<Envelope>,
     sync_epoch: u64,
     background: Option<background::Pending>,
+    catalog_cleanup: catalog_cleanup::Cleanup,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
     authority: Arc<partition::Authority>,
@@ -186,6 +188,7 @@ impl Service {
             deferred: Default::default(),
             sync_epoch: 0,
             background: None,
+            catalog_cleanup: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             authority,
@@ -207,6 +210,7 @@ impl Service {
             ram_setup: None,
             ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
         };
+        catalog::redaction::migrate(&owner.db)?;
         owner.recover()?;
         owner.discover();
         owner.publish_policy()?;
@@ -424,6 +428,17 @@ impl Owner {
                 discovered = Instant::now();
             }
             self.poll_background();
+            self.catalog_cleanup.poll(
+                &self.backup_jobs,
+                &self.db,
+                &self.state,
+                &self.closing,
+                self.background.is_none()
+                    && !self
+                        .partition
+                        .as_ref()
+                        .is_some_and(partition::Pending::is_image),
+            );
             self.poll_partition();
             self.poll_ram_setup();
             self.poll_sync();
@@ -497,6 +512,16 @@ impl Owner {
         while let Some(job) = &self.background {
             job.cancel.store(true, Ordering::Release);
             self.poll_background();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        while self.catalog_cleanup.busy() {
+            self.catalog_cleanup.poll(
+                &self.backup_jobs,
+                &self.db,
+                &self.state,
+                &self.closing,
+                false,
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         while self.ram_setup.is_some() {
@@ -773,8 +798,12 @@ impl Owner {
                     catalog,
                     index,
                 };
-                self.db.put("rule", &id, &rule)?;
-                Ok("Catalog and indexing policy updated; existing catalog versions remain dated snapshots".into())
+                catalog::redaction::set_rule(&self.db, &rule)?;
+                Ok(if catalog {
+                    "Catalog and indexing policy updated; saved catalogs retain their capture date"
+                } else {
+                    "Catalog exclusion saved; saved descendant metadata will be removed after mounted views are unmounted"
+                }.into())
             }
             DriveRequest::SaveRam { .. } => {
                 Err("RAM saves require retained worker admission".into())
@@ -857,6 +886,9 @@ impl Owner {
             return Err("FUSE is unavailable: /dev/fuse is missing".into());
         }
         let mut catalog: Catalog = self.db.get("catalog", id)?.ok_or("Unknown catalog")?;
+        if catalog.pending_redactions != 0 {
+            return Err("Catalog metadata cleanup is pending; unmount its existing view and wait for cleanup before mounting again".into());
+        }
         if self.children.contains_key(id) {
             return Err("Catalog is already mounted".into());
         }
@@ -1103,6 +1135,7 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 mod tests {
     mod admission;
     mod backup_review;
+    mod catalog_cleanup;
     mod native_images;
     use super::*;
     #[test]

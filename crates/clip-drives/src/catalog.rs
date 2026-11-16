@@ -25,6 +25,7 @@ use std::{
     sync::atomic::AtomicBool,
     time::{Duration, SystemTime},
 };
+pub(crate) mod redaction;
 
 pub(crate) fn capture(
     db: &Store,
@@ -82,10 +83,15 @@ pub(crate) fn capture(
         entries: coverage.count,
         complete: coverage.complete,
         coverage: coverage.message,
+        redacted: None,
+        redaction_generation: 0,
+        pending_redactions: 0,
+        redaction_error: None,
+        root_excluded: false,
         mount: None,
     };
     cat_db.put("catalog", &id, &catalog)?;
-    db.put("catalog", &id, &catalog)?;
+    redaction::publish(db, &catalog, &limits.exclusions)?;
     Ok(catalog)
 }
 struct OpenFile {
@@ -101,6 +107,7 @@ struct CatalogFs {
     next_handle: u64,
     #[cfg(test)]
     payload_opens: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    _lease: redaction::Lease,
 }
 impl CatalogFs {
     fn coverage(
@@ -108,7 +115,10 @@ impl CatalogFs {
         ino: u64,
     ) -> Result<Option<little_clip_core::catalog_metadata::CatalogEntryStatus>> {
         if ino == 1 {
-            return Ok(None);
+            return Ok(self
+                .catalog
+                .root_excluded
+                .then_some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued));
         }
         let entry = self.row(ino)?.ok_or("Unknown catalog entry")?;
         Ok((entry.kind == "excluded")
@@ -141,6 +151,9 @@ impl CatalogFs {
     }
     fn parent_path(&self, ino: u64) -> Result<PathBuf> {
         if ino == 1 {
+            if self.catalog.root_excluded {
+                return Err("Directory was not catalogued".into());
+            }
             Ok(PathBuf::new())
         } else {
             let entry = self.row(ino)?.ok_or("Unknown catalog directory")?;
@@ -251,7 +264,11 @@ impl CatalogFs {
             blocks: 0,
             atime: time,
             mtime: time,
-            ctime: time,
+            // Source mtime stays intact. Virtual ctime identifies this metadata
+            // snapshot so a reopened/redacted mount cannot reuse old previews.
+            ctime: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(self.catalog.redacted.unwrap_or(self.catalog.captured))
+                + Duration::from_nanos(self.catalog.redaction_generation),
             crtime: time,
             kind,
             perm: if kind == FileType::Directory {
@@ -516,11 +533,19 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
     if uuid::Uuid::parse_str(id).is_err() {
         return Err("Invalid catalog identifier".into());
     }
-    let db = Store::existing(&state.join("catalogs").join(format!("{id}.sqlite")), true)?;
+    let lease = redaction::Lease::acquire(std::sync::Arc::new(Root::open(state)?), id, false)?
+        .ok_or("Catalog cleanup is running; try mounting again when it finishes")?;
+    let registry = Store::existing(&state.join("drives.sqlite"), true)?;
+    let registered: Catalog = registry.get("catalog", id)?.ok_or("Unknown catalog")?;
+    if registered.pending_redactions != 0 {
+        return Err("Catalog cleanup is pending; unmount its existing view and wait for cleanup before mounting again".into());
+    }
+    let db = Store::existing(&lease.path, true)?;
     let catalog: Catalog = db.get("catalog", id)?.ok_or("Catalog does not exist")?;
     let root = Root::open(mount)?;
     fuser::mount2(
         CatalogFs {
+            _lease: lease,
             db,
             state: state.into(),
             catalog,
@@ -537,6 +562,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod redaction_tests;
     use super::*;
     struct Fixture {
         db: Store,
@@ -623,6 +649,13 @@ mod tests {
     }
     fn filesystem(state: &Path, catalog: Catalog) -> CatalogFs {
         CatalogFs {
+            _lease: redaction::Lease::acquire(
+                std::sync::Arc::new(Root::open(state).unwrap()),
+                &catalog.id,
+                false,
+            )
+            .unwrap()
+            .unwrap(),
             db: Store::open(
                 &state
                     .join("catalogs")

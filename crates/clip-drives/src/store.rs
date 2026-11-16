@@ -80,6 +80,41 @@ impl Store {
         )?;
         Ok(())
     }
+    /// Visits a fixed rowid interval in bounded pages inside the caller's transaction.
+    pub fn visit<T: DeserializeOwned>(
+        &self,
+        kind: &str,
+        mut visit: impl FnMut(T) -> Result<()>,
+    ) -> Result<()> {
+        if self.0.is_autocommit() {
+            return Err("Entity visits require a retained transaction".into());
+        }
+        let through: Option<i64> = self.0.query_row(
+            "SELECT max(rowid) FROM entities WHERE kind=?1",
+            [kind],
+            |row| row.get(0),
+        )?;
+        let Some(through) = through else {
+            return Ok(());
+        };
+        let mut after = 0_i64;
+        loop {
+            let page = {
+                let mut statement = self.0.prepare("SELECT rowid,json FROM entities WHERE kind=?1 AND rowid>?2 AND rowid<=?3 ORDER BY rowid LIMIT 1000")?;
+                let rows = statement.query_map(rusqlite::params![kind, after, through], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let Some((last, _)) = page.last() else {
+                return Ok(());
+            };
+            after = *last;
+            for (_, json) in page {
+                visit(serde_json::from_str(&json)?)?;
+            }
+        }
+    }
     pub fn clear_scan(&self, scan: &str) -> Result<()> {
         self.0
             .execute("DELETE FROM entries WHERE scan=?1", [scan])?;

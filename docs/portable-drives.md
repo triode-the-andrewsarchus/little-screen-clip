@@ -135,6 +135,26 @@ excluded from the saved catalog. Coverage labels do not change file identity or
 authorize content access. Catalog directory inventories do not probe file payloads
 to classify their formats.
 
+Excluding catalog metadata also queues removal of the saved descendant records
+from existing catalogs for that drive. Each mounted view retains its immutable
+snapshot until unmounted; close open files if unmounting reports that the view is
+busy. Cleanup survives daemon restarts and does not require the original medium.
+Repeated pending exclusions coalesce. Existing exclusions from older versions are
+enrolled once during startup.
+
+The catalog keeps its original capture date, source modification dates and original
+coverage warnings. Metadata removal adds a separate redaction date and a virtual
+filesystem revision, so cached previews cannot stand in for the changed snapshot.
+Re-enabling catalog admission does not recreate deleted metadata; capture a new
+catalog to include it again. Backup payloads/manifests and enrolled synchronization
+baselines remain independent of this optional catalog cleanup.
+
+Cleanup compacts the local catalog database on the bounded bulk worker after its
+readers retire. Compaction can require temporary free disk space; failed cleanup
+retains its intent for retry. SQLite can change implicit rowids during compaction,
+which is why an existing mounted view keeps its reader lease until unmounted.
+[SQLite VACUUM documentation](https://www.sqlite.org/lang_vacuum.html)
+
 The focused private-desktop check covers this distinction and the wrapped
 navigation error without repeating RAM population or backup setup:
 
@@ -152,7 +172,7 @@ and retires cached Shelf summaries, photo similarity state and audio map discove
 Accepted saves/sends and collected items remain owned. This refresh does not yet cover
 every search/answer/image-order cache.
 
-Catalogs, RAM mirrors, and backup destinations do not automatically enroll in content search. The default catalog budget is 250,000 entries, 256 MiB, depth 64, and ten minutes. The database byte limit is enforced independently of the entry limit (minimum 128 KiB). A budget limit or read failure is disclosed as partial coverage; excluded directories are not represented as known-empty folders. Existing catalogs remain dated versions when policy changes.
+Catalogs, RAM mirrors, and backup destinations do not automatically enroll in content search. The default catalog budget is 250,000 entries, 256 MiB, depth 64, and ten minutes. The database byte limit is enforced independently of the entry limit (minimum 128 KiB). A budget limit or read failure is disclosed as partial coverage; excluded directories are not represented as known-empty folders. Explicit metadata redaction preserves the catalog's capture date and discloses the later change.
 
 Admitted backup destinations remain registered locally even when they are used only
 once or a backup fails. Their index exclusion is published before collection starts,

@@ -42,6 +42,7 @@ impl Owner {
     }
     pub(super) fn start_background(&mut self, mut envelope: Envelope) {
         if self.background.is_some()
+            || self.catalog_cleanup.busy()
             || self
                 .partition
                 .as_ref()

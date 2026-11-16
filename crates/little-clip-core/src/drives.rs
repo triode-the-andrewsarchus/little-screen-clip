@@ -415,6 +415,20 @@ pub struct Catalog {
     pub entries: u64,
     pub complete: bool,
     pub coverage: String,
+    /// Most recent explicit metadata redaction; the original capture date is retained.
+    #[serde(default)]
+    pub redacted: Option<u64>,
+    /// Monotonic metadata revision used by the virtual filesystem, including same-second edits.
+    #[serde(default)]
+    pub redaction_generation: u64,
+    /// Durable exclusion requests waiting for readers or metadata maintenance.
+    #[serde(default)]
+    pub pending_redactions: u64,
+    #[serde(default)]
+    pub redaction_error: Option<String>,
+    /// An explicit whole-drive exclusion removed the saved root's descendants.
+    #[serde(default)]
+    pub root_excluded: bool,
     #[serde(with = "crate::path_serde::optional")]
     pub mount: Option<PathBuf>,
 }
@@ -438,6 +452,20 @@ pub fn valid_relative(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_catalog_records_have_no_implied_redaction_or_pending_work() {
+        let catalog: Catalog = serde_json::from_value(serde_json::json!({
+            "id":"saved", "drive":"portable", "evidence":"observed", "label":"Card",
+            "captured":123, "entries":9, "complete":true, "coverage":"Complete", "mount":null
+        }))
+        .unwrap();
+        assert_eq!(catalog.captured, 123);
+        assert_eq!(catalog.redacted, None);
+        assert_eq!(catalog.redaction_generation, 0);
+        assert_eq!(catalog.pending_redactions, 0);
+        assert_eq!(catalog.redaction_error, None);
+        assert!(!catalog.root_excluded);
+    }
     #[test]
     fn drive_defaults_remain_opt_in_and_relative_paths_cannot_escape() {
         let defaults = DriveConfig::default();
