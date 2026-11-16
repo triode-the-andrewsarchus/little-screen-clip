@@ -8,83 +8,6 @@ pub(super) struct Save {
     pub target: Arc<Root>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::MetadataExt;
-
-    #[test]
-    fn cancelled_export_retains_completed_files_and_a_retry_preserves_directory_metadata() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = Arc::new(Root::create(&temp.path().join("ram")).unwrap());
-        let target = Arc::new(Root::create(&temp.path().join("saved")).unwrap());
-        fs::create_dir(source.path.join("folder")).unwrap();
-        fs::write(source.path.join("folder/a"), b"keep completed output").unwrap();
-        fs::write(source.path.join("folder/b"), b"also keep this").unwrap();
-        fs::set_permissions(
-            source.path.join("folder"),
-            fs::Permissions::from_mode(0o750),
-        )
-        .unwrap();
-        let session = RamSession {
-            id: "export-fixture".into(),
-            drive: "offline".into(),
-            identity: kernel_interface::MountIdentity::directory(&source.path).unwrap(),
-            path: source.path.clone(),
-            ready: false,
-            connected: false,
-            status: "Media is offline".into(),
-            backing: None,
-            last_saved: None,
-            save_status: None,
-        };
-        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
-        let save = Save {
-            session,
-            source,
-            target,
-        };
-        let cancel = AtomicBool::new(false);
-        let result = save.run(&db, &cancel, &mut |_, _| {
-            if save.target.path.join("folder/a").is_file() {
-                cancel.store(true, Ordering::Release);
-            }
-        });
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Completed files are retained")
-        );
-        assert_eq!(
-            fs::read(save.target.path.join("folder/a")).unwrap(),
-            b"keep completed output"
-        );
-        // A fresh destination follows the same retained-root path as a new user request.
-        let retry = Save {
-            target: Arc::new(Root::create(&temp.path().join("retry")).unwrap()),
-            ..save
-        };
-        cancel.store(false, Ordering::Release);
-        assert!(
-            retry
-                .run(&db, &cancel, &mut |_, _| {})
-                .unwrap()
-                .starts_with("Partial RAM copy saved")
-        );
-        assert_eq!(
-            fs::read(retry.target.path.join("folder/b")).unwrap(),
-            b"also keep this"
-        );
-        let original = fs::metadata(retry.source.path.join("folder")).unwrap();
-        let copied = fs::metadata(retry.target.path.join("folder")).unwrap();
-        assert_eq!(copied.mode(), original.mode());
-        assert_eq!(
-            (copied.mtime(), copied.mtime_nsec()),
-            (original.mtime(), original.mtime_nsec())
-        );
-    }
-}
 impl Save {
     pub fn run(
         &self,
@@ -196,5 +119,83 @@ impl Owner {
             self.db.put("ram", &session.id, &session)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn cancelled_export_retains_completed_files_and_a_retry_preserves_directory_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = Arc::new(Root::create(&temp.path().join("ram")).unwrap());
+        let target = Arc::new(Root::create(&temp.path().join("saved")).unwrap());
+        fs::create_dir(source.path.join("folder")).unwrap();
+        fs::write(source.path.join("folder/a"), b"keep completed output").unwrap();
+        fs::write(source.path.join("folder/b"), b"also keep this").unwrap();
+        fs::set_permissions(
+            source.path.join("folder"),
+            fs::Permissions::from_mode(0o750),
+        )
+        .unwrap();
+        let session = RamSession {
+            id: "export-fixture".into(),
+            drive: "offline".into(),
+            identity: kernel_interface::MountIdentity::directory(&source.path).unwrap(),
+            path: source.path.clone(),
+            ready: false,
+            connected: false,
+            status: "Media is offline".into(),
+            backing: None,
+            last_saved: None,
+            save_status: None,
+        };
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let save = Save {
+            session,
+            source,
+            target,
+        };
+        let cancel = AtomicBool::new(false);
+        let result = save.run(&db, &cancel, &mut |_, _| {
+            if save.target.path.join("folder/a").is_file() {
+                cancel.store(true, Ordering::Release);
+            }
+        });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Completed files are retained")
+        );
+        assert_eq!(
+            fs::read(save.target.path.join("folder/a")).unwrap(),
+            b"keep completed output"
+        );
+        // A fresh destination follows the same retained-root path as a new user request.
+        let retry = Save {
+            target: Arc::new(Root::create(&temp.path().join("retry")).unwrap()),
+            ..save
+        };
+        cancel.store(false, Ordering::Release);
+        assert!(
+            retry
+                .run(&db, &cancel, &mut |_, _| {})
+                .unwrap()
+                .starts_with("Partial RAM copy saved")
+        );
+        assert_eq!(
+            fs::read(retry.target.path.join("folder/b")).unwrap(),
+            b"also keep this"
+        );
+        let original = fs::metadata(retry.source.path.join("folder")).unwrap();
+        let copied = fs::metadata(retry.target.path.join("folder")).unwrap();
+        assert_eq!(copied.mode(), original.mode());
+        assert_eq!(
+            (copied.mtime(), copied.mtime_nsec()),
+            (original.mtime(), original.mtime_nsec())
+        );
     }
 }
