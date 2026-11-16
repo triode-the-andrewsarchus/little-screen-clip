@@ -27,6 +27,8 @@ pub(crate) struct Entry {
     pub inode: u64,
     pub hash: Option<String>,
     #[serde(default)]
+    pub changed: Option<(i64, i64)>,
+    #[serde(default)]
     pub warning: Option<String>,
     #[serde(with = "little_clip_core::path_serde::optional")]
     pub link: Option<PathBuf>,
@@ -39,6 +41,7 @@ pub(crate) struct Limits {
     pub timeout: Duration,
     pub hashes: bool,
     pub exclusions: Vec<PathBuf>,
+    pub reuse_scan: Option<String>,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -49,6 +52,7 @@ impl Default for Limits {
             timeout: Duration::MAX,
             hashes: true,
             exclusions: vec![],
+            reuse_scan: None,
         }
     }
 }
@@ -101,11 +105,22 @@ pub(crate) fn observe(
         device: metadata.dev(),
         inode: metadata.ino(),
         hash: None,
+        changed: Some((metadata.ctime(), metadata.ctime_nsec())),
         warning: None,
         link: None,
     };
     if metadata.is_file() && hashes {
         entry.hash = Some(root.digest(relative, cancel)?);
+        let after = root.metadata(relative)?.ok_or("Hashed file disappeared")?;
+        if after.dev() != entry.device
+            || after.ino() != entry.inode
+            || after.len() != entry.size
+            || after.mtime() != entry.modified
+            || after.mtime_nsec() != entry.nanos
+            || Some((after.ctime(), after.ctime_nsec())) != entry.changed
+        {
+            return Err("File changed while recording its fingerprint".into());
+        }
     }
     if metadata.file_type().is_symlink() {
         let (_parent, path) = root.parent(relative, false)?;
@@ -124,6 +139,7 @@ fn unavailable(path: PathBuf, error: String) -> Entry {
         device: 0,
         inode: 0,
         hash: None,
+        changed: None,
         warning: Some(error),
         link: None,
     }
@@ -147,7 +163,7 @@ pub(crate) fn scan(
     let mut bytes = 0_u64;
     let mut complete = true;
     let mut messages = Vec::new();
-    let mut transaction = db.0.unchecked_transaction()?;
+    let mut pending = Vec::with_capacity(128);
     while let Some(frame) = stack.last_mut() {
         cancelled(cancel)?;
         let Some(child) = frame.reader.next() else {
@@ -170,7 +186,12 @@ pub(crate) fn scan(
         };
         let relative = frame.relative.join(child.file_name());
         let excluded = limits.exclusions.iter().any(|p| relative.starts_with(p));
-        let mut entry = match observe(root, &relative, limits.hashes && !excluded, cancel) {
+        let mut entry = match observe(
+            root,
+            &relative,
+            limits.hashes && !excluded && limits.reuse_scan.is_none(),
+            cancel,
+        ) {
             Ok(Some(entry)) => entry,
             Ok(None) => {
                 complete = false;
@@ -185,6 +206,31 @@ pub(crate) fn scan(
                 unavailable(relative.clone(), e.to_string())
             }
         };
+        if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
+            let cached = limits
+                .reuse_scan
+                .as_ref()
+                .map(|id| self::entry(db, id, &relative))
+                .transpose()?
+                .flatten();
+            if let Some(cached) = cached.filter(|old| {
+                old.kind == entry.kind
+                    && old.device == entry.device
+                    && old.inode == entry.inode
+                    && old.size == entry.size
+                    && old.modified == entry.modified
+                    && old.nanos == entry.nanos
+                    && old.changed.is_some()
+                    && old.changed == entry.changed
+                    && old.mode == entry.mode
+            }) {
+                entry.hash = cached.hash;
+            }
+            if entry.hash.is_none() {
+                entry = observe(root, &relative, true, cancel)?
+                    .ok_or("File disappeared during collection")?;
+            }
+        }
         if excluded {
             entry.kind = "excluded".into();
         }
@@ -215,21 +261,31 @@ pub(crate) fn scan(
             messages.push("catalog byte budget reached".into());
             break;
         }
-        if let Some(warning) = &entry.warning {
-            if messages.len() < 8 {
-                messages.push(format!("{}: {warning}", relative.display()));
-            }
+        if let Some(warning) = &entry.warning
+            && messages.len() < 8
+        {
+            messages.push(format!("{}: {warning}", relative.display()));
         }
-        put(db, id, &entry)?;
+        pending.push(entry);
         count += 1;
-        if count % 128 == 0 {
-            transaction.commit()?;
+        if pending.len() == 128 {
+            if !flush(db, id, &pending)? {
+                complete = false;
+                messages.push("catalog database byte limit reached".into());
+                pending.clear();
+                count = stored_count(db, id)?;
+                break;
+            }
+            pending.clear();
             root.validate()?;
             progress(count, bytes);
-            transaction = db.0.unchecked_transaction()?;
         }
     }
-    transaction.commit()?;
+    if !pending.is_empty() && !flush(db, id, &pending)? {
+        complete = false;
+        messages.push("catalog database byte limit reached".into());
+        count = stored_count(db, id)?;
+    }
     root.validate()?;
     progress(count, bytes);
     let message = if !complete {
@@ -251,6 +307,29 @@ pub(crate) fn scan(
         complete,
         message,
     })
+}
+fn flush(db: &Store, id: &str, entries: &[Entry]) -> Result<bool> {
+    let transaction = db.0.unchecked_transaction()?;
+    for entry in entries {
+        match put(db, id, entry) {
+            Ok(()) => (),
+            Err(crate::Error::Sql(rusqlite::Error::SqliteFailure(error, _)))
+                if error.code == rusqlite::ErrorCode::DiskFull =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    transaction.commit()?;
+    Ok(true)
+}
+fn stored_count(db: &Store, id: &str) -> Result<u64> {
+    Ok(db
+        .0
+        .query_row("SELECT count(*) FROM entries WHERE scan=?1", [id], |r| {
+            r.get(0)
+        })?)
 }
 pub(crate) fn entries(db: &Store, scan: &str, after: &[u8], limit: usize) -> Result<Vec<Entry>> {
     let mut statement =

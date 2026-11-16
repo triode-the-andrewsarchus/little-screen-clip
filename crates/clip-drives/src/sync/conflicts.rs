@@ -112,58 +112,81 @@ fn choose_variant(
     }
     Err("Too many occupied conflict names; existing files retained".into())
 }
-fn preserve(
-    db: &Store,
-    from: &Root,
-    to: &Root,
-    entry: &Entry,
-    name: &Path,
-    tree: Option<&PreservedTree>,
-    owner: &str,
-    cancel: &AtomicBool,
-) -> Result<()> {
-    if let Some(tree) = tree {
-        let recorded = db.get::<crate::StorageIdentity>("conflict-owner", owner)?;
-        if to.metadata(name)?.is_none() {
-            to.ensure_directory(name)?;
-        }
-        let held = to.directory(name, false)?;
-        let target = Root::open(&anchor(&held))?;
-        let identity = target.storage_identity()?;
-        if recorded.as_ref().is_some_and(|key| *key != identity) {
-            return Err("Preserved conflict directory was replaced".into());
-        }
-        if recorded.is_none() {
-            db.put("conflict-owner", owner, &identity)?;
-        }
-        for child in scan::Cursor::new(db, &tree.scan) {
-            let child = child?;
-            if let Some(existing) = scan::observe(&target, &child.path, true, cancel)? {
-                if signature(&existing)? != signature(&child)? {
-                    return Err("A preserved variant was edited; both originals retained".into());
+impl Reconcile<'_> {
+    fn preserve(
+        &self,
+        from: &Root,
+        to: &Root,
+        entry: &Entry,
+        name: &Path,
+        tree: Option<&PreservedTree>,
+        owner: &str,
+    ) -> Result<()> {
+        let db = self.db;
+        let cancel = self.cancel;
+        if let Some(tree) = tree {
+            let recorded = db.get::<crate::StorageIdentity>("conflict-owner", owner)?;
+            if to.metadata(name)?.is_none() {
+                to.ensure_directory(name)?;
+            }
+            let held = to.directory(name, false)?;
+            let target = Root::open(&anchor(&held))?;
+            let identity = target.storage_identity()?;
+            if recorded.as_ref().is_some_and(|key| *key != identity) {
+                return Err("Preserved conflict directory was replaced".into());
+            }
+            if recorded.is_none() {
+                db.put("conflict-owner", owner, &identity)?;
+            }
+            for child in scan::Cursor::new(db, &tree.scan) {
+                let child = child?;
+                if let Some(existing) = scan::observe(&target, &child.path, true, cancel)? {
+                    if signature(&existing)? != signature(&child)? {
+                        return Err(
+                            "A preserved variant was edited; both originals retained".into()
+                        );
+                    }
+                } else {
+                    install(
+                        &tree.root,
+                        &target,
+                        &child,
+                        &child.path,
+                        None,
+                        cancel,
+                        false,
+                    )?;
                 }
-            } else {
-                install(
-                    &tree.root,
-                    &target,
-                    &child,
-                    &child.path,
-                    None,
-                    cancel,
-                    false,
-                )?;
+            }
+        } else if let Some(existing) = scan::observe(to, name, true, cancel)? {
+            if signature(&existing)? != signature(entry)? {
+                return Err("A preserved variant was edited; both originals retained".into());
+            }
+        } else {
+            install(from, to, entry, name, None, cancel, false)?;
+        }
+        Ok(())
+    }
+    pub(super) fn resolve_converged(&self, path: &Path) -> Result<()> {
+        let mut statement = self
+            .db
+            .0
+            .prepare("SELECT id FROM conflict_paths WHERE pair=?1 AND path=?2")?;
+        let ids = statement.query_map(params![self.pair.id, path.as_os_str().as_bytes()], |r| {
+            r.get::<_, String>(0)
+        })?;
+        for id in ids {
+            let id = id?;
+            if let Some(mut conflict) = self.db.get::<DriveConflict>("conflict", &id)?
+                && conflict.complete
+                && !conflict.resolved
+            {
+                conflict.resolved = true;
+                self.db.put("conflict", &id, &conflict)?;
             }
         }
-    } else if let Some(existing) = scan::observe(to, name, true, cancel)? {
-        if signature(&existing)? != signature(entry)? {
-            return Err("A preserved variant was edited; both originals retained".into());
-        }
-    } else {
-        install(from, to, entry, name, None, cancel, false)?;
+        Ok(())
     }
-    Ok(())
-}
-impl Reconcile<'_> {
     pub(super) fn preserve_conflict(&mut self, a: &Entry, b: &Entry) -> Result<()> {
         let (ah, at) = content_key(self.db, self.portable, a, self.cancel)?;
         let (bh, bt) = content_key(self.db, self.local, b, self.cancel)?;
@@ -208,29 +231,25 @@ impl Reconcile<'_> {
         };
         if !conflict.complete {
             for (root, side) in [(self.portable, "portable"), (self.local, "local")] {
-                preserve(
-                    self.db,
+                self.preserve(
                     self.portable,
                     root,
                     a,
                     &conflict.portable,
                     at.as_ref(),
                     &format!("{id}:portable:{side}"),
-                    self.cancel,
                 )?;
-                preserve(
-                    self.db,
+                self.preserve(
                     self.local,
                     root,
                     b,
                     &conflict.local,
                     bt.as_ref(),
                     &format!("{id}:local:{side}"),
-                    self.cancel,
                 )?;
             }
             conflict.complete = true;
-            conflict.message="Both sides changed. Complete portable/local variants were preserved on both sides. Edit the original to resolve, then sync.".into();
+            conflict.message="Both sides changed. Complete portable/local variants were preserved on both sides. Choose the same original on both sides to resolve; preserved variants remain available.".into();
             self.db.put("conflict", &id, &conflict)?;
         }
         self.db.0.execute(
@@ -282,10 +301,6 @@ impl Reconcile<'_> {
             resolved: false,
         };
         self.db.put("conflict", &id, &conflict)?;
-        self.db.0.execute(
-            "INSERT OR IGNORE INTO conflict_paths VALUES(?1,?2,?3)",
-            params![self.pair.id, path.as_os_str().as_bytes(), id],
-        )?;
         self.report.conflicts += 1;
         Ok(())
     }

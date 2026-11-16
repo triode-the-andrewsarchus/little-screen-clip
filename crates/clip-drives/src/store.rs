@@ -26,6 +26,25 @@ impl Store {
         }
         Ok(Self(db))
     }
+    /// Connects to initialized state without acquiring a schema write lock.
+    pub fn existing(path: &Path, read_only: bool) -> Result<Self> {
+        let flags = if read_only {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        } else {
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        };
+        let db = Connection::open_with_flags(path, flags)?;
+        db.busy_timeout(Duration::from_secs(2))?;
+        if !read_only {
+            db.execute_batch("PRAGMA synchronous=FULL")?;
+        }
+        let version: u32 =
+            db.query_row("SELECT value FROM version WHERE id=1", [], |r| r.get(0))?;
+        if version != 1 {
+            return Err("Unsupported drive database version".into());
+        }
+        Ok(Self(db))
+    }
     pub fn put<T: Serialize>(&self, kind: &str, id: &str, value: &T) -> Result<()> {
         self.0.execute("INSERT INTO entities VALUES(?1,?2,?3) ON CONFLICT(kind,id) DO UPDATE SET json=excluded.json",params![kind,id,serde_json::to_string(value)?])?;
         Ok(())

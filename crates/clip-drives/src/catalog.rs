@@ -62,10 +62,20 @@ pub(crate) fn capture(
         timeout: Duration::from_secs(config.catalog_timeout_seconds),
         hashes: false,
         exclusions,
+        reuse_scan: None,
     };
     let cat_db = Store::open(&path)?;
+    if config.catalog_max_bytes < 128 * 1024 {
+        return Err("Catalog byte limit must be at least 128 KiB".into());
+    }
+    cat_db.0.execute_batch("PRAGMA journal_mode=DELETE")?;
+    let page_size: u64 = cat_db.0.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    let pages = config.catalog_max_bytes / page_size;
+    cat_db
+        .0
+        .pragma_update(None, "max_page_count", pages.saturating_sub(16))?;
     let coverage = scan::scan(&cat_db, &root, "catalog", &limits, cancel, progress)?;
-    cat_db.0.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    cat_db.0.pragma_update(None, "max_page_count", pages)?;
     let catalog = Catalog {
         id: id.clone(),
         drive: drive.id.clone(),
@@ -134,16 +144,15 @@ impl CatalogFs {
         }
     }
     fn resolve(&self, entry: &Entry) -> Result<OpenFile> {
-        let state_db = Store::open(&self.state.join("drives.sqlite"))?;
+        let state_db = Store::existing(&self.state.join("drives.sqlite"), true)?;
         let mut providers = Vec::new();
         for drive in discovery::discover().unwrap_or_default() {
             if drive.id == self.catalog.drive
                 && drive.evidence == self.catalog.evidence
                 && !drive.ambiguous
+                && let Some(mount) = drive.mount
             {
-                if let Some(mount) = drive.mount {
-                    providers.push(mount);
-                }
+                providers.push(mount);
             }
         }
         let mut offset = 0;
@@ -182,11 +191,11 @@ impl CatalogFs {
                 stale = true;
                 continue;
             }
-            if let Some(hash) = &entry.hash {
-                if root.digest(&entry.path, &AtomicBool::new(false))? != *hash {
-                    stale = true;
-                    continue;
-                }
+            if let Some(hash) = &entry.hash
+                && root.digest(&entry.path, &AtomicBool::new(false))? != *hash
+            {
+                stale = true;
+                continue;
             }
             let source = FileSource::capture_file(&file)?;
             return Ok(OpenFile { file, source, root });
@@ -244,6 +253,7 @@ impl Filesystem for CatalogFs {
             self.lookup_path(&path)
         })();
         match result {
+            Ok(Some((_, entry))) if entry.kind == "unavailable" => reply.error(libc::EIO),
             Ok(Some((ino, entry))) => {
                 reply.entry(&Duration::from_secs(1), &self.attr(ino, Some(&entry)), 0)
             }
@@ -257,6 +267,7 @@ impl Filesystem for CatalogFs {
             return;
         }
         match self.row(ino) {
+            Ok(Some(e)) if e.kind == "unavailable" => reply.error(libc::EIO),
             Ok(Some(e)) => reply.attr(&Duration::from_secs(1), &self.attr(ino, Some(&e))),
             _ => reply.error(libc::ENOENT),
         }
@@ -418,7 +429,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
     if uuid::Uuid::parse_str(id).is_err() {
         return Err("Invalid catalog identifier".into());
     }
-    let db = Store::open(&state.join("catalogs").join(format!("{id}.sqlite")))?;
+    let db = Store::existing(&state.join("catalogs").join(format!("{id}.sqlite")), true)?;
     let catalog: Catalog = db.get("catalog", id)?.ok_or("Catalog does not exist")?;
     let root = Root::open(mount)?;
     fuser::mount2(
@@ -496,6 +507,57 @@ mod tests {
             opened: HashMap::new(),
             next_handle: 0,
         }
+    }
+    #[test]
+    fn catalog_database_cap_preserves_committed_partial_coverage() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        for index in 0..2000 {
+            File::create(source.join(format!("file-{index:06}"))).unwrap();
+        }
+        let drive = crate::Drive {
+            id: "part:cap".into(),
+            label: "cap".into(),
+            device: "/dev/not-real".into(),
+            mount: Some(source),
+            part_uuid: Some("cap".into()),
+            filesystem_uuid: None,
+            filesystem: "vfat".into(),
+            capacity: 1024 * 1024,
+            drive_capacity: 1024 * 1024,
+            removable: true,
+            read_only: false,
+            evidence: "fixture".into(),
+            ambiguous: false,
+        };
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let config = DriveConfig {
+            catalog_max_bytes: 128 * 1024,
+            ..Default::default()
+        };
+        let catalog = capture(
+            &db,
+            temp.path(),
+            &drive,
+            &config,
+            &AtomicBool::new(false),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(!catalog.complete);
+        let path = temp
+            .path()
+            .join("catalogs")
+            .join(format!("{}.sqlite", catalog.id));
+        assert!(std::fs::metadata(&path).unwrap().len() <= config.catalog_max_bytes);
+        let stored = Store::existing(&path, true).unwrap();
+        let count: u64 = stored
+            .0
+            .query_row("SELECT count(*) FROM entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(catalog.entries, count);
+        assert!(count < 2000);
     }
     #[test]
     fn metadata_listing_works_offline_and_matching_backup_supplies_content() {

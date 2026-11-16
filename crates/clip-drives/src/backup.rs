@@ -122,9 +122,14 @@ pub(crate) fn files(
         parent.ensure_directory(Path::new(&temporary))?;
     }
     let target = Root::open(&parent.path.join(&temporary))?;
+    // Hashing a large source must not hold the coordinator's SQLite writer lock.
+    let scratch = tempfile::Builder::new()
+        .prefix(".manifest-")
+        .tempdir_in(&parent.path)?;
+    let manifest = Store::open(&scratch.path().join("scan.sqlite"))?;
     let scan_id = format!("backup:{id}");
     let coverage = scan::scan(
-        db,
+        &manifest,
         &source,
         &scan_id,
         &Limits::default(),
@@ -138,13 +143,13 @@ pub(crate) fn files(
     let mut count = 0;
     let mut written = 0;
     loop {
-        let batch = scan::entries(db, &scan_id, &after, 128)?;
+        let batch = scan::entries(&manifest, &scan_id, &after, 128)?;
         if batch.is_empty() {
             break;
         }
         for entry in batch {
             cancelled(cancel)?;
-            prepare_entry(db, &target, &entry, cancel)?;
+            prepare_entry(&manifest, &target, &entry, cancel)?;
             let existing = target.metadata(&entry.path)?;
             if entry.kind == "directory" {
                 target.ensure_directory(&entry.path)?;
@@ -175,11 +180,11 @@ pub(crate) fn files(
     }
     // Remove only entries absent from the complete source manifest in this private version.
     if prior.is_some() && incremental {
-        remove_obsolete(db, &scan_id, &target, cancel)?;
+        remove_obsolete(&manifest, &scan_id, &target, cancel)?;
     }
     source.validate()?;
     target.validate()?;
-    finish_directories(db, &scan_id, &target, cancel)?;
+    finish_directories(&manifest, &scan_id, &target, cancel)?;
     if incremental {
         // Property arguments follow the path, unlike subvolume commands.
         let (request, fd) = CommandRequest::new("btrfs")
@@ -217,7 +222,6 @@ pub(crate) fn files(
         identity: Some(Root::open(&parent.path.join(&completed))?.storage_identity()?),
     };
     db.put("backup", &id, &backup)?;
-    db.clear_scan(&scan_id)?;
     Ok(backup)
 }
 fn snapshot_entry(root: &Root, path: &Path, cancel: &AtomicBool) -> Result<scan::Entry> {
@@ -242,6 +246,7 @@ fn snapshot_entry(root: &Root, path: &Path, cancel: &AtomicBool) -> Result<scan:
         device: m.dev(),
         inode: m.ino(),
         warning: None,
+        changed: Some((m.ctime(), m.ctime_nsec())),
         hash: if m.is_file() {
             Some(root.digest(path, cancel)?)
         } else {
@@ -364,8 +369,15 @@ pub(crate) fn time(seconds: i64, nanos: i64) -> Option<std::time::SystemTime> {
             .checked_add(Duration::from_nanos(nanos as u64))
     }
 }
+fn system_connection() -> Result<zbus::blocking::Connection> {
+    zbus::blocking::connection::Builder::system()
+        .map_err(|e| e.to_string())?
+        .method_timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string().into())
+}
 fn udisks_path(drive: &Drive) -> Result<String> {
-    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let connection = system_connection()?;
     let manager = zbus::blocking::Proxy::new(
         &connection,
         "org.freedesktop.UDisks2",
@@ -406,7 +418,7 @@ pub(crate) fn image(
             "Unmount the partition before imaging it; flush pending RAM/sync changes first".into(),
         );
     }
-    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let connection = system_connection()?;
     let path = udisks_path(drive)?;
     let proxy = zbus::blocking::Proxy::new(
         &connection,
@@ -511,11 +523,9 @@ fn copy_image(
         input.read_exact_at(&mut buffer[..n], offset)?;
         let equal =
             delta && output.read_exact_at(&mut old[..n], offset).is_ok() && old[..n] == buffer[..n];
-        if !equal {
-            if buffer[..n].iter().any(|b| *b != 0) || delta {
-                output.write_all_at(&buffer[..n], offset)?;
-                written += n as u64;
-            }
+        if !equal && (buffer[..n].iter().any(|b| *b != 0) || delta) {
+            output.write_all_at(&buffer[..n], offset)?;
+            written += n as u64;
         }
         offset += n as u64;
         progress(0, offset);
@@ -696,7 +706,7 @@ pub(crate) fn mount_image(db: &Store, id: &str) -> Result<String> {
     let file = kernel_interface::open_content(&backup.path, false)?;
     let source = little_clip_core::file_source::FileSource::capture_file(&file)?;
     verify_image(&backup, &file)?;
-    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let connection = system_connection()?;
     let manager = zbus::blocking::Proxy::new(
         &connection,
         "org.freedesktop.UDisks2",
@@ -750,7 +760,7 @@ pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
         .loop_object
         .clone()
         .ok_or("Image has no managed loop mapping")?;
-    let connection = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+    let connection = system_connection()?;
     let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
     if backup.mount.is_some() {
         let filesystem = zbus::blocking::Proxy::new(

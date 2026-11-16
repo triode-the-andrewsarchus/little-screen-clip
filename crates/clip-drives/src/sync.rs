@@ -125,16 +125,12 @@ fn delete(root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
                 .ok_or("Missing deletion fingerprint")?,
             cancel,
         ),
-        "symlink" => {
-            cancelled(cancel)?;
-            let (parent, path) = root.parent(&entry.path, false)?;
-            if fs::read_link(&path)? != *entry.link.as_ref().ok_or("Missing link")? {
-                return Err("Symlink changed".into());
-            }
-            fs::remove_file(path)?;
-            std::fs::File::open(anchor(&parent))?.sync_all()?;
-            Ok(())
-        }
+        "symlink" => root.delete_symlink(
+            &entry.path,
+            entry.link.as_deref().ok_or("Missing link")?,
+            (entry.device, entry.inode),
+            cancel,
+        ),
         _ => Ok(()),
     }
 }
@@ -168,6 +164,7 @@ impl Reconcile<'_> {
             if old != ah {
                 save_baseline(self.db, &self.pair.id, path, ah.as_deref())?;
             }
+            self.resolve_converged(path)?;
             return Ok(());
         }
         let direction = match (&a, &b) {
@@ -229,21 +226,86 @@ impl Reconcile<'_> {
         Ok(())
     }
 }
+/// Reconcile only named file changes while both retained root identities are current.
+/// Directory changes and unknown coverage deliberately take the complete scan path.
+pub(crate) fn changed(
+    db: &Store,
+    pair: &SyncPair,
+    portable: &Root,
+    local: &Root,
+    paths: &std::collections::HashSet<PathBuf>,
+    cancel: &AtomicBool,
+) -> Result<SyncReport> {
+    let mut relative = std::collections::BTreeSet::new();
+    for path in paths {
+        for root in [portable, local] {
+            if let Ok(path) = path.strip_prefix(&root.path) {
+                relative.insert(path.to_owned());
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    for path in relative {
+        if path.as_os_str().is_empty() {
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, true);
+        }
+        let a = scan::observe(portable, &path, true, cancel)?;
+        let b = scan::observe(local, &path, true, cancel)?;
+        if baseline(db, &pair.id, &path)?.as_deref() == Some("directory")
+            || a.as_ref().is_some_and(|e| e.kind == "directory")
+            || b.as_ref().is_some_and(|e| e.kind == "directory")
+        {
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, true);
+        }
+        entries.push((path, a, b));
+    }
+    db.0.execute("DELETE FROM sync_blocked WHERE pair=?1", [&pair.id])?;
+    let mut reconcile = Reconcile {
+        db,
+        pair,
+        portable,
+        local,
+        cancel,
+        report: SyncReport::default(),
+    };
+    for (path, a, b) in entries {
+        reconcile.path(&path, a, b)?;
+    }
+    portable.validate()?;
+    local.validate()?;
+    Ok(reconcile.report)
+}
+#[cfg(test)]
 pub(crate) fn synchronize(
     db: &Store,
     pair: &SyncPair,
     portable: &Root,
     local: &Root,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, u64),
+    progress: impl FnMut(u64, u64),
 ) -> Result<SyncReport> {
+    synchronize_with(db, pair, (portable, local), cancel, progress, false)
+}
+pub(crate) fn synchronize_with(
+    db: &Store,
+    pair: &SyncPair,
+    roots: (&Root, &Root),
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(u64, u64),
+    reuse: bool,
+) -> Result<SyncReport> {
+    let (portable, local) = roots;
     if portable.overlap(local) {
         return Err("Sync roots overlap".into());
     }
-    let a = format!("{}:portable", pair.id);
-    let b = format!("{}:local", pair.id);
+    let a = format!("{}:portable:next", pair.id);
+    let b = format!("{}:local:next", pair.id);
     for (root, id) in [(portable, &a), (local, &b)] {
-        let coverage = scan::scan(db, root, id, &Limits::default(), cancel, &mut progress)?;
+        let limits = Limits {
+            reuse_scan: reuse.then(|| id.strip_suffix(":next").unwrap_or(id).to_owned()),
+            ..Default::default()
+        };
+        let coverage = scan::scan(db, root, id, &limits, cancel, &mut progress)?;
         if !coverage.complete {
             return Err(format!(
                 "Synchronization requires complete coverage: {}",
@@ -288,8 +350,16 @@ pub(crate) fn synchronize(
     reconcile.finish_directories()?;
     portable.validate()?;
     local.validate()?;
-    db.clear_scan(&a)?;
-    db.clear_scan(&b)?;
+    for id in [&a, &b] {
+        let previous = id.strip_suffix(":next").ok_or("Invalid scan generation")?;
+        let transaction = db.0.unchecked_transaction()?;
+        db.clear_scan(previous)?;
+        db.0.execute(
+            "UPDATE entries SET scan=?1 WHERE scan=?2",
+            params![previous, id],
+        )?;
+        transaction.commit()?;
+    }
     Ok(reconcile.report)
 }
 

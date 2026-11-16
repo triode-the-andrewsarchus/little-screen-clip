@@ -31,9 +31,15 @@ pub struct Service {
     tokens: Tokens,
     state: PathBuf,
 }
+mod background;
+mod policy;
+
 struct Owner {
+    background: Option<background::Pending>,
+    backup_jobs: little_clip_core::jobs::BackgroundJobs,
     inventory: Inventory,
     unidentified_ram: HashMap<String, Root>,
+    sync_roots: HashMap<String, (Arc<Root>, Arc<Root>)>,
     db: Store,
     state: PathBuf,
     config: DriveConfig,
@@ -86,6 +92,7 @@ impl Service {
         state: PathBuf,
         inventory: Inventory,
     ) -> Result<Self> {
+        policy::validate_config(&config)?;
         let root = Root::create(&state)?;
         fs::set_permissions(&root.path, fs::Permissions::from_mode(0o700))?;
         let lock = fs::OpenOptions::new()
@@ -114,8 +121,11 @@ impl Service {
         let tokens = Arc::new(Mutex::new(HashMap::new()));
         let (sender, receiver) = mpsc::sync_channel(16);
         let mut owner = Owner {
+            background: None,
+            backup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             inventory,
             unidentified_ram: HashMap::new(),
+            sync_roots: HashMap::new(),
             db,
             state: root.path.clone(),
             config,
@@ -161,7 +171,7 @@ impl Service {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let cancel = Arc::new(AtomicBool::new(false));
-        let db = Store::open(&self.state.join("drives.sqlite"))?;
+        let db = Store::existing(&self.state.join("drives.sqlite"), false)?;
         let operation = DriveOperation {
             id: id.clone(),
             title: title(&request).into(),
@@ -198,7 +208,7 @@ impl Service {
             .lock()
             .map_err(|_| "Drive status unavailable")?
             .clone();
-        let db = Store::open(&self.state.join("drives.sqlite"))?;
+        let db = Store::existing(&self.state.join("drives.sqlite"), true)?;
         status.pairs = db.list("pair", offset, 100)?;
         status.ram = db.list("ram", offset, 100)?;
         status.operations = db.list("operation", offset, 100)?;
@@ -220,10 +230,15 @@ impl Service {
             status.next_offset = Some(offset + 100);
         }
         for session in &mut status.ram {
-            session.connected = status
-                .drives
-                .iter()
-                .any(|d| d.id == session.drive && d.mount.is_some() && !d.ambiguous);
+            let evidence = db
+                .get::<SyncPair>("pair", &session.id)?
+                .map(|pair| pair.evidence);
+            session.connected = status.drives.iter().any(|d| {
+                d.id == session.drive
+                    && d.mount.is_some()
+                    && !d.ambiguous
+                    && evidence.as_ref() == Some(&d.evidence)
+            });
         }
         Ok(status)
     }
@@ -278,12 +293,14 @@ impl Owner {
         }
         Ok(())
     }
-    fn discover(&self) {
+    fn discover(&self) -> bool {
+        let inventory = (self.inventory)();
         let mut status = match self.shared.lock() {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => return false,
         };
-        match (self.inventory)() {
+        let previous = status.drives.clone();
+        match inventory {
             Ok(drives) => {
                 status.drives = drives;
                 status.discovery_error = None;
@@ -296,11 +313,12 @@ impl Owner {
         status.ram_unavailable = ram_reason(&self.config).err().map(|e| e.to_string());
         status.backup_directory = self.config.backup_directory.clone();
         status.config = self.config.clone();
+        previous != status.drives
     }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
         let mut discovered = Instant::now();
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
-        let mut wake = Instant::now();
+
         loop {
             match receiver.recv_timeout(Duration::from_millis(200)) {
                 Ok(envelope) => self.operation(envelope),
@@ -308,18 +326,22 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
             if discovered.elapsed() >= Duration::from_secs(5) {
-                self.discover();
+                if self.discover() {
+                    self.sync_roots.clear();
+                    self.automatic();
+                }
                 let _ = self.publish_policy();
                 discovered = Instant::now();
             }
-            let changed = self.watch.as_mut().is_some_and(Watch::changed);
-            if synchronized.elapsed()
-                >= Duration::from_secs(self.config.sync_interval_seconds.max(1))
-                || (changed && wake.elapsed() >= Duration::from_millis(200))
-            {
+            self.poll_background();
+            let changes = self.watch.as_mut().map(Watch::changes).unwrap_or_default();
+            let periodic = synchronized.elapsed()
+                >= Duration::from_secs(self.config.sync_interval_seconds.max(1));
+            if periodic || changes.full {
                 self.automatic();
                 synchronized = Instant::now();
-                wake = Instant::now();
+            } else if !changes.paths.is_empty() {
+                self.automatic_changed(Some(&changes.paths));
             }
             let retired = self
                 .children
@@ -333,6 +355,12 @@ impl Owner {
                 let _ = self.unmount(&id);
             }
         }
+        // Retain accepted bulk ownership and the singleton lock until actual completion.
+        while let Some(job) = &self.background {
+            job.cancel.store(true, Ordering::Release);
+            self.poll_background();
+            std::thread::sleep(Duration::from_millis(20));
+        }
         // Unmount before retiring helpers; failed/busy mounts retain a recovery record.
         for id in self.children.keys().cloned().collect::<Vec<_>>() {
             let _ = self.unmount(&id);
@@ -343,6 +371,13 @@ impl Owner {
         }
     }
     fn operation(&mut self, envelope: Envelope) {
+        if matches!(
+            envelope.request,
+            DriveRequest::Backup { .. } | DriveRequest::Catalog { .. }
+        ) {
+            self.start_background(envelope);
+            return;
+        }
         let id = &envelope.id;
         let mut op = match self.db.get::<DriveOperation>("operation", id) {
             Ok(Some(op)) => op,
@@ -358,12 +393,12 @@ impl Owner {
                 return;
             }
             last = Instant::now();
-            if let Ok(db) = Store::open(&progress_db) {
-                if let Ok(Some(mut op)) = db.get::<DriveOperation>("operation", &op_id) {
-                    op.files = files;
-                    op.bytes = bytes;
-                    let _ = db.put("operation", &op_id, &op);
-                }
+            if let Ok(db) = Store::existing(&progress_db, false)
+                && let Ok(Some(mut op)) = db.get::<DriveOperation>("operation", &op_id)
+            {
+                op.files = files;
+                op.bytes = bytes;
+                let _ = db.put("operation", &op_id, &op);
             }
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -423,6 +458,7 @@ impl Owner {
         cancelled(cancel)?;
         match request {
             DriveRequest::Eject { drive } => {
+                self.check_busy(&drive)?;
                 let drive = self.drive(&drive)?;
                 for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
                     if pair.drive == drive.id && !pair.paused {
@@ -448,6 +484,9 @@ impl Owner {
             DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
             DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
             DriveRequest::PruneBackups { drive } => {
+                if self.background.is_some() {
+                    return Err("Wait for the active backup or catalog before pruning".into());
+                }
                 let keep = self
                     .config
                     .backup_keep_versions
@@ -458,11 +497,16 @@ impl Owner {
                 if config.backup_directory.is_none() {
                     config.backup_directory = self.config.backup_directory.clone();
                 }
+                policy::validate_config(&config)?;
+                if let Some(path) = &config.backup_directory {
+                    self.validate_backup_directory(&Root::create(path)?)?;
+                }
                 self.config = config;
                 Ok("Drive configuration reloaded".into())
             }
             DriveRequest::BackupDirectory { path } => {
                 let root = Root::create(&path)?;
+                self.validate_backup_directory(&root)?;
                 self.config.backup_directory = Some(root.path);
                 self.db.put("settings", "config", &self.config)?;
                 Ok("Backup directory configured".into())
@@ -471,48 +515,8 @@ impl Owner {
                 let drive = self.drive(&drive)?;
                 self.ram(&drive, cancel, progress)
             }
-            DriveRequest::Backup { drive, kind } => {
-                let destination = self
-                    .config
-                    .backup_directory
-                    .clone()
-                    .ok_or("Choose a DriveBackupDir before starting a backup")?;
-                let mut drive = self.drive(&drive)?;
-                if kind == BackupKind::Image && drive.mount.is_some() {
-                    for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-                        if pair.drive == drive.id {
-                            self.synchronize(&pair.id, cancel, progress)?;
-                        }
-                    }
-                    let output = CommandRequest::new("udisksctl")
-                        .args(["unmount", "--block-device"])
-                        .arg(&drive.device)
-                        .timeout(Duration::from_secs(60))
-                        .own_process_group()
-                        .run()
-                        .map_err(|e| e.to_string())?;
-                    if !output.status.success() {
-                        return Err(format!(
-                            "Cannot unmount partition for imaging: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        )
-                        .into());
-                    }
-                    drive = self.drive(&drive.id)?;
-                }
-                let version = match kind {
-                    BackupKind::Files => {
-                        backup::files(&self.db, &drive, &destination, cancel, progress)?
-                    }
-                    BackupKind::Image => {
-                        backup::image(&self.db, &drive, &destination, cancel, progress)?
-                    }
-                };
-                Ok(format!(
-                    "Backup completed: {} ({} bytes written)",
-                    version.path.display(),
-                    version.bytes_written
-                ))
+            DriveRequest::Backup { .. } | DriveRequest::Catalog { .. } => {
+                Err("Backup and catalog work must use retained background admission".into())
             }
             DriveRequest::Pair {
                 drive,
@@ -537,9 +541,7 @@ impl Owner {
                     .ok_or("Mount the drive before pairing a folder")?;
                 let source = Root::open(&mount.join(&relative))?;
                 let local = Root::create(&local)?;
-                if source.overlap(&local) {
-                    return Err("Sync roots overlap".into());
-                }
+                self.validate_pair_target(&source, &local)?;
                 let id = uuid::Uuid::new_v4().to_string();
                 let pair = SyncPair {
                     local_identity: Some(local.storage_identity()?),
@@ -579,21 +581,6 @@ impl Owner {
                 pair.deletions = enabled;
                 self.db.put("pair", &pair.id, &pair)?;
                 Ok("Deletion policy updated".into())
-            }
-            DriveRequest::Catalog { drive } => {
-                let drive = self.drive(&drive)?;
-                let catalog = catalog::capture(
-                    &self.db,
-                    &self.state,
-                    &drive,
-                    &self.config,
-                    cancel,
-                    progress,
-                )?;
-                Ok(format!(
-                    "Catalog saved: {} · {}",
-                    catalog.id, catalog.coverage
-                ))
             }
             DriveRequest::MountCatalog { catalog } => self.mount(&catalog),
             DriveRequest::UnmountCatalog { catalog } => self.unmount(&catalog),
@@ -695,7 +682,17 @@ impl Owner {
         cancel: &AtomicBool,
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
+        self.synchronize_changed(id, cancel, progress, None)
+    }
+    fn synchronize_changed(
+        &mut self,
+        id: &str,
+        cancel: &AtomicBool,
+        progress: &mut impl FnMut(u64, u64),
+        paths: Option<&std::collections::HashSet<PathBuf>>,
+    ) -> Result<String> {
         let mut pair: SyncPair = self.db.get("pair", id)?.ok_or("Unknown sync pair")?;
+        self.check_busy(&pair.drive)?;
         let drive = self.drive(&pair.drive)?;
         if drive.evidence != pair.evidence {
             return Err(
@@ -709,15 +706,32 @@ impl Owner {
             .mount
             .as_ref()
             .ok_or("Drive is offline; local contents retained")?;
-        let portable = Root::open(&mount.join(&pair.relative))?;
+        let portable = Arc::new(Root::open(&mount.join(&pair.relative))?);
         if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
             self.unidentified_ram.get(id).ok_or("No persistent media identity; RAM is retained but writeback needs a new explicit session")?.validate()?;
         }
-        let local = Root::open(&pair.local)?;
+        let local = Arc::new(Root::open(&pair.local)?);
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
         }
-        let result = sync::synchronize(&self.db, &pair, &portable, &local, cancel, progress)?;
+        let cached = self.sync_roots.get(id).is_some_and(|(a, b)| {
+            a.validate().is_ok()
+                && b.validate().is_ok()
+                && a.same_root(&portable)
+                && b.same_root(&local)
+        });
+        let result = if let Some(paths) = paths.filter(|_| cached) {
+            sync::changed(&self.db, &pair, &portable, &local, paths, cancel)?
+        } else {
+            sync::synchronize_with(
+                &self.db,
+                &pair,
+                (&portable, &local),
+                cancel,
+                progress,
+                cached,
+            )?
+        };
         pair.last_success = Some(now());
         pair.status = format!(
             "{} files copied · {} conflicts",
@@ -725,9 +739,10 @@ impl Owner {
         );
         self.db.put("pair", id, &pair)?;
         if let Some(watch) = &mut self.watch {
-            watch.add(&portable.path);
-            watch.add(&local.path);
+            watch.add(portable.clone());
+            watch.add(local.clone());
         }
+        self.sync_roots.insert(id.into(), (portable, local));
         if let Some(mut session) = self.db.get::<RamSession>("ram", id)? {
             session.status = pair.status.clone();
             session.ready = true;
@@ -737,16 +752,20 @@ impl Owner {
         Ok(pair.status)
     }
     fn automatic(&mut self) {
+        self.automatic_changed(None);
+    }
+    fn automatic_changed(&mut self, paths: Option<&std::collections::HashSet<PathBuf>>) {
         let pairs: Vec<SyncPair> = match self.db.list("pair", 0, 1000) {
             Ok(pairs) => pairs,
             Err(_) => return,
         };
         for mut pair in pairs {
-            if pair.paused {
+            if pair.paused || self.check_busy(&pair.drive).is_err() {
                 continue;
             }
             let cancel = Arc::new(AtomicBool::new(false));
-            if let Err(error) = self.synchronize(&pair.id, &cancel, &mut |_, _| {}) {
+            if let Err(error) = self.synchronize_changed(&pair.id, &cancel, &mut |_, _| {}, paths) {
+                self.sync_roots.remove(&pair.id);
                 pair.status = error.to_string();
                 let _ = self.db.put("pair", &pair.id, &pair);
                 if let Ok(Some(mut session)) = self.db.get::<RamSession>("ram", &pair.id) {
@@ -791,6 +810,7 @@ impl Owner {
         {
             return Err("Insufficient tmpfs byte or inode headroom".into());
         }
+        self.ram_size_check(&source, &stats, cancel)?;
         let temporary = tempfile::Builder::new()
             .prefix("little-clip-ram-")
             .tempdir_in(&base.path)?;
@@ -852,6 +872,11 @@ impl Owner {
     ) -> Result<String> {
         let session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
         let source = Root::open(&session.path)?;
+        if little_clip_core::kernel_interface::MountIdentity::directory(&source.path)?
+            != session.identity
+        {
+            return Err("RAM directory identity changed; refusing save".into());
+        }
         let base = Root::create(destination)?;
         let name = format!("ram-copy-{}", uuid::Uuid::new_v4());
         base.ensure_directory(Path::new(&name))?;
@@ -931,7 +956,8 @@ impl Owner {
             .spawn()?;
         let started = Instant::now();
         loop {
-            if crate::mounts::catalog_mount(&path, id)?.is_some() {
+            if let Some(mount) = crate::mounts::catalog_mount(&path, id)? {
+                self.db.put("catalog-mount", id, &mount.id)?;
                 break;
             }
             if let Some(status) = child.try_wait()? {
@@ -952,7 +978,16 @@ impl Owner {
     fn unmount(&mut self, id: &str) -> Result<String> {
         let mut catalog: Catalog = self.db.get("catalog", id)?.ok_or("Unknown catalog")?;
         let path = catalog.mount.as_ref().ok_or("Catalog is not mounted")?;
-        if crate::mounts::catalog_mount(path, id)?.is_none() {
+        let observed = crate::mounts::catalog_mount(path, id)?;
+        if let Some(mount) = &observed
+            && self
+                .db
+                .get::<u64>("catalog-mount", id)?
+                .is_some_and(|recorded| recorded != mount.id)
+        {
+            return Err("Catalog mount identity changed; refusing unmount".into());
+        }
+        if observed.is_none() {
             if crate::mounts::inventory()?
                 .iter()
                 .any(|mount| mount.target == *path)
@@ -980,9 +1015,14 @@ impl Owner {
             )
             .into());
         }
-        if let Some(mut child) = self.children.remove(id) {
-            let _ = child.wait();
+        if self
+            .children
+            .get_mut(id)
+            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
+        {
+            self.children.remove(id);
         }
+        self.db.remove("catalog-mount", id)?;
         catalog.mount = None;
         self.db.put("catalog", id, &catalog)?;
         Ok("Catalog unmounted".into())
@@ -1005,10 +1045,10 @@ impl Owner {
         for rule in self.db.list::<DriveRule>("rule", 0, 1000)? {
             if !rule.index {
                 for drive in &drives {
-                    if drive.id == rule.drive {
-                        if let Some(mount) = &drive.mount {
-                            excluded.push(mount.join(&rule.relative));
-                        }
+                    if drive.id == rule.drive
+                        && let Some(mount) = &drive.mount
+                    {
+                        excluded.push(mount.join(&rule.relative));
                     }
                 }
             }
@@ -1017,6 +1057,17 @@ impl Owner {
         let root = kernel_interface::pin_content_directory(&self.state)?;
         let path = self.state.join("index-policy.json");
         if path.exists() {
+            if kernel_interface::open_content(&path, false)
+                .and_then(|mut file| {
+                    use std::io::Read;
+                    let mut old = Vec::new();
+                    file.by_ref().take(1024 * 1024 + 1).read_to_end(&mut old)?;
+                    Ok(old == json)
+                })
+                .unwrap_or(false)
+            {
+                return Ok(());
+            }
             little_clip_core::file_source::FileSource::capture(&path)?
                 .write_in(&path, &json, &root)?;
         } else {
@@ -1025,7 +1076,7 @@ impl Owner {
         Ok(())
     }
 }
-fn ram_reason(config: &DriveConfig) -> Result<()> {
+fn available_memory() -> Result<u64> {
     let mem = fs::read_to_string("/proc/meminfo")?;
     let available = mem
         .lines()
@@ -1038,6 +1089,10 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
         })
         .ok_or("Cannot determine available RAM")?
         .saturating_mul(1024);
+    Ok(available)
+}
+fn ram_reason(config: &DriveConfig) -> Result<()> {
+    let available = available_memory()?;
     if available < config.ram_min_available {
         return Err("Insufficient available RAM before copying".into());
     }
@@ -1177,6 +1232,109 @@ mod tests {
         assert!(!ram.path.exists());
         drop(service);
         std::thread::sleep(Duration::from_millis(300));
+    }
+    #[test]
+    fn bulk_backup_leaves_another_drives_ram_writeback_and_status_responsive() {
+        let temp = tempfile::tempdir().unwrap();
+        let small = temp.path().join("small");
+        let large = temp.path().join("large");
+        fs::create_dir(&small).unwrap();
+        fs::create_dir(&large).unwrap();
+        fs::write(small.join("edit"), b"initial").unwrap();
+        File::create(large.join("sparse"))
+            .unwrap()
+            .set_len(16 * 1024 * 1024 * 1024)
+            .unwrap();
+        let drive = |path: PathBuf, id: &str| Drive {
+            id: format!("part:{id}"),
+            label: id.into(),
+            device: format!("/dev/not-real-{id}").into(),
+            mount: Some(path),
+            part_uuid: Some(id.into()),
+            filesystem_uuid: Some(id.into()),
+            filesystem: "vfat".into(),
+            capacity: 1024 * 1024,
+            drive_capacity: 1024 * 1024,
+            removable: true,
+            read_only: false,
+            evidence: id.into(),
+            ambiguous: false,
+        };
+        let drives = vec![drive(small.clone(), "small"), drive(large, "large")];
+        let service = Service::start_with_inventory(
+            DriveConfig {
+                ram_min_available: 0,
+                sync_interval_seconds: 3600,
+                backup_directory: Some(temp.path().join("backup")),
+                ..Default::default()
+            },
+            temp.path().join("state"),
+            Arc::new(move || Ok(drives.clone())),
+        )
+        .unwrap();
+        finish(
+            &service,
+            DriveRequest::CopyToRam {
+                drive: "part:small".into(),
+            },
+        );
+        let ram = status(&service).ram[0].clone();
+        let DriveReply::Accepted(id) = service
+            .request(DriveRequest::Backup {
+                drive: "part:large".into(),
+                kind: BackupKind::Files,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let start = Instant::now();
+        while !status(&service)
+            .operations
+            .iter()
+            .any(|o| o.id == id && o.state == "running")
+        {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::write(ram.path.join("edit"), b"RAM first during backup").unwrap();
+        let start = Instant::now();
+        while fs::read(small.join("edit")).unwrap() != b"RAM first during backup" {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "bulk work blocked writeback"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            status(&service)
+                .operations
+                .iter()
+                .any(|o| o.id == id && o.finished.is_none())
+        );
+        service
+            .request(DriveRequest::Cancel {
+                operation: id.clone(),
+            })
+            .unwrap();
+        let start = Instant::now();
+        while !status(&service)
+            .operations
+            .iter()
+            .any(|o| o.id == id && o.finished.is_some())
+        {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        finish(
+            &service,
+            DriveRequest::DiscardRam {
+                session: ram.id,
+                confirmed: true,
+            },
+        );
+        drop(service);
+        std::thread::sleep(Duration::from_millis(250));
     }
     #[test]
     fn unset_backup_directory_and_duplicate_identity_fail_without_side_effects() {

@@ -73,12 +73,10 @@ pub fn copy_checked(
     }
     output.set_len(size).map_err(|e| e.to_string())?;
     source.check_file(input)?;
-    if let (Some(digest), Some(expected)) = (digest, expected_sha256) {
-        if format!("{:x}", digest.finalize()) != expected {
-            return Err(
-                "Source contents changed after inventory; staging was not published".into(),
-            );
-        }
+    if let (Some(digest), Some(expected)) = (digest, expected_sha256)
+        && format!("{:x}", digest.finalize()) != expected
+    {
+        return Err("Source contents changed after inventory; staging was not published".into());
     }
     Ok(stats)
 }

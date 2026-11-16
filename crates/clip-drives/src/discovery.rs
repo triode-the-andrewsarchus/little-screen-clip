@@ -20,8 +20,9 @@ pub fn discover() -> Result<Vec<Drive>> {
         let candidates = mounts
             .iter()
             .filter(|mount| {
-                std::fs::metadata(&mount.source)
-                    .is_ok_and(|m| m.file_type().is_block_device() && m.rdev() == device)
+                mount.source.starts_with("/dev")
+                    && std::fs::metadata(&mount.source)
+                        .is_ok_and(|m| m.file_type().is_block_device() && m.rdev() == device)
             })
             .collect::<Vec<_>>();
         let selected = candidates

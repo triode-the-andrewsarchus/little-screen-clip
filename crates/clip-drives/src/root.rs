@@ -62,6 +62,9 @@ impl Root {
         }
         Ok(())
     }
+    pub fn same_root(&self, other: &Self) -> bool {
+        self.identity == other.identity && self.namespace == other.namespace
+    }
     pub fn overlap(&self, other: &Self) -> bool {
         self.path.starts_with(&other.path)
             || other.path.starts_with(&self.path)
@@ -187,10 +190,10 @@ impl Root {
             source_hash,
             |_| {},
         )?;
-        if let Some(expected) = expected {
-            if self.digest(target, cancel)? != expected {
-                return Err("Destination changed before installation".into());
-            }
+        if let Some(expected) = expected
+            && self.digest(target, cancel)? != expected
+        {
+            return Err("Destination changed before installation".into());
         }
         observed.check_file(&input)?;
         if let (Some(old), Some(source)) = (&old, &old_source) {
@@ -215,18 +218,79 @@ impl Root {
         File::open(anchor(&parent))?.sync_all()?;
         Ok(stats.written)
     }
-    pub fn delete_file(&self, relative: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
+    fn remove_verified(
+        &self,
+        relative: &Path,
+        cancel: &AtomicBool,
+        verify: impl Fn(&Path) -> Result<()>,
+    ) -> Result<()> {
         let (parent, path) = self.parent(relative, false)?;
-        let file = self.input(relative)?;
-        let source = FileSource::capture_file(&file)?;
-        if self.digest(relative, cancel)? != expected {
-            return Err("Deletion target changed".into());
-        }
+        verify(&path)?;
         cancelled(cancel)?;
-        source.check_file(&file)?;
-        fs::remove_file(path)?;
+        let name = format!(".little-clip-delete-{}", uuid::Uuid::new_v4());
+        let quarantine = anchor(&parent).join(&name);
+        little_clip_core::file_source::rename_noreplace(&path, &quarantine)?;
+        let result: Result<()> = (|| {
+            self.validate()?;
+            cancelled(cancel)?;
+            verify(&quarantine)?;
+            fs::remove_file(&quarantine)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let recovery =
+                if little_clip_core::file_source::rename_noreplace(&quarantine, &path).is_ok() {
+                    "original restored".into()
+                } else {
+                    format!(
+                        "retained at {}",
+                        self.path
+                            .join(relative.parent().unwrap_or(Path::new("")))
+                            .join(name)
+                            .display()
+                    )
+                };
+            return Err(format!("Deletion stopped: {error}; {recovery}").into());
+        }
         File::open(anchor(&parent))?.sync_all()?;
         Ok(())
+    }
+    pub fn delete_file(&self, relative: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
+        let file = self.input(relative)?;
+        let identity = file.metadata()?;
+        self.remove_verified(relative, cancel, |path| {
+            let held = kernel_interface::open_content(path, false)?;
+            let metadata = held.metadata()?;
+            if metadata.dev() != identity.dev()
+                || metadata.ino() != identity.ino()
+                || FileSource::capture_file(&held)?.sha256(
+                    &held,
+                    cancel,
+                    std::time::Duration::MAX,
+                )? != expected
+            {
+                return Err("Deletion target changed".into());
+            }
+            Ok(())
+        })
+    }
+    pub fn delete_symlink(
+        &self,
+        relative: &Path,
+        target: &Path,
+        identity: (u64, u64),
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        self.remove_verified(relative, cancel, |path| {
+            let metadata = fs::symlink_metadata(path)?;
+            if !metadata.file_type().is_symlink()
+                || (metadata.dev(), metadata.ino()) != identity
+                || fs::read_link(path)? != target
+            {
+                return Err("Symlink deletion target changed".into());
+            }
+            Ok(())
+        })
     }
     pub fn same_file(&self, relative: &Path, dev: u64, ino: u64) -> Result<bool> {
         Ok(self
