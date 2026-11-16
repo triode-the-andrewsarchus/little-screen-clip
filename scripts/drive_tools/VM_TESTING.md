@@ -80,3 +80,22 @@ run. Native permission/link/timestamp probes are retained in
 `/tmp/portable-drive-vm-native-capabilities/guest.log`; FAT32/exFAT can acknowledge a
 chmod without changing their presented mode, so application fidelity tests must check
 observed metadata rather than syscall success alone.
+
+
+Application acceptance is in `clip-drives`' ignored
+`sync_edge_tests::native_fs::` tests. Build with the file-manager/backend feature
+graph, then pass the emitted absolute test-binary path and
+`sync_edge_tests::native_fs:: --ignored --test-threads=1 --nocapture` after `--`.
+The tests require the guest marker, a distinct boot identity, and matching pinned
+mount/device/filesystem facts; they create only unique fixture subdirectories.
+
+`/tmp/portable-drive-vm-native-app-final/report.json` records eight passing tests
+per filesystem. Common cases cover union/conflicts with restored timestamps,
+explicit deletion policy, file-backup versions/manifests/observed timestamps,
+metadata-only catalogs and exclusions, case collisions, and a shared table of
+literal file/directory names. Driver-specific checks cover NTFS3 alternate-stream
+refusal and FAT32 oversized-file refusal. These whole-volume loop fixtures do not
+establish partition identity, interactive authentication, ntfs-3g or every mount
+option. The guest's default NTFS3 mount is case-sensitive; FAT32 and exFAT fold
+ASCII case. A pass does not imply every requested Unix filename is representable:
+the invariant is exact-name success or explicit refusal with originals retained.

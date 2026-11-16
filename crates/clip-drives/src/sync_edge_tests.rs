@@ -38,27 +38,26 @@ impl Fixture {
             cancel: AtomicBool::new(false),
         }
     }
-    fn run(&self) -> sync::SyncReport {
+    fn run(&self) -> Result<sync::SyncReport> {
         sync::synchronize(
             &self.db,
             &self.pair,
-            &Root::open(&self.a).unwrap(),
-            &Root::open(&self.b).unwrap(),
+            &Root::open(&self.a)?,
+            &Root::open(&self.b)?,
             &self.cancel,
             |_, _| {},
         )
-        .unwrap()
     }
 }
 #[test]
 fn delete_versus_edit_restores_the_edit_and_reports_a_conflict() {
     let mut fixture = Fixture::new();
     fs::write(fixture.a.join("x"), b"baseline").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     fixture.pair.deletions = true;
     fs::remove_file(fixture.a.join("x")).unwrap();
     fs::write(fixture.b.join("x"), b"offline edit").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     assert_eq!(fs::read(fixture.a.join("x")).unwrap(), b"offline edit");
     assert!(
         !fixture
@@ -73,10 +72,10 @@ fn confirmed_directory_deletions_propagate_after_their_unchanged_children() {
     let mut fixture = Fixture::new();
     fs::create_dir(fixture.a.join("folder")).unwrap();
     fs::write(fixture.a.join("folder/x"), b"baseline").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     fixture.pair.deletions = true;
     fs::remove_dir_all(fixture.a.join("folder")).unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     assert!(!fixture.a.join("folder").exists());
     assert!(!fixture.b.join("folder").exists());
 }
@@ -86,7 +85,7 @@ fn file_directory_conflicts_preserve_both_complete_variants() {
     fs::create_dir(fixture.a.join("collision")).unwrap();
     fs::write(fixture.a.join("collision/child"), b"directory contents").unwrap();
     fs::write(fixture.b.join("collision"), b"regular file").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     let conflicts = fixture
         .db
         .list::<DriveConflict>("conflict", 0, 100)
@@ -102,7 +101,7 @@ fn file_directory_conflicts_preserve_both_complete_variants() {
             b"regular file"
         );
     }
-    fixture.run();
+    fixture.run().unwrap();
     assert_eq!(
         fixture
             .db
@@ -116,7 +115,7 @@ fn file_directory_conflicts_preserve_both_complete_variants() {
 fn an_incomplete_tree_never_deletes_previously_synced_data() {
     let mut fixture = Fixture::new();
     fs::write(fixture.a.join("safe"), b"keep").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     fixture.pair.deletions = true;
     fs::remove_file(fixture.a.join("safe")).unwrap();
     let name = std::ffi::CString::new(
@@ -145,12 +144,12 @@ fn an_incomplete_tree_never_deletes_previously_synced_data() {
 fn symlinks_are_preserved_as_references_without_following_payloads() {
     let fixture = Fixture::new();
     std::os::unix::fs::symlink("missing", fixture.a.join("link")).unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     assert_eq!(
         fs::read_link(fixture.b.join("link")).unwrap(),
         PathBuf::from("missing")
     );
-    fixture.run();
+    fixture.run().unwrap();
 }
 #[test]
 fn lossless_names_survive_sync_and_baseline_storage() {
@@ -158,15 +157,15 @@ fn lossless_names_survive_sync_and_baseline_storage() {
     let fixture = Fixture::new();
     let name = std::ffi::OsString::from_vec(b"name_\xff.txt".to_vec());
     fs::write(fixture.a.join(&name), b"raw path").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     assert_eq!(fs::read(fixture.b.join(&name)).unwrap(), b"raw path");
-    fixture.run();
+    fixture.run().unwrap();
 }
 #[test]
 fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestamp_edits() {
     let fixture = Fixture::new();
     fs::write(fixture.a.join("x"), b"0000").unwrap();
-    fixture.run();
+    fixture.run().unwrap();
     let time = fs::metadata(fixture.a.join("x"))
         .unwrap()
         .modified()
@@ -223,3 +222,5 @@ fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestam
         .is_err()
     );
 }
+
+mod native_fs;

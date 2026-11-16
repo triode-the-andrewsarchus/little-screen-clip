@@ -237,7 +237,7 @@ An isolated million-file fixture run measured 0.029 seconds for a catalog exclud
 
 Real Btrfs tests changed 4 KiB in an 8 MiB file and an 8 MiB partition image. Each new version allocated 256 KiB exclusively and shared the remaining extents; old versions retained their original bytes. Real FUSE tests cover offline stat/listing, unavailable contents, exclusions, backup reads and rejected writes. A daemon test keeps a separate RAM mirror responsive while a 16 GiB sparse backup is active and verifies cooperative cancellation.
 
-Loop-device FAT/exFAT/NTFS and interactive UDisks authentication remain host acceptance checks: this session has no noninteractive PolicyKit authorization or passwordless sudo. No attached user partition was used for testing. Source filesystems need no Btrfs, ZFS or Git metadata.
+An isolated KVM guest now passes native FAT32, exFAT and kernel NTFS3 sync, file-backup, catalog, timestamp, conflict and filename checks. Literal directory-entry checks caught silent filename normalization; the backend now refuses ambiguous NTFS3 colon paths and FAT32/exFAT trailing-dot/space paths while retaining originals. Whole-volume loop fixtures exercise filesystem-UUID fallback. Real partitioned-device imaging/authorization, ntfs-3g and alternate mount options remain separate acceptance checks. No attached user partition was used. Source filesystems need no Btrfs, ZFS or Git metadata.
 
 The complete workspace run passed **3,328 tests** across 50 suites, with 39 intentionally ignored host/fixture tests, using:
 

@@ -148,11 +148,45 @@ impl Root {
                 .flatten(),
         }
     }
+    fn ordinary_names(&self, relative: &Path) -> Result<()> {
+        let stream = relative.as_os_str().as_encoded_bytes().contains(&b':');
+        let trailing = relative.components().any(|part| {
+            matches!(
+                part.as_os_str().as_encoded_bytes().last(),
+                Some(b'.' | b' ')
+            )
+        });
+        if !stream && !trailing {
+            return Ok(());
+        }
+        self.validate()?;
+        let mount = crate::mounts::inventory()?
+            .into_iter()
+            .find(|mount| mount.id == self.identity.mount)
+            .ok_or("Cannot establish filesystem name semantics; data retained")?;
+        // NTFS3 treats ':' as alternate-stream syntax. A staging rename can
+        // otherwise report success while installing only the basename prefix.
+        // Select semantics from the pinned mount, not a label or pathname hint.
+        if stream && matches!(mount.filesystem.as_str(), "ntfs3" | "ntfs3_64") {
+            return Err(format!(
+                "NTFS alternate-stream syntax is not an ordinary path: {}. Rename this item before synchronizing",
+                little_clip_core::path_address::display_path(relative)
+            ).into());
+        }
+        if trailing && matches!(mount.filesystem.as_str(), "vfat" | "msdos" | "exfat") {
+            return Err(format!(
+                "This filesystem normalizes trailing dots or spaces in path \"{}\". Rename this item before synchronizing",
+                little_clip_core::path_address::display_path(relative)
+            ).into());
+        }
+        Ok(())
+    }
     pub fn directory(&self, relative: &Path, create: bool) -> Result<File> {
         if !valid_relative(relative) {
             return Err("Invalid relative directory".into());
         }
         self.validate()?;
+        self.ordinary_names(relative)?;
         let mut held = self.file.try_clone()?;
         for component in relative.components() {
             let child = anchor(&held).join(component.as_os_str());
@@ -182,6 +216,7 @@ impl Root {
         if !valid_relative(relative) || relative.as_os_str().is_empty() {
             return Err("Invalid file address".into());
         }
+        self.ordinary_names(relative)?;
         let parent = self.directory(relative.parent().unwrap_or(Path::new("")), create)?;
         let path = anchor(&parent).join(relative.file_name().ok_or("Missing filename")?);
         Ok((parent, path))
@@ -398,6 +433,32 @@ fn reliable_change_metadata(filesystem: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_unix_colon_names_remain_data_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        fs::write(temp.path().join("literal:name.txt"), b"ordinary content").unwrap();
+        assert!(
+            root.metadata(Path::new("literal:name.txt"))
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            root.input(Path::new("literal:name.txt"))
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .len(),
+            16
+        );
+        root.ensure_directory(Path::new("folder:part")).unwrap();
+        assert!(temp.path().join("folder:part").is_dir());
+        for name in ["trailing-dot.", "trailing-space "] {
+            root.ensure_directory(Path::new(name)).unwrap();
+            assert!(temp.path().join(name).is_dir());
+        }
+    }
+
     #[test]
     fn bind_subtrees_project_into_the_original_filesystem_coordinates() {
         let mount = crate::mounts::Mount {
