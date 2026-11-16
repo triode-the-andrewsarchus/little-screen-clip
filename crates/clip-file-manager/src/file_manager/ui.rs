@@ -94,6 +94,7 @@ impl FileManager {
                 );
             }
         });
+        self.drive_windows(ui.ctx());
         self.naming_ui(ui.ctx(), palette);
         self.transfer_windows(ui.ctx(), palette);
         self.search_settings_ui(ui.ctx(), palette);
@@ -275,7 +276,10 @@ impl FileManager {
     }
 
     fn browser_modal(&self) -> bool {
-        self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
+        self.drives.modal()
+            || self.edits.dialog.is_some()
+            || self.transfers_modal()
+            || self.search.preferences.open
     }
 
     fn sync_browser_focus(&mut self, ctx: &egui::Context) -> bool {
@@ -740,6 +744,9 @@ impl FileManager {
     }
 
     fn apply_list_actions(&mut self, actions: ListActions) {
+        if let Some(path) = &actions.drive_policy {
+            self.open_folder_drive_policy(path);
+        }
         if actions.selection.is_some() || actions.clear {
             self.type_navigation.clear();
         }
@@ -1606,11 +1613,20 @@ struct ListActions {
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
+    drive_policy: Option<PathBuf>,
+    drive_roots: Vec<PathBuf>,
 }
 
 impl ListActions {
     fn for_browser(browser: &FileManager) -> Self {
         Self {
+            drive_roots: browser
+                .drives
+                .status
+                .drives
+                .iter()
+                .filter_map(|d| d.mount.clone())
+                .collect(),
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
@@ -1775,6 +1791,16 @@ impl ListActions {
                 ui.close_menu();
             }
 
+            if entry.directory
+                && self
+                    .drive_roots
+                    .iter()
+                    .any(|root| entry.path.starts_with(root))
+                && ui.button("Catalog / indexing policy…").clicked()
+            {
+                self.drive_policy = Some(entry.path.clone());
+                ui.close_menu();
+            }
             self.video_audio_menu(ui, entry);
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {

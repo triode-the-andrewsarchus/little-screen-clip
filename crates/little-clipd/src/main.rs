@@ -672,6 +672,26 @@ fn build_file_item(paths: Vec<PathBuf>, references_only: bool) -> ClipItem {
     }
 }
 
+async fn drive_reply(
+    service: Option<&clip_drives::Service>,
+    request: little_clip_core::drives::DriveRequest,
+) -> IpcResponse {
+    let Some(service) = service.cloned() else {
+        return IpcResponse::Error {
+            error: "Drive services are unavailable; check daemon logs".into(),
+        };
+    };
+    match tokio::task::spawn_blocking(move || service.request(request)).await {
+        Ok(Ok(reply)) => IpcResponse::Drives(reply),
+        Ok(Err(error)) => IpcResponse::Error {
+            error: error.to_string(),
+        },
+        Err(error) => IpcResponse::Error {
+            error: error.to_string(),
+        },
+    }
+}
+
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
@@ -699,24 +719,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
         let req: Result<IpcRequest, _> = serde_json::from_slice(&request_bytes);
         let references_only = matches!(&req, Ok(IpcRequest::PushFileReferences { .. }));
         let resp = match req {
-            Ok(IpcRequest::Drives(request)) => {
-                if let Some(service) = &ctx.drives {
-                    let service = service.clone();
-                    match tokio::task::spawn_blocking(move || service.request(request)).await {
-                        Ok(Ok(reply)) => IpcResponse::Drives(reply),
-                        Ok(Err(error)) => IpcResponse::Error {
-                            error: error.to_string(),
-                        },
-                        Err(error) => IpcResponse::Error {
-                            error: error.to_string(),
-                        },
-                    }
-                } else {
-                    IpcResponse::Error {
-                        error: "Drive services are unavailable; check daemon logs".into(),
-                    }
-                }
-            }
+            Ok(IpcRequest::Drives(request)) => drive_reply(ctx.drives.as_ref(), request).await,
             Ok(IpcRequest::GetState) => {
                 info!("Processing GetState...");
                 let mgr = ctx.manager.read().await;
@@ -969,11 +972,13 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 let mut config = ctx.config.write().await;
                 let new_config = little_clip_core::config::AppConfig::load();
                 let new_audio_config = new_config.audio.clone();
-                if let Some(service) = &ctx.drives {
-                    let _ = service.request(little_clip_core::drives::DriveRequest::Configure {
+                let _ = drive_reply(
+                    ctx.drives.as_ref(),
+                    little_clip_core::drives::DriveRequest::Configure {
                         config: new_config.drives.clone(),
-                    });
-                }
+                    },
+                )
+                .await;
                 *config = new_config.clone();
                 ctx.manager.write().await.apply_config(&new_config.slots);
                 match ctx.rolling_capture_config.write() {

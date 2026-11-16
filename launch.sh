@@ -246,8 +246,24 @@ function build_if_needed() {
         CLIPCTL_BIN=$(workspace_binary clipctl)
         WORKBENCH_BIN=$(workspace_binary clip-workbench)
     fi
+    ensure_drive_helper "$DAEMON_BIN"
     ensure_media_worker "$DAEMON_BIN"
     ensure_media_worker "$WORKBENCH_BIN"
+}
+
+function ensure_drive_helper() {
+    local profile_dir
+    profile_dir=$(dirname "$1")
+    if [ -n "${LITTLE_CLIP_DRIVE_MOUNT_HELPER:-}" ] || [ -x "$profile_dir/clip-drive-mount" ]; then
+        return 0
+    fi
+    local profile
+    profile=$(basename "$profile_dir")
+    if [ "$profile" = "debug" ]; then
+        cargo build -p clip-drives --bin clip-drive-mount
+    else
+        cargo build --release -p clip-drives --bin clip-drive-mount
+    fi
 }
 
 function ensure_media_worker() {
@@ -386,9 +402,10 @@ function run_file_manager() {
     local file_manager_bin
     file_manager_bin=$(workspace_binary clip-file-manager)
     if [ ! -x "$file_manager_bin" ]; then
-        cargo build --release -p clip-file-manager -p clip-media-worker
+        cargo build --release -p clip-file-manager -p clip-media-worker -p clip-drives
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
+    ensure_drive_helper "$file_manager_bin"
     ensure_media_worker "$file_manager_bin"
     "$file_manager_bin" "$@"
 }

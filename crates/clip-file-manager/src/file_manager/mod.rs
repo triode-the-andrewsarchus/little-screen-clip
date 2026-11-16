@@ -12,6 +12,7 @@ mod content;
 mod database;
 mod diagram_strip;
 use little_clip_core::file_format as document_format;
+mod drives;
 mod ebook;
 mod edit_ui;
 mod edits;
@@ -287,6 +288,7 @@ pub(crate) struct FileManager {
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
+    drives: drives::Drives,
     pub(crate) constellation: constellation::ConstellationState,
     pub(crate) last_status: Option<LastStatus>,
 }
@@ -374,6 +376,7 @@ impl FileManager {
             music_selection: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
+            drives: Default::default(),
             constellation: constellation::ConstellationState::new(),
             last_status: None,
         }
@@ -604,6 +607,7 @@ impl FileManager {
         self.tick_edits(jobs);
         self.tick_transfers(jobs);
         self.tick_mounts(jobs);
+        self.tick_drives();
         self.tick_fuse_binwalk(jobs);
         if self.refresh_after_transfer && self.pending.is_none() {
             self.refresh_after_transfer = false;

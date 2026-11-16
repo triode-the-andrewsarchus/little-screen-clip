@@ -7,7 +7,12 @@ use crate::file_manager::mounts::{MountEntry, MountKind};
 impl FileManager {
     pub(super) fn mounts_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         ui.add_space(4.0);
-        ui.heading("Mounts");
+        ui.horizontal(|ui| {
+            ui.heading("Mounts");
+            if ui.small_button("Jobs…").clicked() {
+                self.drives.open_details();
+            }
+        });
         ui.separator();
 
         let mut open = None;
@@ -18,8 +23,9 @@ impl FileManager {
             .id_source("files_mount_rows")
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_HEIGHT, self.mounts.entries.len(), |ui, rows| {
-                for index in rows {
+            .show(ui, |ui| {
+                self.ram_mounts_ui(ui);
+                for index in 0..self.mounts.entries.len() {
                     let entry = self.mounts.entries[index].clone();
                     let (o, m, u) = self.mount_row_ui(ui, &entry, index, colors);
                     if o.is_some() {
@@ -52,8 +58,10 @@ impl FileManager {
                 format!("Unmounting '{}'…", entry.label),
                 false,
             );
-            self.mounts
-                .request_unmount(&entry, super::super::BackgroundJobs::global());
+            if !self.eject_enrolled_drive(&entry) {
+                self.mounts
+                    .request_unmount(&entry, super::super::BackgroundJobs::global());
+            }
         }
     }
 
@@ -112,6 +120,7 @@ impl FileManager {
 
         response.context_menu(|ui| {
             mount_context_menu(ui, entry, &mut open, &mut unmount, &mut mount);
+            self.drive_context_menu(ui, entry);
         });
 
         (open, mount, unmount)

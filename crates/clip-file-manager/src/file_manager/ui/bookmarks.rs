@@ -43,10 +43,19 @@ impl FileManager {
             self.bookmarks.add(payload.paths.clone(), None);
         }
 
-        if !self.mounts.entries.is_empty() {
+        let virtual_rows = self.drives.status.ram.len()
+            + self
+                .drives
+                .status
+                .catalogs
+                .iter()
+                .map(|c| &c.drive)
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+        if !self.mounts.entries.is_empty() || virtual_rows > 0 {
             let available_height = ui.available_height();
-            let height = (36.0 + self.mounts.entries.len() as f32 * row)
-                .min(available_height * 0.4)
+            let height = (44.0 + (self.mounts.entries.len() + virtual_rows) as f32 * row)
+                .min(available_height * 0.5)
                 .max(36.0 + row);
             egui::TopBottomPanel::bottom("files_mounts")
                 .exact_height(height)
