@@ -125,6 +125,7 @@ fn saved_catalog() -> Catalog {
         entries: 9,
         complete: true,
         coverage: "Complete".into(),
+        details: None,
         mount: None,
         redacted: None,
         redaction_generation: 0,

@@ -203,20 +203,14 @@ fn collect_directory(
         }
         match child {
             Ok(child) => {
-                let mut entry = read_entry(child, held.is_none() && catalog.is_none());
-                if entry.directory
-                    && let Some(status) = catalog.as_ref().and_then(|view| view.status(&entry.path))
-                {
-                    entry.size = status.label().into();
-                    entry.catalog_status = Some(status);
-                }
-                if let Some(held) = held {
-                    entry.path =
-                        path.join(entry.path.strip_prefix(held).map_err(|e| e.to_string())?);
-                }
-                entries.push(entry);
+                entries.push(read_child(child, &path, held, catalog.as_ref())?);
             }
-            Err(_) => skipped += 1,
+            Err(error) => {
+                if catalog.is_some() && entries.is_empty() {
+                    return Err(directory_read_error(held.unwrap_or(&path), error));
+                }
+                skipped += 1;
+            }
         }
     }
     entries.sort_by(|a, b| {
@@ -258,14 +252,44 @@ fn collect_directory(
     })
 }
 
+/// Adapts one worker-side observation to the logical directory address.
+fn read_child(
+    child: std::fs::DirEntry,
+    path: &Path,
+    held: Option<&Path>,
+    catalog: Option<&crate::catalog_metadata::CatalogMount>,
+) -> Result<Entry, String> {
+    let mut entry = read_entry(child, held.is_none() && catalog.is_none());
+    if entry.directory
+        && let Some(status) = catalog.and_then(|view| view.status(&entry.path))
+    {
+        entry.size = status.label().into();
+        entry.catalog_status = Some(status);
+    }
+    if let Some(held) = held {
+        entry.path = path.join(
+            entry
+                .path
+                .strip_prefix(held)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(entry)
+}
+
 fn directory_read_error(path: &Path, error: std::io::Error) -> String {
     if let Some(status) =
         crate::catalog_metadata::CatalogMount::detect(path).and_then(|view| view.status(path))
     {
-        format!(
-            "{}: this folder's contents were excluded from the saved catalog",
-            status.label()
-        )
+        match status {
+            crate::catalog_metadata::CatalogEntryStatus::NotCatalogued => format!(
+                "{}: this folder's contents were excluded from the saved catalog",
+                status.label()
+            ),
+            crate::catalog_metadata::CatalogEntryStatus::Incomplete => {
+                format!("{}: {}", status.label(), status.explanation())
+            }
+        }
     } else {
         error.to_string()
     }

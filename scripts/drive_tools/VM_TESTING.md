@@ -228,3 +228,39 @@ returns ESTALE while the whole-second entry opens. FAT32 and NTFS3 provider read
 retain their comparable timestamps. The test reports precision loss explicitly;
 a green run covers conservative refusal, not complete cross-driver compatibility.
 That limitation remains in the completion audit.
+
+## Typed catalog and partial-listing fixtures
+
+New catalogs use database version 2 so a version-1 helper cannot silently serve
+an unfinished directory as an empty folder. The current helper reads both
+versions. Keep ordinary drive state and backup manifests at version 1.
+
+Build the current `clip-drive-mount` and backend test binary first, then select
+only the owned real-FUSE cases with:
+
+```text
+LITTLE_CLIP_DRIVE_MOUNT_HELPER=/absolute/current/clip-drive-mount \
+  /absolute/backend-test-binary catalog::tests::provider_tests::real_fuse_ \
+  --ignored --test-threads=1 --nocapture
+```
+
+These check provider retention, typed details, partial EOF/missing-child EIO and
+complete-parent ENOENT. The mixed-version refusal case separately requires an
+explicitly retained helper built before the version-2 catalog change:
+
+```text
+LITTLE_CLIP_DRIVE_LEGACY_MOUNT_HELPER=/absolute/version-1/clip-drive-mount \
+  /absolute/backend-test-binary \
+  catalog::tests::provider_tests::older_helpers_refuse_typed_catalogs \
+  --ignored --test-threads=1 --nocapture
+```
+
+The old helper must reject the database before mounting. It is not downloaded or
+run against user media. Do not compile over a backend binary while a guest matrix
+is invoking that same binary for successive source filesystems.
+
+The private desktop `scripts/portable_drive_acceptance.py --catalog-coverage-only`
+scenario exercises partial labels, failure navigation, Retry and Dismiss in either
+appearance. `--catalog-boundary-only` separately verifies excluded and genuinely
+empty folders. These use private compositor/IPC/configuration and owned FUSE
+mounts; the native FAT/exFAT/NTFS driver checks remain in the disposable guest.

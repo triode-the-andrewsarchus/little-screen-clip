@@ -37,6 +37,16 @@ fn catalog_description(catalog: &Catalog) -> String {
         catalog.entries,
         catalog.coverage
     );
+    if let Some(details) = &catalog.details {
+        let precision = details
+            .mtime_resolution_ns
+            .map(|ns| format!("{ns} ns"))
+            .unwrap_or_else(|| "unknown".into());
+        text.push_str(&format!(
+            "\nSource filesystem: {} · modification-time storage resolution: {precision}",
+            details.filesystem.as_deref().unwrap_or("unknown")
+        ));
+    }
     if let Some(redacted) = catalog.redacted {
         text.push_str(&format!("\nRedacted {}", recorded_time(redacted)));
     }

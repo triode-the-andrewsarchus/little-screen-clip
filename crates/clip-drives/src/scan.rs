@@ -4,6 +4,9 @@ use crate::{
     root::{Root, anchor},
     store::Store,
 };
+use little_clip_core::catalog_metadata::{
+    CatalogDirectoryCoverage, CatalogScanIssue, CatalogScanReason, CatalogScanStage,
+};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,6 +39,10 @@ pub(crate) struct Entry {
     pub changed: Option<(i64, i64)>,
     #[serde(default)]
     pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CatalogScanIssue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_coverage: Option<CatalogDirectoryCoverage>,
     #[serde(with = "little_clip_core::path_serde::optional")]
     pub link: Option<PathBuf>,
 }
@@ -65,6 +72,8 @@ impl Entry {
             hash: None,
             changed: Some((metadata.ctime(), metadata.ctime_nsec())),
             warning: None,
+            failure: None,
+            directory_coverage: None,
             link: None,
         }
     }
@@ -90,6 +99,7 @@ impl Entry {
 }
 #[derive(Clone)]
 pub(crate) struct Limits {
+    pub detailed_coverage: bool,
     pub entries: u64,
     pub bytes: u64,
     pub depth: usize,
@@ -103,6 +113,7 @@ pub(crate) struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            detailed_coverage: false,
             entries: u64::MAX,
             bytes: u64::MAX,
             depth: 256,
@@ -119,11 +130,14 @@ pub(crate) struct Coverage {
     pub count: u64,
     pub complete: bool,
     pub message: String,
+    pub directory: CatalogDirectoryCoverage,
+    pub stopped: Option<CatalogScanIssue>,
 }
 pub(crate) struct Frame {
     pub relative: PathBuf,
     _pin: File,
     pub reader: ReadDir,
+    coverage: CatalogDirectoryCoverage,
 }
 impl Frame {
     pub fn new(root: &Root, relative: PathBuf) -> Result<Self> {
@@ -133,7 +147,18 @@ impl Frame {
             relative,
             _pin: pin,
             reader,
+            coverage: CatalogDirectoryCoverage::default(),
         })
+    }
+    fn validate(&self, root: &Root) -> Result<()> {
+        let current = root.directory(&self.relative, false)?.metadata()?;
+        let held = self._pin.metadata()?;
+        if current.dev() != held.dev() || current.ino() != held.ino() {
+            return Err(crate::Error::SourceChanged(
+                "Directory was replaced during inventory".into(),
+            ));
+        }
+        Ok(())
     }
 }
 pub(crate) fn observe(
@@ -166,7 +191,7 @@ pub(crate) fn observe(
     }
     Ok(Some(entry))
 }
-fn unavailable(path: PathBuf, error: String) -> Entry {
+pub(super) fn unavailable(path: PathBuf, error: &crate::Error, detailed: bool) -> Entry {
     Entry {
         path,
         kind: "unavailable".into(),
@@ -181,7 +206,9 @@ fn unavailable(path: PathBuf, error: String) -> Entry {
         inode: 0,
         hash: None,
         changed: None,
-        warning: Some(error),
+        warning: Some(error.to_string()),
+        failure: detailed.then(|| issue(CatalogScanStage::InspectEntry, error)),
+        directory_coverage: None,
         link: None,
     }
 }
@@ -202,7 +229,7 @@ fn collect_entry(
         .iter()
         .any(|path| relative.starts_with(path));
     let mut entry = observe(root, relative, false, remaining, cancel)?
-        .ok_or("Entry disappeared during collection")?;
+        .ok_or_else(|| crate::Error::SourceChanged("Entry disappeared during collection".into()))?;
     if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
         if entry.size > remaining {
             return Err(
@@ -219,8 +246,9 @@ fn collect_entry(
             entry.hash = cached.hash;
         }
         if entry.hash.is_none() {
-            entry = observe(root, relative, true, remaining, cancel)?
-                .ok_or("File disappeared during collection")?;
+            entry = observe(root, relative, true, remaining, cancel)?.ok_or_else(|| {
+                crate::Error::SourceChanged("File disappeared during collection".into())
+            })?;
         }
     }
     if excluded {
@@ -234,131 +262,36 @@ fn collect_entry(
     }
     Ok(entry)
 }
-fn descend(root: &Root, entry: &mut Entry, stack: &mut Vec<Frame>, depth: usize) {
-    if entry.kind != "directory" {
-        return;
-    }
-    if stack.len() >= depth {
-        entry.kind = "excluded".into();
-        entry.warning = Some("Directory depth limit".into());
-        return;
-    }
-    match Frame::new(root, entry.path.clone()) {
-        Ok(frame) => stack.push(frame),
-        Err(error) => entry.warning = Some(error.to_string()),
-    }
-}
+mod traversal;
 pub(crate) fn scan(
     db: &Store,
     root: &Root,
     id: &str,
     limits: &Limits,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, u64),
+    progress: impl FnMut(u64, u64),
 ) -> Result<Coverage> {
     db.clear_scan(id)?;
-    let mut stack = vec![Frame::new(root, PathBuf::new())?];
-    let started = Instant::now();
-    let mut count = 0;
-    let mut bytes = 0_u64;
-    let mut payload = 0_u64;
-    let mut complete = true;
-    let mut messages = Vec::new();
-    let mut pending = Vec::with_capacity(128);
-    while let Some(frame) = stack.last_mut() {
-        cancelled(cancel)?;
-        let Some(child) = frame.reader.next() else {
-            stack.pop();
-            continue;
-        };
-        if count >= limits.entries || bytes >= limits.bytes || started.elapsed() >= limits.timeout {
-            complete = false;
-            messages.push("catalog entry, byte or time budget reached".to_string());
-            break;
-        }
-        let child = match child {
-            Ok(child) => child,
-            Err(e) => {
-                complete = false;
-                messages.push(format!("directory enumeration: {e}"));
-                stack.pop();
-                continue;
-            }
-        };
-        let relative = frame.relative.join(child.file_name());
-        let mut entry = match collect_entry(
-            db,
-            root,
-            &relative,
-            limits,
-            limits.hash_bytes.saturating_sub(payload),
-            cancel,
-        ) {
-            Ok(entry) => entry,
-            Err(error) => {
-                cancelled(cancel)?;
-                unavailable(relative.clone(), error.to_string())
-            }
-        };
-        if entry.kind == "file" && limits.hashes {
-            payload = payload.saturating_add(entry.size);
-        }
-        descend(root, &mut entry, &mut stack, limits.depth);
-        complete &= entry.warning.is_none();
-        let json = serde_json::to_string(&entry)?;
-        bytes = bytes
-            .saturating_add((json.len() + relative.as_os_str().as_bytes().len() * 3 + 256) as u64);
-        if bytes > limits.bytes {
-            complete = false;
-            messages.push("catalog byte budget reached".into());
-            break;
-        }
-        if let Some(warning) = &entry.warning
-            && messages.len() < 8
-        {
-            messages.push(format!("{}: {warning}", relative.display()));
-        }
-        pending.push(entry);
-        count += 1;
-        if pending.len() == 128 {
-            if !flush(db, id, &pending)? {
-                complete = false;
-                messages.push("catalog database byte limit reached".into());
-                pending.clear();
-                count = stored_count(db, id)?;
-                break;
-            }
-            pending.clear();
-            root.validate()?;
-            progress(count, bytes);
-        }
-    }
-    if !pending.is_empty() && !flush(db, id, &pending)? {
-        complete = false;
-        messages.push("catalog database byte limit reached".into());
-        count = stored_count(db, id)?;
-    }
-    root.validate()?;
-    progress(count, bytes);
-    let message = if !complete {
-        format!(
-            "Partial: {}",
-            if messages.is_empty() {
-                "incomplete tree".into()
-            } else {
-                messages.join("; ")
-            }
-        )
-    } else if limits.exclusions.is_empty() {
-        "Complete".into()
-    } else {
-        "Complete with configured exclusions".into()
+    traversal::Scanner::new(db, root, id, limits, cancel)?.run(progress)
+}
+fn issue(stage: CatalogScanStage, error: &crate::Error) -> CatalogScanIssue {
+    let (reason, errno) = match error {
+        crate::Error::Io(error) => (CatalogScanReason::Io, error.raw_os_error()),
+        crate::Error::SourceChanged(_) => (CatalogScanReason::Changed, None),
+        _ => (CatalogScanReason::GuardOrUnknown, None),
     };
-    Ok(Coverage {
-        count,
-        complete,
-        message,
-    })
+    CatalogScanIssue {
+        stage,
+        reason,
+        errno,
+    }
+}
+fn limit(reason: CatalogScanReason) -> CatalogScanIssue {
+    CatalogScanIssue {
+        stage: CatalogScanStage::Budget,
+        reason,
+        errno: None,
+    }
 }
 fn flush(db: &Store, id: &str, entries: &[Entry]) -> Result<bool> {
     let transaction = db.0.unchecked_transaction()?;

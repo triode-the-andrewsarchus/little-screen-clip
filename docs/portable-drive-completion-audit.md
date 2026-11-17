@@ -38,12 +38,12 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs partition images now pass on FAT32/exFAT/NTFS with exact source SHA-256 and retained earlier images. Mount-option and interrupted-device matrices remain. |
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
-| 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
+| 6.1 | Complete | Version-2 paginated SQLite catalogs preserve raw names, numeric sizes/types, original modification/ctime fields, captured Drive and pinned source mount/namespace, explicit known/unknown driver precision, per-directory coverage and typed stage/reason/errno. Host permission/replacement/raw-name tests, indexed multi-page reads, real FUSE details/errors and native FAT32/exFAT/NTFS precision/metadata checks pass. See the typed catalog coverage checkpoint. |
 | 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Operational-baseline accounting and rule-address alias/selector handling remain. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
-| 6.6 | Partial | Real FUSE metadata/errors/RO tested; pagination, type fidelity and mutation errno matrix remain. |
+| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention and read-only behavior. File-type fidelity, pre-epoch/overflow timestamp projection and the full mutation errno matrix remain. |
 | 6.7 | Partial | Provider metadata/digests now validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups also require their captured directory identity. Reuse of available sync/backup hashes and uncertain revision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
@@ -53,6 +53,111 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Typed catalog coverage and source precision
+
+New version-2 catalog databases retain per-directory direct-listing and subtree
+coverage, typed failure stage/reason/errno, the captured Drive, and core's existing
+source mount/namespace identities. These are dated observations, never payload
+access authority. Raw paths, sizes, modes/types and timestamp seconds/nanoseconds
+remain unchanged. Modification-time storage resolution is a separate fact for
+verified kernel FAT, exFAT and NTFS3 mounts; unrecognized and FUSE drivers remain
+unknown. The descriptive precision field never loosens provider revision/hash
+checks. The driver sources are linked in `docs/portable-drives.md`.
+
+The shared scanner now owns depth-bounded frames, a 128-entry transactional batch,
+progress and the final coverage report. Catalog directory completion is written
+only after child rows commit and the retained directory identity is confirmed.
+Unreadable roots/directories and replaced directory objects remain incomplete.
+Unfinished records inherit the global entry/byte/time/database stop reason, while
+an earlier direct diagnostic is retained. Configured exclusions stay separate
+from depth limits; a depth-limited folder remains a partial directory. Ordinary
+sync/backup scans retain their existing batch policy and persisted entry shape.
+
+The FUSE server exposes bounded JSON in `user.little-clip.catalog.details` and
+labels incomplete folders separately from Not catalogued boundaries. Exhausting
+an incomplete listing returns EIO after its known entries; an unknown child of
+that directory returns EIO instead of claiming absence. A completed parent's
+missing child still returns ENOENT, and a captured empty directory lists normally.
+Directory pages use the existing rowid inode/offset scheme with a new ordinary
+SQLite `(scan,parent)` index and a rowid range predicate. A 1,028-name test proves
+stable raw names/inodes/offsets across pages, and EXPLAIN confirms a rowid seek
+without a temporary directory-wide sort. No payload opens occur in that test.
+
+The version gate prevents old helpers from silently ignoring the new incomplete
+listing semantics. The current helper still accepts version-1 catalogs with
+unknown details. Ordinary drive state and backup manifests stay at version 1.
+A retained version-1 helper refuses a new catalog before mounting; the tested
+binary is `/tmp/little-clip-catalog-schema1-helper` (SHA-256
+`92c27944ff0a7d825840db34abe1cf11d4d80912848348c86efd536f3f640057`).
+
+Metadata redaction removes descendant entry diagnostics with the original rows,
+clears the boundary's old coverage and updates retained ancestor/root coverage.
+Capture dates and redaction revisions keep their existing separate meanings.
+The source identity record contains no descendant-name inventory. New summary
+messages avoid copying per-path failure names into retained ancestor summaries.
+
+Validation:
+
+- 119 ordinary backend cases pass, with 50 explicit native/scale fixtures ignored:
+  `/tmp/portable-drive-catalog-coverage-backend-accepted.log`. Seven new host cases, together with the existing database-cap case,
+  cover directory completion, labels versus observed mount type, original dates,
+  raw-name failures/legacy unknowns, actual EACCES as an ordinary user, root/depth/
+  entry/database coverage, multi-page reads, directory replacement, and redaction.
+- Core catalog compatibility/ordinary-source protection tests pass two cases;
+  Files drive logic passes fourteen. Selected all-target clippy, app/helper build,
+  formatting and Python compilation pass. Logs use the
+  `/tmp/portable-drive-catalog-coverage-` prefix with `core-final.log`,
+  `files-accepted.log`, `clippy-accepted.log`, `ui-build-accepted.log` and
+  `fmt-accepted.log`.
+- Three separate-process helper cases pass in
+  `/tmp/portable-drive-catalog-coverage-fuse-current.log`: old-helper refusal,
+  partial-listing metadata/EIO/ENOENT including core inventory errors, and retained
+  provider/stale-handle behavior. The first partial fixture passed its checks but
+  failed when its second mount reused an existing directory; mount paths now
+  include the catalog ID. That failed run is not counted as acceptance.
+- Fifteen native cases per FAT32/exFAT/NTFS3 source (45 total) pass in
+  `/tmp/portable-drive-vm-catalog-coverage-native-final/report.json`. These verify
+  observed driver precision and exact source modification fields alongside prior
+  backup/sync/safety coverage. The twelve image/read-only authority cases also pass:
+  `/tmp/portable-drive-vm-catalog-coverage-authority-final/report.json`. Both real
+  Btrfs cases remain green in `btrfs-final.log` with the checkpoint log prefix.
+- The million-file fixture passes in
+  `/tmp/portable-drive-catalog-coverage-scale-final.log`: excluded traversal takes
+  about 0.0022 seconds, a 1,000-entry limited capture about 0.060 seconds, its
+  database is 561,152 bytes, and peak process RSS is about 13 MiB. This is process
+  memory, not the fixture's kernel/tmpfs allocation.
+
+Rendered verification distinguishes Partial catalog, Not catalogued and actual
+empty folders. The first status layout adjustment put controls below the visible
+dock; the final layout reserves actions first, wraps text in its own left-aligned
+column and skips an empty pending row. It shares the existing status presentation
+with retained notices. Tests verify actual Retry/Dismiss captions before clicking,
+using bounded button-interior OCR because full-window OCR omits small bordered
+controls. Earlier failed visual/OCR runs remain under the preceding checkpoint
+log names rather than being counted as passes.
+
+Final dark/light coverage runs each pass five observations, including verified
+Retry and Dismiss clicks, in
+`/tmp/portable-drive-catalog-coverage-actions-{dark,light}-accepted/report.json`.
+Dark/light exclusion-boundary runs each pass three observations in
+`/tmp/portable-drive-catalog-boundary-actions-{dark,light}-accepted/report.json`.
+Both final layouts were visually inspected: controls remain visible, text stays
+in its own column, and the alert icon does not overpaint the message.
+
+The full-feature architecture result remains REGRESSION against
+`pre-portable-drive-services`: 4300 clone groups versus 4289, reported cycles
+144 versus 143, duplication 7.10% versus 7.30%, average CCN 3.48 versus 3.44,
+and maximum 274 unchanged. This checkpoint adds no clone group or new hotspot
+relative to `2e7191ae`. Shared fixture preparation removes its first two new
+clones. Catalog capture falls from CCN 18 to 16, and the old monolithic scan's
+CCN 30 is replaced by cohesive traversal, commit and report methods at or below
+15. Existing provider resolution remains unchanged. Selected fields are retained
+in `.fitness/portable-drives-catalog-coverage-architecture.json`.
+
+Item 6.1 is complete. Items 6.5–6.8 and the final architecture/workspace gates
+remain open; this checkpoint does not establish full catalog type/time fidelity,
+cross-driver provider equivalence or the complete interrupted-device matrix.
 
 ## Selectable read-only file collection
 

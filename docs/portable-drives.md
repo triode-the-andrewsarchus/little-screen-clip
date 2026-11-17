@@ -219,6 +219,37 @@ The daemon validates partition identity and additional device evidence before wr
 
 **Save / update catalog…** stores hierarchy, names, sizes, types, available modification times, and coverage status without copying file contents. **Mount saved catalog** exposes a read-only ordinary filesystem view. Saved catalogs remain accessible from the sidebar after the original drive is removed.
 
+New catalogs record direct-listing and descendant coverage for each directory.
+A folder labeled **Partial catalog** has failed, excluded or unvisited descendant
+metadata; a configured exclusion remains **Not catalogued**. A partial directory
+listing returns I/O failure at the end of its known entries. Looking up an
+uncaptured name in that directory also returns I/O failure, so missing metadata
+cannot claim the file was absent. A completed empty directory still lists normally.
+
+The read-only `user.little-clip.catalog.details` extended attribute exposes
+bounded JSON coverage, typed failure stage/reason/errno, observed source
+mount/namespace and modification-time storage resolution. Per-entry failures and
+directory coverage also remain in the paginated SQLite catalog. Capture does not
+read file payloads. Redaction removes descendant records and updates retained
+ancestor coverage; it preserves the original capture date.
+
+Captured timestamp seconds/nanoseconds are preserved exactly. Precision is a
+separate source-driver fact, never a content-matching rule: FAT modification time
+has two-second storage resolution, exFAT ten milliseconds, and kernel NTFS3 one
+hundred nanoseconds. These follow the kernel's
+[FAT timestamp conversion](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/fat/misc.c),
+[exFAT timestamp conversion](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/exfat/misc.c)
+and [NTFS3 timestamp conversion](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/ntfs3/ntfs_fs.h).
+Other drivers, including FUSE adapters, remain explicitly unknown. A nanosecond
+field or a filesystem label never proves finer resolution. Catalog details show
+the source mount type independently of the drive label. Existing provider
+revision/hash validation stays conservative.
+
+New catalog databases use version 2 so older helpers reject their partial-listing
+semantics. Updated helpers also read version-1 catalogs, whose missing precision
+and directory details remain unknown. Ordinary drive state and backup manifests
+retain version 1. Keep the helper and applications from the same build together.
+
 Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
 File-backup providers must retain their saved directory identity; replacing a

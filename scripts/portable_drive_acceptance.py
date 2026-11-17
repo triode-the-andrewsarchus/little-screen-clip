@@ -66,7 +66,7 @@ def click_word(session, shot, word, *, tree=False):
                 break
     if position is None:
         # Rounded small buttons can disappear in full-window segmentation.
-        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (105, 390, 300, 670), (820, 505, 888, 520)]:
+        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (105, 390, 300, 670), (820, 505, 888, 520), (1030, 440, 1184, 526)]:
             crop = session.output / 'drive-button.png'
             with Image.open(session.output / (shot + '.png')) as screen:
                 region = screen.crop(bounds)
@@ -100,6 +100,13 @@ def caption(session, shot, bounds):
         interior.resize((interior.width * 6, interior.height * 6)).save(label)
     rendered = private.run_checked(['tesseract', str(label), 'stdout', '--psm', '7'], env=session.env)
     return ''.join(character for character in rendered.lower() if character.isalpha())
+
+
+def click_status_action(session, shot, label):
+    # Private fixture geometry, verified against the actual rendered interior.
+    bounds = {'Retry': (1041, 448, 1093, 464), 'Dismiss': (1109, 448, 1171, 464)}[label]
+    assert caption(session, shot, bounds) == label.lower(), (shot, label)
+    session.click((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
 
 
 def cancel_backup_review(session, shot):
@@ -357,6 +364,14 @@ def exercise(session, root):
             (session.output / 'drive-cleanup-error.txt').write_text(str(error))
 
 
+def mount_catalog_offline(env, root, catalog):
+    (root / 'portable').rename(root / 'removed-portable')
+    wait_for(lambda: not status(env)['drives'], 'offline catalog source')
+    completed(env, request(env, {'MountCatalog': {'catalog': catalog['id']}}))
+    current = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+    return Path(current['mount'])
+
+
 def exercise_catalog_boundary(session, root):
     """Verify exclusion presentation without repeating unrelated storage workflows."""
     env = session.env
@@ -364,11 +379,8 @@ def exercise_catalog_boundary(session, root):
     completed(env, request(env, {'Rule': {'drive': drive, 'relative': 'many', 'catalog': False, 'index': False}}))
     completed(env, request(env, {'Catalog': {'drive': drive}}))
     catalog = status(env)['catalogs'][0]
-    (root / 'portable').rename(root / 'removed-portable')
-    wait_for(lambda: not status(env)['drives'], 'offline catalog source')
-    completed(env, request(env, {'MountCatalog': {'catalog': catalog['id']}}))
+    mount = mount_catalog_offline(env, root, catalog)
     try:
-        mount = Path(next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])['mount'])
         session.address(mount)
         text = session.observe('offline-catalog', ['readme.txt', 'many', 'empty', 'Not catalogued'])
         assert 'File changed since enumeration' not in text
@@ -377,6 +389,33 @@ def exercise_catalog_boundary(session, root):
         session.observe('excluded-catalog-folder', ['Cannot open', 'Not catalogued', 'excluded from the saved catalog'])
         session.address(mount)
         session.observe('catalog-after-excluded-navigation', ['readme.txt', 'many', 'Not catalogued'])
+    finally:
+        completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+
+
+def exercise_catalog_coverage(session, root):
+    """An incomplete offline folder must disclose its coverage instead of emptiness."""
+    env = session.env
+    drive = status(env)['drives'][0]['id']
+    config = status(env)['config']
+    config['catalog_max_depth'] = 1
+    completed(env, request(env, {'Configure': {'config': config}}))
+    completed(env, request(env, {'Catalog': {'drive': drive}}))
+    catalog = status(env)['catalogs'][0]
+    assert not catalog['complete']
+    assert catalog['details']['directory']['listing_complete']
+    mount = mount_catalog_offline(env, root, catalog)
+    try:
+        session.address(mount)
+        session.observe('partial-catalog-root', ['readme.txt', 'many', 'Partial catalog'])
+        session.address(mount / 'many')
+        session.observe('incomplete-catalog-folder', ['Cannot open', 'Partial catalog', 'not fully inventoried'])
+        click_status_action(session, 'incomplete-catalog-folder', 'Retry')
+        session.observe('incomplete-catalog-retry', ['Cannot open', 'Partial catalog'])
+        click_status_action(session, 'incomplete-catalog-retry', 'Dismiss')
+        session.observe('incomplete-catalog-dismissed', ['readme.txt', 'many', 'Partial catalog'])
+        session.address(mount)
+        session.observe('partial-catalog-return', ['readme.txt', 'many', 'Partial catalog'])
     finally:
         completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
@@ -510,6 +549,7 @@ def main():
         scenarios = parser.add_mutually_exclusive_group()
         scenarios.add_argument('--backup-review-only', action='store_true')
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
+        scenarios.add_argument('--catalog-coverage-only', action='store_true')
         scenarios.add_argument('--catalog-redaction-only', action='store_true')
         scenarios.add_argument('--policy-editor-only', action='store_true')
         scenarios.add_argument('--ram-pending-only', action='store_true')
@@ -537,6 +577,8 @@ def main():
         scenario, scope = exercise_policy_editor, 'Whole-drive and folder policy lookup beyond status pagination without resetting saved flags'
     elif args.catalog_redaction_only:
         scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'
+    elif args.catalog_coverage_only:
+        scenario, scope = exercise_catalog_coverage, 'Offline partial catalog labels, typed directory coverage and incomplete-folder navigation errors'
     elif args.catalog_boundary_only:
         scenario, scope = exercise_catalog_boundary, 'Offline catalog exclusion labels, empty folders and navigation errors'
     elif args.backup_review_only:

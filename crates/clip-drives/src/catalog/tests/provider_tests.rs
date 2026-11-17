@@ -10,7 +10,10 @@ impl CatalogProcess {
         use little_clip_core::process::CommandRequest;
         let helper = std::env::var_os("LITTLE_CLIP_DRIVE_MOUNT_HELPER")
             .expect("Build and explicitly select the current clip-drive-mount helper");
-        let mount = fixture.temp.path().join("provider-view");
+        let mount = fixture
+            .temp
+            .path()
+            .join(format!("provider-view-{}", catalog.id));
         fs::create_dir(&mount).unwrap();
         let child = CommandRequest::new(helper)
             .arg(&fixture.state.path)
@@ -173,4 +176,86 @@ fn real_fuse_reads_retain_one_provider_and_reject_replaced_payloads() {
     assert_eq!(error.raw_os_error(), Some(libc::ESTALE));
     drop(held);
     drop(server);
+}
+
+#[test]
+#[ignore = "requires /dev/fuse, fusermount3 and LITTLE_CLIP_DRIVE_MOUNT_HELPER"]
+fn real_fuse_partial_listings_disclose_details_and_refuse_successful_empty_or_absent_results() {
+    use little_clip_core::catalog_metadata::{
+        CATALOG_DETAILS_XATTR, CatalogEntryStatus, CatalogMount,
+    };
+    let fixture = fixture();
+    let catalog = coverage_tests::limited_subtree(&fixture);
+    let server = CatalogProcess::start(&fixture, &catalog);
+    let limited = server.mount.join("limited");
+    let mount = CatalogMount::detect(&server.mount).unwrap();
+    assert_eq!(mount.status(&limited), Some(CatalogEntryStatus::Incomplete));
+    let error = little_clip_core::file_inventory::read_directory(&limited, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(error.contains("Partial catalog"), "{error}");
+    let mut bytes = [0; 2048];
+    let len = rustix::fs::getxattr(&limited, CATALOG_DETAILS_XATTR, &mut bytes[..]).unwrap();
+    let details: serde_json::Value = serde_json::from_slice(&bytes[..len]).unwrap();
+    assert_eq!(details["directory"]["issue"]["reason"], "Depth");
+    let error = fs::read_dir(&limited)
+        .and_then(|rows| rows.collect::<std::io::Result<Vec<_>>>())
+        .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EIO));
+    assert_eq!(
+        fs::metadata(limited.join("unseen"))
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::EIO)
+    );
+    assert_eq!(
+        fs::metadata(server.mount.join("absent"))
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::ENOENT)
+    );
+    drop(server);
+
+    let catalog = fixture
+        .capture(&DriveConfig {
+            catalog_max_entries: 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let server = CatalogProcess::start(&fixture, &catalog);
+    assert_eq!(
+        fs::metadata(server.mount.join("unobserved-name"))
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::EIO)
+    );
+    let error = fs::read_dir(&server.mount)
+        .and_then(|rows| rows.collect::<std::io::Result<Vec<_>>>())
+        .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EIO));
+    drop(server);
+}
+
+#[test]
+#[ignore = "requires an explicitly retained version-1 LITTLE_CLIP_DRIVE_LEGACY_MOUNT_HELPER"]
+fn older_helpers_refuse_typed_catalogs_before_mounting_incomplete_listings() {
+    let helper = std::env::var_os("LITTLE_CLIP_DRIVE_LEGACY_MOUNT_HELPER")
+        .expect("Select a retained version-1 catalog helper");
+    let fixture = fixture();
+    let catalog = coverage_tests::limited_subtree(&fixture);
+    let mount = fixture.temp.path().join("legacy-refusal");
+    fs::create_dir(&mount).unwrap();
+    let output = little_clip_core::process::CommandRequest::new(helper)
+        .arg(&fixture.state.path)
+        .arg(&catalog.id)
+        .arg(&mount)
+        .timeout(Duration::from_secs(5))
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unsupported drive database version"));
+    assert!(
+        crate::mounts::catalog_mount(&mount, &catalog.id)
+            .unwrap()
+            .is_none()
+    );
 }

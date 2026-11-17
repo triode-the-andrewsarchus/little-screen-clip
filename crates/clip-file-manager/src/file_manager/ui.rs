@@ -606,6 +606,13 @@ impl FileManager {
     }
 
     fn pending_status_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let status = self
+            .fuse_mounts
+            .status_text()
+            .or_else(|| self.mounts.status_text().map(str::to_owned));
+        if self.pending.is_none() && status.is_none() {
+            return;
+        }
         ui.horizontal(|ui| {
             if let Some(request) = &self.pending {
                 ui.spinner();
@@ -628,10 +635,6 @@ impl FileManager {
                     }
                 }
             }
-            let status = self
-                .fuse_mounts
-                .status_text()
-                .or_else(|| self.mounts.status_text().map(str::to_owned));
             if let Some(mount_status) = status {
                 ui.spinner();
                 ui.add(egui::Label::new(mount_status).truncate(true));
@@ -646,29 +649,23 @@ impl FileManager {
         if self.last_status.as_ref().map(|s| &s.text) != Some(error) {
             self.last_status = Some(super::LastStatus::new(Icon::Alert, error.clone(), true));
         }
-        let (retry, dismiss) = ui
-            .horizontal_wrapped(|ui| {
-                Icon::Alert.ui(ui, clip_ui::ui_ext::CONTROL_ICON_SIZE, colors.danger);
-                ui.add(
-                    egui::Label::new(egui::RichText::new(error).color(colors.danger)).wrap(true),
-                );
-                let retry = ui
-                    .add(
-                        clip_ui::buttons::ButtonRole::Secondary
-                            .button("Retry", palette)
-                            .small(),
-                    )
-                    .clicked();
-                let dismiss = ui
-                    .add(
-                        clip_ui::buttons::ButtonRole::Secondary
-                            .button("Dismiss", palette)
-                            .small(),
-                    )
-                    .clicked();
-                (retry, dismiss)
-            })
-            .inner;
+        let (retry, dismiss) = status_notice(ui, Icon::Alert, error, colors.danger, |ui| {
+            let dismiss = ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Dismiss", palette)
+                        .small(),
+                )
+                .clicked();
+            let retry = ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Retry", palette)
+                        .small(),
+                )
+                .clicked();
+            (retry, dismiss)
+        });
         if retry {
             self.retry();
         }
@@ -692,26 +689,14 @@ impl FileManager {
         } else {
             colors.text_secondary
         };
-        let dismiss = ui
-            .horizontal_top(|ui| {
-                last.icon.ui(ui, clip_ui::ui_ext::CONTROL_ICON_SIZE, color);
-                // Reserve the action first so a long path cannot push it offscreen.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                    let dismiss = ui
-                        .add(
-                            clip_ui::buttons::ButtonRole::Secondary
-                                .button("Dismiss", palette)
-                                .small(),
-                        )
-                        .clicked();
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&last.text).color(color)).wrap(true),
-                    );
-                    dismiss
-                })
-                .inner
-            })
-            .inner;
+        let dismiss = status_notice(ui, last.icon, &last.text, color, |ui| {
+            ui.add(
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button("Dismiss", palette)
+                    .small(),
+            )
+            .clicked()
+        });
         if dismiss {
             self.clear_status();
         }
@@ -1090,6 +1075,29 @@ impl FileManager {
         }
         None
     }
+}
+
+fn status_notice<T>(
+    ui: &mut Ui,
+    icon: Icon,
+    text: &str,
+    color: Color32,
+    actions: impl FnOnce(&mut Ui) -> T,
+) -> T {
+    ui.horizontal_top(|ui| {
+        icon.ui(ui, clip_ui::ui_ext::CONTROL_ICON_SIZE, color);
+        // Reserve controls before wrapping. Each message line stays to the right
+        // of the icon, and long paths cannot push the actions out of view.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+            let result = actions(ui);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap(true));
+            });
+            result
+        })
+        .inner
+    })
+    .inner
 }
 
 fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &AppPalette) -> bool {
@@ -1545,10 +1553,7 @@ fn file_row(
             display_path(&entry.path),
             entry
                 .catalog_status
-                .map(|status| format!(
-                    "\n{}: contents were excluded from this saved snapshot",
-                    status.label()
-                ))
+                .map(|status| format!("\n{}: {}", status.label(), status.explanation()))
                 .unwrap_or_default(),
             entry
                 .warning

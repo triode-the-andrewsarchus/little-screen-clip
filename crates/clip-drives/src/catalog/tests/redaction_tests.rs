@@ -158,6 +158,51 @@ fn root_redaction_is_not_an_empty_snapshot_or_a_new_capture() {
 }
 
 #[test]
+fn redaction_retires_descendant_diagnostics_and_updates_retained_ancestor_coverage() {
+    let fixture = fixture();
+    std::fs::create_dir_all(fixture.source.path.join("parent/private/hidden")).unwrap();
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    let before = filesystem(&fixture.state.path, catalog.clone());
+    let (parent, _) = before.lookup_path(Path::new("parent")).unwrap().unwrap();
+    assert!(
+        before
+            .row(parent)
+            .unwrap()
+            .unwrap()
+            .directory_coverage
+            .unwrap()
+            .subtree_complete
+    );
+    drop(before);
+    let intent = exclude(&fixture, Path::new("parent/private"));
+    assert!(apply(&fixture, &intent).unwrap());
+    let updated: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert!(!updated.details.as_ref().unwrap().directory.subtree_complete);
+    let view = filesystem(&fixture.state.path, updated);
+    let (parent, _) = view.lookup_path(Path::new("parent")).unwrap().unwrap();
+    assert!(
+        !view
+            .row(parent)
+            .unwrap()
+            .unwrap()
+            .directory_coverage
+            .unwrap()
+            .subtree_complete
+    );
+    let (_, boundary) = view
+        .lookup_path(Path::new("parent/private"))
+        .unwrap()
+        .unwrap();
+    assert!(boundary.directory_coverage.is_none());
+    assert!(boundary.failure.is_none());
+    assert!(
+        view.lookup_path(Path::new("parent/private/hidden"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn interrupted_registration_retries_without_rewriting_the_redaction_date_or_losing_new_intents() {
     let fixture = fixture();
     std::fs::create_dir(fixture.source.path.join("private")).unwrap();

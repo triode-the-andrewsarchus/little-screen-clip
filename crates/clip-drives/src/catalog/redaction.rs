@@ -196,10 +196,31 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
             entry.hash = None;
             entry.link = None;
             entry.warning = Some("Metadata removed by an explicit catalog exclusion".into());
+            entry.failure = None;
+            entry.directory_coverage = None;
             scan::put(db, "catalog", &entry)?;
         }
         removed
     };
+    // Completeness of retained ancestors changes when descendants are removed.
+    if let Some(details) = &mut catalog.details {
+        details.directory.subtree_complete = false;
+        details.directory.incomplete_child = true;
+    }
+    for parent in intent
+        .relative
+        .ancestors()
+        .skip(1)
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        if let Some(mut entry) = scan::entry(db, "catalog", parent)? {
+            if let Some(coverage) = &mut entry.directory_coverage {
+                coverage.subtree_complete = false;
+                coverage.incomplete_child = true;
+            }
+            scan::put(db, "catalog", &entry)?;
+        }
+    }
     catalog.entries = db.0.query_row(
         "SELECT count(*) FROM entries WHERE scan='catalog'",
         [],
@@ -287,6 +308,7 @@ fn complete(registry: &Store, intent: &Intent, catalog: Catalog) -> Result<()> {
         current.entries = catalog.entries;
         current.complete = catalog.complete;
         current.coverage = catalog.coverage;
+        current.details = catalog.details;
         current.redacted = catalog.redacted;
         current.redaction_generation = catalog.redaction_generation;
         current.root_excluded = catalog.root_excluded;

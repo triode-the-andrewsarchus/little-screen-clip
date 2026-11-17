@@ -10,24 +10,103 @@ use std::{
 pub const CATALOG_FS_SUBTYPE: &str = "clip-catalog";
 /// Read-only catalog coverage attribute; its values are bounded protocol tokens.
 pub const CATALOG_STATUS_XATTR: &str = "user.little-clip.catalog.status";
+/// Structured capture coverage and timestamp facts, bounded independently of payloads.
+pub const CATALOG_DETAILS_XATTR: &str = "user.little-clip.catalog.details";
+
+/// The stage at which a metadata-only inventory observation failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CatalogScanStage {
+    InspectEntry,
+    OpenDirectory,
+    ReadDirectory,
+    Budget,
+}
+
+/// A typed failure or traversal limit; neither absence nor truncation means empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CatalogScanReason {
+    Io,
+    Changed,
+    GuardOrUnknown,
+    Entries,
+    Bytes,
+    Database,
+    Depth,
+    Time,
+}
+
+/// A bounded diagnostic. Entry-specific human-readable errors stay with that entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CatalogScanIssue {
+    pub stage: CatalogScanStage,
+    pub reason: CatalogScanReason,
+    pub errno: Option<i32>,
+}
+
+/// Coverage of one directory in the dated capture, including its descendants.
+///
+/// Completeness is an observation of traversal, never a transactional snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CatalogDirectoryCoverage {
+    /// True only after the directory iterator reached its end without an error.
+    pub listing_complete: bool,
+    /// False when any descendant is excluded, failed or not fully traversed.
+    pub subtree_complete: bool,
+    /// Immediate entries whose metadata or subtree could not be collected.
+    pub failed_entries: u64,
+    /// At least one immediate subtree did not have complete coverage.
+    pub incomplete_child: bool,
+    /// Direct directory or budget failure; propagated global limits stay separate.
+    pub issue: Option<CatalogScanIssue>,
+}
+
+/// Source and root coverage facts recorded by newer metadata captures.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CatalogCaptureDetails {
+    pub directory: CatalogDirectoryCoverage,
+    /// Limit that stopped the scan; unfinished directory records inherit this limit.
+    pub stopped: Option<CatalogScanIssue>,
+    /// Captured root identity; this dated observation never authorizes a later read.
+    pub source_mount: MountIdentity,
+    /// Namespace in which the source root was observed.
+    pub namespace: Namespace,
+    /// Observed kernel mount type, independently of labels or filename conventions.
+    pub filesystem: Option<String>,
+    /// Documented modification-time storage resolution for a known source driver.
+    /// None means unknown. This does not authorize revision or content equivalence.
+    pub mtime_resolution_ns: Option<u64>,
+}
 
 /// A disclosed boundary in a dated metadata catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CatalogEntryStatus {
     /// Descendant contents were excluded, rather than observed to be empty.
     NotCatalogued,
+    /// Some descendant metadata is missing, failed, excluded or truncated.
+    Incomplete,
 }
 impl CatalogEntryStatus {
     /// Returns the fixed metadata protocol token.
     pub fn token(self) -> &'static [u8] {
         match self {
             Self::NotCatalogued => b"not-catalogued",
+            Self::Incomplete => b"incomplete",
         }
     }
     /// Returns the displayed coverage label.
     pub fn label(self) -> &'static str {
         match self {
             Self::NotCatalogued => "Not catalogued",
+            Self::Incomplete => "Partial catalog",
+        }
+    }
+    /// Describes the observation without treating missing metadata as an empty folder.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::NotCatalogued => "Contents were excluded from this saved snapshot",
+            Self::Incomplete => {
+                "Some descendant metadata was excluded, failed or not fully inventoried"
+            }
         }
     }
 }
@@ -96,6 +175,9 @@ impl CatalogMount {
         match &bytes[..count] {
             value if value == CatalogEntryStatus::NotCatalogued.token() => {
                 Some(CatalogEntryStatus::NotCatalogued)
+            }
+            value if value == CatalogEntryStatus::Incomplete.token() => {
+                Some(CatalogEntryStatus::Incomplete)
             }
             _ => None,
         }

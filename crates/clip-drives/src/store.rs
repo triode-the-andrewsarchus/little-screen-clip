@@ -39,7 +39,9 @@ impl Store {
     fn checked(db: Connection) -> Result<Self> {
         let version: u32 =
             db.query_row("SELECT value FROM version WHERE id=1", [], |r| r.get(0))?;
-        if version != 1 {
+        // Version 2 is the same table layout with typed catalog coverage.
+        // Its gate prevents older FUSE helpers from treating partial folders as empty.
+        if !matches!(version, 1 | 2) {
             return Err("Unsupported drive database version".into());
         }
         Ok(Self(db))

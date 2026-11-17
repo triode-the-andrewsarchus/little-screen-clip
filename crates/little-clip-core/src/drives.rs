@@ -525,6 +525,9 @@ pub struct Catalog {
     pub entries: u64,
     pub complete: bool,
     pub coverage: String,
+    /// Structured source/coverage facts; absent in older saved catalogs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<crate::catalog_metadata::CatalogCaptureDetails>,
     /// Most recent explicit metadata redaction; the original capture date is retained.
     #[serde(default)]
     pub redacted: Option<u64>,
@@ -629,6 +632,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(catalog.captured, 123);
+        assert_eq!(catalog.details, None);
+        assert!(
+            serde_json::to_value(&catalog)
+                .unwrap()
+                .get("details")
+                .is_none()
+        );
         assert_eq!(catalog.redacted, None);
         assert_eq!(catalog.redaction_generation, 0);
         assert_eq!(catalog.pending_redactions, 0);

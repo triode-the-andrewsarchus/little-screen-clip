@@ -25,6 +25,7 @@ use std::{
     sync::atomic::AtomicBool,
     time::{Duration, SystemTime},
 };
+mod capture_details;
 pub(crate) mod redaction;
 
 pub(crate) fn capture(
@@ -55,6 +56,7 @@ pub(crate) fn capture(
         transaction.commit()?;
     }
     let limits = Limits {
+        detailed_coverage: true,
         hash_bytes: u64::MAX,
         entries: config.catalog_max_entries,
         bytes: config.catalog_max_bytes,
@@ -65,18 +67,10 @@ pub(crate) fn capture(
         exclusions,
         reuse_scan: None,
     };
-    let cat_db = Store::open(&path)?;
-    if config.catalog_max_bytes < 128 * 1024 {
-        return Err("Catalog byte limit must be at least 128 KiB".into());
-    }
-    cat_db.0.execute_batch("PRAGMA journal_mode=DELETE")?;
-    let page_size: u64 = cat_db.0.query_row("PRAGMA page_size", [], |r| r.get(0))?;
-    let pages = config.catalog_max_bytes / page_size;
-    cat_db
-        .0
-        .pragma_update(None, "max_page_count", pages.saturating_sub(16))?;
+    let (cat_db, pages) = capture_details::database(&path, config.catalog_max_bytes)?;
     let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
     cat_db.0.pragma_update(None, "max_page_count", pages)?;
+    let details = capture_details::source(root, coverage.directory, coverage.stopped)?;
     let catalog = Catalog {
         id: id.clone(),
         drive: drive.id.clone(),
@@ -86,6 +80,7 @@ pub(crate) fn capture(
         entries: coverage.count,
         complete: coverage.complete,
         coverage: coverage.message,
+        details: Some(details),
         redacted: None,
         redaction_generation: 0,
         pending_redactions: 0,
@@ -93,6 +88,7 @@ pub(crate) fn capture(
         root_excluded: false,
         mount: None,
     };
+    cat_db.put("source", "drive", drive)?;
     cat_db.put("catalog", &id, &catalog)?;
     redaction::publish(db, &catalog, &limits.exclusions)?;
     Ok(catalog)
@@ -141,14 +137,78 @@ impl CatalogFs {
         ino: u64,
     ) -> Result<Option<little_clip_core::catalog_metadata::CatalogEntryStatus>> {
         if ino == 1 {
-            return Ok(self
+            return Ok(if self.catalog.root_excluded {
+                Some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued)
+            } else if self
                 .catalog
-                .root_excluded
-                .then_some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued));
+                .details
+                .as_ref()
+                .is_some_and(|details| !details.directory.subtree_complete)
+            {
+                Some(little_clip_core::catalog_metadata::CatalogEntryStatus::Incomplete)
+            } else {
+                None
+            });
         }
         let entry = self.row(ino)?.ok_or("Unknown catalog entry")?;
-        Ok((entry.kind == "excluded")
-            .then_some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued))
+        Ok(if entry.kind == "excluded" {
+            Some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued)
+        } else if entry
+            .directory_coverage
+            .as_ref()
+            .is_some_and(|coverage| !coverage.subtree_complete)
+        {
+            Some(little_clip_core::catalog_metadata::CatalogEntryStatus::Incomplete)
+        } else {
+            None
+        })
+    }
+    fn details(&self, ino: u64) -> Result<Option<Vec<u8>>> {
+        let Some(source) = &self.catalog.details else {
+            return Ok(None);
+        };
+        let (directory, failure, excluded) = if ino == 1 {
+            (
+                Some(source.directory.clone()),
+                None,
+                self.catalog.root_excluded,
+            )
+        } else {
+            let entry = self.row(ino)?.ok_or("Unknown catalog entry")?;
+            (
+                entry.directory_coverage,
+                entry.failure,
+                entry.kind == "excluded",
+            )
+        };
+        let directory = directory.map(|mut coverage| {
+            if excluded {
+                coverage = Default::default();
+            } else if !coverage.listing_complete && coverage.issue.is_none() {
+                coverage.issue = source.stopped;
+            }
+            coverage
+        });
+        Ok(Some(serde_json::to_vec(&serde_json::json!({
+            "directory": directory, "failure": failure, "excluded": excluded,
+            "filesystem": source.filesystem, "mtime_resolution_ns": source.mtime_resolution_ns,
+            "source_mount": source.source_mount, "namespace": source.namespace,
+        }))?))
+    }
+    fn listing_complete(&self, ino: u64) -> Result<bool> {
+        if ino == 1 {
+            return Ok(self
+                .catalog
+                .details
+                .as_ref()
+                .map_or(self.catalog.complete, |details| {
+                    details.directory.listing_complete
+                }));
+        }
+        let entry = self.row(ino)?.ok_or("Unknown catalog directory")?;
+        Ok(entry
+            .directory_coverage
+            .map_or(self.catalog.complete, |coverage| coverage.listing_complete))
     }
     fn row(&self, ino: u64) -> Result<Option<Entry>> {
         let json: Option<String> = self
@@ -174,6 +234,34 @@ impl CatalogFs {
             .optional()?;
         row.map(|(id, json)| Ok((id as u64 + 2, serde_json::from_str(&json)?)))
             .transpose()
+    }
+    fn directory_page(&self, ino: u64, offset: i64) -> Result<Vec<(u64, OsString, Entry)>> {
+        let path = self.parent_path(ino)?;
+        let mut statement = self.db.0.prepare("SELECT rowid,name,json FROM entries WHERE scan='catalog' AND parent=?1 AND rowid>?2 ORDER BY rowid LIMIT 512")?;
+        let rows = statement.query_map(
+            params![path.as_os_str().as_bytes(), offset.saturating_sub(2)],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        let page = rows
+            .map(|row| {
+                let (id, name, json) = row?;
+                Ok((
+                    id as u64 + 2,
+                    OsString::from_vec(name),
+                    serde_json::from_str(&json)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if page.is_empty() && !self.listing_complete(ino)? {
+            return Err(std::io::Error::from_raw_os_error(libc::EIO).into());
+        }
+        Ok(page)
     }
     fn parent_path(&self, ino: u64) -> Result<PathBuf> {
         if ino == 1 {
@@ -324,6 +412,14 @@ impl Filesystem for CatalogFs {
         size: u32,
         reply: ReplyXattr,
     ) {
+        if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR) {
+            match self.details(ino) {
+                Ok(Some(details)) => xattr_reply(&details, size, reply),
+                Ok(None) => reply.error(libc::ENODATA),
+                Err(_) => reply.error(libc::ENOENT),
+            }
+            return;
+        }
         if name != OsStr::new(little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR) {
             reply.error(libc::ENODATA);
             return;
@@ -335,15 +431,24 @@ impl Filesystem for CatalogFs {
         }
     }
     fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
-        match self.coverage(ino) {
-            Ok(Some(_)) => {
-                let key = format!(
-                    "{}\0",
-                    little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR
+        let result = (|| -> Result<Vec<u8>> {
+            let mut names = Vec::new();
+            if self.coverage(ino)?.is_some() {
+                names.extend_from_slice(
+                    little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR.as_bytes(),
                 );
-                xattr_reply(key.as_bytes(), size, reply);
+                names.push(0);
             }
-            Ok(None) => xattr_reply(b"", size, reply),
+            if self.details(ino)?.is_some() {
+                names.extend_from_slice(
+                    little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR.as_bytes(),
+                );
+                names.push(0);
+            }
+            Ok(names)
+        })();
+        match result {
+            Ok(names) => xattr_reply(&names, size, reply),
             Err(_) => reply.error(libc::ENOENT),
         }
     }
@@ -361,7 +466,11 @@ impl Filesystem for CatalogFs {
             Ok(Some((ino, entry))) => {
                 reply.entry(&Duration::from_secs(1), &self.attr(ino, Some(&entry)), 0)
             }
-            Ok(None) => reply.error(libc::ENOENT),
+            Ok(None) => reply.error(if self.listing_complete(parent).unwrap_or(false) {
+                libc::ENOENT
+            } else {
+                libc::EIO
+            }),
             Err(_) => reply.error(libc::EACCES),
         }
     }
@@ -418,30 +527,15 @@ impl Filesystem for CatalogFs {
         mut reply: ReplyDirectory,
     ) {
         let result = (|| -> Result<()> {
-            let path = self.parent_path(ino)?;
+            self.parent_path(ino)?;
             if offset < 1 && reply.add(ino, 1, FileType::Directory, ".") {
                 return Ok(());
             }
             if offset < 2 && reply.add(1, 2, FileType::Directory, "..") {
                 return Ok(());
             }
-            let mut statement=self.db.0.prepare("SELECT rowid,name,json FROM entries WHERE scan='catalog' AND parent=?1 AND rowid+2>?2 ORDER BY rowid LIMIT 512")?;
-            let rows = statement.query_map(params![path.as_os_str().as_bytes(), offset], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, name, json) = row?;
-                let entry: Entry = serde_json::from_str(&json)?;
-                if reply.add(
-                    id as u64 + 2,
-                    id + 2,
-                    file_type(&entry.kind),
-                    OsString::from_vec(name),
-                ) {
+            for (id, name, entry) in self.directory_page(ino, offset)? {
+                if reply.add(id, id as i64, file_type(&entry.kind), name) {
                     break;
                 }
             }
@@ -449,6 +543,7 @@ impl Filesystem for CatalogFs {
         })();
         match result {
             Ok(()) => reply.ok(),
+            Err(crate::Error::Io(error)) => reply.error(error.raw_os_error().unwrap_or(libc::EIO)),
             Err(_) => reply.error(libc::EACCES),
         }
     }
@@ -585,6 +680,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod coverage_tests;
     mod provider_tests;
     mod redaction_tests;
     use super::*;
@@ -762,6 +858,10 @@ mod tests {
         };
         let catalog = fixture.capture(&config).unwrap();
         assert!(!catalog.complete);
+        assert_eq!(
+            catalog.details.as_ref().unwrap().stopped.unwrap().reason,
+            little_clip_core::catalog_metadata::CatalogScanReason::Database
+        );
         let path = fixture
             .state
             .path

@@ -964,6 +964,19 @@ fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
     )
     .unwrap();
     assert!(catalog.complete);
+    let facts = catalog.details.as_ref().unwrap();
+    assert_eq!(facts.filesystem.as_deref(), Some(drive.filesystem.as_str()));
+    assert_eq!(
+        facts.mtime_resolution_ns,
+        Some(match drive.filesystem.as_str() {
+            "vfat" => 2_000_000_000,
+            "exfat" => 10_000_000,
+            "ntfs3" => 100,
+            other => panic!("unexpected native source {other}"),
+        })
+    );
+    assert!(facts.directory.listing_complete);
+    assert!(!facts.directory.subtree_complete);
     let database = Store::existing(
         &state
             .path
@@ -976,6 +989,11 @@ fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
         .unwrap()
         .unwrap();
     assert_eq!(entry.size, 9);
+    let observed = fs::metadata(fixture.a.join("metadata.bin")).unwrap();
+    assert_eq!(
+        (entry.modified, entry.nanos),
+        (observed.mtime(), observed.mtime_nsec())
+    );
     assert!(entry.hash.is_none());
     assert_eq!(
         scan::entry(&database, "catalog", Path::new("excluded"))
