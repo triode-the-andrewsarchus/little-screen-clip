@@ -55,7 +55,7 @@ struct Owner {
     sync_auto: std::collections::BTreeMap<String, reconciliation::Intent>,
     deferred: std::collections::VecDeque<Envelope>,
     sync_epoch: u64,
-    background: Option<background::Pending>,
+    background: HashMap<String, background::Pending>,
     catalog_cleanup: catalog_cleanup::Cleanup,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
@@ -189,13 +189,16 @@ impl Service {
             sync_auto: Default::default(),
             deferred: Default::default(),
             sync_epoch: 0,
-            background: None,
+            background: HashMap::new(),
             catalog_cleanup: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             authority,
             previews: previews.clone(),
-            backup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
+            backup_jobs: little_clip_core::jobs::BackgroundJobs::new(
+                little_clip_core::drives::MAX_CATALOG_WORKERS,
+                little_clip_core::drives::MAX_CATALOG_WORKERS,
+            ),
             inventory: inventory.clone(),
             unidentified_ram: HashMap::new(),
             sync_roots: HashMap::new(),
@@ -471,7 +474,7 @@ impl Owner {
                 &self.db,
                 &self.state,
                 &self.closing,
-                self.background.is_none()
+                self.background.is_empty()
                     && !self
                         .partition
                         .as_ref()
@@ -547,8 +550,10 @@ impl Owner {
             std::thread::sleep(Duration::from_millis(20));
         }
         // Retain accepted bulk ownership and the singleton lock until actual completion.
-        while let Some(job) = &self.background {
-            job.cancel.store(true, Ordering::Release);
+        while !self.background.is_empty() {
+            for job in self.background.values() {
+                job.cancel.store(true, Ordering::Release);
+            }
             self.poll_background();
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -749,7 +754,7 @@ impl Owner {
             DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
             DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
             DriveRequest::PruneBackups { drive } => {
-                if self.background.is_some() {
+                if !self.background.is_empty() {
                     return Err("Wait for the active backup or catalog before pruning".into());
                 }
                 let keep = self
@@ -1072,8 +1077,8 @@ impl Owner {
         );
         excluded.extend(
             self.background
-                .as_ref()
-                .and_then(|job| job.destination.clone()),
+                .values()
+                .filter_map(|job| job.destination.clone()),
         );
         self.db
             .visit::<ram_setup::Allocation>("ram-allocation", |allocation| {
@@ -1217,6 +1222,7 @@ mod tests {
     mod backup_review;
     mod catalog_cleanup;
     mod catalog_limits;
+    mod catalog_workers;
     mod event_loss;
     mod guest_ram;
     mod native_images;

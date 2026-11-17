@@ -92,6 +92,7 @@ mod tests {
             catalog_max_depth: 7,
             catalog_timeout_seconds: 91,
             ram_min_available: 123,
+            catalog_workers: 3,
             backup_directory: Some("/owned/backups".into()),
             ..Default::default()
         };
@@ -113,10 +114,24 @@ mod tests {
         limits.apply_to(&mut config);
         assert_eq!(CatalogLimits::from(&config), limits);
         assert_eq!(config.ram_min_available, 123);
+        assert_eq!(config.catalog_workers, 3);
         assert_eq!(
             config.backup_directory.unwrap(),
             std::path::Path::new("/owned/backups")
         );
+    }
+
+    #[test]
+    fn old_preferences_default_to_one_worker_and_explicit_counts_roundtrip() {
+        let old: DriveConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.catalog_workers, 1);
+        let configured = DriveConfig {
+            catalog_workers: crate::drives::MAX_CATALOG_WORKERS,
+            ..old
+        };
+        let decoded: DriveConfig =
+            serde_json::from_slice(&serde_json::to_vec(&configured).unwrap()).unwrap();
+        assert_eq!(decoded.catalog_workers, crate::drives::MAX_CATALOG_WORKERS);
     }
 
     #[test]

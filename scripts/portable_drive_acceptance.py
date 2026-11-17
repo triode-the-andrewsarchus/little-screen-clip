@@ -572,7 +572,7 @@ def exercise_catalog_limits(session, root):
     env = session.env
     config = status(env)['config']
     config.update(catalog_max_entries=2, catalog_max_bytes=1024 * 1024,
-                  catalog_max_depth=8, catalog_timeout_seconds=60)
+                  catalog_max_depth=8, catalog_timeout_seconds=60, catalog_workers=3)
     completed(env, request(env, {'Configure': {'config': config}}))
 
     dismiss_completion_notice(session, 'catalog-limits-setup-notice', 'Drive settings')
@@ -593,7 +593,7 @@ def exercise_catalog_limits(session, root):
             text = session.capture_text(name, session.output / (name + '.png'), ['Review contents catalog'])
             if 'reviewcontentscatalog' in ''.join(text.lower().split()):
                 session.observe(name, ['Review contents catalog', 'Maximum entries', 'Database bytes',
-                                       'Maximum depth', 'Time limit', 'background worker', 'Start catalog'])
+                                       'Maximum depth', 'Time limit', '3 independent catalog', 'Start catalog'])
                 return
         raise RuntimeError('Could not open the verified catalog review')
 

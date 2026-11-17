@@ -1,10 +1,11 @@
-//! One retained bulk worker leaves prompt writeback on the storage coordinator.
+//! Bounded independent captures share the retained bulk pool; backups stay exclusive.
 use super::*;
 use little_clip_core::jobs::task::Task;
 mod worker;
 
 pub(super) struct Pending {
     pub(super) drive: String,
+    catalog: bool,
     pub(super) roots: Vec<Arc<Root>>,
     pub(super) destination: Option<PathBuf>,
     context: Option<partition::BackupContext>,
@@ -15,11 +16,17 @@ pub(super) struct Pending {
 }
 impl Pending {
     pub(super) fn scopes(&self) -> impl Iterator<Item = crate::root::Scope> + '_ {
-        self.roots.iter().map(|root| root.scope()).chain(
-            self.context
-                .iter()
-                .flat_map(|image| image.claims.iter().cloned()),
-        )
+        // Catalog output directories are private and separately journaled. Sharing
+        // the registry root does not serialize independent source inventories.
+        self.roots
+            .iter()
+            .take(if self.catalog { 1 } else { self.roots.len() })
+            .map(|root| root.scope())
+            .chain(
+                self.context
+                    .iter()
+                    .flat_map(|image| image.claims.iter().cloned()),
+            )
     }
 }
 impl Owner {
@@ -32,10 +39,7 @@ impl Owner {
                 .partition
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)
-            || self
-                .background
-                .as_ref()
-                .is_some_and(|job| job.drive == drive)
+            || self.background.values().any(|job| job.drive == drive)
             || self.sync_jobs.values().any(|job| job.drive == drive)
         {
             return Err("This partition has an active storage operation; synchronization resumes when it finishes".into());
@@ -43,7 +47,17 @@ impl Owner {
         Ok(())
     }
     pub(super) fn start_background(&mut self, mut envelope: Envelope) {
-        if self.background.is_some()
+        let catalog = matches!(
+            envelope.request,
+            DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. }
+        );
+        let available = if catalog {
+            self.background.len() < self.config.catalog_workers
+                && self.background.values().all(|job| job.catalog)
+        } else {
+            self.background.is_empty()
+        };
+        if !available
             || self.catalog_cleanup.busy()
             || self
                 .partition
@@ -53,37 +67,7 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
-        let resources = (|| -> Result<(Drive, Vec<Arc<Root>>)> {
-            let selector = match &envelope.request {
-                DriveRequest::Backup { drive, .. }
-                | DriveRequest::ReadOnlyBackup { drive }
-                | DriveRequest::Catalog { drive } => drive,
-                DriveRequest::CatalogWithLimits { drive, .. } => drive,
-                _ => return Err("Missing bulk drive".into()),
-            };
-            let drive = self.drive(selector)?;
-            let mut roots = Vec::new();
-            let source = self
-                .admitted_source(&envelope, &drive)?
-                .ok_or("Mount the partition before saving a file backup or catalog")?;
-            roots.push(source);
-            if matches!(
-                envelope.request,
-                DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
-            ) {
-                let source = roots.first().map(Arc::as_ref);
-                let destination = self.reviewed_backup_destination(&envelope, source)?;
-                preflight::space(&destination, &drive, BackupKind::Files)?;
-                roots.push(destination);
-            } else {
-                roots.push(Arc::new(Root::open(&self.state)?));
-            }
-            if self.drive(selector)? != drive {
-                return Err("Drive changed while pinning bulk-operation roots".into());
-            }
-            Ok((drive, roots))
-        })();
-        let (drive, roots) = match resources {
+        let (drive, roots) = match self.bulk_roots(&envelope) {
             Ok(value) => value,
             Err(error) => {
                 self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
@@ -107,6 +91,36 @@ impl Owner {
         drop(envelope.review.take());
         self.launch_bulk(envelope, drive, self.config.clone(), roots, None);
     }
+    fn bulk_roots(&self, envelope: &Envelope) -> Result<(Drive, Vec<Arc<Root>>)> {
+        let selector = match &envelope.request {
+            DriveRequest::Backup { drive, .. }
+            | DriveRequest::ReadOnlyBackup { drive }
+            | DriveRequest::Catalog { drive } => drive,
+            DriveRequest::CatalogWithLimits { drive, .. } => drive,
+            _ => return Err("Missing bulk drive".into()),
+        };
+        let drive = self.drive(selector)?;
+        let mut roots = Vec::new();
+        let source = self
+            .admitted_source(envelope, &drive)?
+            .ok_or("Mount the partition before saving a file backup or catalog")?;
+        roots.push(source);
+        if matches!(
+            envelope.request,
+            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+        ) {
+            let source = roots.first().map(Arc::as_ref);
+            let destination = self.reviewed_backup_destination(envelope, source)?;
+            preflight::space(&destination, &drive, BackupKind::Files)?;
+            roots.push(destination);
+        } else {
+            roots.push(Arc::new(Root::open(&self.state)?));
+        }
+        if self.drive(selector)? != drive {
+            return Err("Drive changed while pinning bulk-operation roots".into());
+        }
+        Ok((drive, roots))
+    }
     pub(super) fn launch_bulk(
         &mut self,
         envelope: Envelope,
@@ -129,6 +143,10 @@ impl Owner {
         let cleanup_pending = context
             .as_ref()
             .is_some_and(|context| context.file_mode == FileBackupMode::ReadOnly);
+        let catalog = matches!(
+            envelope.request,
+            DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. }
+        );
         let worker = worker::Worker {
             state: self.state.clone(),
             id: envelope.id.clone(),
@@ -142,21 +160,29 @@ impl Owner {
             inventory: self.inventory.clone(),
         };
         let task = write_task(&self.backup_jobs, move || worker.run());
-        self.background = Some(Pending {
-            drive: drive_id,
-            roots,
-            destination,
-            context,
-            cleanup_pending,
-            id: envelope.id,
-            cancel: envelope.cancel,
-            task,
-        });
+        self.background.insert(
+            envelope.id.clone(),
+            Pending {
+                drive: drive_id,
+                catalog,
+                roots,
+                destination,
+                context,
+                cleanup_pending,
+                id: envelope.id,
+                cancel: envelope.cancel,
+                task,
+            },
+        );
     }
     pub(super) fn poll_background(&mut self) {
-        let result = self.background.as_ref().and_then(|job| job.task.poll());
-        if let Some(result) = result {
-            let mut job = self.background.take().expect("polled retained job");
+        let completed = self
+            .background
+            .iter()
+            .filter_map(|(id, job)| job.task.poll().map(|result| (id.clone(), result)))
+            .collect::<Vec<_>>();
+        for (id, result) in completed {
+            let mut job = self.background.remove(&id).expect("polled retained job");
             let result = write_result(result);
             if job.cleanup_pending {
                 let context = job.context.clone().expect("read-only cleanup context");
@@ -167,8 +193,7 @@ impl Owner {
                 let id = job.id.clone();
                 let inventory = self.inventory.clone();
                 let authority = self.authority.clone();
-                // This exclusively owned bulk queue retains room for cleanup;
-                // Pending prevents another bulk job from entering meanwhile.
+                // Backups are exclusive, reserving the bulk queue for cleanup.
                 job.task = write_task(&self.backup_jobs, move || {
                     let db = Store::existing(&state.join("drives.sqlite"), false);
                     context.finish(
@@ -180,14 +205,21 @@ impl Owner {
                     )
                 });
                 job.cleanup_pending = false;
-                self.background = Some(job);
-                return;
+                self.background.insert(job.id.clone(), job);
+                continue;
             }
             self.finish_operation(&job.id, &job.cancel, result);
             self.automatic();
         }
     }
     pub(super) fn finish_operation(&self, id: &str, cancel: &AtomicBool, result: Result<String>) {
+        // Status combines shared settings with durable operation pages. Publish
+        // the accepted settings before a completed record becomes visible; the
+        // later inventory refresh can be slow or unavailable.
+        if let Ok(mut status) = self.shared.lock() {
+            status.config = self.config.clone();
+            status.backup_directory = self.config.backup_directory.clone();
+        }
         if let Err(error) = finish_record(&self.db, id, cancel, result) {
             tracing::error!(operation = id, %error, "Could not persist storage operation completion");
         }

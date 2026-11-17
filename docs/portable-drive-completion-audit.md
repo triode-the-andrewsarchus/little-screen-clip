@@ -42,7 +42,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Operational-baseline accounting and rule-address alias/selector handling remain. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
-| 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass. A per-run review edits/resets/expands all four budgets and records effective limits; partial CLI overrides inherit daemon settings. Host/native limit checks and dark/light review acceptance pass. Journaled private capture ownership now retires interrupted unpublished databases and finishes sealed publication through existing maintenance, including cancellation, real child exit, failed advertisement, changed identities and late exclusions. All ten lifecycle cases pass on host and FAT32/exFAT/NTFS. Configurable worker-limit policy remains. See the catalog capture lifecycle checkpoint. |
+| 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
 | 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses current completed file-backup hashes only with verified manifest/root/full revision and queried-change provenance, without source payload reads. Native FAT32/exFAT/NTFS correctly decline metadata-only hash promotion. Sync hash reuse, older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
@@ -53,6 +53,56 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Configurable catalog worker checkpoint
+
+`drives.catalog_workers` now defaults to one and accepts 1..4 concurrent captures.
+The coordinator retains a bounded map of accepted tasks using the existing bulk
+executor, retaining each task through delivery and shutdown. Catalogs share the
+registry but claim only their independent source for scheduling; captures of the
+same partition or overlapping source serialize. Backups remain exclusive with
+captures, and metadata maintenance waits for all active captures. Lowering the
+setting changes future admission without cancelling accepted work. Status now
+publishes accepted settings before advertising Configure completion, independently
+of potentially slow subsequent inventory refresh.
+
+The owned host fixture passes default admission, live increase/decrease, four
+simultaneous captures, repeated/same-root aliases, an independent queued backup,
+and concurrent shutdown/restart with no source inventory. A separate held-inventory
+test verifies the completion/settings ordering. The full ordinary backend suite
+passes 152 tests (71 explicit fixtures ignored); nine core drive tests and fourteen
+Files drive tests pass. Dark and light UI runs each pass 22 observations with a
+custom count of three displayed and all per-run budgets preserved.
+
+Final native acceptance passes on FAT32, exFAT and NTFS in
+`/tmp/portable-drive-vm-catalog-workers-bounded/report.json`: each profile runs
+four worker cases, two per-run limit cases and ten capture lifecycle cases. The
+40,000-file fixture uses small directories and empty ordinary files, keeping the
+metadata workload within the guest's exFAT allocation budget. The first flat
+fixture timed out and exposed the configuration-status race; the first grouped
+fixture ran out of exFAT space before capture admission. Those unsuccessful runs
+remain recorded under `/tmp/portable-drive-vm-catalog-workers` and
+`/tmp/portable-drive-vm-catalog-workers-verified`; neither counts as passing evidence.
+
+The final owned host worker acceptance passes four cases in
+`/tmp/portable-drive-catalog-workers-host-bounded.log`. Broader ordinary backend
+results are `/tmp/portable-drive-catalog-workers-backend.log`; core/Files and
+all-target clippy logs use `/tmp/portable-drive-catalog-workers-`. Dark/light
+reports are `/tmp/portable-drive-catalog-workers-{dark,light}/report.json`.
+Both UI runs show the custom count of three and preserve configuration through
+review cancellation, reset, limited capture and explicit larger capture. No
+catalog is accidentally mounted. Final test-only fixture adjustment is covered
+by the passing native/host cases and backend all-target clippy. Changed-source
+rustfmt, Python compilation and diff whitespace checks pass.
+
+The original-baseline architecture result remains REGRESSION with 4300 clone
+groups, 144 cycles, average CCN 3.48, maximum 274 and duplication 7.05%. None of
+those counts worsen versus the preceding committed checkpoint. Resource pinning
+now has its own admission phase instead of a nested closure in the scheduling
+method; no touched new hotspot or clone remains. The existing executor, retained
+write-task delivery, scopes and cleanup scheduler are reused with no dependency
+addition. Report: `.fitness/portable-drives-catalog-workers-architecture.json`.
+Other identity/provider/no-index, responsiveness and final feature gates remain open.
 
 ## Catalog capture lifecycle checkpoint
 
@@ -89,7 +139,7 @@ unchanged, duplication 7.05% versus 7.30%. This checkpoint introduces no additio
 reported clone/hotspot compared with its preceding committed checkpoint. Shared
 recovery classification, maintenance scheduling and redaction assertions avoid
 parallel mechanisms. Report: `.fitness/portable-drives-catalog-lifecycle-architecture.json`.
-Configurable capture workers and broader feature-wide acceptance remain unfinished.
+Configurable capture workers were unfinished at that checkpoint and are covered above. Broader feature-wide acceptance remains unfinished.
 
 ## Explicit catalog limits for one capture
 

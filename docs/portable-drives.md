@@ -385,6 +385,14 @@ entry has a digest, validation hashes the same retained descriptor used for read
 A stale candidate can fall back to another matching backup, while an already open
 file keeps its chosen provider and reports stale data if that provider changes.
 
+The reloadable `drives.catalog_workers` setting allows one to four independent
+catalog captures at once, defaulting to one. Raising it admits queued independent
+captures; lowering it lets accepted work finish before admitting more. Captures
+of the same partition or overlapping source wait for one another. File/image
+backups remain exclusive with catalog captures, and metadata cleanup waits for
+live captures to release ownership. The review displays the configured capacity;
+its larger-run button changes only that capture's metadata budgets.
+
 Catalog creation journals private staging ownership before writing metadata.
 Cancelled unfinished captures are removed; interrupted captures are recovered by
 the daemon's metadata maintenance worker without needing the original drive.
@@ -493,6 +501,7 @@ catalog_max_entries = 250000
 catalog_max_bytes = 268435456
 catalog_max_depth = 64
 catalog_timeout_seconds = 600
+catalog_workers = 1 # 1..4 concurrent captures on independent sources
 sync_interval_seconds = 30
 # backup_keep_versions = 3
 ```

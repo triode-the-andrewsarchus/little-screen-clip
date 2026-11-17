@@ -58,7 +58,7 @@ pub(super) fn review(
             *limits = CatalogLimits::from(&status.config);
         }
     });
-    ui.label("Captures share one background worker with file backups. Other drives can continue syncing; cancel remaining work from Jobs.");
+    ui.label(format!("Up to {} independent catalog capture(s) can run together. Backups wait for captures; other drives can continue syncing. Cancel remaining work from Jobs.", status.config.catalog_workers));
     let valid = limits.validate();
     if let Err(error) = valid {
         ui.colored_label(egui::Color32::LIGHT_RED, error);

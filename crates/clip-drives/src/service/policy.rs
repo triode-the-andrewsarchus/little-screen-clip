@@ -30,8 +30,8 @@ impl Owner {
                 .any(|job| job.plan.scopes().iter().any(&overlaps))
             || self
                 .background
-                .as_ref()
-                .is_some_and(|job| job.scopes().any(|scope| overlaps(&scope)))
+                .values()
+                .any(|job| job.scopes().any(|scope| overlaps(&scope)))
     }
     pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
         self.validate_sync_storage(source, local, None)?;
@@ -160,6 +160,13 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
         return Err("Drive storage directories must be absolute paths".into());
     }
     crate::CatalogLimits::from(config).validate()?;
+    if !(1..=little_clip_core::drives::MAX_CATALOG_WORKERS).contains(&config.catalog_workers) {
+        return Err(format!(
+            "Catalog workers must be between 1 and {}",
+            little_clip_core::drives::MAX_CATALOG_WORKERS
+        )
+        .into());
+    }
     if config.sync_interval_seconds == 0 {
         return Err("Drive synchronization requires a nonzero interval".into());
     }

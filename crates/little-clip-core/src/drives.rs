@@ -1,6 +1,9 @@
 //! Portable storage configuration and data-only daemon protocol.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+/// Maximum number of independently admitted catalog captures.
+pub const MAX_CATALOG_WORKERS: usize = 4;
+
 mod catalog_limits;
 pub use catalog_limits::{CatalogLimitOverrides, CatalogLimits};
 
@@ -22,6 +25,8 @@ pub struct DriveConfig {
     pub catalog_max_bytes: u64,
     pub catalog_max_depth: usize,
     pub catalog_timeout_seconds: u64,
+    /// Concurrent captures on independent sources; lowering waits for active work.
+    pub catalog_workers: usize,
     pub sync_interval_seconds: u64,
     /// None retains completed versions until an explicit pruning request.
     pub backup_keep_versions: Option<usize>,
@@ -42,6 +47,7 @@ impl Default for DriveConfig {
             catalog_max_bytes: 256 * 1024 * 1024,
             catalog_max_depth: 64,
             catalog_timeout_seconds: 600,
+            catalog_workers: 1,
             sync_interval_seconds: 30,
             backup_keep_versions: None,
         }
