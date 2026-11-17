@@ -92,6 +92,24 @@ pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
 }
 
 impl Fixture {
+    fn capture_catalog(
+        &self,
+        drive: &Drive,
+        config: &DriveConfig,
+    ) -> crate::Result<(Root, crate::Catalog)> {
+        let source = Root::open(&self.a)?;
+        let state = Root::create(&self._temp.path().join("catalog-state"))?;
+        let catalog = catalog::capture(
+            &self.db,
+            &state,
+            drive,
+            &source,
+            config,
+            &self.cancel,
+            |_, _| {},
+        )?;
+        Ok((state, catalog))
+    }
     fn file_backup(
         &self,
         drive: &Drive,
@@ -932,6 +950,80 @@ fn native_hard_link_sources_retain_aliases_and_refuse_divergent_captured_attribu
 
 #[test]
 #[ignore = "requires the isolated removable-filesystem guest"]
+fn native_catalog_case_exclusions_use_kernel_equivalence_before_descent() {
+    for (rule, spelling) in [
+        ("Future", "future"),
+        ("Résumé", "résumé"),
+        ("Ångström", "ångström"),
+        ("Future/Inner", "future/inner"),
+    ] {
+        let (_native, fixture, drive) = fixture();
+        fixture
+            .db
+            .put(
+                "rule",
+                "future-private",
+                &DriveRule {
+                    id: "future-private".into(),
+                    drive: drive.id.clone(),
+                    relative: rule.into(),
+                    catalog: false,
+                    index: true,
+                },
+            )
+            .unwrap();
+        let actual = fixture.a.join(spelling);
+        fs::create_dir_all(&actual).unwrap();
+        for number in 0..32 {
+            fs::write(actual.join(format!("secret-{number}")), b"not catalogued").unwrap();
+        }
+        fs::write(fixture.a.join("public"), b"ordinary metadata").unwrap();
+        let equivalent = fixture.a.join(rule).exists();
+        let (state, catalog) = fixture
+            .capture_catalog(
+                &drive,
+                &DriveConfig {
+                    catalog_max_entries: 16,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let database = Store::existing(
+            &state
+                .path
+                .join("catalogs")
+                .join(format!("{}.sqlite", catalog.id)),
+            true,
+        )
+        .unwrap();
+        let boundary = scan::entry(&database, "catalog", Path::new(spelling))
+            .unwrap()
+            .unwrap();
+        eprintln!("Native catalog {rule:?} / {spelling:?}: {equivalent}");
+        assert_eq!(boundary.kind == "excluded", equivalent, "{rule}");
+        assert_eq!(catalog.complete, equivalent, "{rule}");
+        if equivalent {
+            let rows = scan::Cursor::new(&database, "catalog")
+                .map(|entry| entry.unwrap())
+                .collect::<Vec<_>>();
+            assert!(rows.iter().all(|entry| entry.hash.is_none()));
+            assert!(
+                !rows
+                    .iter()
+                    .any(|entry| entry.path != Path::new(spelling)
+                        && entry.path.starts_with(spelling))
+            );
+            assert!(rows.iter().any(|entry| entry.path == Path::new("public")));
+            assert!(
+                catalog.entries <= 3,
+                "Excluded subtree used the entry budget"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
 fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
     let (_native, fixture, drive) = fixture();
     fs::write(fixture.a.join("metadata.bin"), b"\x00\xffpayload").unwrap();
@@ -955,18 +1047,9 @@ fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
             },
         )
         .unwrap();
-    let source = Root::open(&fixture.a).unwrap();
-    let state = Root::create(&fixture._temp.path().join("catalog-state")).unwrap();
-    let catalog = catalog::capture(
-        &fixture.db,
-        &state,
-        &drive,
-        &source,
-        &DriveConfig::default(),
-        &fixture.cancel,
-        |_, _| {},
-    )
-    .unwrap();
+    let (state, catalog) = fixture
+        .capture_catalog(&drive, &DriveConfig::default())
+        .unwrap();
     assert!(catalog.complete);
     let facts = catalog.details.as_ref().unwrap();
     assert_eq!(facts.filesystem.as_deref(), Some(drive.filesystem.as_str()));
@@ -1012,6 +1095,7 @@ fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
             .is_none()
     );
     let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+    let source = Root::open(&fixture.a).unwrap();
     let version = backup::files(
         &fixture.db,
         &drive,

@@ -141,6 +141,34 @@ impl Default for Limits {
         }
     }
 }
+impl Limits {
+    // Traversal reaches every excluded subtree's boundary before its children.
+    // Compare the current rule at that depth through the existing guarded root:
+    // the filesystem owns name equivalence, and neither lookup reads payloads.
+    fn excluded(&self, root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<bool> {
+        if self
+            .exclusions
+            .iter()
+            .any(|path| entry.path.starts_with(path))
+        {
+            return Ok(true);
+        }
+        let depth = entry.path.components().count();
+        for path in self
+            .exclusions
+            .iter()
+            .filter(|path| path.components().count() == depth)
+        {
+            cancelled(cancel)?;
+            if root.metadata(path)?.is_some_and(|metadata| {
+                metadata.dev() == entry.device && metadata.ino() == entry.inode
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
 pub(crate) struct Coverage {
     pub count: u64,
     pub complete: bool,
@@ -241,12 +269,9 @@ fn collect_entry(
     remaining: u64,
     cancel: &AtomicBool,
 ) -> Result<Entry> {
-    let excluded = limits
-        .exclusions
-        .iter()
-        .any(|path| relative.starts_with(path));
     let mut entry = observe(root, relative, false, remaining, cancel)?
         .ok_or_else(|| crate::Error::SourceChanged("Entry disappeared during collection".into()))?;
+    let excluded = limits.excluded(root, &entry, cancel)?;
     if limits.hashes && !excluded && entry.kind == "file" && entry.hash.is_none() {
         if entry.size > remaining {
             return Err(

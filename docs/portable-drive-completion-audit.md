@@ -54,6 +54,50 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Catalog capture name-equivalence checkpoint
+
+A separate native control reproduced the same lexical bypass in catalog metadata
+capture (`/tmp/portable-drive-vm-catalog-case-before/report.json`): FAT32/exFAT
+descended into a future folder excluded using another spelling. Default NTFS3
+correctly treated the tested spellings as distinct. This test uses `catalog=false`
+with `index=true`; it does not depend on search-index exclusion.
+
+The streaming scanner now compares the current rule object's device/inode with
+the observed boundary entry through `Root::metadata`, at the rule's component
+depth and before hashing or directory descent. Existing literal prefix matching
+remains first. The existing NO_XDEV/no-symlink source-root checks still govern
+every rule lookup, and cancellation is checked between lookups. No case-fold
+table, directory-wide list, new content cache or persistent inode is introduced.
+These lookups run only for configured catalog exclusions; sync and full backup
+inventories retain empty exclusion lists. This matcher is separate from the
+shared background-index policy because the two flags are independent and the
+scanner retains a guarded source root with stricter no-symlink traversal.
+
+The reviewed disposable run passes **seven native tests**: two each on FAT32,
+exFAT and default NTFS3, plus the new four-pair capture test on NTFS3 `nocase`.
+Each equivalent folder contains 32 hidden files with a 16-entry capture cap.
+Equivalent boundaries are marked excluded, no descendants or hashes are saved,
+ordinary metadata is present and at most three entries are consumed. Distinct
+names remain eligible and reach the explicit cap. The companion existing test
+also verifies full backup and enrolled sync inclusion on each source format.
+Report: `/tmp/portable-drive-vm-catalog-case-reviewed/report.json`; the earlier
+green six-test run before fixture consolidation is
+`/tmp/portable-drive-vm-catalog-case-final/report.json`.
+
+The ordinary backend suite passes **204 tests**, with 86 opt-in tests ignored
+(`/tmp/portable-drive-catalog-case-backend-final.log`). Architecture review found
+a duplicated native capture setup; the native fixture now owns its shared
+guarded-source/state/capture sequence. The final comparison returns to 4,300
+clone groups and 144 cycles, average CCN 3.49, maximum 274 and 7.00% duplication.
+No new hotspot is reported here; the whole-branch regression remains open.
+
+Capture-side matching does not prove historical offline redaction matching.
+That matching is still lexical, and wider replacement races, alias/driver
+matrices and policy-observation responsiveness remain open. Items 6.2–6.4 remain
+Partial. Backend all-target Clippy passes with warnings denied
+(`/tmp/portable-drive-catalog-case-clippy.log`); targeted Rust formatting and
+`git diff --check` pass.
+
 ## Future-name equivalence checkpoint
 
 After `ee3f397e`, a new disposable-guest control reproduced a search-index policy

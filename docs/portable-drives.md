@@ -586,9 +586,13 @@ Btrfs per-subvolume object device numbers do not select mount boundaries: mount
 continuity uses the non-reused mount ID, and filesystem projection uses mount-table
 coordinates. Exact pinned-object identity checks keep their original fields.
 Native ASCII/Unicode future-name checks pass on FAT32, exFAT and NTFS3, including
-NTFS3's `nocase` option. Catalog-metadata name matching, broader relocation and
-consumer matrices remain separate acceptance work; search-index matching alone
-is not their proof.
+NTFS3's `nocase` option. Catalog capture separately compares the current rule
+object with the directory boundary through its guarded source root before
+hashing or descending. This respects catalog exclusions even when search indexing
+is enabled, without removing files from full backups or sync. Missing rule names
+remain distinct where the filesystem treats them as distinct. Historical catalog
+redaction name matching, broader relocation and consumer matrices remain separate
+acceptance work; capture matching alone is not their proof.
 
 Legacy development records naming only a device node have no persistent identity
 evidence. They remain retained without being attached to a potentially reused
