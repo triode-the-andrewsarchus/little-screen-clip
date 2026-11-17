@@ -27,7 +27,23 @@
  
  	/* Already the same file? */
  	if (to_ino != 0 && to_ino == from_ino) {
-@@ -2922,7 +2929,8 @@
+@@ -2871,6 +2878,15 @@
+ 		goto out;
+ 
+ out:
++	/* Acknowledged RAM writes must survive abrupt helper/daemon death. */
++	if (got) {
++		err = ext2fs_flush2(fs, 0);
++		if (err) {
++			got = 0;
++			ret = translate_error(fs, fh->ino, err);
++		}
++	}
++
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return got ? (int) got : ret;
+ }
+@@ -2922,7 +2938,8 @@
  	dbg_printf(ff, "%s: ino=%d\n", __func__, fh->ino);
  	/* For now, flush everything, even if it's slow */
  	pthread_mutex_lock(&ff->bfl);

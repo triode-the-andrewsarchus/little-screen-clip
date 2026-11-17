@@ -25,7 +25,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
 | 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Physical USB/device-transport and native FAT/exFAT/NTFS interrupted-I/O matrices remain. |
 | 3.6 | Partial | Eject includes paused ready RAM mirrors and refuses incomplete population/failed preflush. Native tests also queue eject and unconfirmed discard behind a held write, preserve ownership through cancellation, keep unrelated controls responsive and retain terminal results after reconnect. Broader read-only, dirty-session and eject/discard cancellation matrices remain. |
-| 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. A bounded guest now proves available-memory admission refusal without dirty-session eviction, and underlying-tmpfs exhaustion with logical image headroom, preserved image identity/acknowledged edits and successful restart/writeback. The exhaustion test exposed and fixed suppressed libext2fs cache-eviction errors. Unflushed-kill and broader concurrent pressure matrices remain. |
+| 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion and recovery, and acknowledged external writes retained across abrupt daemon death while held open without fsync. The helper now propagates eviction errors and flushes data/metadata before write acknowledgement. Namespace-only mutations, interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
 | 4.3 | Open | File copy preserves modes/times; bounded live-source retry, omission records and optional quiesced collection remain. |
@@ -51,8 +51,60 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE and Btrfs tests pass; authorized image-loop tests remain. |
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
-| 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure and underlying-tmpfs exhaustion pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unflushed-kill cases remain. |
+| 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged unflushed-write daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission, namespace-only crashes and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Acknowledged writes across abrupt daemon death
+
+The new guest test starts an owned test process containing the daemon service,
+populates and pauses a RAM session, and publishes its session record to the parent.
+The parent is the external writer: it holds the file open, receives successful
+writes, then kills and reaps its daemon child without closing or fsyncing that
+file. It waits for the validated backing image's exclusive lease to retire before
+restarting against the same state. No guessed helper PID is signalled. The child
+has parent-death handling, a bounded lifetime and an RAII kill/reap guard in its
+parent. The internal probe is explicitly skipped in module-wide guest selection.
+
+The negative run, `/tmp/portable-drive-vm-ram-crash-negative/report.json`, genuinely
+loses the new file with the previous helper after successful recovery. The first
+diagnostic run instead rejected recycled FUSE mount identifiers; the corrected test
+checks an explicit successful recovery result and the retained image device/inode,
+rather than assuming Linux cannot immediately recycle mount/minor numbers.
+
+The companion patch now flushes filesystem metadata and cached blocks into the
+tmpfs image before acknowledging stored write bytes. Flush errors clear the
+successful-byte result and are translated back to the caller. This includes a
+partial stored prefix on other error paths. The patched crash test covers a new
+file, an overwritten existing file and an 8 MiB file written in 4 KiB chunks.
+Each case checks exact recovered bytes, the same image identity/path, full-check
+pending state and successful portable writeback before confirmed cleanup. The
+8 MiB case took about 63 ms in the final bounded guest; this is one observed run,
+not a general throughput guarantee. Data remains RAM-backed and cannot survive a
+host reboot or power loss.
+
+Final guest evidence is `/tmp/portable-drive-vm-ram-crash-accepted/report.json` and
+its log: all three guest tests (crash matrix and both pressure tests) pass. The
+backing-full case still returns ENOSPC with zero underlying free bytes and logical
+headroom. The existing controlled partial-removal/cancellation and full-media/paused
+eject fixtures both pass with rebuilt normal and gated helpers. Backend tests pass
+91 cases with 34 explicit fixture entrypoints ignored; selected backend/Files/daemon
+all-target clippy with warnings denied and four delivery tests pass. Logs:
+`/tmp/portable-drive-ram-crash-backend.log`,
+`/tmp/portable-drive-ram-crash-native-regressions.log`,
+`/tmp/portable-drive-ram-crash-clippy.log`, and
+`/tmp/portable-drive-ram-crash-builder-tests.log`.
+
+The architecture comparison remains REGRESSION: 4301 versus 4289 clone groups,
+7.14% duplication, average CCN 3.48, maximum 274 and reported cycles 144 versus 143.
+The new crash fixture adds no reported hotspot or additional clone group; the
+feature-wide gate remains open. Formatting is checked for the affected crate.
+An initial workspace format invocation also formatted 141 previously unformatted
+vendor files; each was restored only after its contents exactly matched rustfmt
+applied to HEAD, with no vendor changes retained.
+
+Item 3.7 remains Partial. Acknowledged data writes now have direct crash evidence;
+namespace-only mutations (including empty creation, mkdir and unlink), death during
+an unacknowledged request and concurrent pressure/admission still require work.
 
 ## Backing-tmpfs exhaustion and memory-pressure checkpoint
 

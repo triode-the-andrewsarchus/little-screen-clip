@@ -80,9 +80,9 @@
  static int op_write(const char *path EXT2FS_ATTR((unused)),
  		    const char *buf, size_t len, off_t offset,
  		    struct fuse_file_info *fp)
-@@ -2872,6 +2938,11 @@
+@@ -2888,6 +2954,11 @@
+ 	}
  
- out:
  	pthread_mutex_unlock(&ff->bfl);
 +	if (got) {
 +		int fault = test_write_gate(offset, got);

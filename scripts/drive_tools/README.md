@@ -24,8 +24,17 @@ The patch also propagates backing-I/O errors when the libext2fs write cache must
 evict a dirty block. Upstream 1.47.4 stores that failure in a local variable but
 returns the still-successful outer result. With a full backing tmpfs this can
 acknowledge writes whose bytes never reach the image. The guest exhaustion test
-fails against the old helper and passes with the error-propagation fix. This
-fix does not turn unflushed helper-cache bytes into crash-durable writes.
+fails against the old helper and passes with the error-propagation fix.
+
+Each successful data write also flushes filesystem metadata and cached blocks into
+the tmpfs image before acknowledgement. Flushing failures return an error. Previously,
+a new file acknowledged to an external writer disappeared when the daemon and its
+parent-bound helper were killed before that writer closed or fsynced the file.
+The disposable guest crash test now recovers a new file, an overwritten file and an
+8 MiB file written in 4 KiB chunks, then writes each back to the simulated source.
+The external writer retains its open descriptor throughout the kill. This covers
+acknowledged file data across process death, not host restart/power loss, namespace-only
+mutations or a kill during an unacknowledged write. The image remains RAM-backed.
 
 Every generated `drive-tools/` directory includes the executable, original source
 archive, patch, upstream license notice, source hashes and a rebuild script. The

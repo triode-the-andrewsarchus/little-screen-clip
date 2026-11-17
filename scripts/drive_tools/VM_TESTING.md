@@ -77,7 +77,8 @@ backend test binary:
 
 ```text
 --guest-script scripts/drive_tools/vm_ram.sh --memory-mib 4096 \
-  -- /absolute/backend-test-binary service::tests::guest_ram:: --ignored --test-threads=1 --nocapture
+  -- /absolute/backend-test-binary service::tests::guest_ram:: --ignored --test-threads=1 --nocapture \
+  --skip service::tests::guest_ram::crash_owner_probe
 ```
 
 This is a guest-script/argument selection for the runner above, alongside its
@@ -102,6 +103,20 @@ acknowledged edits and pending recovery state, then permit successful writeback.
 failure against the old helper; `/tmp/portable-drive-vm-ram-pressure-patched/report.json`
 records both passing cases with the cache-error propagation fix. These do not
 establish unflushed-process-kill or physical power-loss guarantees.
+
+The third case starts an owned test child containing the daemon service. Its parent
+writes a new file, overwrites an existing file and writes an 8 MiB file in 4 KiB
+chunks, each in a separate session. The parent keeps the external file open without
+fsync while killing and reaping only its child. It waits for the retained image's
+exclusive lease to retire, restarts against the same state and checks exact contents,
+image identity, pending full-check state and successful portable writeback.
+The internal `crash_owner_probe` entrypoint is skipped in the module-wide invocation
+because the crash test supplies its private fixture and invokes it explicitly.
+The original helper loses the new file in
+`/tmp/portable-drive-vm-ram-crash-negative/report.json`; the write-acknowledgement
+patch passes all three cases in `/tmp/portable-drive-vm-ram-crash-matrix/report.json`.
+Namespace-only mutations and death during an unacknowledged operation remain separate
+checks. None of these tests implies persistence through host reboot or power loss.
 
 The metadata handoff and tmpfs working-directory follow-up passed all three command
 invocations in `/tmp/portable-drive-vm-native-bootstrap/report.json`. The updated

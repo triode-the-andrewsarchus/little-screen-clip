@@ -1,4 +1,4 @@
-//! Global memory/storage pressure runs only in the disposable, bounded guest.
+//! Memory pressure and abrupt daemon death run only in the disposable guest.
 use super::*;
 use std::{io::Write, os::unix::fs::MetadataExt};
 
@@ -205,6 +205,148 @@ fn backing_tmpfs_exhaustion_retains_acknowledged_edits_through_restart() {
     assert_eq!(
         fs::read(fixture.temp.path().join("large/after-recovery")).unwrap(),
         b"writable after backing space returned"
+    );
+    discard_ram(&service, &ram);
+    service.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "internal child of abrupt_daemon_death_recovers_an_external_unflushed_write"]
+fn crash_owner_probe() {
+    let config = config();
+    let root = PathBuf::from(std::env::var_os("LITTLE_CLIP_RAM_CRASH_FIXTURE").unwrap());
+    assert!(root.starts_with("/work/tmp"));
+    let drives: Vec<Drive> =
+        serde_json::from_slice(&fs::read(root.join("drives.json")).unwrap()).unwrap();
+    let service = Service::start_with_inventory(
+        config,
+        root.join("state"),
+        Arc::new(move || Ok(drives.clone())),
+    )
+    .unwrap();
+    let ram = paused_copy(&service);
+    fs::write(root.join("ready.json"), serde_json::to_vec(&ram).unwrap()).unwrap();
+    // This child owns the service, but never owns the external writer's file.
+    // Bound its lifetime even if its test parent fails before terminating it.
+    std::thread::sleep(Duration::from_secs(30));
+    panic!("crash fixture owner was not terminated by its parent");
+}
+
+struct CrashOwner(std::process::Child);
+
+impl Drop for CrashOwner {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+#[ignore = "requires the disposable vm_ram.sh guest with bounded tmpfs mounts"]
+fn abrupt_daemon_death_recovers_an_external_unflushed_write() {
+    for (relative, expected) in [
+        (
+            "external-unflushed",
+            b"external write acknowledged without close or fsync".to_vec(),
+        ),
+        (
+            "acknowledged",
+            b"replacement of an existing RAM file".to_vec(),
+        ),
+        ("large-sparse", vec![0x5c; 8 * MIB as usize]),
+    ] {
+        crash_write(relative, &expected);
+    }
+}
+
+fn crash_write(relative: &str, expected: &[u8]) {
+    use std::os::fd::AsRawFd;
+
+    let config = config();
+    let fixture = TestDrives::new(0);
+    let root = fixture.temp.path();
+    fs::write(
+        root.join("drives.json"),
+        serde_json::to_vec(&*fixture.drives.lock().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut command = CommandRequest::new(std::env::current_exe().unwrap())
+        .args([
+            "service::tests::guest_ram::crash_owner_probe",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .own_process_group()
+        .die_with_parent()
+        .build_command();
+    command.env("LITTLE_CLIP_RAM_CRASH_FIXTURE", root);
+    let mut owner = CrashOwner(command.spawn().unwrap());
+    let started = Instant::now();
+    let ram: RamSession = loop {
+        if let Ok(bytes) = fs::read(root.join("ready.json"))
+            && let Ok(ram) = serde_json::from_slice(&bytes)
+        {
+            break ram;
+        }
+        assert!(owner.0.try_wait().unwrap().is_none(), "owner exited early");
+        assert!(started.elapsed() < Duration::from_secs(15));
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let backing = ram.backing.as_ref().unwrap();
+    let (_, image) = crate::ram::open(backing).unwrap();
+    let identity = image.metadata().unwrap();
+    let mut held = File::create(ram.path.join(relative)).unwrap();
+    let writing = Instant::now();
+    for chunk in expected.chunks(4096) {
+        held.write_all(chunk).unwrap();
+    }
+    let elapsed = writing.elapsed();
+    // No close, fsync, rename, or service request between acknowledgement and kill.
+    owner.0.kill().unwrap();
+    assert!(!owner.0.wait().unwrap().success());
+    eprintln!(
+        "crash write {relative}: {} bytes in {elapsed:?}, external fd still open",
+        expected.len()
+    );
+    let started = Instant::now();
+    loop {
+        // SAFETY: the validated image descriptor is live; flock takes no pointers.
+        if unsafe { libc::flock(image.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK));
+        assert!(started.elapsed() < Duration::from_secs(10), "{error}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(image);
+    drop(held);
+    let service = fixture.start_configured(config, None, fixture.image_authority());
+    let recovered = wait_ram(&service, &ram.id, |session| {
+        // Linux can reuse both FUSE minor numbers and mount IDs immediately.
+        // The explicit recovery result distinguishes this from the old ready record.
+        session.browsable() && session.status.starts_with("RAM view recovered;")
+    });
+    assert_eq!(recovered.path, ram.path);
+    let (_, image) = crate::ram::open(recovered.backing.as_ref().unwrap()).unwrap();
+    let after = image.metadata().unwrap();
+    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+    drop(image);
+    assert!(
+        fs::read(ram.path.join(relative)).unwrap() == expected,
+        "recovered contents differ for {relative}"
+    );
+    assert!(recovered.pending.as_ref().unwrap().full_check_required);
+    finish(
+        &service,
+        DriveRequest::FlushRam {
+            session: ram.id.clone(),
+        },
+    );
+    assert!(
+        fs::read(root.join("large").join(relative)).unwrap() == expected,
+        "portable writeback differs for {relative}"
     );
     discard_ram(&service, &ram);
     service.shutdown().unwrap();
