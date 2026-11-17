@@ -1,6 +1,7 @@
 //! Optional reuse of completed, verified fingerprints; never hashes source payloads.
 use super::*;
 use crate::cancelled;
+mod history;
 mod sync;
 use std::{os::unix::fs::MetadataExt, time::Instant};
 
@@ -27,24 +28,6 @@ pub(super) fn enrich(
     reuse.sync(state, drive)
 }
 
-fn current(state: &Store, drive: &crate::Drive) -> Result<Option<(Backup, PathBuf)>> {
-    // A current-version lookup is bounded; it cannot scan unrelated history.
-    let Some(version) = backup::current_version(state, &drive.id, crate::BackupKind::Files)? else {
-        return Ok(None);
-    };
-    let Some(path) = version.manifest.clone() else {
-        return Ok(None);
-    };
-    if version.drive != drive.id
-        || version.evidence != drive.evidence
-        || path.parent() != version.path.parent()
-        || path.file_name() != Some(OsStr::new(&format!("{}.manifest.sqlite", version.id)))
-    {
-        return Ok(None);
-    }
-    Ok(Some((version, path)))
-}
-
 struct Reuse<'a> {
     catalog: &'a Store,
     source: &'a Root,
@@ -53,21 +36,6 @@ struct Reuse<'a> {
     timeout: Duration,
 }
 impl Reuse<'_> {
-    fn backup(&self, state: &Store, drive: &crate::Drive, bytes: u64) -> Result<()> {
-        let Ok(Some((version, path))) = current(state, drive) else {
-            return Ok(());
-        };
-        let transaction = self.catalog.0.unchecked_transaction()?;
-        let result = backup::read_manifest(
-            &version,
-            &path,
-            self.cancel,
-            bytes,
-            self.remaining(),
-            |manifest| self.merge(manifest, &format!("backup:{}", version.id)),
-        );
-        self.finish(transaction, result)
-    }
     fn finish(&self, transaction: rusqlite::Transaction<'_>, result: Result<()>) -> Result<()> {
         match result {
             Ok(()) => transaction.commit()?,
@@ -82,23 +50,37 @@ impl Reuse<'_> {
     fn remaining(&self) -> Duration {
         self.timeout.saturating_sub(self.started.elapsed())
     }
-    fn merge(&self, manifest: &Store, scan: &str) -> Result<()> {
+    fn merge(&self, manifest: &Store, scan: &str, missing: u64) -> Result<u64> {
         self.check_source(manifest)?;
-        for entry in scan::Cursor::new(self.catalog, "catalog") {
+        let mut query = manifest.0.prepare("SELECT CASE WHEN length(CAST(json AS BLOB))<=65536 THEN json END FROM entries WHERE scan=?1 ORDER BY path")?;
+        let rows = query.query_map([scan], |row| row.get::<_, Option<String>>(0))?;
+        let mut imported = 0;
+        for row in rows {
             cancelled(self.cancel)?;
             if self.remaining().is_zero() {
                 break;
             }
-            self.import(manifest, scan, Path::new(""), None, entry?)?;
+            let saved: Entry =
+                serde_json::from_str(&row?.ok_or("Oversized manifest fingerprint row")?)?;
+            if saved.kind == "file"
+                && let Some(entry) = scan::entry(self.catalog, "catalog", &saved.path)?
+            {
+                imported += u64::from(self.promote(saved, Path::new(""), None, entry)?);
+                if imported == missing {
+                    break;
+                }
+            }
         }
-        Ok(())
+        Ok(imported)
     }
     fn check_source(&self, manifest: &Store) -> Result<()> {
-        if manifest.get::<bool>("collection", "source_queried_change_tracking")? != Some(true) {
+        if manifest.get_bounded::<bool>("collection", "source_queried_change_tracking", 128)?
+            != Some(true)
+        {
             return Err("Backup has no queried-change tracking provenance".into());
         }
         let captured: Entry = manifest
-            .get("source", "root")?
+            .get_bounded("source", "root", 64 * 1024)?
             .ok_or("Missing backup source root")?;
         let current = self
             .source
@@ -119,16 +101,8 @@ impl Reuse<'_> {
         scan: &str,
         prefix: &Path,
         generation: Option<uuid::Uuid>,
-        mut entry: Entry,
+        entry: Entry,
     ) -> Result<bool> {
-        if entry.hash.is_some()
-            || entry.kind != "file"
-            || !entry
-                .changed
-                .is_some_and(|(_, nanos)| nanos > 0 && nanos < 1_000_000_000)
-        {
-            return Ok(false);
-        }
         let relative = entry
             .path
             .strip_prefix(prefix)
@@ -145,6 +119,27 @@ impl Reuse<'_> {
         else {
             return Ok(false);
         };
+        self.promote(saved, prefix, generation, entry)
+    }
+    fn promote(
+        &self,
+        saved: Entry,
+        prefix: &Path,
+        generation: Option<uuid::Uuid>,
+        mut entry: Entry,
+    ) -> Result<bool> {
+        if entry.hash.is_some()
+            || entry.kind != "file"
+            || !entry
+                .changed
+                .is_some_and(|(_, nanos)| nanos > 0 && nanos < 1_000_000_000)
+        {
+            return Ok(false);
+        }
+        let relative = entry
+            .path
+            .strip_prefix(prefix)
+            .map_err(|error| error.to_string())?;
         if generation.is_none_or(|generation| saved.hash_generation == Some(generation))
             && saved.path == relative
             && entry.same_revision(&saved)

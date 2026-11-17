@@ -1,21 +1,5 @@
 use super::*;
-use little_clip_core::file_source::FileSource;
 use std::{fs, fs::FileTimes, os::unix::fs::MetadataExt};
-
-fn rewrite_manifest(fixture: &Fixture, version: &mut Backup, edit: impl FnOnce(&Store)) {
-    let path = version.manifest.as_ref().unwrap();
-    let manifest = Store::existing(path, false).unwrap();
-    edit(&manifest);
-    drop(manifest);
-    let file = little_clip_core::kernel_interface::open_content(path, false).unwrap();
-    version.manifest_sha256 = Some(
-        FileSource::capture_file(&file)
-            .unwrap()
-            .sha256(&file, &AtomicBool::new(false), Duration::MAX)
-            .unwrap(),
-    );
-    fixture.db.put("backup", &version.id, version).unwrap();
-}
 
 #[test]
 fn verified_current_backup_hashes_are_reused_only_for_the_same_captured_revision() {
@@ -95,7 +79,7 @@ fn optional_hash_reuse_rejects_corrupt_wrong_root_and_oversized_manifests() {
                     .put("unverified", "change", &true)
                     .unwrap();
             }
-            "source-root" => rewrite_manifest(&fixture, &mut version, |manifest| {
+            "source-root" => fixture.rewrite_manifest(&mut version, |manifest| {
                 let mut root: Entry = manifest.get("source", "root").unwrap().unwrap();
                 root.inode += 1;
                 manifest.put("source", "root", &root).unwrap();
@@ -104,12 +88,12 @@ fn optional_hash_reuse_rejects_corrupt_wrong_root_and_oversized_manifests() {
                 version.evidence = "different-media".into();
                 fixture.db.put("backup", &version.id, &version).unwrap();
             }
-            "size" => rewrite_manifest(&fixture, &mut version, |manifest| {
+            "size" => fixture.rewrite_manifest(&mut version, |manifest| {
                 manifest
                     .put("unused", "large", &"x".repeat(512 * 1024))
                     .unwrap();
             }),
-            "legacy-tracking" => rewrite_manifest(&fixture, &mut version, |manifest| {
+            "legacy-tracking" => fixture.rewrite_manifest(&mut version, |manifest| {
                 manifest
                     .remove("collection", "source_queried_change_tracking")
                     .unwrap();
@@ -144,7 +128,7 @@ fn a_late_invalid_manifest_row_rolls_back_previously_imported_hashes() {
     )
     .unwrap();
     let mut version = fixture.backup().unwrap();
-    rewrite_manifest(&fixture, &mut version, |manifest| {
+    fixture.rewrite_manifest(&mut version, |manifest| {
         manifest
             .0
             .execute(
@@ -161,11 +145,12 @@ fn verified_manifest_reads_keep_the_descriptor_and_refuse_name_replacement() {
     let fixture = reliable_fixture();
     let version = fixture.backup().unwrap();
     let path = version.manifest.as_ref().unwrap();
+    let mut bytes = u64::MAX;
     let result = backup::read_manifest(
         &version,
         path,
         &AtomicBool::new(false),
-        u64::MAX,
+        &mut bytes,
         Duration::MAX,
         |manifest| {
             fs::rename(path, path.with_extension("retained")).unwrap();
@@ -186,15 +171,21 @@ fn manifest_reuse_observes_cancellation_and_time_admission_before_querying_rows(
     let fixture = reliable_fixture();
     let version = fixture.backup().unwrap();
     for (cancelled, timeout) in [(true, Duration::MAX), (false, Duration::ZERO)] {
+        let mut bytes = u64::MAX;
         let result: Result<()> = backup::read_manifest(
             &version,
             version.manifest.as_ref().unwrap(),
             &AtomicBool::new(cancelled),
-            u64::MAX,
+            &mut bytes,
             timeout,
             |_| panic!("Unadmitted manifest read"),
         );
         assert!(result.is_err());
+        assert_eq!(
+            bytes,
+            u64::MAX,
+            "unadmitted checks consume no verification allowance"
+        );
     }
 }
 
@@ -249,14 +240,24 @@ fn hash_capture_probe() {
 #[ignore = "requires Linux 7+, strace and writable /dev/shm; traces only an owned child"]
 fn real_capture_reuses_hashes_without_source_payload_reads_and_the_trace_detects_a_control_read() {
     use little_clip_core::process::CommandRequest;
-    for source in ["backup", "sync"] {
+    for source in ["backup", "sync", "history"] {
         let fixture = reliable_fixture();
+        let mut unused_history = None;
         match source {
             "backup" => {
+                unused_history = fixture.backup().unwrap().manifest;
                 fixture.backup().unwrap();
             }
             "sync" => {
                 fixture.pair(Path::new(""));
+            }
+            "history" => {
+                fixture.backup().unwrap();
+                let current = fixture.backup().unwrap();
+                Store::existing(current.manifest.as_ref().unwrap(), false)
+                    .unwrap()
+                    .put("unverified", "trace-control", &true)
+                    .unwrap();
             }
             _ => unreachable!(),
         }
@@ -334,6 +335,19 @@ fn real_capture_reuses_hashes_without_source_payload_reads_and_the_trace_detects
                 read_payload,
                 "source payload reads: {reads:?}"
             );
+            if let Some(path) = &unused_history {
+                let label = format!("<{}>", path.display());
+                assert!(
+                    !text
+                        .lines()
+                        .any(|line| line.split_once('(').is_some_and(|(_, args)| args
+                            .split_once(',')
+                            .map_or(args, |(fd, _)| fd)
+                            .contains(&label))),
+                    "already-covered history must not be read"
+                );
+            }
+
             fs::copy(
                 &trace,
                 Path::new("/tmp").join(format!(

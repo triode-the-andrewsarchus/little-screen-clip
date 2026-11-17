@@ -67,10 +67,13 @@ fn current_key(drive: &str, kind: BackupKind) -> String {
     format!("{drive}:{kind:?}")
 }
 pub(crate) fn current(db: &Store, drive: &str, kind: BackupKind) -> Result<Option<Backup>> {
-    let id = db.get::<String>("backup-current", &current_key(drive, kind))?;
-    id.map(|id| db.get("backup", &id))
-        .transpose()
-        .map(Option::flatten)
+    let Some(id) = db.get_bounded::<String>("backup-current", &current_key(drive, kind), 128)?
+    else {
+        return Ok(None);
+    };
+    Ok(db
+        .get_bounded::<Backup>("backup", &id, 64 * 1024)?
+        .filter(|version| version.id == id))
 }
 pub(super) fn publish(
     db: &Store,
@@ -106,11 +109,12 @@ fn artifact_identity(path: &Path, kind: BackupKind) -> Result<crate::StorageIden
     Ok(crate::StorageIdentity::pinned(&held)?)
 }
 fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
+    let mut bytes = u64::MAX;
     read_manifest(
         backup,
         path,
         &AtomicBool::new(false),
-        u64::MAX,
+        &mut bytes,
         Duration::MAX,
         |_| Ok(()),
     )
@@ -118,19 +122,30 @@ fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
 
 /// Keeps checksum verification, SQLite queries and the final revision check on
 /// one retained file. The callback cannot retarget a verified pathname.
+/// Reserves its observed length from the remaining verification allowance before
+/// hashing; failed checks retain that reservation. Pre-admission cancellation or
+/// a zero deadline leaves the allowance untouched.
 pub(crate) fn read_manifest<T>(
     backup: &Backup,
     path: &Path,
     cancel: &AtomicBool,
-    bytes: u64,
+    bytes: &mut u64,
     timeout: Duration,
     read: impl FnOnce(&Store) -> Result<T>,
 ) -> Result<T> {
+    cancelled(cancel)?;
+    if timeout.is_zero() {
+        return Err("Backup manifest read timed out before admission".into());
+    }
     let file = kernel_interface::open_content(path, false)?;
     let source = FileSource::capture_file(&file)?;
-    if file.metadata()?.len() > bytes {
+    let length = source.observed_size();
+    if length > *bytes {
         return Err("Backup manifest exceeds the metadata reuse byte budget".into());
     }
+    // Reserve the exact revision length before hashing, including failed checks.
+    // FileSource hashes only that observed length and rejects a changed revision.
+    *bytes -= length;
     let hash = source.sha256(&file, cancel, timeout)?;
     if backup.manifest_sha256.as_deref() != Some(hash.as_str()) {
         return Err("Prepared backup manifest changed; publication suspended".into());
@@ -144,7 +159,7 @@ pub(crate) fn read_manifest<T>(
 }
 fn validate_header(backup: &Backup, manifest: &Store) -> Result<()> {
     let header: Backup = manifest
-        .get("backup", &backup.id)?
+        .get_bounded("backup", &backup.id, 64 * 1024)?
         .ok_or("Missing manifest backup header")?;
     if header.id != backup.id
         || header.path != backup.path

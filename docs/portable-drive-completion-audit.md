@@ -44,7 +44,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
-| 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses verified current-backup and enrolled portable sync hashes without source payload reads. Sync reuse binds full revision, subtree, source birth identity, boot/namespace/unique mount lifetime and row generation; legacy/mismatched rows require fresh hashing. Named portable observations refresh proven rows; incoming copies await observation. Native FAT32/exFAT/NTFS decline unsupported promotion and full-scan reuse. Older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
+| 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses verified current/historical file-backup and enrolled portable sync hashes without source payload reads. Sync reuse binds full revision, subtree, source birth identity, boot/namespace/unique mount lifetime and row generation; legacy/mismatched rows require fresh hashing. Named portable observations refresh proven rows; incoming copies await observation. Native FAT32/exFAT/NTFS decline unsupported promotion and full-scan reuse. Historical candidate enrichment now uses independent transactions, bounded decoding, indexed registration order, a shared checksum allowance and early completion; explicit current pointers keep priority. Uncertain revisions and cross-driver precision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
@@ -53,6 +53,69 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Historical backup fingerprint checkpoint
+
+Capture now tries the explicit current completed file backup first, then completed
+history in reverse registration order. Matching drive/evidence, kind, identifier,
+manifest location, checksum/header, queried-change provenance, source-root identity
+and full per-file revision remain required. It does not select prepared publications
+or change current-version pointers. Each candidate has an independent transaction:
+failure cannot discard earlier imports, and older candidates cannot replace a
+verified current hash. Raw file names remain lossless.
+
+A single verification allowance starts at the effective catalog byte budget. The
+existing guarded manifest reader reserves the exact FileSource-observed length
+before hashing, even if verification fails. Oversized inputs are refused before
+reading; cancellation/zero deadlines detected before admission leave the allowance
+untouched. The new core observed_size accessor returns that captured length rather
+than refreshing it from a potentially changed file. Existing FileSource checks and
+bounded positional hashing remain authoritative. It does not change revision-key
+representation. Header/source/provenance records use the shared bounded entity
+reader; backup records/rows are limited to 64 KiB before decoding.
+
+An additive kind/rowid index supports history without a growing in-memory list,
+a full-history sort or status-page cut-off. Startup upgrades existing state in
+place without changing database versions. Standalone pre-index callers retain
+current-version enrichment; daemon startup enables history. Verified manifests
+stream their rows and query captured paths through the existing index. A missing
+eligible-file count is computed once, imports decrement it only after commit,
+and completed coverage stops further historical verification. Empty/no-candidate
+catalogs avoid that count. Time and cancellation checks span the complete search.
+
+Seven focused history cases cover twelve current-candidate faults, explicit old
+current pointers and changed clock values, independent rollback/gap filling,
+aggregate allowance refusal and larger-limit recovery, over 1,100 newer unrelated
+records, old-index migration and raw file names. They retain older manifest bytes
+unchanged. The trace acceptance exercises current backup, sync and historical
+fallback, each with no-read and deliberate source-read controls. It also verifies
+that an already-covered older manifest is not read.
+
+Evidence: `/tmp/portable-drive-history-hashes-backend-final.log` records the final
+ordinary backend run (170 pass, 72 ignored); the explicit FUSE, trace and native
+fixtures below were run separately. Final backend all-target clippy passes with
+warnings denied (`/tmp/portable-drive-history-hashes-clippy-final.log`).
+Nine core guarded file-source tests pass, including unchanged observed length
+after source growth; all twelve core doctests pass. The rendered observed_size
+summary and its resolved check_file link were inspected. Logs use
+`/tmp/portable-drive-history-hashes-`. The fresh helper passes 21 host FUSE provider
+cases. `/tmp/portable-drive-vm-history-hashes/report.json` passes FAT32, exFAT and
+NTFS: each profile checks unsupported promotion/reuse refusal, ordinary versioned
+backups, catalog policy versus full backup/sync inclusion, and real authorized
+imaging/read-only providers with explicit denial-child verification. The separately
+tracked exFAT fractional-time limitation remains unchanged. No host mount, attached
+medium or live desktop daemon was used.
+
+Architecture comparison retains 4300 clone groups, 144 cycles, average CCN 3.48
+and maximum 274; duplication is 7.04% versus the original baseline's 7.30%.
+The branch-wide result is still REGRESSION. New history/resource functions have
+no reported CCN hotspot; the structural tool flags catalog/hashes.rs:merge for
+the final architecture review. Bounded decoding is shared with sync provenance.
+The existing publication install/seal and Store.visit flags and short scan/store
+clone predate this checkpoint. Filtered checkpoint report with full metric deltas:
+`.fitness/portable-drives-history-hashes-architecture.json`.
+Item 6.7 stays Partial for uncertain provider revisions and cross-driver precision;
+no broader feature gate is marked complete by this checkpoint.
 
 ## Sync fingerprint enrichment checkpoint
 

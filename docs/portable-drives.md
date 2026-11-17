@@ -360,8 +360,10 @@ retain version 1. Keep the helper and applications from the same build together.
 
 Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
-Capture can reuse SHA-256 fingerprints from the current completed file backup
-without reading the source file contents. This optional enrichment requires a
+Capture can reuse SHA-256 fingerprints from completed file backups without
+reading the source file contents. It prefers the explicit current version, then
+visits completed history in reverse registration order until eligible files are
+covered or the capture budgets are exhausted. This optional enrichment requires a
 matching drive/evidence, source-root identity and full per-file revision, plus
 recorded support for queried change timestamps during backup collection. The
 current conservative eligibility is Linux 7 or later with an observed ext4,
@@ -375,8 +377,15 @@ The backup manifest is checksummed and queried through one retained descriptor,
 within the catalog byte/time budgets. Corrupt, replaced, oversized or unsupported
 manifests leave the metadata catalog usable and roll back imported hashes.
 The additional collection-provenance field is optional; existing manifest and
-catalog versions are unchanged. Searching older manifests for capture enrichment
-and the full uncertain-provider policy remain unfinished.
+catalog versions are unchanged. Manifest verification shares one byte allowance
+equal to this capture's database-byte budget, reserving the observed file length
+before each checksum check, including unsuccessful checks. Explicit larger
+capture limits also increase that allowance. A failed candidate rolls back only
+its own imports, so an older valid candidate can fill gaps without replacing
+verified current-version hashes. Registry/header/row decoding is bounded, and
+history uses an indexed cursor without a history-wide sort or repeated catalog
+scans. Metadata remains usable when optional enrichment cannot continue.
+The full uncertain-provider policy remains unfinished.
 
 Capture can also reuse an enrolled partition/subtree's portable sync scan under
 the same conservative queried-change policy. The local operational SQLite state

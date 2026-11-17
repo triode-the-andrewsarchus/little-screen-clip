@@ -12,15 +12,6 @@ use std::{
     os::unix::{ffi::OsStringExt, fs::MetadataExt},
 };
 
-fn saved(fixture: &Fixture, path: &Path) -> Entry {
-    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
-    assert!(catalog.complete, "{}", catalog.coverage);
-    filesystem(&fixture.state.path, catalog)
-        .lookup_path(path)
-        .unwrap()
-        .unwrap()
-        .1
-}
 fn cache(pair: &SyncPair) -> String {
     format!("{}:portable", pair.id)
 }
@@ -53,7 +44,7 @@ fn named_source_updates_refresh_only_freshly_observed_eligible_cache_rows() {
     );
     let eligible = fixture.source.queried_change_tracking().unwrap();
     assert_eq!(
-        saved(&fixture, Path::new("file.txt")).hash.is_some(),
+        fixture.captured_entry(Path::new("file.txt")).hash.is_some(),
         eligible
     );
 
@@ -62,10 +53,10 @@ fn named_source_updates_refresh_only_freshly_observed_eligible_cache_rows() {
     fs::write(pair.local.join("file.txt"), b"locally changed").unwrap();
     changed(&fixture, &pair, pair.local.join("file.txt")).unwrap();
     assert_eq!(fs::read(&source).unwrap(), b"locally changed");
-    assert!(saved(&fixture, Path::new("file.txt")).hash.is_none());
+    assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_none());
     fixture.synchronize(&pair, false).unwrap();
     let expected = eligible.then(|| format!("{:x}", Sha256::digest(b"locally changed")));
-    assert_eq!(saved(&fixture, Path::new("file.txt")).hash, expected);
+    assert_eq!(fixture.captured_entry(Path::new("file.txt")).hash, expected);
 
     fixture
         .db
@@ -74,7 +65,7 @@ fn named_source_updates_refresh_only_freshly_observed_eligible_cache_rows() {
     fs::write(&source, b"another version").unwrap();
     changed(&fixture, &pair, source).unwrap();
     assert!(provenance(&fixture, &pair).is_none());
-    assert!(saved(&fixture, Path::new("file.txt")).hash.is_none());
+    assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_none());
 }
 
 #[test]
@@ -100,7 +91,7 @@ fn named_directory_fallbacks_do_not_reuse_a_whole_unobserved_scan() {
 fn portable_sync_hashes_enrich_catalogs_and_changed_revisions_are_not_promoted() {
     let fixture = reliable_fixture();
     let pair = fixture.pair(Path::new(""));
-    let entry = saved(&fixture, Path::new("file.txt"));
+    let entry = fixture.captured_entry(Path::new("file.txt"));
     if !fixture.source.queried_change_tracking().unwrap() {
         assert!(entry.hash.is_none());
         assert!(provenance(&fixture, &pair).is_none());
@@ -131,9 +122,9 @@ fn portable_sync_hashes_enrich_catalogs_and_changed_revisions_are_not_promoted()
         (before.len(), before.mtime(), before.mtime_nsec()),
         (after.len(), after.mtime(), after.mtime_nsec())
     );
-    assert!(saved(&fixture, Path::new("file.txt")).hash.is_none());
+    assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_none());
     fixture.synchronize(&pair, false).unwrap();
-    assert!(saved(&fixture, Path::new("file.txt")).hash.is_some());
+    assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_some());
     assert_eq!(fs::read(path).unwrap(), b"changed payload");
 }
 
@@ -145,7 +136,7 @@ fn subtree_and_raw_names_map_to_portable_scan_paths_without_enriching_other_fold
     fs::create_dir(fixture.source.path.join(&relative)).unwrap();
     fs::write(fixture.source.path.join(&leaf), b"raw payload").unwrap();
     let pair = fixture.pair(&relative);
-    let entry = saved(&fixture, &leaf);
+    let entry = fixture.captured_entry(&leaf);
     assert_eq!(
         entry.hash.is_some(),
         fixture.source.queried_change_tracking().unwrap()
@@ -154,7 +145,7 @@ fn subtree_and_raw_names_map_to_portable_scan_paths_without_enriching_other_fold
         fs::read(pair.local.join(leaf.file_name().unwrap())).unwrap(),
         b"raw payload"
     );
-    assert!(saved(&fixture, Path::new("file.txt")).hash.is_none());
+    assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_none());
     assert_eq!(entry.path, leaf);
 }
 
@@ -184,7 +175,7 @@ fn legacy_or_mismatched_row_generations_are_rehashed_before_new_provenance_is_pu
         fixture.assert_metadata_only(&["file.txt"]);
         assert_eq!(fixture.synchronize(&pair, true).unwrap().files, 0);
         let expected = Some(format!("{:x}", Sha256::digest(b"catalog payload")));
-        assert_eq!(saved(&fixture, Path::new("file.txt")).hash, expected);
+        assert_eq!(fixture.captured_entry(Path::new("file.txt")).hash, expected);
         let after = provenance(&fixture, &pair).unwrap();
         assert_ne!(before["generation"], after["generation"]);
     }
@@ -234,7 +225,7 @@ fn missing_or_changed_fingerprint_context_declines_hashes_without_losing_metadat
                 .put(fingerprints::KIND, &cache(&pair), &record)
                 .unwrap();
         }
-        let entry = saved(&fixture, Path::new("file.txt"));
+        let entry = fixture.captured_entry(Path::new("file.txt"));
         assert!(entry.hash.is_none(), "{field}");
         assert_eq!(entry.size, b"catalog payload".len() as u64);
     }
@@ -276,14 +267,14 @@ fn scan_and_provenance_publication_fail_atomically_after_completed_file_effects(
                 .hash,
             old.hash
         );
-        assert!(saved(&fixture, Path::new("file.txt")).hash.is_none());
+        assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_none());
         fixture
             .db
             .0
             .execute_batch("DROP TRIGGER fingerprint_publication_fault")
             .unwrap();
         assert_eq!(fixture.synchronize(&pair, false).unwrap().files, 0);
-        assert!(saved(&fixture, Path::new("file.txt")).hash.is_some());
+        assert!(fixture.captured_entry(Path::new("file.txt")).hash.is_some());
     }
 }
 
@@ -340,7 +331,7 @@ fn oversized_optional_rows_and_registries_keep_catalogs_metadata_only() {
             _ => unreachable!(),
         }
         assert!(
-            saved(&fixture, Path::new("file.txt")).hash.is_none(),
+            fixture.captured_entry(Path::new("file.txt")).hash.is_none(),
             "{fault}"
         );
     }
@@ -351,13 +342,13 @@ fn a_sync_digest_cannot_replace_a_verified_completed_backup_digest() {
     let fixture = reliable_fixture();
     fixture.backup().unwrap();
     let pair = fixture.pair(Path::new(""));
-    let before = saved(&fixture, Path::new("file.txt")).hash;
+    let before = fixture.captured_entry(Path::new("file.txt")).hash;
     let mut entry = scan::entry(&fixture.db, &cache(&pair), Path::new("file.txt"))
         .unwrap()
         .unwrap();
     entry.hash = Some("0".repeat(64));
     scan::put(&fixture.db, &cache(&pair), &entry).unwrap();
-    assert_eq!(saved(&fixture, Path::new("file.txt")).hash, before);
+    assert_eq!(fixture.captured_entry(Path::new("file.txt")).hash, before);
 }
 
 #[test]
@@ -384,7 +375,7 @@ fn native_coarse_sources_do_not_promote_sync_hashes_without_tracking_provenance(
     );
     assert!(!fixture.source.queried_change_tracking().unwrap());
     assert!(provenance(&fixture, &pair).is_none());
-    let entry = saved(&fixture, Path::new("file.txt"));
+    let entry = fixture.captured_entry(Path::new("file.txt"));
     assert!(entry.hash.is_none());
     assert_eq!(entry.size, b"catalog payload".len() as u64);
 }

@@ -23,12 +23,7 @@ struct Context {
 }
 impl Provenance {
     pub fn load(db: &Store, id: &str) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        let json: Option<String> = db.0.query_row(
-            "SELECT json FROM entities WHERE kind=?1 AND id=?2 AND length(CAST(json AS BLOB))<=16384",
-            params![KIND, id], |row| row.get(0),
-        ).optional()?;
-        Ok(json.map(|json| serde_json::from_str(&json)).transpose()?)
+        db.get_bounded(KIND, id, 16 * 1024)
     }
 
     pub fn capture(pair: &SyncPair, root: &Root) -> Result<Self> {

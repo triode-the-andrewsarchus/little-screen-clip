@@ -13,6 +13,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS version (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL);
             INSERT OR IGNORE INTO version VALUES(1,1);
             CREATE TABLE IF NOT EXISTS entities(kind TEXT NOT NULL,id TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(kind,id));
+            CREATE INDEX IF NOT EXISTS entity_kind ON entities(kind);
             CREATE TABLE IF NOT EXISTS entries(scan TEXT NOT NULL,path BLOB NOT NULL,parent BLOB NOT NULL,name BLOB NOT NULL,json TEXT NOT NULL,PRIMARY KEY(scan,path));
             CREATE INDEX IF NOT EXISTS entry_parent ON entries(scan,parent,name);
             CREATE TABLE IF NOT EXISTS conflict_paths(pair TEXT NOT NULL,path BLOB NOT NULL,id TEXT NOT NULL,PRIMARY KEY(pair,path,id));
@@ -75,6 +76,23 @@ impl Store {
                 r.get::<_, String>(0)
             })?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    /// Limits decoding before materializing a potentially corrupt metadata record.
+    pub fn get_bounded<T: DeserializeOwned>(
+        &self,
+        kind: &str,
+        id: &str,
+        bytes: u64,
+    ) -> Result<Option<T>> {
+        let json: Option<Option<String>> = self.0.query_row(
+            "SELECT CASE WHEN length(CAST(json AS BLOB))<=?3 THEN json END FROM entities WHERE kind=?1 AND id=?2",
+            params![kind, id, bytes.min(i64::MAX as u64)], |row| row.get(0),
+        ).optional()?;
+        json.map(|json| {
+            let json = json.ok_or("Metadata record exceeds its decoding budget")?;
+            Ok(serde_json::from_str(&json)?)
+        })
+        .transpose()
     }
     pub fn remove(&self, kind: &str, id: &str) -> Result<()> {
         self.0.execute(

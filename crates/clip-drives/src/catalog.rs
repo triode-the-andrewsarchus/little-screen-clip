@@ -515,6 +515,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 mod tests {
     mod coverage_tests;
     mod hash_tests;
+    mod history_hash_tests;
     mod lifecycle_tests;
     mod provider_tests;
     mod redaction_tests;
@@ -528,6 +529,31 @@ mod tests {
         temp: tempfile::TempDir,
     }
     impl Fixture {
+        fn rewrite_manifest(&self, version: &mut Backup, edit: impl FnOnce(&Store)) {
+            let path = version.manifest.as_ref().unwrap();
+            let manifest = Store::existing(path, false).unwrap();
+            edit(&manifest);
+            drop(manifest);
+            let file = little_clip_core::kernel_interface::open_content(path, false).unwrap();
+            version.manifest_sha256 = Some(
+                FileSource::capture_file(&file)
+                    .unwrap()
+                    .sha256(&file, &AtomicBool::new(false), Duration::MAX)
+                    .unwrap(),
+            );
+            self.db.put("backup", &version.id, version).unwrap();
+        }
+
+        fn captured_entry(&self, path: &Path) -> Entry {
+            let catalog = self.capture(&DriveConfig::default()).unwrap();
+            assert!(catalog.complete, "{}", catalog.coverage);
+            filesystem(&self.state.path, catalog)
+                .lookup_path(path)
+                .unwrap()
+                .unwrap()
+                .1
+        }
+
         fn pair(&self, relative: &Path) -> crate::SyncPair {
             let local = Root::create(&self.temp.path().join("paired")).unwrap();
             let pair = crate::SyncPair {

@@ -157,6 +157,14 @@ impl FileSource {
         &self.path
     }
 
+    /// Returns the byte length recorded for this revision.
+    ///
+    /// This observation does not refresh metadata or authorize a read. Use
+    /// [`Self::check_file`] to validate the retained input before processing it.
+    pub fn observed_size(&self) -> u64 {
+        self.version[2]
+    }
+
     /// Captures the resolved regular file's identity and timestamps on a worker.
     ///
     /// Classification, metadata and the resolved name come from the same pinned file.
@@ -447,6 +455,7 @@ mod tests {
         std::fs::write(&path, b"abc").unwrap();
         let mut file = open_regular_file(&path, true).unwrap();
         let source = FileSource::capture_file(&file).unwrap();
+        assert_eq!(source.observed_size(), 3);
         file.seek(SeekFrom::Start(2)).unwrap();
         assert_eq!(
             source
@@ -468,6 +477,11 @@ mod tests {
                 .contains("timed out")
         );
         std::fs::write(&path, b"changed").unwrap();
+        assert_eq!(
+            source.observed_size(),
+            3,
+            "the original reservation must not grow"
+        );
         assert!(
             source
                 .sha256(&file, &AtomicBool::new(false), Duration::from_secs(5))
