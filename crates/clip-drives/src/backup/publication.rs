@@ -296,16 +296,7 @@ pub(crate) fn recover(db: &Store) -> Result<()> {
             install(db, &parent, pending)
         })();
         if let Err(error) = outcome {
-            let cause = match &error {
-                crate::Error::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    crate::RecoveryCause::Unavailable
-                }
-                crate::Error::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                    crate::RecoveryCause::PermissionDenied
-                }
-                crate::Error::Io(_) | crate::Error::Sql(_) => crate::RecoveryCause::Storage,
-                _ => crate::RecoveryCause::ChangedIdentityOrContent,
-            };
+            let cause = error.recovery_cause();
             db.put(
                 "recovery",
                 &id,

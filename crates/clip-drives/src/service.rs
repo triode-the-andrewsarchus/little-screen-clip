@@ -121,7 +121,7 @@ impl Service {
         )
     }
     #[cfg(any(test, feature = "test-support"))]
-    fn start_with_inventory(
+    pub(crate) fn start_with_inventory(
         config: DriveConfig,
         state: PathBuf,
         inventory: Inventory,

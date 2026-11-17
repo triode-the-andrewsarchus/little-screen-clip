@@ -165,8 +165,25 @@ pub(crate) fn publish(db: &Store, catalog: &Catalog, applied: &[PathBuf]) -> Res
         }
         Ok(())
     })?;
+    db.remove(super::staging::KIND, &catalog.id)?;
+    db.remove("recovery", &catalog.id)?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Shares the same catalog policy selection for capture and late-rule publication.
+pub(super) fn capture_exclusions(db: &Store, drive: &str) -> Result<Vec<PathBuf>> {
+    let transaction = db.0.unchecked_transaction()?;
+    let mut exclusions = Vec::new();
+    visit_exclusions(db, drive, |relative| {
+        if relative.as_os_str().is_empty() {
+            return Err("Cataloging is disabled for this drive".into());
+        }
+        exclusions.push(relative);
+        Ok(())
+    })?;
+    transaction.commit()?;
+    Ok(exclusions)
 }
 
 /// Shares the same catalog policy selection for capture and late-rule publication.

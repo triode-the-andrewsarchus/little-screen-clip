@@ -41,6 +41,20 @@ impl From<&str> for Error {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+impl Error {
+    pub(crate) fn recovery_cause(&self) -> RecoveryCause {
+        match self {
+            Self::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                RecoveryCause::Unavailable
+            }
+            Self::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                RecoveryCause::PermissionDenied
+            }
+            Self::Io(_) | Self::Sql(_) => RecoveryCause::Storage,
+            _ => RecoveryCause::ChangedIdentityOrContent,
+        }
+    }
+}
 #[cfg(test)]
 pub(crate) fn raw_errno(error: Error) -> Option<i32> {
     match error {

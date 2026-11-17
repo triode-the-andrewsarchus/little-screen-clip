@@ -385,6 +385,14 @@ entry has a digest, validation hashes the same retained descriptor used for read
 A stale candidate can fall back to another matching backup, while an already open
 file keeps its chosen provider and reports stale data if that provider changes.
 
+Catalog creation journals private staging ownership before writing metadata.
+Cancelled unfinished captures are removed; interrupted captures are recovered by
+the daemon's metadata maintenance worker without needing the original drive.
+A sealed capture is checksummed, installed and published after restart. Changed
+or unrecognized staging artifacts are retained with recovery status rather than
+deleted. A cancellation arriving after sealing can still finish publication and
+returns the completed result. Previously published catalogs remain available.
+
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
 Whole-drive and folder editors read the exact saved rule before displaying editable

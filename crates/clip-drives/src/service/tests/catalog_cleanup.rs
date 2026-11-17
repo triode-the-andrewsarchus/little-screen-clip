@@ -82,21 +82,12 @@ fn pending_catalog_exclusions_allow_sync_and_resume_after_daemon_restart_and_rea
     };
     assert_eq!(updated.captured, catalog.captured);
     assert!(updated.redacted.is_some());
-    let db = Store::existing(
-        &state
-            .join("catalogs")
-            .join(format!("{}.sqlite", catalog.id)),
-        true,
-    )
-    .unwrap();
-    assert!(
-        scan::entry(&db, "catalog", Path::new("private/secret"))
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        fs::read(temp.path().join("removed-portable/private/secret")).unwrap(),
-        b"retained payload"
+    catalog::test_assertions::redacted_leaf(
+        &state,
+        &catalog.id,
+        Path::new("private/secret"),
+        &temp.path().join("removed-portable"),
+        b"retained payload",
     );
     service.shutdown().unwrap();
 }

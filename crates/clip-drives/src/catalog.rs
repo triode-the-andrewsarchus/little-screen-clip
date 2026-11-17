@@ -26,6 +26,9 @@ mod capture_details;
 mod hashes;
 pub(crate) mod redaction;
 mod server;
+pub(crate) mod staging;
+#[cfg(test)]
+pub(crate) mod test_assertions;
 
 pub(crate) fn capture(
     db: &Store,
@@ -40,21 +43,7 @@ pub(crate) fn capture(
     budgets.validate()?;
     let started = std::time::Instant::now();
     root.validate()?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let catalogs = state.directory(Path::new("catalogs"), true)?;
-    let path = crate::root::anchor(&catalogs).join(format!("{id}.sqlite"));
-    let mut exclusions = Vec::new();
-    {
-        let transaction = db.0.unchecked_transaction()?;
-        redaction::visit_exclusions(db, &drive.id, |relative| {
-            if relative.as_os_str().is_empty() {
-                return Err("Cataloging is disabled for this drive".into());
-            }
-            exclusions.push(relative);
-            Ok(())
-        })?;
-        transaction.commit()?;
-    }
+    let exclusions = redaction::capture_exclusions(db, &drive.id)?;
     let limits = Limits {
         detailed_coverage: true,
         hash_bytes: u64::MAX,
@@ -67,33 +56,41 @@ pub(crate) fn capture(
         exclusions,
         reuse_scan: None,
     };
-    let (cat_db, pages) = capture_details::database(&path, config.catalog_max_bytes)?;
-    let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
-    hashes::from_backup(db, &cat_db, drive, root, config, cancel, started)?;
-    cat_db.0.pragma_update(None, "max_page_count", pages)?;
-    let details = capture_details::source(root, coverage.directory, coverage.stopped)?;
-    let catalog = Catalog {
-        id: id.clone(),
-        drive: drive.id.clone(),
-        evidence: drive.evidence.clone(),
-        label: drive.label.clone(),
-        captured: crate::now(),
-        entries: coverage.count,
-        complete: coverage.complete,
-        coverage: coverage.message,
-        limits: Some(budgets),
-        details: Some(details),
-        redacted: None,
-        redaction_generation: 0,
-        pending_redactions: 0,
-        redaction_error: None,
-        root_excluded: false,
-        mount: None,
-    };
-    cat_db.put("source", "drive", drive)?;
-    cat_db.put("catalog", &id, &catalog)?;
-    redaction::publish(db, &catalog, &limits.exclusions)?;
-    Ok(catalog)
+    let mut staged = staging::Capture::new(db, state, drive)?;
+    let id = staged.id().to_owned();
+    let result = (|| {
+        let (cat_db, pages) = capture_details::database(&staged.path(), config.catalog_max_bytes)?;
+        let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
+        hashes::from_backup(db, &cat_db, drive, root, config, cancel, started)?;
+        cat_db.0.pragma_update(None, "max_page_count", pages)?;
+        let details = capture_details::source(root, coverage.directory, coverage.stopped)?;
+        let catalog = Catalog {
+            id: id.clone(),
+            drive: drive.id.clone(),
+            evidence: drive.evidence.clone(),
+            label: drive.label.clone(),
+            captured: crate::now(),
+            entries: coverage.count,
+            complete: coverage.complete,
+            coverage: coverage.message,
+            limits: Some(budgets),
+            details: Some(details),
+            redacted: None,
+            redaction_generation: 0,
+            pending_redactions: 0,
+            redaction_error: None,
+            root_excluded: false,
+            mount: None,
+        };
+        cat_db.put("source", "drive", drive)?;
+        cat_db.put("catalog", &id, &catalog)?;
+        staged.publish(cat_db, &catalog, &limits.exclusions, cancel)?;
+        Ok(catalog)
+    })();
+    match result {
+        Ok(catalog) => Ok(catalog),
+        Err(error) => staged.failed(error),
+    }
 }
 struct OpenFile {
     file: File,
@@ -516,6 +513,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 mod tests {
     mod coverage_tests;
     mod hash_tests;
+    mod lifecycle_tests;
     mod provider_tests;
     mod redaction_tests;
     use super::*;
