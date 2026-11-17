@@ -43,7 +43,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
-| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention and read-only behavior. File-type fidelity, pre-epoch/overflow timestamp projection and the full mutation errno matrix remain. |
+| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention, exact signed fractional dates, invalid-date EOVERFLOW and multi-megabyte reads. Thirteen ordinary write/namespace/metadata calls return EROFS; read-only descriptor truncation/write retain Linux EINVAL/EBADF. File-type fidelity and remaining mutation-call coverage remain. See the FUSE timestamp checkpoint. |
 | 6.7 | Partial | Provider metadata/digests now validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups also require their captured directory identity. Reuse of available sync/backup hashes and uncertain revision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
@@ -53,6 +53,69 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## FUSE timestamp projection and bounded protocol upgrade
+
+A separate-process real-mount regression test reproduced an upstream fuser 0.14
+wire conversion error: source `(-2 seconds, 250000000 nanoseconds)` was presented
+as `(-1, 750000000)`. The retained failing helper is
+`/tmp/little-clip-catalog-fuser014-helper`, SHA-256
+`75a9e686c32a86565c82eeaed1d063872137a33344dbe8e8c0788d3f5e018b67`;
+the original failure is recorded in `/tmp/portable-drive-catalog-time-negative.log`.
+The final current test executable also fails against that retained helper in
+`/tmp/portable-drive-catalog-fuser-old-negative-final.log`, confirming the same
+assertion distinguishes the old and upgraded helper.
+
+The drive helper now uses upstream fuser 0.18's corrected signed conversion.
+The unrelated fuse-binwalk dependency retains its existing fuser 0.14 version.
+The typed protocol adapter reuses the existing catalog, SQLite owner, held
+providers and checked `backup::time` conversion. Its mutex satisfies the new
+library's `Sync` callback contract; one configured request thread preserves the
+existing ownership and admission model. Production and in-process tests share
+the same mount configuration. The mount advertises a 1 MiB maximum read, matching
+the existing request allocation bound, and retains the 128-handle limit.
+
+Attribute projection now returns `EOVERFLOW` for invalid saved nanoseconds,
+capture/redaction seconds outside the signed range, and redaction-revision
+addition overflow. It does not fabricate a substitute date or rely on upstream
+saturation. Original modification dates and virtual redaction ctime keep their
+separate meanings. No catalog/database format changes are required.
+
+Validation:
+
+- 120 ordinary backend cases pass, with 53 explicit fixtures ignored, in
+  `/tmp/portable-drive-catalog-fuser-backend-final.log`.
+- Eleven provider/metadata cases pass in
+  `/tmp/portable-drive-catalog-fuser-provider-final.log`. These include six actual
+  helper/legacy-helper cases: exact negative and positive fractional dates,
+  corrupt saved nanoseconds returning EOVERFLOW while other entries remain
+  accessible, multi-megabyte sequential/offset reads, thirteen mutation calls
+  returning EROFS, old-schema helper refusal, partial listings and provider
+  replacement. The ordinary cases also check root/revision overflow without
+  panic. The mutation test verifies both original and backup bytes after all
+  attempted writes; read-only descriptor truncation/write return EINVAL/EBADF.
+- Both migrated in-process metadata-only/redaction-reader fixtures pass in
+  `/tmp/portable-drive-catalog-fuser-inprocess-final.log`. Metadata inventory
+  still performs zero payload opens.
+- Four real partition/authority cases per FAT32, exFAT and NTFS3 source pass
+  (twelve total), including catalog payload reads through mounted images:
+  `/tmp/portable-drive-vm-catalog-fuser-native-final/report.json`. The report
+  contains success=true and the successful guest completion marker, and each
+  filesystem's four-case result is present in `guest.log`.
+- Helper/backend builds and all-target drive clippy with warnings denied pass;
+  logs use `/tmp/portable-drive-catalog-fuser-` followed by `new-build.log`,
+  `helper-build.log`, `clippy-final.log` and `fmt-final.log`. The tested current
+  helper SHA-256 is
+  `2611b96641ee8a3e708d21e17b7150195ca20d56b376e40ff3cde4eb44a27ddf`.
+
+The full-feature architecture comparison still reports REGRESSION against
+`pre-portable-drive-services`: 4300 clone groups versus 4289 and 144 cycles versus
+143, unchanged from the preceding checkpoint. Duplication is 7.09% versus 7.30%,
+average CCN 3.48 versus 3.44, maximum 274 unchanged. The new protocol adapter and
+metadata tests add no reported hotspot. Selected evidence is retained in
+`.fitness/portable-drives-catalog-time-architecture.json`. File-type fidelity,
+remaining mutation calls, uncertain provider equivalence and full final gates
+remain open; this checkpoint does not complete item 6.6 or the full goal.
 
 ## Typed catalog coverage and source precision
 

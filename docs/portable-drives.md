@@ -245,6 +245,15 @@ field or a filesystem label never proves finer resolution. Catalog details show
 the source mount type independently of the drive label. Existing provider
 revision/hash validation stays conservative.
 
+The mounted view preserves signed fractional modification times, including dates
+before 1970. Invalid stored nanoseconds or unrepresentable capture/redaction dates
+return `EOVERFLOW` rather than replacing the original date with a capture date.
+The helper uses the corrected upstream
+[fuser time conversion](https://github.com/cberner/fuser/blob/v0.18.0/src/time.rs).
+Its FUSE request loop remains single-threaded, with at most 128 open provider
+handles and 1 MiB per read request. Large client reads are split by the kernel;
+each request still validates its retained provider before and after reading.
+
 New catalog databases use version 2 so older helpers reject their partial-listing
 semantics. Updated helpers also read version-1 catalogs, whose missing precision
 and directory details remain unknown. Ordinary drive state and backup manifests

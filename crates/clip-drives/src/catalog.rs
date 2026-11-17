@@ -7,10 +7,7 @@ use crate::{
     scan::{self, Entry, Limits},
     store::Store,
 };
-use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
-    ReplyOpen, ReplyXattr, Request,
-};
+use fuser::{FileAttr, FileType, INodeNo};
 use little_clip_core::file_source::FileSource;
 use rusqlite::{OptionalExtension, params};
 use std::{
@@ -23,10 +20,11 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 mod capture_details;
 pub(crate) mod redaction;
+mod server;
 
 pub(crate) fn capture(
     db: &Store,
@@ -364,22 +362,31 @@ impl CatalogFs {
         }
         .into())
     }
-    fn attr(&self, ino: u64, entry: Option<&Entry>) -> FileAttr {
-        let time = entry
-            .and_then(|e| backup::time(e.modified, e.nanos))
-            .unwrap_or(SystemTime::UNIX_EPOCH + Duration::from_secs(self.catalog.captured));
+    fn attr(&self, ino: u64, entry: Option<&Entry>) -> Result<FileAttr> {
+        let clock = |seconds: u64| {
+            i64::try_from(seconds)
+                .ok()
+                .and_then(|seconds| backup::time(seconds, 0))
+                .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EOVERFLOW))
+        };
+        let time = match entry {
+            Some(entry) => backup::time(entry.modified, entry.nanos)
+                .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EOVERFLOW))?,
+            None => clock(self.catalog.captured)?,
+        };
+        let revision = clock(self.catalog.redacted.unwrap_or(self.catalog.captured))?
+            .checked_add(Duration::from_nanos(self.catalog.redaction_generation))
+            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EOVERFLOW))?;
         let kind = entry.map_or(FileType::Directory, |e| file_type(&e.kind));
-        FileAttr {
-            ino,
+        Ok(FileAttr {
+            ino: INodeNo(ino),
             size: entry.map_or(0, |e| e.size),
             blocks: 0,
             atime: time,
             mtime: time,
             // Source mtime stays intact. Virtual ctime identifies this metadata
             // snapshot so a reopened/redacted mount cannot reuse old previews.
-            ctime: SystemTime::UNIX_EPOCH
-                + Duration::from_secs(self.catalog.redacted.unwrap_or(self.catalog.captured))
-                + Duration::from_nanos(self.catalog.redaction_generation),
+            ctime: revision,
             crtime: time,
             kind,
             perm: if kind == FileType::Directory {
@@ -393,7 +400,7 @@ impl CatalogFs {
             rdev: 0,
             blksize: 4096,
             flags: 0,
-        }
+        })
     }
 }
 fn file_type(kind: &str) -> FileType {
@@ -402,246 +409,6 @@ fn file_type(kind: &str) -> FileType {
         "symlink" => FileType::Symlink,
         _ => FileType::RegularFile,
     }
-}
-impl Filesystem for CatalogFs {
-    fn getxattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        name: &OsStr,
-        size: u32,
-        reply: ReplyXattr,
-    ) {
-        if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR) {
-            match self.details(ino) {
-                Ok(Some(details)) => xattr_reply(&details, size, reply),
-                Ok(None) => reply.error(libc::ENODATA),
-                Err(_) => reply.error(libc::ENOENT),
-            }
-            return;
-        }
-        if name != OsStr::new(little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR) {
-            reply.error(libc::ENODATA);
-            return;
-        }
-        match self.coverage(ino) {
-            Ok(Some(status)) => xattr_reply(status.token(), size, reply),
-            Ok(None) => reply.error(libc::ENODATA),
-            _ => reply.error(libc::ENOENT),
-        }
-    }
-    fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
-        let result = (|| -> Result<Vec<u8>> {
-            let mut names = Vec::new();
-            if self.coverage(ino)?.is_some() {
-                names.extend_from_slice(
-                    little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR.as_bytes(),
-                );
-                names.push(0);
-            }
-            if self.details(ino)?.is_some() {
-                names.extend_from_slice(
-                    little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR.as_bytes(),
-                );
-                names.push(0);
-            }
-            Ok(names)
-        })();
-        match result {
-            Ok(names) => xattr_reply(&names, size, reply),
-            Err(_) => reply.error(libc::ENOENT),
-        }
-    }
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let result = (|| {
-            let parent = self.parent_path(parent)?;
-            let path = parent.join(name);
-            if !little_clip_core::drives::valid_relative(&path) {
-                return Err("Invalid catalog path".into());
-            }
-            self.lookup_path(&path)
-        })();
-        match result {
-            Ok(Some((_, entry))) if entry.kind == "unavailable" => reply.error(libc::EIO),
-            Ok(Some((ino, entry))) => {
-                reply.entry(&Duration::from_secs(1), &self.attr(ino, Some(&entry)), 0)
-            }
-            Ok(None) => reply.error(if self.listing_complete(parent).unwrap_or(false) {
-                libc::ENOENT
-            } else {
-                libc::EIO
-            }),
-            Err(_) => reply.error(libc::EACCES),
-        }
-    }
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
-        if ino == 1 {
-            reply.attr(&Duration::from_secs(1), &self.attr(1, None));
-            return;
-        }
-        match self.row(ino) {
-            Ok(Some(e)) if e.kind == "unavailable" => reply.error(libc::EIO),
-            Ok(Some(e)) => reply.attr(&Duration::from_secs(1), &self.attr(ino, Some(&e))),
-            _ => reply.error(libc::ENOENT),
-        }
-    }
-    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
-        let result = (|| -> Result<PathBuf> {
-            let entry = self.row(ino)?.ok_or("Unknown catalog link")?;
-            let link = entry.link.ok_or("Not a symlink")?;
-            let mut target = entry.path.parent().unwrap_or(Path::new("")).to_owned();
-            for component in link.components() {
-                match component {
-                    std::path::Component::Normal(name) => target.push(name),
-                    std::path::Component::CurDir => (),
-                    std::path::Component::ParentDir => {
-                        if !target.pop() {
-                            return Err("Link escapes catalog".into());
-                        }
-                    }
-                    _ => return Err("Absolute links remain metadata-only".into()),
-                }
-            }
-            if self.lookup_path(&target)?.is_none() {
-                return Err("Link target is not catalogued".into());
-            }
-            Ok(link)
-        })();
-        match result {
-            Ok(link) => reply.data(link.as_os_str().as_bytes()),
-            Err(_) => reply.error(libc::ENODATA),
-        }
-    }
-    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-        match self.parent_path(ino) {
-            Ok(_) => reply.opened(0, 0),
-            Err(_) => reply.error(libc::EACCES),
-        }
-    }
-    fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        let result = (|| -> Result<()> {
-            self.parent_path(ino)?;
-            if offset < 1 && reply.add(ino, 1, FileType::Directory, ".") {
-                return Ok(());
-            }
-            if offset < 2 && reply.add(1, 2, FileType::Directory, "..") {
-                return Ok(());
-            }
-            for (id, name, entry) in self.directory_page(ino, offset)? {
-                if reply.add(id, id as i64, file_type(&entry.kind), name) {
-                    break;
-                }
-            }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => reply.ok(),
-            Err(crate::Error::Io(error)) => reply.error(error.raw_os_error().unwrap_or(libc::EIO)),
-            Err(_) => reply.error(libc::EACCES),
-        }
-    }
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        #[cfg(test)]
-        self.payload_opens
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if flags & libc::O_ACCMODE != libc::O_RDONLY {
-            reply.error(libc::EROFS);
-            return;
-        }
-        if self.opened.len() >= 128 {
-            reply.error(libc::EMFILE);
-            return;
-        }
-        let result = (|| {
-            let entry = self.row(ino)?.ok_or("Unknown entry")?;
-            if entry.kind != "file" {
-                return Err("Not a regular catalog file".into());
-            }
-            self.resolve(&entry)
-        })();
-        match result {
-            Ok(open) => {
-                self.next_handle = self.next_handle.wrapping_add(1).max(1);
-                let handle = self.next_handle;
-                self.opened.insert(handle, open);
-                reply.opened(handle, 1);
-            }
-            Err(e) => reply.error(if e.to_string().contains("stale") {
-                libc::ESTALE
-            } else {
-                libc::ENOMEDIUM
-            }),
-        }
-    }
-    fn read(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
-        size: u32,
-        _flags: i32,
-        _owner: Option<u64>,
-        reply: ReplyData,
-    ) {
-        let result = (|| -> Result<Vec<u8>> {
-            if offset < 0 || size > 1024 * 1024 {
-                return Err("Invalid read size".into());
-            }
-            let open = self.opened.get(&fh).ok_or("Unknown file handle")?;
-            open.root.validate()?;
-            open.source.check_file(&open.file)?;
-            let mut bytes = vec![0; size as usize];
-            let count = open.file.read_at(&mut bytes, offset as u64)?;
-            open.source.check_file(&open.file)?;
-            bytes.truncate(count);
-            Ok(bytes)
-        })();
-        match result {
-            Ok(bytes) => reply.data(&bytes),
-            Err(_) => reply.error(libc::ESTALE),
-        }
-    }
-    fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        _owner: Option<u64>,
-        _flush: bool,
-        reply: ReplyEmpty,
-    ) {
-        self.opened.remove(&fh);
-        reply.ok();
-    }
-}
-fn xattr_reply(value: &[u8], size: u32, reply: ReplyXattr) {
-    if size == 0 {
-        reply.size(value.len() as u32);
-    } else if size < value.len() as u32 {
-        reply.error(libc::ERANGE);
-    } else {
-        reply.data(value);
-    }
-}
-
-fn mount_options(id: &str) -> [fuser::MountOption; 6] {
-    [
-        fuser::MountOption::RO,
-        fuser::MountOption::NoExec,
-        fuser::MountOption::NoDev,
-        fuser::MountOption::NoSuid,
-        fuser::MountOption::Subtype(little_clip_core::catalog_metadata::CATALOG_FS_SUBTYPE.into()),
-        fuser::MountOption::FSName(format!("little-clip-catalog:{id}")),
-    ]
 }
 /// Mounts an existing immutable catalog until it is unmounted by its owner.
 ///
@@ -661,7 +428,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
     let db = Store::existing(&lease.path, true)?;
     let catalog: Catalog = db.get("catalog", id)?.ok_or("Catalog does not exist")?;
     let root = Root::open(mount)?;
-    fuser::mount2(
+    server::mount(
         CatalogFs {
             _lease: lease,
             db,
@@ -673,7 +440,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
             payload_opens: Default::default(),
         },
         &root.path,
-        &mount_options(id),
+        id,
     )?;
     Ok(())
 }
@@ -910,7 +677,7 @@ mod tests {
         let catalog = fixture.capture(&DriveConfig::default()).unwrap();
         let fs = filesystem(&fixture.state.path, catalog);
         let (ino, entry) = fs.lookup_path(Path::new("file.txt")).unwrap().unwrap();
-        assert_eq!(fs.attr(ino, Some(&entry)).size, 15);
+        assert_eq!(fs.attr(ino, Some(&entry)).unwrap().size, 15);
         assert!(fs.resolve(&entry).is_err());
         assert!(
             fs.lookup_path(Path::new("excluded/hidden"))
@@ -936,10 +703,9 @@ mod tests {
         let catalog = fixture.capture(&DriveConfig::default()).unwrap();
         let mount = fixture.temp.path().join("mount");
         std::fs::create_dir(&mount).unwrap();
-        let options = mount_options(&catalog.id);
-        let server = filesystem(&fixture.state.path, catalog);
+        let server = filesystem(&fixture.state.path, catalog.clone());
         let opens = server.payload_opens.clone();
-        let session = fuser::spawn_mount2(server, &mount, &options).unwrap();
+        let session = server::spawn(server, &mount, &catalog.id).unwrap();
         assert_eq!(std::fs::metadata(mount.join("file.txt")).unwrap().len(), 15);
         assert!(std::fs::read(mount.join("file.txt")).is_err());
         assert!(std::fs::read_dir(mount.join("excluded")).is_err());

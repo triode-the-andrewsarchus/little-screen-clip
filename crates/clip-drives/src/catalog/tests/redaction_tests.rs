@@ -134,7 +134,7 @@ fn root_redaction_is_not_an_empty_snapshot_or_a_new_capture() {
         .unwrap();
     assert!(!catalog.complete);
     let reader = filesystem(&fixture.state.path, catalog.clone());
-    let before = reader.attr(1, None);
+    let before = reader.attr(1, None).unwrap();
     drop(reader);
     let intent = exclude(&fixture, Path::new(""));
     assert!(apply(&fixture, &intent).unwrap());
@@ -144,8 +144,8 @@ fn root_redaction_is_not_an_empty_snapshot_or_a_new_capture() {
     assert!(updated.coverage.contains(&catalog.coverage));
     assert!(updated.root_excluded);
     let fs = filesystem(&fixture.state.path, updated);
-    assert_eq!(fs.attr(1, None).mtime, before.mtime);
-    assert!(fs.attr(1, None).ctime > before.ctime);
+    assert_eq!(fs.attr(1, None).unwrap().mtime, before.mtime);
+    assert!(fs.attr(1, None).unwrap().ctime > before.ctime);
     assert!(fs.parent_path(1).is_err());
     assert_eq!(
         fs.coverage(1).unwrap(),
@@ -325,7 +325,7 @@ fn mounted_legacy_helpers_without_file_leases_still_block_redaction() {
     std::fs::create_dir(&mount).unwrap();
     let server = filesystem(&fixture.state.path, catalog.clone());
     server._lease.release_for_legacy_reader_test();
-    let session = fuser::spawn_mount2(server, &mount, &mount_options(&catalog.id)).unwrap();
+    let session = server::spawn(server, &mount, &catalog.id).unwrap();
     assert!(mount.join("file.txt").is_file());
     let intent = exclude(&fixture, Path::new(""));
     assert!(!apply(&fixture, &intent).unwrap());
