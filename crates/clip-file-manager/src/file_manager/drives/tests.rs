@@ -117,6 +117,7 @@ fn failed_cancelled_or_mismatched_policy_reads_cannot_open_a_default_editor() {
 
 fn saved_catalog() -> Catalog {
     Catalog {
+        limits: None,
         id: "saved".into(),
         drive: "portable".into(),
         evidence: "observed".into(),

@@ -58,6 +58,7 @@ impl Owner {
                 DriveRequest::Backup { drive, .. }
                 | DriveRequest::ReadOnlyBackup { drive }
                 | DriveRequest::Catalog { drive } => drive,
+                DriveRequest::CatalogWithLimits { drive, .. } => drive,
                 _ => return Err("Missing bulk drive".into()),
             };
             let drive = self.drive(selector)?;

@@ -499,6 +499,45 @@ mod tests {
     }
 
     #[test]
+    fn catalog_cli_keeps_defaults_and_sends_only_explicit_overrides() {
+        use little_clip_core::drives::{CatalogLimitOverrides, DriveRequest};
+        for (flags, explicit) in [
+            (vec![], false),
+            (
+                vec!["--max-entries", "1000000", "--max-bytes", "1073741824"],
+                true,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(
+                [vec!["clipctl", "drives", "catalog", "part:owned"], flags].concat(),
+            )
+            .unwrap();
+            let Commands::Drives { action, .. } = cli.command else {
+                panic!("expected drives")
+            };
+            match action.request() {
+                DriveRequest::Catalog { drive } => {
+                    assert!(!explicit);
+                    assert_eq!(drive, "part:owned");
+                }
+                DriveRequest::CatalogWithLimits { drive, limits } => {
+                    assert!(explicit);
+                    assert_eq!(drive, "part:owned");
+                    assert_eq!(
+                        limits,
+                        CatalogLimitOverrides {
+                            entries: Some(1_000_000),
+                            bytes: Some(1_073_741_824),
+                            ..Default::default()
+                        }
+                    );
+                }
+                _ => panic!("expected catalog request"),
+            }
+        }
+    }
+
+    #[test]
     fn whole_partition_pair_and_policy_commands_accept_omitted_subtrees() {
         for args in [
             vec!["clipctl", "drives", "pair", "part:owned", "/owned/local"],

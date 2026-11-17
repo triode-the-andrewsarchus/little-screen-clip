@@ -505,6 +505,7 @@ impl Owner {
             | DriveRequest::Backup { drive, .. }
             | DriveRequest::ReadOnlyBackup { drive }
             | DriveRequest::Catalog { drive }
+            | DriveRequest::CatalogWithLimits { drive, .. }
             | DriveRequest::Eject { drive }
             | DriveRequest::PruneBackups { drive } => {
                 if drive.starts_with("/dev/") {

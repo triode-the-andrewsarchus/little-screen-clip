@@ -36,6 +36,8 @@ pub(crate) fn capture(
     cancel: &AtomicBool,
     progress: impl FnMut(u64, u64),
 ) -> Result<Catalog> {
+    let budgets = crate::CatalogLimits::from(config);
+    budgets.validate()?;
     let started = std::time::Instant::now();
     root.validate()?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -79,6 +81,7 @@ pub(crate) fn capture(
         entries: coverage.count,
         complete: coverage.complete,
         coverage: coverage.message,
+        limits: Some(budgets),
         details: Some(details),
         redacted: None,
         redaction_generation: 0,

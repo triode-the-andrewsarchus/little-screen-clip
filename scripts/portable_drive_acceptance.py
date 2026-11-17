@@ -109,7 +109,7 @@ def click_status_action(session, shot, label):
     session.click((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
 
 
-def cancel_backup_review(session, shot):
+def cancel_review(session, shot):
     # Verify the bordered button's interior instead of accepting its frame as text.
     point = session.word(shot, 'Start', tree=True, required=False) or session.word(shot, 'Start', required=False)
     if point is None:
@@ -126,7 +126,7 @@ def cancel_backup_review(session, shot):
                 point = (bounds[0] + int(item['left']) // 3, bounds[1] + (int(item['top']) + int(item['height']) // 2) // 3)
                 break
     if point is None:
-        raise RuntimeError(f'{shot}: no verified Start backup button')
+        raise RuntimeError(f'{shot}: no verified Start button')
     x, y = point
     assert caption(session, shot, (x - 3, y + 43, x + 54, y + 68)) == 'cancel'
     session.click(x + 20, y + 54)
@@ -165,7 +165,7 @@ def backup_review(session, backups):
     assert not status(env)['backups']
     click_word(session, 'backup-review-cancel', 'Temporarily')
     session.observe('backup-review-read-only', ['Close open files', 'original access mode is restored', 'Start backup'])
-    cancel_backup_review(session, 'backup-review-read-only')
+    cancel_review(session, 'backup-review-read-only')
     assert status(env)['backup_directory'] is None
     assert not status(env)['backups']
     drive_menu(session, 'backup-retry-menu')
@@ -196,7 +196,7 @@ def backup_review(session, backups):
     session.click(x + 50, y + 142)
     session.observe('image-review-cancel', ['Full independent image estimate', 'Mount again after imaging', 'Start backup'])
     assert len(status(env)['backups']) == 1
-    cancel_backup_review(session, 'image-review-cancel')
+    cancel_review(session, 'image-review-cancel')
     assert len(status(env)['backups']) == 1
 
     return saved
@@ -314,7 +314,9 @@ def exercise(session, root):
         drive_menu(session, 'catalog-menu')
         click_word(session, 'catalog-menu', 'Contents', tree=True)
         session.observe('catalog-actions', ['Save / update'], preserve_pointer=True)
-        click_word(session, 'catalog-actions', 'Save')
+        click_word(session, 'catalog-actions', 'update')
+        session.observe('catalog-review', ['Review contents catalog', 'Maximum entries', 'Start catalog'])
+        click_word(session, 'catalog-review', 'Start')
         wait_for(lambda: bool(status(env)['catalogs']), 'saved contents catalog')
         catalog = status(env)['catalogs'][0]
         with sqlite3.connect(Path(env['LITTLE_CLIP_DRIVE_STATE_DIR']) / 'catalogs' / (catalog['id'] + '.sqlite')) as db:
@@ -565,6 +567,69 @@ def exercise_catalog_redaction(session, root):
             completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
 
+def exercise_catalog_limits(session, root):
+    """Review, cancel, reset and explicitly expand this run's bounded capture."""
+    env = session.env
+    config = status(env)['config']
+    config.update(catalog_max_entries=2, catalog_max_bytes=1024 * 1024,
+                  catalog_max_depth=8, catalog_timeout_seconds=60)
+    completed(env, request(env, {'Configure': {'config': config}}))
+
+    dismiss_completion_notice(session, 'catalog-limits-setup-notice', 'Drive settings')
+
+    def review(name):
+        for attempt in range(3):
+            # Existing catalog descriptions make this submenu taller and can
+            # reposition it above its parent. Retry only opening the review;
+            # no capture is submitted until the separately verified Start action.
+            if attempt:
+                session.click(650, 73)
+            drive_menu(session, name + '-menu')
+            click_word(session, name + '-menu', 'Contents', tree=True)
+            session.observe(name + '-actions', ['Save / update'], preserve_pointer=True)
+            # "saved" in the separate mount action can be OCR'd as "Save".
+            # The update token identifies only the intended review action.
+            click_word(session, name + '-actions', 'update')
+            text = session.capture_text(name, session.output / (name + '.png'), ['Review contents catalog'])
+            if 'reviewcontentscatalog' in ''.join(text.lower().split()):
+                session.observe(name, ['Review contents catalog', 'Maximum entries', 'Database bytes',
+                                       'Maximum depth', 'Time limit', 'background worker', 'Start catalog'])
+                return
+        raise RuntimeError('Could not open the verified catalog review')
+
+    review('catalog-limits-cancel')
+    click_word(session, 'catalog-limits-cancel', 'larger')
+    session.observe('catalog-limits-expanded-cancel', ['capture only', 'Start catalog'])
+    cancel_review(session, 'catalog-limits-expanded-cancel')
+    assert not status(env)['catalogs']
+    assert status(env)['config'] == config
+
+    review('catalog-limits-reset')
+    click_word(session, 'catalog-limits-reset', 'larger')
+    session.observe('catalog-limits-reset-expanded', ['Use configured limits'])
+    click_word(session, 'catalog-limits-reset-expanded', 'configured')
+    session.observe('catalog-limits-reset-ready', ['Start catalog'])
+    click_word(session, 'catalog-limits-reset-ready', 'Start')
+    wait_for(lambda: bool(status(env)['catalogs']), 'limited capture after resetting review')
+    limited = status(env)['catalogs'][0]
+    assert not limited['complete'] and limited['entries'] <= 2, limited
+    assert limited['limits'] == dict(entries=2, bytes=1024 * 1024, depth=8, timeout_seconds=60)
+    dismiss_completion_notice(session, 'catalog-limits-limited-notice', 'Save contents catalog')
+
+    review('catalog-limits-start')
+    click_word(session, 'catalog-limits-start', 'larger')
+    session.observe('catalog-limits-expanded-ready', ['Start catalog'])
+    click_word(session, 'catalog-limits-expanded-ready', 'Start')
+    wait_for(lambda: len(status(env)['catalogs']) == 2, 'explicit larger metadata capture')
+    expanded = next(item for item in status(env)['catalogs'] if item['id'] != limited['id'])
+    assert expanded['complete'], expanded
+    assert expanded['limits'] == dict(entries=8, bytes=4 * 1024 * 1024, depth=16, timeout_seconds=180)
+    assert status(env)['config'] == config
+    assert all(item['mount'] is None for item in status(env)['catalogs'])
+    assert (root / 'portable/many/hidden.txt').is_file()
+    session.observe('catalog-limits-completed', ['Catalog:', 'Portable test drive'])
+
+
 def main():
     repository = Path(__file__).resolve().parent.parent
     def configure(parser):
@@ -576,6 +641,7 @@ def main():
         scenarios.add_argument('--catalog-redaction-only', action='store_true')
         scenarios.add_argument('--policy-editor-only', action='store_true')
         scenarios.add_argument('--ram-pending-only', action='store_true')
+        scenarios.add_argument('--catalog-limits-only', action='store_true')
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
@@ -599,7 +665,9 @@ def main():
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
         if args.policy_editor_only:
             seed_old_policy_rules(env)
-    if args.ram_pending_only:
+    if args.catalog_limits_only:
+        scenario, scope = exercise_catalog_limits, 'Per-run catalog review, cancellation, configured-limit reset and explicit larger capture without changing defaults'
+    elif args.ram_pending_only:
         scenario, scope = exercise_ram_pending, 'RAM pending changes and confirmed drive sync across removal, export and reconnect'
     elif args.policy_editor_only:
         scenario, scope = exercise_policy_editor, 'Whole-drive and folder policy lookup beyond status pagination without resetting saved flags'

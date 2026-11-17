@@ -1,5 +1,6 @@
 //! Drive dialogs keep destination selection and conflict review independent of menus.
 use super::*;
+mod catalog;
 impl Dialog {
     fn title(&self) -> &str {
         match self {
@@ -10,6 +11,7 @@ impl Dialog {
             Self::Details => "Drive operations and conflicts",
             Self::BackupLoading { .. } => "Checking backup destination",
             Self::BackupReview { .. } => "Review partition backup",
+            Self::Catalog { .. } => "Review contents catalog",
         }
     }
     fn show(
@@ -20,6 +22,7 @@ impl Dialog {
         requests: &mut Vec<DriveRequest>,
     ) -> bool {
         match self {
+            Self::Catalog { drive, limits } => catalog::review(ui, drive, limits, status, requests),
             Self::PolicyLoading { .. } => {
                 ui.spinner();
                 ui.label("Reading saved catalog and indexing settings…");

@@ -37,6 +37,12 @@ fn catalog_description(catalog: &Catalog) -> String {
         catalog.entries,
         catalog.coverage
     );
+    if let Some(limits) = catalog.limits {
+        text.push_str(&format!(
+            "\nCapture limits: {} entries · {} bytes · depth {} · {} seconds",
+            limits.entries, limits.bytes, limits.depth, limits.timeout_seconds
+        ));
+    }
     if let Some(details) = &catalog.details {
         let precision = details
             .mtime_resolution_ns
@@ -94,6 +100,10 @@ enum PathAction {
     SaveRam { session: String },
 }
 enum Dialog {
+    Catalog {
+        drive: Box<Drive>,
+        limits: CatalogLimits,
+    },
     Path {
         title: String,
         text: String,
@@ -569,8 +579,9 @@ impl Drives {
             )
             .clicked()
         {
-            self.send(DriveRequest::Catalog {
-                drive: display_path(&drive.device),
+            self.dialog = Some(Dialog::Catalog {
+                drive: Box::new(drive.clone()),
+                limits: CatalogLimits::from(&self.status.config),
             });
             ui.close_menu();
         }

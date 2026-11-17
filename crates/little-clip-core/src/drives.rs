@@ -1,6 +1,8 @@
 //! Portable storage configuration and data-only daemon protocol.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+mod catalog_limits;
+pub use catalog_limits::{CatalogLimitOverrides, CatalogLimits};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -201,6 +203,11 @@ pub enum DriveRequest {
     },
     Catalog {
         drive: String,
+    },
+    /// Explicit limits for one capture; older daemons must reject this operation.
+    CatalogWithLimits {
+        drive: String,
+        limits: CatalogLimitOverrides,
     },
     MountCatalog {
         catalog: String,
@@ -525,6 +532,9 @@ pub struct Catalog {
     pub entries: u64,
     pub complete: bool,
     pub coverage: String,
+    /// Effective capture budgets; absent when an older catalog did not record them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<CatalogLimits>,
     /// Structured source/coverage facts; absent in older saved catalogs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<crate::catalog_metadata::CatalogCaptureDetails>,
@@ -633,6 +643,7 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.captured, 123);
         assert_eq!(catalog.details, None);
+        assert_eq!(catalog.limits, None);
         assert!(
             serde_json::to_value(&catalog)
                 .unwrap()

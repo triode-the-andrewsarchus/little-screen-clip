@@ -58,7 +58,13 @@ impl Worker {
         match self.request {
             DriveRequest::Backup { kind, .. } => self.backup(db, kind, progress),
             DriveRequest::ReadOnlyBackup { .. } => self.backup(db, BackupKind::Files, progress),
-            DriveRequest::Catalog { .. } => {
+            DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. } => {
+                let mut config = self.config.clone();
+                if let DriveRequest::CatalogWithLimits { limits, .. } = &self.request {
+                    limits
+                        .resolve(crate::CatalogLimits::from(&config))
+                        .apply_to(&mut config);
+                }
                 let catalog = catalog::capture(
                     db,
                     self.roots
@@ -68,7 +74,7 @@ impl Worker {
                     self.roots
                         .first()
                         .ok_or("Missing admitted partition root")?,
-                    &self.config,
+                    &config,
                     &self.cancel,
                     progress,
                 )?;

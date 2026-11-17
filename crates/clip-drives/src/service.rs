@@ -363,7 +363,9 @@ fn title(request: &DriveRequest) -> &'static str {
         } => "Back up files",
         DriveRequest::ReadOnlyBackup { .. } => "Back up files read-only",
         DriveRequest::Backup { .. } => "Back up partition image",
-        DriveRequest::Catalog { .. } => "Save contents catalog",
+        DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. } => {
+            "Save contents catalog"
+        }
         DriveRequest::Pair { .. } => "Enroll folder sync",
         DriveRequest::Sync { .. } | DriveRequest::FlushRam { .. } => "Synchronize",
         DriveRequest::SaveRam { .. } => "Save RAM copy",
@@ -702,7 +704,9 @@ impl Owner {
         }
         if matches!(
             envelope.request,
-            DriveRequest::Backup { .. } | DriveRequest::Catalog { .. }
+            DriveRequest::Backup { .. }
+                | DriveRequest::Catalog { .. }
+                | DriveRequest::CatalogWithLimits { .. }
         ) {
             self.start_background(envelope);
             return;
@@ -784,6 +788,7 @@ impl Owner {
             DriveRequest::Backup { .. }
             | DriveRequest::ReadOnlyBackup { .. }
             | DriveRequest::Catalog { .. }
+            | DriveRequest::CatalogWithLimits { .. }
             | DriveRequest::PreviewBackup { .. }
             | DriveRequest::StartBackup { .. }
             | DriveRequest::StartReadOnlyBackup { .. }
@@ -1211,6 +1216,7 @@ mod tests {
     mod admission;
     mod backup_review;
     mod catalog_cleanup;
+    mod catalog_limits;
     mod event_loss;
     mod guest_ram;
     mod native_images;

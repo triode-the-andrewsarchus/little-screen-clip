@@ -76,7 +76,21 @@ pub(super) enum DriveCommand {
         enabled: bool,
     },
     /// Save a bounded metadata-only contents catalog
-    Catalog { drive: String },
+    Catalog {
+        drive: String,
+        /// Override this run's entry limit without changing daemon defaults
+        #[arg(long)]
+        max_entries: Option<u64>,
+        /// Maximum catalog database bytes (at least 131072)
+        #[arg(long)]
+        max_bytes: Option<u64>,
+        /// Maximum subtree depth (at least 1)
+        #[arg(long)]
+        max_depth: Option<usize>,
+        /// Capture deadline in seconds (at least 1)
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+    },
     /// Mount a saved catalog read-only
     MountCatalog { catalog: String },
     /// Unmount a saved catalog
@@ -191,7 +205,25 @@ impl DriveCommand {
                 paused: !resume,
             },
             Self::Deletions { pair, enabled } => DriveRequest::Deletions { pair, enabled },
-            Self::Catalog { drive } => DriveRequest::Catalog { drive },
+            Self::Catalog {
+                drive,
+                max_entries,
+                max_bytes,
+                max_depth,
+                timeout_seconds,
+            } => {
+                let limits = CatalogLimitOverrides {
+                    entries: max_entries,
+                    bytes: max_bytes,
+                    depth: max_depth,
+                    timeout_seconds,
+                };
+                if limits == CatalogLimitOverrides::default() {
+                    DriveRequest::Catalog { drive }
+                } else {
+                    DriveRequest::CatalogWithLimits { drive, limits }
+                }
+            }
             Self::MountCatalog { catalog } => DriveRequest::MountCatalog { catalog },
             Self::UnmountCatalog { catalog } => DriveRequest::UnmountCatalog { catalog },
             Self::GetPolicy { drive, relative } => DriveRequest::GetRule {

@@ -159,12 +159,9 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
     {
         return Err("Drive storage directories must be absolute paths".into());
     }
-    if config.catalog_max_bytes < 128 * 1024
-        || config.catalog_max_depth == 0
-        || config.catalog_timeout_seconds == 0
-        || config.sync_interval_seconds == 0
-    {
-        return Err("Catalogs require at least 128 KiB, a nonzero depth/time budget and nonzero sync interval".into());
+    crate::CatalogLimits::from(config).validate()?;
+    if config.sync_interval_seconds == 0 {
+        return Err("Drive synchronization requires a nonzero interval".into());
     }
     if config.ram_session_max_bytes < 128 * 1024 * 1024
         || config.ram_session_max_entries < 4096

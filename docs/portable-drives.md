@@ -267,6 +267,28 @@ The daemon validates partition identity and additional device evidence before wr
 
 **Save / update catalog…** stores hierarchy, names, sizes, types, available modification times, and coverage status without copying file contents. **Mount saved catalog** exposes a read-only ordinary filesystem view. Saved catalogs remain accessible from the sidebar after the original drive is removed.
 
+Saving opens a review with entry, database-byte, depth and time limits. Edit the
+four budgets or choose **Use larger limits** for this capture; **Use configured
+limits** resets them to the current defaults. Canceling the review starts no job.
+The selected budgets are recorded with the catalog and do not change later
+captures. Catalogs created by older versions have unknown capture budgets.
+Captures share one retained background worker with file backups; independent
+drive synchronization continues while a capture runs.
+
+The CLI supports individual per-run overrides; omitted fields inherit the
+daemon's configuration when the retained worker is launched:
+
+```sh
+clipctl drives catalog part:PARTUUID --max-entries 1000000 \
+  --max-bytes 1073741824 --max-depth 128 --timeout-seconds 1800
+```
+
+Without flags, the existing configured-limit request is unchanged. Explicit
+overrides use a distinct request that older daemons reject, so they cannot
+silently ignore the requested budgets. Reaching a limit still produces disclosed
+partial coverage rather than claiming a complete listing. Effective budgets are
+local SQLite metadata; nothing is added to the removable filesystem.
+
 New catalogs record direct-listing and descendant coverage for each directory.
 A folder labeled **Partial catalog** has failed, excluded or unvisited descendant
 metadata; a configured exclusion remains **Not catalogued**. A partial directory
