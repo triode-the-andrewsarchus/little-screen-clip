@@ -12,7 +12,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
-| 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
+| 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Remaining remount/event-loss and fault matrices still need evidence. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
 | 2.4 | Partial | Persistent collision-safe complete conflict variants tested; provenance and repeat behavior need a full matrix. |
@@ -53,6 +53,47 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Common-baseline recovery after interrupted synchronization
+
+Plan item 2.1 is now Complete. Existing service fixtures cover guarded subtree
+enrollment and later link/relocation refusal. The shared reconciliation fixture
+now accepts the engine's existing progress callback. New tests persist a selected
+subtree pair, retain its local directory identity and reopen its actual registry
+after interruption; there are no new production hooks or schema changes.
+
+Twenty cases exercise both copy directions, initial installations and replacement
+of an earlier common version. After the first file and its baseline commit, each
+case injects cancellation, source disappearance, source bytes changed with size
+and modification time preserved, destination changes, or a SQLite baseline
+publication failure on the next file. Assertions distinguish the exact failure,
+retained completed bytes, uncommitted later paths and each per-file baseline.
+The database fault occurs after the next file has actually been installed, so
+that completed write remains visible despite the stale comparison baseline.
+
+After reopening the registry, a fresh comparison converges verified data and
+retains the identity/revision of previously installed files instead of copying
+them again. Concurrent destination edits preserve both conflict variants on both
+sides and retain the original baseline. Two additional cases fail the baseline
+DELETE after the physical deletion, then reopen and reconcile: neither direction
+resurrects the deleted file, and the obsolete baseline is removed. These are
+per-file baseline proofs; copying-stage operation-ledger accounting, event loss
+and the broader deletion/conflict matrices remain in their separate partial rows.
+
+Both tests pass on owned host storage and on each real FAT32, exFAT and NTFS
+source in the disposable VM (22 scenarios per filesystem). Accepted report:
+`/tmp/portable-drive-vm-sync-baseline-accepted/report.json`, with success=true,
+no timeout, exactly one successful guest marker and three two-test passing
+groups. The complete ordinary backend suite passes: 137 tests, 64 explicit
+fixtures ignored. Drive all-target clippy with warnings denied, targeted Rust
+formatting and whitespace checks pass. Logs use
+`/tmp/portable-drive-sync-baseline-` with `host.log`, `backend.log`,
+`tests-build.log`, `vm.log` and `clippy.log`.
+
+The original-baseline architecture result remains REGRESSION: 4300 clone groups,
+144 cycles, average CCN 3.48, maximum 274 and duplication 7.07%. There is no
+additional reported hotspot, clone group or dependency cycle from these tests.
+Report: `.fitness/portable-drives-sync-baseline-architecture.json`.
 
 ## Initial RAM population interleavings and recovery
 

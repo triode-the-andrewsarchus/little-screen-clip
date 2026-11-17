@@ -1,6 +1,7 @@
 //! Reconciliation regressions exercised with owned ordinary filesystem fixtures.
 use crate::{root::Root, store::Store, sync, *};
 use std::{fs, path::PathBuf, sync::atomic::AtomicBool};
+mod baseline_tests;
 pub(crate) struct Fixture {
     _temp: tempfile::TempDir,
     db: Store,
@@ -39,13 +40,16 @@ impl Fixture {
         }
     }
     fn run(&self) -> Result<sync::SyncReport> {
+        self.run_with(|_, _| {})
+    }
+    fn run_with(&self, progress: impl FnMut(u64, u64)) -> Result<sync::SyncReport> {
         sync::synchronize(
             &self.db,
             &self.pair,
             &Root::open(&self.a)?,
             &Root::open(&self.b)?,
             &self.cancel,
-            |_, _| {},
+            progress,
         )
     }
 }
