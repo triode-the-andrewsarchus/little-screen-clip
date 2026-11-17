@@ -58,7 +58,10 @@ fn real_fuse_invalid_saved_date_returns_overflow_without_hiding_other_entries() 
         .0
         .execute(
             "UPDATE entries SET json=?1 WHERE scan='catalog' AND path=?2",
-            params![serde_json::to_string(&entry).unwrap(), b"file.txt".as_slice()],
+            params![
+                serde_json::to_string(&entry).unwrap(),
+                b"file.txt".as_slice()
+            ],
         )
         .unwrap();
     drop(view);
@@ -142,6 +145,22 @@ fn real_fuse_large_reads_and_metadata_views_reject_mutations() {
         ),
         ("create", File::create(&absent).map(drop)),
         (
+            "fifo",
+            rustix::fs::mkfifoat(rustix::fs::CWD, &absent, rustix::fs::Mode::RUSR)
+                .map_err(Into::into),
+        ),
+        (
+            "mknod",
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &absent,
+                rustix::fs::FileType::RegularFile,
+                rustix::fs::Mode::RUSR,
+                0,
+            )
+            .map_err(Into::into),
+        ),
+        (
             "chmod",
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)),
         ),
@@ -153,8 +172,68 @@ fn real_fuse_large_reads_and_metadata_views_reject_mutations() {
         ("unlink", fs::remove_file(&path)),
         ("rmdir", fs::remove_dir(server.mount.join("empty"))),
         ("rename", fs::rename(&path, &absent)),
+        (
+            "rename_noreplace",
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::CWD,
+                &absent,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )
+            .map_err(Into::into),
+        ),
+        (
+            "rename_exchange",
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::CWD,
+                server.mount.join("file.txt"),
+                rustix::fs::RenameFlags::EXCHANGE,
+            )
+            .map_err(Into::into),
+        ),
         ("symlink", symlink("large.bin", &absent)),
         ("hardlink", fs::hard_link(&path, &absent)),
+        (
+            "fchmod",
+            held.set_permissions(fs::Permissions::from_mode(0o600)),
+        ),
+        (
+            "fchown",
+            rustix::fs::fchown(
+                &held,
+                Some(rustix::process::getuid()),
+                Some(rustix::process::getgid()),
+            )
+            .map_err(Into::into),
+        ),
+        (
+            "chown_nofollow",
+            rustix::fs::chownat(
+                rustix::fs::CWD,
+                &path,
+                Some(rustix::process::getuid()),
+                Some(rustix::process::getgid()),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(Into::into),
+        ),
+        (
+            "fsetxattr",
+            rustix::fs::fsetxattr(
+                &held,
+                "user.test",
+                b"value",
+                rustix::fs::XattrFlags::empty(),
+            )
+            .map_err(Into::into),
+        ),
+        (
+            "fremovexattr",
+            rustix::fs::fremovexattr(&held, "user.test").map_err(Into::into),
+        ),
         (
             "setxattr",
             rustix::fs::setxattr(
@@ -185,6 +264,10 @@ fn real_fuse_large_reads_and_metadata_views_reject_mutations() {
     assert_eq!(
         held.write_at(b"changed", 0).unwrap_err().raw_os_error(),
         Some(libc::EBADF)
+    );
+    assert_eq!(
+        rustix::fs::fallocate(&held, rustix::fs::FallocateFlags::empty(), 0, 1).unwrap_err(),
+        rustix::io::Errno::BADF
     );
     assert!(!absent.exists());
     assert!(server.mount.join("empty").is_dir());

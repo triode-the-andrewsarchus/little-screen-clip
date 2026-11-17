@@ -43,7 +43,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
-| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention, exact signed fractional dates, invalid-date EOVERFLOW and multi-megabyte reads. Thirteen ordinary write/namespace/metadata calls return EROFS; read-only descriptor truncation/write retain Linux EINVAL/EBADF. File-type fidelity and remaining mutation-call coverage remain. See the FUSE timestamp checkpoint. |
+| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention, signed fractional dates, invalid-date EOVERFLOW and multi-megabyte reads. Original modes/types, raw link targets and available device numbers are exposed as bounded saved metadata; FIFO/socket/device entries stay inert and skip previews. Safe root-relative links work, escaping links remain metadata-only, and cycles return ELOOP. Twenty-two ordinary write/namespace/metadata calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. Nested parent-inode reporting and invalid inode/offset guards remain open. See the catalog type and timestamp checkpoints. |
 | 6.7 | Partial | Provider metadata/digests now validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups also require their captured directory identity. Reuse of available sync/backup hashes and uncertain revision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
@@ -53,6 +53,93 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Catalog types and inert special-file metadata
+
+The original mode bits identify FIFO, socket, character-device and block-device
+entries independently of their names. The shared core catalog-status protocol
+now exposes those typed observations, and Files retains them while disabling
+payload-format classification. The mounted representation deliberately remains
+an inert regular-file metadata placeholder: open returns EOPNOTSUPP rather than
+producing an empty successful file or activating a kernel pipe/device. Original
+file types remain available in the saved record, rather than being silently
+reported as ordinary source files. A real FIFO mode would select the kernel's
+pipe operations and bypass the catalog's payload callbacks; the primary kernel
+sources are linked in `docs/portable-drives.md`.
+
+Catalog scans now distinguish deliberately unread special-file payloads from
+missing metadata. A fully inventoried special entry does not make a metadata-only
+capture incomplete. Ordinary backup/sync scans retain their unsupported-special
+warning. Optional `special_device` preserves the captured raw device number for
+character/block nodes; older records have None, without inventing device zero.
+Normal file records omit this field and retain their existing representation.
+
+`system.little-clip.catalog.entry` supplies the lossless saved entry as bounded
+JSON (maximum 64 KiB, E2BIG for oversized records). It works independently of
+newer directory/source coverage fields. Linux permits this metadata-only system
+attribute on a symlink itself, whereas it rejects user attributes on symlinks
+before calling FUSE. This preserves inspection of blocked absolute, escaping
+and uncaptured link targets without following them. Relative links that resolve
+to the catalog root now work; cyclic links retain normal ELOOP behavior.
+
+Files uses its shared entry-icon selection for special metadata, and both preview
+admission and painting bypass content caches for these entries. The first dark
+render passed its text observations but exposed generic folder icons; it is
+retained under `/tmp/portable-drive-catalog-types-dark-initial/` and is not used
+as final visual acceptance. The preview regression test proves that a saved
+special entry named like a MIDI file does not admit a content job or allocate a
+preview identity. Ordinary files carrying the same status xattr remain ordinary
+because core first verifies the owned FUSE mount identity.
+
+The expanded real-mount mutation fixture checks twenty-two namespace, data,
+permission, ownership and xattr calls, including descriptor variants, FIFO/node
+creation and both rename flags. Each returns EROFS and the original and backup
+bytes remain unchanged. Read-only descriptor truncation, positioned writes and
+allocation retain Linux EINVAL/EBADF admission errors.
+
+Validation:
+
+- 123 ordinary backend cases pass, with 56 explicit fixtures ignored, in
+  `/tmp/portable-drive-catalog-types-backend-final.log`. Sixteen selected provider
+  cases, including the real-mount metadata/type/link/mutation fixtures, pass in
+  `/tmp/portable-drive-catalog-types-provider-accepted.log`. The guest-only node
+  test is explicitly excluded from that host selection.
+- The isolated guest device-node case passes in
+  `/tmp/portable-drive-vm-catalog-types-devices-accepted/report.json`, with both
+  success=true and its successful guest marker. It creates only owned temporary
+  character/block nodes on guest tmpfs and never opens the originals for I/O.
+  The existing filesystem harness invokes it in each of its three phases; this
+  does not claim that FAT/exFAT/NTFS support Unix device nodes.
+- Two core catalog protocol/ordinary-source tests pass in
+  `/tmp/portable-drive-catalog-types-core-final.log`; nine Files preview cases
+  pass in `/tmp/portable-drive-catalog-types-previews-accepted.log`.
+- Dark and light private-desktop runs each pass four observations in
+  `/tmp/portable-drive-catalog-types-{dark,light}-accepted/report.json`. Final
+  screenshots were visually inspected: metadata icons and type labels remain
+  readable, root-link navigation returns the same contents, and refused pipe
+  directory navigation preserves the listing and visible notice actions.
+- Helper/app/fixture builds, affected all-target clippy with warnings denied,
+  targeted Rust formatting, Python compilation and rustdoc generation pass.
+  Logs use `/tmp/portable-drive-catalog-types-` with `final-accepted-build.log`,
+  `accepted-ui-build.log`, `clippy-accepted.log`, `fmt-final.log` and
+  `rustdoc-final.log`. The generated special-kind/status/attribute API pages
+  contain the expected rendered descriptions. The tested helper SHA-256 is
+  `12f4107cc06a3cc4ce690dcb13b6eb249a2b41f9991b57a022705fcbeb184610`.
+
+The full-feature architecture comparison remains REGRESSION against the original
+baseline: clone groups 4300 versus 4289, cycles 144 versus 143, duplication 7.09%
+versus 7.30%, average CCN 3.48 versus 3.44, maximum 274 unchanged. This checkpoint
+adds no clone group after sharing fixture preparation and inert-open assertions.
+The two flagged preview clones are existing fragments: local jscpd checks against
+`e7742aa0` retain the same fragment hash `39e9795c7d7e818f` before and after.
+Shared entry-icon reuse keeps preview painting at CCN 15. The bounded symlink
+validation callback has CCN 13; Valknut newly flags that necessary path-validation
+entity after the root-link case was added. Selected findings and local clone
+report paths are retained in `.fitness/portable-drives-catalog-types-architecture.json`.
+
+Item 6.6 remains partial while nested parent inode reporting and invalid
+inode/offset handling are still under review. Provider uncertainty/concurrency,
+the final architecture gate and the full goal remain open.
 
 ## FUSE timestamp projection and bounded protocol upgrade
 

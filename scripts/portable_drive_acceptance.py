@@ -420,6 +420,28 @@ def exercise_catalog_coverage(session, root):
         completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
 
+def exercise_catalog_types(session, root):
+    """Saved special files stay inert and visible after the source is removed."""
+    env = session.env
+    drive = status(env)['drives'][0]['id']
+    completed(env, request(env, {'Catalog': {'drive': drive}}))
+    catalog = status(env)['catalogs'][0]
+    assert catalog['complete'], catalog['coverage']
+    mount = mount_catalog_offline(env, root, catalog)
+    try:
+        session.address(mount)
+        text = session.observe('catalog-inert-file-types', ['pipe.ts', 'socket', 'FIFO metadata', 'Socket metadata', 'readme.txt'])
+        assert 'Partial catalog' not in text
+        session.address(mount / 'root-link')
+        session.observe('catalog-root-link', ['pipe.ts', 'socket', 'FIFO metadata', 'Socket metadata'])
+        session.address(mount / 'pipe.ts')
+        session.observe('catalog-pipe-navigation-refused', ['Cannot open', 'pipe.ts', 'FIFO metadata'])
+        session.address(mount)
+        session.observe('catalog-types-return', ['pipe.ts', 'socket', 'FIFO metadata', 'Socket metadata'])
+    finally:
+        completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+
+
 def catalog_context_menu(session, name, expected):
     # Status notices and ancestor inventories move Mounts after navigation.
     # Refresh and retry only this read-only menu opening if the row moved.
@@ -550,6 +572,7 @@ def main():
         scenarios.add_argument('--backup-review-only', action='store_true')
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
         scenarios.add_argument('--catalog-coverage-only', action='store_true')
+        scenarios.add_argument('--catalog-types-only', action='store_true')
         scenarios.add_argument('--catalog-redaction-only', action='store_true')
         scenarios.add_argument('--policy-editor-only', action='store_true')
         scenarios.add_argument('--ram-pending-only', action='store_true')
@@ -562,6 +585,11 @@ def main():
     (root / 'portable/many/hidden.txt').write_text('Back up and sync this; exclude catalog/index traversal.\n')
     if args.catalog_boundary_only:
         (root / 'portable/empty').mkdir()
+    if args.catalog_types_only:
+        os.mkfifo(root / 'portable/pipe.ts')
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(root / 'portable/socket'))
+        (root / 'portable/root-link').symlink_to('.')
     (root / 'local/local-only.txt').write_text('Union merge keeps this file.\n')
     def prepare(env, children):
         state = output / 'drive-state'
@@ -579,6 +607,8 @@ def main():
         scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'
     elif args.catalog_coverage_only:
         scenario, scope = exercise_catalog_coverage, 'Offline partial catalog labels, typed directory coverage and incomplete-folder navigation errors'
+    elif args.catalog_types_only:
+        scenario, scope = exercise_catalog_types, 'Offline special-file metadata labels, inert FIFO/socket entries and internal symlinks'
     elif args.catalog_boundary_only:
         scenario, scope = exercise_catalog_boundary, 'Offline catalog exclusion labels, empty folders and navigation errors'
     elif args.backup_review_only:

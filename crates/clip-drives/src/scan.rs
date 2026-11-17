@@ -33,6 +33,8 @@ pub(crate) struct Entry {
     #[serde(default)]
     pub gid: Option<u32>,
     pub device: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub special_device: Option<u64>,
     pub inode: u64,
     pub hash: Option<String>,
     #[serde(default)]
@@ -68,6 +70,11 @@ impl Entry {
             uid: Some(metadata.uid()),
             gid: Some(metadata.gid()),
             device: metadata.dev(),
+            special_device: matches!(
+                metadata.mode() & libc::S_IFMT,
+                libc::S_IFCHR | libc::S_IFBLK
+            )
+            .then(|| metadata.rdev()),
             inode: metadata.ino(),
             hash: None,
             changed: Some((metadata.ctime(), metadata.ctime_nsec())),
@@ -203,6 +210,7 @@ pub(super) fn unavailable(path: PathBuf, error: &crate::Error, detailed: bool) -
         uid: None,
         gid: None,
         device: 0,
+        special_device: None,
         inode: 0,
         hash: None,
         changed: None,
@@ -254,7 +262,7 @@ fn collect_entry(
     if excluded {
         entry.kind = "excluded".into();
     }
-    if entry.kind == "special" {
+    if entry.kind == "special" && !limits.detailed_coverage {
         entry.warning = Some("Special file was not read".into());
     }
     if !limits.access_dates {

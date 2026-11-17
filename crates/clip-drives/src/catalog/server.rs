@@ -64,7 +64,10 @@ impl Filesystem for Server {
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
         let result = (|| -> Result<Option<Vec<u8>>> {
             let fs = self.lock()?;
-            if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR) {
+            if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_ENTRY_XATTR) {
+                fs.saved_entry(ino.0)
+            } else if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR)
+            {
                 fs.details(ino.0)
             } else if name == OsStr::new(little_clip_core::catalog_metadata::CATALOG_STATUS_XATTR) {
                 Ok(fs.coverage(ino.0)?.map(|status| status.token().to_vec()))
@@ -91,6 +94,14 @@ impl Filesystem for Server {
             if fs.details(ino.0)?.is_some() {
                 names.extend_from_slice(
                     little_clip_core::catalog_metadata::CATALOG_DETAILS_XATTR.as_bytes(),
+                );
+                names.push(0);
+            }
+            if ino != INodeNo(1) {
+                fs.row(ino.0)?
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
+                names.extend_from_slice(
+                    little_clip_core::catalog_metadata::CATALOG_ENTRY_XATTR.as_bytes(),
                 );
                 names.push(0);
             }
@@ -165,7 +176,7 @@ impl Filesystem for Server {
                     _ => return Err("Absolute links remain metadata-only".into()),
                 }
             }
-            if fs.lookup_path(&target)?.is_none() {
+            if !target.as_os_str().is_empty() && fs.lookup_path(&target)?.is_none() {
                 return Err("Link target is not catalogued".into());
             }
             Ok(link)
@@ -226,9 +237,11 @@ impl Filesystem for Server {
             if fs.opened.len() >= 128 {
                 return Err(std::io::Error::from_raw_os_error(libc::EMFILE).into());
             }
-            let entry = fs.row(ino.0)?.ok_or("Unknown entry")?;
+            let entry = fs
+                .row(ino.0)?
+                .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
             if entry.kind != "file" {
-                return Err("Not a regular catalog file".into());
+                return Err(std::io::Error::from_raw_os_error(libc::EOPNOTSUPP).into());
             }
             let open = fs.resolve(&entry)?;
             fs.next_handle = fs.next_handle.wrapping_add(1).max(1);

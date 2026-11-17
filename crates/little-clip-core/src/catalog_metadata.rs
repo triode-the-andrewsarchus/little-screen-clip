@@ -12,6 +12,11 @@ pub const CATALOG_FS_SUBTYPE: &str = "clip-catalog";
 pub const CATALOG_STATUS_XATTR: &str = "user.little-clip.catalog.status";
 /// Structured capture coverage and timestamp facts, bounded independently of payloads.
 pub const CATALOG_DETAILS_XATTR: &str = "user.little-clip.catalog.details";
+/// Original saved entry metadata, including Unix mode/type and lossless link bytes.
+///
+/// The `system` namespace permits metadata-only `lgetxattr` on symlinks; Linux
+/// rejects `user` attributes on symlinks before calling the filesystem.
+pub const CATALOG_ENTRY_XATTR: &str = "system.little-clip.catalog.entry";
 
 /// The stage at which a metadata-only inventory observation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,20 +82,56 @@ pub struct CatalogCaptureDetails {
     pub mtime_resolution_ns: Option<u64>,
 }
 
-/// A disclosed boundary in a dated metadata catalog.
+/// A saved special-file type whose catalog representation cannot perform I/O.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum CatalogSpecialKind {
+    Fifo,
+    Socket,
+    CharacterDevice,
+    BlockDevice,
+    Unknown,
+}
+impl CatalogSpecialKind {
+    /// Returns the saved special-file type from the original Unix mode bits.
+    pub fn from_mode(mode: u32) -> Self {
+        match mode & libc::S_IFMT {
+            libc::S_IFIFO => Self::Fifo,
+            libc::S_IFSOCK => Self::Socket,
+            libc::S_IFCHR => Self::CharacterDevice,
+            libc::S_IFBLK => Self::BlockDevice,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// A disclosed coverage boundary or inert entry in a dated metadata catalog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CatalogEntryStatus {
     /// Descendant contents were excluded, rather than observed to be empty.
     NotCatalogued,
     /// Some descendant metadata is missing, failed, excluded or truncated.
     Incomplete,
+    /// A special file retained as metadata, without live device or IPC behavior.
+    MetadataOnly(CatalogSpecialKind),
 }
 impl CatalogEntryStatus {
+    /// Returns the saved special-file type when this entry has an inert view.
+    pub fn special_kind(self) -> Option<CatalogSpecialKind> {
+        match self {
+            Self::MetadataOnly(kind) => Some(kind),
+            _ => None,
+        }
+    }
     /// Returns the fixed metadata protocol token.
     pub fn token(self) -> &'static [u8] {
         match self {
             Self::NotCatalogued => b"not-catalogued",
             Self::Incomplete => b"incomplete",
+            Self::MetadataOnly(CatalogSpecialKind::Fifo) => b"fifo-metadata",
+            Self::MetadataOnly(CatalogSpecialKind::Socket) => b"socket-metadata",
+            Self::MetadataOnly(CatalogSpecialKind::CharacterDevice) => b"char-device-metadata",
+            Self::MetadataOnly(CatalogSpecialKind::BlockDevice) => b"block-device-metadata",
+            Self::MetadataOnly(CatalogSpecialKind::Unknown) => b"special-metadata",
         }
     }
     /// Returns the displayed coverage label.
@@ -98,6 +139,11 @@ impl CatalogEntryStatus {
         match self {
             Self::NotCatalogued => "Not catalogued",
             Self::Incomplete => "Partial catalog",
+            Self::MetadataOnly(CatalogSpecialKind::Fifo) => "FIFO metadata",
+            Self::MetadataOnly(CatalogSpecialKind::Socket) => "Socket metadata",
+            Self::MetadataOnly(CatalogSpecialKind::CharacterDevice) => "Char device metadata",
+            Self::MetadataOnly(CatalogSpecialKind::BlockDevice) => "Block device metadata",
+            Self::MetadataOnly(CatalogSpecialKind::Unknown) => "Special metadata",
         }
     }
     /// Describes the observation without treating missing metadata as an empty folder.
@@ -107,7 +153,23 @@ impl CatalogEntryStatus {
             Self::Incomplete => {
                 "Some descendant metadata was excluded, failed or not fully inventoried"
             }
+            Self::MetadataOnly(_) => {
+                "Saved special-file metadata; opening cannot activate a device, pipe or socket"
+            }
         }
+    }
+    fn from_token(token: &[u8]) -> Option<Self> {
+        [
+            Self::NotCatalogued,
+            Self::Incomplete,
+            Self::MetadataOnly(CatalogSpecialKind::Fifo),
+            Self::MetadataOnly(CatalogSpecialKind::Socket),
+            Self::MetadataOnly(CatalogSpecialKind::CharacterDevice),
+            Self::MetadataOnly(CatalogSpecialKind::BlockDevice),
+            Self::MetadataOnly(CatalogSpecialKind::Unknown),
+        ]
+        .into_iter()
+        .find(|status| status.token() == token)
     }
 }
 
@@ -172,21 +234,46 @@ impl CatalogMount {
         let anchored = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
         let mut bytes = [0; 32];
         let count = rustix::fs::getxattr(anchored, CATALOG_STATUS_XATTR, &mut bytes[..]).ok()?;
-        match &bytes[..count] {
-            value if value == CatalogEntryStatus::NotCatalogued.token() => {
-                Some(CatalogEntryStatus::NotCatalogued)
-            }
-            value if value == CatalogEntryStatus::Incomplete.token() => {
-                Some(CatalogEntryStatus::Incomplete)
-            }
-            _ => None,
-        }
+        CatalogEntryStatus::from_token(&bytes[..count])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn special_metadata_tokens_are_typed_bounded_and_do_not_affect_ordinary_files() {
+        for (mode, kind) in [
+            (libc::S_IFIFO, CatalogSpecialKind::Fifo),
+            (libc::S_IFSOCK, CatalogSpecialKind::Socket),
+            (libc::S_IFCHR, CatalogSpecialKind::CharacterDevice),
+            (libc::S_IFBLK, CatalogSpecialKind::BlockDevice),
+            (0, CatalogSpecialKind::Unknown),
+        ] {
+            assert_eq!(CatalogSpecialKind::from_mode(mode | 0o600), kind);
+            let status = CatalogEntryStatus::MetadataOnly(kind);
+            assert!(status.token().len() <= 32);
+            assert_eq!(CatalogEntryStatus::from_token(status.token()), Some(status));
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("ordinary.ts");
+            std::fs::write(&path, b"ordinary content").unwrap();
+            rustix::fs::setxattr(
+                &path,
+                CATALOG_STATUS_XATTR,
+                status.token(),
+                rustix::fs::XattrFlags::empty(),
+            )
+            .unwrap();
+            let rows = crate::file_inventory::read_directory(
+                temp.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+            assert!(rows.entries[0].regular_file);
+            assert!(rows.entries[0].catalog_status.is_none());
+        }
+        assert!(CatalogEntryStatus::from_token(b"unrecognized").is_none());
+    }
     #[test]
     fn ordinary_attributes_do_not_create_catalog_coverage_or_change_ordinary_revision_protocol() {
         let temp = tempfile::tempdir().unwrap();

@@ -130,6 +130,19 @@ struct CatalogFs {
     _lease: redaction::Lease,
 }
 impl CatalogFs {
+    fn saved_entry(&self, ino: u64) -> Result<Option<Vec<u8>>> {
+        if ino == 1 {
+            return Ok(None);
+        }
+        let entry = self
+            .row(ino)?
+            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
+        let bytes = serde_json::to_vec(&entry)?;
+        if bytes.len() > 65536 {
+            return Err(std::io::Error::from_raw_os_error(libc::E2BIG).into());
+        }
+        Ok(Some(bytes))
+    }
     fn coverage(
         &self,
         ino: u64,
@@ -151,6 +164,12 @@ impl CatalogFs {
         let entry = self.row(ino)?.ok_or("Unknown catalog entry")?;
         Ok(if entry.kind == "excluded" {
             Some(little_clip_core::catalog_metadata::CatalogEntryStatus::NotCatalogued)
+        } else if entry.kind == "special" {
+            Some(
+                little_clip_core::catalog_metadata::CatalogEntryStatus::MetadataOnly(
+                    little_clip_core::catalog_metadata::CatalogSpecialKind::from_mode(entry.mode),
+                ),
+            )
         } else if entry
             .directory_coverage
             .as_ref()

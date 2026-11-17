@@ -4,6 +4,7 @@ use super::{
     filesystem::Entry,
     shelf::preview::{Previews, Source},
 };
+use little_clip_core::catalog_metadata::CatalogEntryStatus;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One-based item ordinals with a middle ellipsis when a strip is full.
@@ -257,6 +258,13 @@ impl EntryPreviews {
         self.system_refresh.clear();
     }
     pub fn listing(&mut self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
+        if entry
+            .catalog_status
+            .and_then(CatalogEntryStatus::special_kind)
+            .is_some()
+        {
+            return None;
+        }
         let id = self.identity(entry);
         if self.cache.needs(id) {
             self.cache.request(
@@ -823,6 +831,14 @@ impl EntryPreviews {
         }
     }
     fn show_inner(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry, gallery: bool) {
+        if entry
+            .catalog_status
+            .and_then(CatalogEntryStatus::special_kind)
+            .is_some()
+        {
+            super::ui::entry_icon(entry).paint(ui.painter(), rect, ui.visuals().text_color());
+            return;
+        }
         let id = self.identity(entry);
         if !gallery && self.cache.needs(id) {
             self.cache.request(
@@ -904,12 +920,10 @@ impl EntryPreviews {
                 });
             }
         } else {
-            let icon = if entry.is_video() {
-                crate::icons::Icon::Film
-            } else if gallery {
+            let icon = if gallery {
                 crate::icons::Icon::Image
             } else {
-                crate::icons::Icon::Text
+                super::ui::entry_icon(entry)
             };
             icon.paint(ui.painter(), rect, ui.visuals().text_color());
             ui.ctx()
@@ -942,6 +956,23 @@ fn text_candidate(entry: &Entry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_special_metadata_never_admits_content_preview_jobs() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("saved-node.mid"), b"not MIDI data").unwrap();
+        let mut entry = single_entry(folder.path());
+        entry.regular_file = false;
+        entry.catalog_status = Some(
+            little_clip_core::catalog_metadata::CatalogEntryStatus::MetadataOnly(
+                little_clip_core::catalog_metadata::CatalogSpecialKind::Fifo,
+            ),
+        );
+        let mut previews = EntryPreviews::default();
+        assert!(previews.listing(&entry).is_none());
+        assert!(!previews.has_pending());
+        assert!(previews.identities.is_empty());
+    }
 
     fn wait_for_preview(mut ready: impl FnMut() -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

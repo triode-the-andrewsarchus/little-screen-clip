@@ -254,6 +254,28 @@ Its FUSE request loop remains single-threaded, with at most 128 open provider
 handles and 1 MiB per read request. Large client reads are split by the kernel;
 each request still validates its retained provider before and after reading.
 
+Saved FIFOs, sockets and device nodes are inert metadata entries. Files shows
+their original type and skips content-preview jobs. The mounted view represents
+these entries as regular-file metadata placeholders whose opens return
+`EOPNOTSUPP`; they cannot create live pipes, sockets or device access. The
+original numeric mode/type, size, dates, owner and available device number remain
+in the saved record. Special entries do not make a metadata-only catalog partial
+merely because their payload was not read. Backup/sync collectors retain their
+existing unsupported-special-file warnings.
+
+The read-only `system.little-clip.catalog.entry` extended attribute exposes the
+original entry record, capped at 64 KiB. Unix paths and link targets retain their
+original bytes. Device numbers absent from older records remain unknown.
+Use `lgetxattr` to inspect a saved symlink itself. The `system` namespace is used
+because Linux rejects `user` attributes on symlinks before reaching FUSE; the
+attribute is generated metadata and cannot be written. Safe relative symlinks
+within the catalog, including links back to its root, remain navigable. Absolute,
+escaping and uncaptured targets remain unavailable for traversal while their
+original link text remains inspectable through this attribute. These choices
+follow the kernel's [special-inode behavior](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/inode.c),
+[FIFO open behavior](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/pipe.c)
+and [xattr namespace checks](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/xattr.c).
+
 New catalog databases use version 2 so older helpers reject their partial-listing
 semantics. Updated helpers also read version-1 catalogs, whose missing precision
 and directory details remain unknown. Ordinary drive state and backup manifests

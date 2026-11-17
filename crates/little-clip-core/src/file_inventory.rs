@@ -34,7 +34,7 @@ pub struct Entry {
     pub modified_time: Option<std::time::SystemTime>,
     pub created_time: Option<std::time::SystemTime>,
     pub warning: Option<String>,
-    /// A disclosed catalog boundary; absent on ordinary or unrecognized sources.
+    /// Catalog coverage or inert-file status; absent on ordinary/unrecognized sources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_status: Option<crate::catalog_metadata::CatalogEntryStatus>,
     pub revision: u64,
@@ -260,10 +260,17 @@ fn read_child(
     catalog: Option<&crate::catalog_metadata::CatalogMount>,
 ) -> Result<Entry, String> {
     let mut entry = read_entry(child, held.is_none() && catalog.is_none());
-    if entry.directory
-        && let Some(status) = catalog.and_then(|view| view.status(&entry.path))
-    {
-        entry.size = status.label().into();
+    if let Some(status) = catalog.and_then(|view| view.status(&entry.path)) {
+        if matches!(
+            status,
+            crate::catalog_metadata::CatalogEntryStatus::MetadataOnly(_)
+        ) {
+            entry.regular_file = false;
+            entry.typescript = false;
+        }
+        if entry.directory || !entry.regular_file {
+            entry.size = status.label().into();
+        }
         entry.catalog_status = Some(status);
     }
     if let Some(held) = held {
@@ -286,7 +293,7 @@ fn directory_read_error(path: &Path, error: std::io::Error) -> String {
                 "{}: this folder's contents were excluded from the saved catalog",
                 status.label()
             ),
-            crate::catalog_metadata::CatalogEntryStatus::Incomplete => {
+            _ => {
                 format!("{}: {}", status.label(), status.explanation())
             }
         }

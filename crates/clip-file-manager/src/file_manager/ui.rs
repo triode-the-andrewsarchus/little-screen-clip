@@ -1116,7 +1116,12 @@ fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &A
 }
 
 pub(super) fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
-    if entry.directory {
+    if matches!(
+        entry.catalog_status,
+        Some(little_clip_core::catalog_metadata::CatalogEntryStatus::MetadataOnly(_))
+    ) {
+        Icon::Info
+    } else if entry.directory {
         Icon::Folder
     } else if super::container_preview::inventory::archive(&entry.path) {
         Icon::FolderZip
