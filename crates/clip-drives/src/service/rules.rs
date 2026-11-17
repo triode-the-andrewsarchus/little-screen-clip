@@ -146,12 +146,17 @@ impl IndexSources {
         }
         let owner = format!("rule:{}", rule.id);
         let physical = Path::new("/").join(&rule.relative);
-        let mut paths = self
-            .views
-            .get(&rule.drive)
-            .into_iter()
-            .flatten()
-            .filter_map(|mount| mount.exclusion(&physical))
+        let views = self.views.get(&rule.drive).into_iter().flatten();
+        let whole = views.clone().any(|mount| mount.root == Path::new("/"));
+        let mut paths = views
+            .filter_map(|mount| {
+                mount.exclusion(&physical).or_else(|| {
+                    // With no whole-volume view, the parent of a subtree root
+                    // cannot be looked up to disambiguate filesystem-specific
+                    // case/short-name aliases. Exclude that uncertain view.
+                    (!whole).then(|| mount.target.clone())
+                })
+            })
             .collect::<Vec<_>>();
         paths.extend(
             self.roots

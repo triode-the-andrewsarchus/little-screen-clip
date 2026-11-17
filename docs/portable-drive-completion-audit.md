@@ -54,6 +54,59 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Future-name equivalence checkpoint
+
+After `ee3f397e`, a new disposable-guest control reproduced a search-index policy
+bypass: save an exclusion for nonexistent `private/Future`, create
+`private/future/secret`, and inspect admission without another publication.
+FAT32 and exFAT resolved the two spellings to the same directory but allowed the
+file; default NTFS3 treated them as distinct and correctly allowed it. Evidence:
+`/tmp/portable-drive-vm-future-case-before/report.json` and `guest.log`.
+
+The shared matcher now resolves the current rule through its known origin view,
+validates that mount lifetime, and compares it with the candidate's corresponding
+ancestor using pinned kernel identities. It persists no extra inode and reads no
+payload or directory listing. Delete/recreation follows the current path, rather
+than retaining an obsolete inode. A host test proves same-level hard-link
+equivalence, release after deletion and matching the replacement object. Existing
+literal prefixes remain the inexpensive first check. Metadata uncertainty and
+ancestry outside the accessible candidate view continue to fail closed.
+
+First-time rules with only partial views cannot prove disjointness from lexical
+case alone. Those uncertain views are now excluded in full; routing retains the
+precise projection when an original whole-volume view is available. The native
+origin-removal test covers exact and alternate rule spellings without an older
+policy. This conservative outcome is exposed in the user documentation.
+
+Final native acceptance passes **nine tests**, three each on FAT32, exFAT and
+default NTFS3 (`/tmp/portable-drive-vm-future-case-final/report.json`). The new
+test contains four name pairs: `Future/future`, `Résumé/résumé`,
+`Ångström/ångström` and `Future/Inner` versus `future/inner`. Each checks both
+kernel-reported equivalence and ordinary-file allowance. Under these actual
+mount settings FAT32 does not fold the Å pair, whereas exFAT does; default NTFS3
+folds none. A separate NTFS3 `nocase` run passes all four equivalences
+(`/tmp/portable-drive-vm-future-case-ntfs-nocase/report.json`). The other two
+filesystems are setup-only in that separate run, not additional test cases.
+
+Ordinary suites pass **204 backend tests** (85 opt-in ignored) and **467 core
+tests** (four opt-in ignored), in
+`/tmp/portable-drive-case-alias-ordinary-final.log`. Four-package all-target
+Clippy passes with warnings denied (`/tmp/portable-drive-case-alias-clippy.log`).
+Files policy consumers pass 19 tests
+(`/tmp/portable-drive-case-alias-files-tests.log`); the owned Btrfs subvolume
+fixture also passes the updated ordinary-file allowance checks
+(`/tmp/portable-drive-case-alias-btrfs.log`). Targeted formatting and
+`git diff --check` pass.
+Architecture retains 4,300 clone groups, 144 cycles, average CCN 3.49 and maximum
+274; duplication is 7.00%. Separating current-rule lookup/lifetime validation
+from candidate-ancestor comparison removes the initially reported CCN 17 hotspot
+without duplicating the kernel pin/identity mechanisms. No new hotspot is
+reported for this checkpoint; whole-branch REGRESSION remains open.
+
+This evidence does not close 1.6, 6.2 or 6.3. Saved catalog metadata matching and
+redaction, wider relocation/consumer coverage, observation responsiveness and the
+remaining driver/mount-option matrices still need their own evidence.
+
 ## Observed no-index alias checkpoint
 
 Commit `c0ea5aad` moves the existing four-field mount lifetime into core, preserving

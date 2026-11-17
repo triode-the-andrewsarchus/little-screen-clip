@@ -170,7 +170,7 @@ impl IndexPolicy {
             boot: snapshot.boot,
         };
         for scope in &context.scopes {
-            if scope.contains(&current, mount.device, &physical, snapshot)? {
+            if scope.contains(&current, mount, &physical, &canonical, snapshot)? {
                 return Ok(true);
             }
         }
@@ -284,14 +284,35 @@ impl IndexContext {
     }
 }
 impl Scope {
+    // Resolve the current rule object, not a persisted inode: ordinary delete
+    // and recreation must not accidentally release a path-based exclusion.
+    fn exclusion_identity(&self, entry: &Exclusion) -> io::Result<Option<MountIdentity>> {
+        let location = self
+            .mount
+            .exclusion(&entry.physical)
+            .ok_or_else(|| invalid("Exclusion is outside its original view"))?;
+        let rule = match kernel_interface::pin(&location, true) {
+            Ok(pin) => pin,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let expected = MountIdentity::pinned(&rule)?;
+        if expected.mount != self.lifetime.identity.mount
+            || kernel_interface::unique_mount_id(&rule)? != self.lifetime.unique_mount
+        {
+            return Err(invalid("Exclusion now resolves through another mount"));
+        }
+        Ok(Some(expected))
+    }
     fn contains(
         &self,
         current: &MountLifetime,
-        backing_device: u64,
+        mount: &Mount,
         physical: &Path,
+        canonical: &Path,
         snapshot: &Snapshot,
     ) -> io::Result<bool> {
-        if self.mount.device != backing_device {
+        if self.mount.device != mount.device {
             return Ok(false);
         }
         if !self.lifetime.same_mount(current) {
@@ -303,10 +324,57 @@ impl Scope {
             self.lifetime
                 .validate(&kernel_interface::pin(&origin.target, true)?)?;
         }
-        Ok(self
+        if self
             .excluded
             .iter()
-            .any(|entry| physical.starts_with(&entry.physical)))
+            .any(|entry| physical.starts_with(&entry.physical))
+        {
+            return Ok(true);
+        }
+        for entry in &self.excluded {
+            if entry.equivalent(self, current, mount, physical, canonical)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+impl Exclusion {
+    // Ask the mounted filesystem to resolve the rule spelling. In particular,
+    // an exclusion may have been saved before its final components existed.
+    // No Unicode/upcase table is guessed and no directory contents are listed.
+    fn equivalent(
+        &self,
+        origin: &Scope,
+        current: &MountLifetime,
+        mount: &Mount,
+        physical: &Path,
+        canonical: &Path,
+    ) -> io::Result<bool> {
+        let Some(levels) = physical
+            .components()
+            .count()
+            .checked_sub(self.physical.components().count())
+        else {
+            return Ok(false);
+        };
+        let Some(expected) = origin.exclusion_identity(self)? else {
+            return Ok(false);
+        };
+        let prefix = canonical
+            .ancestors()
+            .nth(levels)
+            .filter(|prefix| prefix.starts_with(&mount.target))
+            .ok_or_else(|| invalid("Exclusion ancestry is outside the candidate view"))?;
+        let pin = kernel_interface::pin(prefix, true)?;
+        let candidate = MountIdentity::pinned(&pin)?;
+        if candidate.mount != current.identity.mount
+            || kernel_interface::unique_mount_id(&pin)? != current.unique_mount
+        {
+            return Err(invalid("Candidate ancestry changed mounts"));
+        }
+        Ok(candidate.device == expected.device && candidate.inode == expected.inode)
     }
 }
 
@@ -557,6 +625,25 @@ mod tests {
         let link = temp.path().join("loop");
         std::os::unix::fs::symlink("loop", &link).unwrap();
         assert!(IndexPolicy::observed(vec![link], None).is_err());
+    }
+    #[test]
+    fn current_kernel_identity_matches_file_aliases_without_persisting_reused_inodes() {
+        let temp = tempfile::tempdir().unwrap();
+        let private = temp.path().join("private");
+        let alias = temp.path().join("alias");
+        let allowed = temp.path().join("ordinary");
+        std::fs::write(&private, b"private bytes").unwrap();
+        std::fs::hard_link(&private, &alias).unwrap();
+        std::fs::write(&allowed, b"public bytes").unwrap();
+        let policy = IndexPolicy::observed(vec![private.clone()], None).unwrap();
+        let snapshot = Snapshot::capture().unwrap();
+        assert!(policy.resolve(&alias, &snapshot).unwrap());
+        assert!(!policy.resolve(&allowed, &snapshot).unwrap());
+        std::fs::remove_file(&private).unwrap();
+        assert!(!policy.resolve(&alias, &snapshot).unwrap());
+        std::fs::hard_link(&allowed, &private).unwrap();
+        assert!(!policy.resolve(&alias, &snapshot).unwrap());
+        assert!(policy.resolve(&allowed, &snapshot).unwrap());
     }
 }
 

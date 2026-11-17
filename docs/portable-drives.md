@@ -567,6 +567,16 @@ backup or sync. Mounted catalog and image views have explicit exclusions; their
 paths come from bounded pages of their mount registries without decoding all
 historical backup/catalog headers.
 
+Search-index exclusions also ask the mounted filesystem to resolve a rule's
+spelling before comparing current object identities. This covers a folder saved
+before it exists and later created with different capitalization, without
+guessing Unicode or filesystem upcase tables. Missing rules do not exclude
+unrelated names on a case-sensitive filesystem. The fallback performs metadata
+lookups only, with no directory listing, content decoding or retained media pin.
+When only partial views remain and the parent cannot be looked up to distinguish
+an alias from a disjoint rule, those uncertain views are excluded in full. A
+whole-volume view lets the filesystem establish the more precise boundary.
+
 These observations use Linux 6.8+ non-reused mount IDs. Older nonempty literal-only
 policy files and unavailable/uncertain mount context pause background indexing
 until the daemon publishes a verified observation. A failed policy observation
@@ -575,8 +585,10 @@ opening, full backups and enrolled sync retain their independent admission rules
 Btrfs per-subvolume object device numbers do not select mount boundaries: mount
 continuity uses the non-reused mount ID, and filesystem projection uses mount-table
 coordinates. Exact pinned-object identity checks keep their original fields.
-Filesystem case-fold and broader relocation/consumer matrices remain separate
-acceptance work; lexical normalization alone is not their proof.
+Native ASCII/Unicode future-name checks pass on FAT32, exFAT and NTFS3, including
+NTFS3's `nocase` option. Catalog-metadata name matching, broader relocation and
+consumer matrices remain separate acceptance work; search-index matching alone
+is not their proof.
 
 Legacy development records naming only a device node have no persistent identity
 evidence. They remain retained without being attached to a potentially reused
