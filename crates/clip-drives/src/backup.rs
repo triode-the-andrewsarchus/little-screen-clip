@@ -24,8 +24,10 @@ mod image_mount;
 pub(crate) use image_mount::ImageMount;
 mod metadata;
 mod publication;
+mod retention;
 pub(crate) use publication::recover as recover_publications;
 pub(crate) use publication::{current as current_version, files_manifest, read_manifest};
+pub(crate) use retention::provider_lease;
 
 pub(crate) use crate::DriveBackup as Backup;
 fn btrfs(root: &Root) -> Result<bool> {
@@ -1277,15 +1279,7 @@ pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -
     if keep == 0 {
         return Err("Retain at least one completed backup version".into());
     }
-    let catalogs: Vec<crate::Catalog> = db.list("catalog", 0, 1000)?;
-    if catalogs
-        .iter()
-        .any(|c| c.drive == drive && c.mount.is_some())
-    {
-        return Err(
-            "Unmount this drive's catalogs before pruning potential content providers".into(),
-        );
-    }
+    retention::check_readers(db, drive)?;
     let mut versions = Vec::new();
     let mut offset = 0;
     loop {
@@ -1336,6 +1330,7 @@ pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -
             fs::remove_file(path)?;
         } else {
             let root = Root::open(&version.path)?;
+            let _lease = provider_lease(&root, true)?;
             if version.identity.as_ref() != Some(&root.storage_identity()?) {
                 return Err("Backup directory identity changed; refusing prune".into());
             }

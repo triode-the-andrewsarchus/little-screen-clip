@@ -425,6 +425,10 @@ before opening a foreign FUSE file. The file-backup manifest location and bounde
 entry lookup are shared with catalog fingerprint enrichment.
 A stale candidate can fall back to another matching backup, while an already open
 file keeps its chosen provider and reports stale data if that provider changes.
+Open file-backup providers retain shared, nonblocking directory leases across
+processes. Pruning requires an exclusive lease, so a reader remains protected even
+if its catalog status is missing. Mounted-catalog checks visit all saved records
+and include actual mount observations rather than relying on the status page.
 
 The reloadable `drives.catalog_workers` setting allows one to four independent
 catalog captures at once, defaulting to one. Raising it admits queued independent

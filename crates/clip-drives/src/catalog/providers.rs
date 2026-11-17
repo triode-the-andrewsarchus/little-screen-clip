@@ -22,6 +22,10 @@ impl ProviderIdentity {
         view: &CatalogFs,
         entry: &Entry,
     ) -> Result<Option<OpenFile>> {
+        let lease = match self {
+            Self::Files(_) => Some(backup::provider_lease(&root, false)?),
+            _ => None,
+        };
         self.validate(&root)?;
         let expected = match self {
             Self::Files(version) if entry.hash.is_none() => view.backup_entry(version, entry)?,
@@ -30,7 +34,9 @@ impl ProviderIdentity {
         let Ok(file) = root.input(&entry.path) else {
             return Ok(None);
         };
-        OpenFile::validated(root, file, &expected).map(Some)
+        let mut open = OpenFile::validated(root, file, &expected)?;
+        open._provider_lease = lease;
+        Ok(Some(open))
     }
 }
 

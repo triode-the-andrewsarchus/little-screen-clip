@@ -31,7 +31,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.3 | Partial | Bounded retries, metadata fidelity and hard-link preservation/reuse pass native checks. Read-only source guards now reject writable backing filesystems and policy loss on real FAT32/exFAT/NTFS, retaining current; ordinary live collection is preserved. Selectable reviewed/CLI read-only collection now owns flush/unmount/verified mount/copy/reader retirement/restoration. Real UDisks guest busy refusal, cancellation and late-cancel completion pass on all three source formats. Desktop password-agent, broader fidelity/mount-option and interruption matrices remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
-| 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
+| 4.6 | Partial | Explicit retention now protects open providers with cross-process directory leases and checks mounted catalogs beyond status pagination. Durable retirement, Btrfs capability fallback and interruption matrices remain. |
 | 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real guest UDisks/PolicyKit authorization, busy-source refusal and successful preflush/unmount/image/restoration now pass. Interactive password-agent and hotplug/replacement races remain. |
 | 5.2 | Partial | Isolated real UDisks/PolicyKit tests now prove authorized image reads, unprivileged denial and busy-device refusal on FAT32/exFAT/NTFS partitions. The desktop authentication-agent/password interaction remains a separate UI gate. |
 | 5.3 | Complete | Exact authorized-device/image hashes, partition sizes, durable publication and checksummed source manifests pass on real FAT32/exFAT/NTFS GPT partitions. Manifests retain typed partition number/start/byte offset/logical sector size/type/label/flags and immediate containing-table type/identifier; unknown fields remain unknown. Native tests assert actual GPT layout and exact manifest retention. See the partition-layout checkpoint and its guest report. |
@@ -53,6 +53,45 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Backup retention reader checkpoint
+
+Two negative tests reproduced deletion of a backup supplying an open catalog
+descriptor and missed mounted-reader status beyond 1,000 records. Both are fixed.
+Evidence: `/tmp/portable-drive-retention-readers-negative.log`.
+
+File-backup providers acquire nonblocking shared locks on an independently opened,
+guarded root-directory descriptor and retain that descriptor until OpenFile drops.
+Pruning needs the matching exclusive lock before touching the tree. Both direct
+readers and the separate FUSE helper remain protected independently of status
+publication. Contention returns a busy result rather than waiting on the server
+or coordinator. Identity, revision and content validation remain required after
+admission; the lease does not substitute for them.
+
+Mounted-catalog admission now visits a transactionally fixed set of all catalog
+records through the existing bounded entity visitor. It checks both published
+mounts and actual catalog mount sources, protecting older helpers without the
+new per-provider lease. It does not use a status-page cut-off. The new separate
+FUSE test removes the catalog status record while retaining its open file, then
+proves that pruning is refused, the original bytes remain readable, and pruning
+succeeds after release and helper exit.
+
+Final backend tests pass 177 cases (75 explicit fixtures ignored); the fresh
+helper passes all 30 selected host provider cases. Backend all-target clippy with
+warnings denied, targeted formatting and whitespace checks pass. Logs:
+`/tmp/portable-drive-retention-readers-{backend,fuse}-final.log` and
+`/tmp/portable-drive-retention-readers-clippy.log`.
+
+Architecture metrics retain 4300 clone groups, 144 cycles, 7.04% duplication,
+average CCN 3.48 and maximum 274. A shared captured-file fixture removes the
+initially reported test clone. New admission/lease functions have no CCN hotspot;
+the graph analysis flags the unchanged provider backup_entry function for final
+branch review. The original-baseline result remains REGRESSION. Filtered report:
+`.fitness/portable-drives-retention-readers-architecture.json`.
+
+Items 4.6/6.8 remain Partial. Durable retirement, Btrfs deletion capability and
+interrupted cleanup still need implementation and acceptance. This reader guard
+does not claim those gates or retention responsiveness are complete.
 
 ## Metadata-only catalog file-provider checkpoint
 

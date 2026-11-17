@@ -3,6 +3,7 @@ use std::fs::{self, FileTimes};
 use std::time::SystemTime;
 mod inodes;
 mod metadata;
+mod retention;
 mod revisions;
 mod types;
 

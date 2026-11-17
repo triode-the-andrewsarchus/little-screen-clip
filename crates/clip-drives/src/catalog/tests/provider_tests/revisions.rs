@@ -20,9 +20,7 @@ fn metadata_only_backup_validation_preserves_raw_file_names() {
 }
 
 fn check_backup_tampering(fixture: &Fixture, name: &Path) {
-    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
-    let view = filesystem(&fixture.state.path, catalog);
-    let entry = view.lookup_path(name).unwrap().unwrap().1;
+    let (view, entry) = fixture.captured_file(name);
     assert!(entry.hash.is_none());
     let version = fixture.backup().unwrap();
     assert_eq!(view.resolve(&entry).unwrap().root.path, version.path);
@@ -58,9 +56,7 @@ fn check_backup_tampering(fixture: &Fixture, name: &Path) {
 #[test]
 fn later_backup_cannot_substitute_a_different_source_revision_with_matching_mtime() {
     let fixture = fixture();
-    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
-    let view = filesystem(&fixture.state.path, catalog);
-    let entry = view.lookup_path(Path::new("file.txt")).unwrap().unwrap().1;
+    let (view, entry) = fixture.captured_file(Path::new("file.txt"));
     assert!(entry.hash.is_none());
     let path = fixture.source.path.join(&entry.path);
     let modified = fs::metadata(&path).unwrap().modified().unwrap();

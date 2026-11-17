@@ -100,6 +100,7 @@ struct OpenFile {
     file: File,
     source: FileSource,
     root: Root,
+    _provider_lease: Option<File>,
 }
 impl OpenFile {
     fn validated(root: Root, file: File, entry: &Entry) -> Result<Self> {
@@ -121,7 +122,12 @@ impl OpenFile {
         }
         source.check_file(&file)?;
         root.validate()?;
-        Ok(Self { file, source, root })
+        Ok(Self {
+            file,
+            source,
+            root,
+            _provider_lease: None,
+        })
     }
 }
 struct CatalogFs {
@@ -527,13 +533,15 @@ mod tests {
         }
 
         fn captured_entry(&self, path: &Path) -> Entry {
+            self.captured_file(path).1
+        }
+
+        fn captured_file(&self, path: &Path) -> (CatalogFs, Entry) {
             let catalog = self.capture(&DriveConfig::default()).unwrap();
             assert!(catalog.complete, "{}", catalog.coverage);
-            filesystem(&self.state.path, catalog)
-                .lookup_path(path)
-                .unwrap()
-                .unwrap()
-                .1
+            let view = filesystem(&self.state.path, catalog);
+            let entry = view.lookup_path(path).unwrap().unwrap().1;
+            (view, entry)
         }
 
         fn pair(&self, relative: &Path) -> crate::SyncPair {
