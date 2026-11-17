@@ -1,6 +1,18 @@
 use super::*;
 use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 
+impl FileFixture {
+    fn hard_linked(contents: &[u8]) -> Self {
+        let fixture = Self::new(contents);
+        fs::hard_link(
+            fixture.source.path.join("file"),
+            fixture.source.path.join("alias"),
+        )
+        .unwrap();
+        fixture
+    }
+}
+
 fn facts(version: &Backup, path: &Path) -> serde_json::Value {
     let manifest = Store::existing(version.manifest.as_ref().unwrap(), true).unwrap();
     let json: String = manifest
@@ -238,6 +250,7 @@ fn hard_links_share_a_backup_inode_and_retain_original_relationship_facts() {
     )
     .unwrap();
     let version = fixture.backup(|_, _| {}).unwrap();
+    assert_eq!(version.bytes_written, b"linked bytes".len() as u64);
     assert_eq!(
         fs::metadata(version.path.join("file")).unwrap().ino(),
         fs::metadata(version.path.join("nested/alias"))
@@ -260,6 +273,7 @@ fn hard_links_share_a_backup_inode_and_retain_original_relationship_facts() {
     assert!(file["hard_link_to"] == "nested/alias" || alias["hard_link_to"] == "file");
     fs::write(fixture.source.path.join("file"), b"new shared contents").unwrap();
     let next = fixture.backup(|_, _| {}).unwrap();
+    assert_eq!(next.bytes_written, b"new shared contents".len() as u64);
     assert_eq!(
         fs::metadata(next.path.join("file")).unwrap().ino(),
         fs::metadata(next.path.join("nested/alias")).unwrap().ino()
@@ -347,12 +361,7 @@ fn raw_named_hard_linked_symlinks_preserve_the_link_inode_and_leave_the_referent
 
 #[test]
 fn differing_hard_link_revisions_stop_publication_and_keep_the_previous_version() {
-    let fixture = FileFixture::new(b"before");
-    fs::hard_link(
-        fixture.source.path.join("file"),
-        fixture.source.path.join("alias"),
-    )
-    .unwrap();
+    let fixture = FileFixture::hard_linked(b"before");
     let first = fixture.backup(|_, _| {}).unwrap();
     let mut edited = false;
     let error = fixture
@@ -376,8 +385,49 @@ fn differing_hard_link_revisions_stop_publication_and_keep_the_previous_version(
 }
 
 #[test]
+fn a_replaced_alias_provider_cannot_supply_a_later_link_or_publish_corrupt_bytes() {
+    let fixture = FileFixture::hard_linked(b"source contents");
+    let first = fixture.backup(|_, _| {}).unwrap();
+    let mut replaced = false;
+    let error = fixture
+        .backup(|count, _| {
+            if count == 1 && !replaced {
+                let stage = fs::read_dir(first.path.parent().unwrap())
+                    .unwrap()
+                    .map(|row| row.unwrap().path())
+                    .find(|path| {
+                        path.file_name()
+                            .unwrap()
+                            .as_bytes()
+                            .starts_with(b".incomplete-")
+                    })
+                    .unwrap();
+                let alias = stage.join("alias");
+                fs::remove_file(&alias).unwrap();
+                fs::write(&alias, b"foreign replacement").unwrap();
+                replaced = true;
+            }
+        })
+        .unwrap_err();
+    assert!(replaced);
+    assert!(
+        error.to_string().contains("Backup contents differ"),
+        "{error}"
+    );
+    fixture.assert_only_current(&first);
+    assert_eq!(
+        fs::read(first.path.join("alias")).unwrap(),
+        b"source contents"
+    );
+    assert_eq!(
+        fs::read(fixture.source.path.join("file")).unwrap(),
+        b"source contents"
+    );
+}
+
+#[test]
 fn attribute_changes_during_copy_are_recollected_and_replaced_in_the_manifest() {
-    let fixture = FileFixture::new(b"stable contents");
+    let fixture = FileFixture::hard_linked(b"stable contents");
     let source = fixture.source.path.join("file");
     rustix::fs::setxattr(
         &source,
@@ -400,6 +450,10 @@ fn attribute_changes_during_copy_are_recollected_and_replaced_in_the_manifest() 
     let version = version.unwrap();
     assert_eq!(attempts, 2);
     assert_eq!(version.bytes_written, b"stable contents".len() as u64);
+    assert_eq!(
+        fs::metadata(version.path.join("file")).unwrap().ino(),
+        fs::metadata(version.path.join("alias")).unwrap().ino()
+    );
     assert_eq!(
         attribute(&version.path.join("file"), b"user.revision"),
         b"after"

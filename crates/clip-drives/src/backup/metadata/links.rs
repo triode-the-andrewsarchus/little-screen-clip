@@ -1,5 +1,42 @@
 //! Disk-backed source-inode groups; only equal captured revisions share an inode.
 use super::*;
+use rusqlite::OptionalExtension;
+
+/// Uses only an already committed entry from this in-progress collection.
+/// The final group pass still verifies coverage and publishes relationship facts.
+pub(super) fn reuse(
+    db: &Store,
+    scan: &str,
+    target: &Root,
+    entry: &Entry,
+    facts: &Facts,
+    cancel: &AtomicBool,
+) -> Result<bool> {
+    cancelled(cancel)?;
+    let row =
+        db.0.query_row(
+            "SELECT e.json,m.json FROM backup_links l
+        JOIN entries e ON e.path=l.path AND e.scan=?1
+        JOIN backup_metadata m ON m.path=l.path
+        WHERE l.identity=?2 ORDER BY e.rowid LIMIT 1",
+            rusqlite::params![scan, format!("{}:{}", entry.device, entry.inode)],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((captured, observed)) = row else {
+        return Ok(false);
+    };
+    let captured = serde_json::from_str(&captured)?;
+    let observed = serde_json::from_str(&observed)?;
+    let output = Object::open(target, &captured)?;
+    let group = Group {
+        entry: captured,
+        facts: observed,
+        output,
+        incomplete: false,
+    };
+    Ok(group.link_member(target, entry, facts, cancel)?.is_none())
+}
 
 pub(super) fn finish(
     report: &Report<'_>,
@@ -91,20 +128,7 @@ impl Group {
         facts: &mut Facts,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        if !same_capture(&self.entry, &self.facts, entry, facts) {
-            return Err(crate::Error::SourceChanged(format!(
-                "Hard-linked source revisions differ between {} and {}; restart backup collection; previous backup retained",
-                little_clip_core::path_address::display_path(&self.entry.path),
-                little_clip_core::path_address::display_path(&entry.path)
-            )));
-        }
-        self.verify_representative(target, cancel)?;
-        let previous = Object::open(target, entry)?;
-        verify_contents(&previous, entry, cancel)?;
-        if same_inode(&self.output, &previous)? {
-            return Ok(());
-        }
-        if let Some(error) = install(target, &self.output, &previous, entry, cancel)? {
+        if let Some(error) = self.link_member(target, entry, facts, cancel)? {
             facts.note(
                 Field::HardLinks,
                 None,
@@ -115,6 +139,32 @@ impl Group {
             self.incomplete = true;
         }
         Ok(())
+    }
+    fn link_member(
+        &self,
+        target: &Root,
+        entry: &Entry,
+        facts: &Facts,
+        cancel: &AtomicBool,
+    ) -> Result<Option<std::io::Error>> {
+        if !same_capture(&self.entry, &self.facts, entry, facts) {
+            return Err(crate::Error::SourceChanged(format!(
+                "Hard-linked source revisions differ between {} and {}; restart backup collection; previous backup retained",
+                little_clip_core::path_address::display_path(&self.entry.path),
+                little_clip_core::path_address::display_path(&entry.path)
+            )));
+        }
+        self.verify_representative(target, cancel)?;
+        let previous = target
+            .metadata(&entry.path)?
+            .map(|_| Object::open(target, entry))
+            .transpose()?;
+        if let Some(previous) = previous.as_ref()
+            && same_inode(&self.output, previous)?
+        {
+            return Ok(None);
+        }
+        install(target, &self.output, previous.as_ref(), entry, cancel)
     }
     fn verify_representative(&self, target: &Root, cancel: &AtomicBool) -> Result<()> {
         self.output.validate_name(target, &self.entry, cancel)?;
@@ -187,10 +237,17 @@ fn same_inode(a: &Object, b: &Object) -> Result<bool> {
 fn install(
     target: &Root,
     original: &Object,
-    previous: &Object,
+    previous: Option<&Object>,
     entry: &Entry,
     cancel: &AtomicBool,
 ) -> Result<Option<std::io::Error>> {
+    let previous = previous
+        .map(|object| {
+            object
+                .metadata()
+                .map(|metadata| (object, Entry::from_metadata(&entry.path, &metadata)))
+        })
+        .transpose()?;
     let (parent, destination) = target.parent(&entry.path, false)?;
     let scratch = tempfile::Builder::new()
         .prefix(".hard-link-")
@@ -199,8 +256,7 @@ fn install(
     if let Err(error) = original.link_to(&staged) {
         return Ok(Some(error));
     }
-    previous.validate_name(target, entry, cancel)?;
-    fs::rename(&staged, &destination)?;
+    install_staged(target, previous, entry, &staged, &destination, cancel)?;
     File::open(anchor(&parent))?.sync_all()?;
     let installed = Object::open(target, entry)?;
     if !same_inode(original, &installed)? {
@@ -208,4 +264,28 @@ fn install(
     }
     target.validate()?;
     Ok(None)
+}
+
+/// Existing names keep their captured revision; absent names install without
+/// overwrite. Both addresses borrow the caller's retained staging/parent handles.
+fn install_staged(
+    target: &Root,
+    previous: Option<(&Object, Entry)>,
+    entry: &Entry,
+    staged: &Path,
+    destination: &Path,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    cancelled(cancel)?;
+    if let Some((previous, revision)) = previous {
+        previous.validate_name(target, entry, cancel)?;
+        if !revision.same_revision(&Entry::from_metadata(&entry.path, &previous.metadata()?)) {
+            return Err("Hard-link destination changed before installation".into());
+        }
+        fs::rename(staged, destination)?;
+    } else {
+        target.validate()?;
+        little_clip_core::file_source::rename_noreplace(staged, destination)?;
+    }
+    Ok(())
 }

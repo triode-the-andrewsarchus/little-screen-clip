@@ -134,6 +134,19 @@ pub(super) struct Snapshot {
     facts: Facts,
 }
 impl Snapshot {
+    pub fn reuse_link(
+        &self,
+        db: &Store,
+        scan: &str,
+        target: &Root,
+        entry: &Entry,
+        cancel: &AtomicBool,
+    ) -> Result<bool> {
+        if self.facts.links <= 1 {
+            return Ok(false);
+        }
+        links::reuse(db, scan, target, entry, &self.facts, cancel)
+    }
     pub fn capture(source: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<Self> {
         cancelled(cancel)?;
         let object = Object::open(source, entry)?;

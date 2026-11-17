@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Partial | Bounded per-file retries, available metadata and fidelity records pass native tests. Regular-file/symlink hard-link groups are now preserved on supporting destinations, with raw reference paths and explicit destination/uncaptured-alias omissions. Divergent captured revisions refuse publication; Btrfs versions preserve and later split groups independently. Staging still copies aliases separately before consolidation; eliminating redundant writes and optional quiesced read-only collection remain. Broader fidelity/consistency matrices stay open. |
+| 4.3 | Partial | Bounded per-file retries, available metadata and fidelity records pass native tests. Regular-file/symlink hard-link groups are preserved on supporting destinations, with raw references and explicit omissions. Matching completed aliases are reused before payload writes; ordinary/Btrfs/native checks prove one payload write, while unsupported destinations keep full copies. Divergent revisions and corrupt candidates refuse publication and retain current. Optional quiesced read-only collection and broader fidelity/consistency matrices remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -53,6 +53,51 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Reusing completed aliases during collection
+
+Collection now looks up source device/inode groups in the current manifest's
+existing disk-backed index before writing another alias payload. It selects
+only entries whose revision and metadata records have already committed in this
+collection. The shared group validator checks captured revision, hash/link target,
+attributes and coverage, then verifies the retained candidate's bytes. Divergent
+source revisions retain bounded failure behavior; replaced/corrupt candidates
+stop publication. This reuses the relationship installer and final coverage pass,
+without a second cache or another persisted source representation.
+
+The installer supports both an existing pinned destination and an absent name.
+Existing destinations must retain their captured revision through staging;
+absent names use atomic no-overwrite installation. Parent and staging handles
+remain held through installation. Link capability failures fall back to the
+ordinary full copy, with the existing final pass reporting lost relationships.
+The final pass still checks payloads, relationships and partial source coverage.
+
+Ordinary nested-alias tests now assert one payload's bytes written in each
+independent version. The attribute-only retry case also includes an alias and
+proves recollection retains one write and a shared final inode. A new fault case
+replaces the completed staging candidate with different bytes before another
+alias: backup fails, the previous manifest/current references remain valid, and
+source bytes remain intact. Backend tests pass 105 cases with 45 explicit
+fixtures ignored: `/tmp/portable-drive-backup-link-reuse-backend-final.log`.
+
+Both real Btrfs cases pass with new assertions that linked first/edited versions
+write one payload, while old versions and later source splits stay independent:
+`/tmp/portable-drive-backup-link-reuse-btrfs-final.log`. The native module passes
+fourteen cases on each FAT32/exFAT/NTFS3 mount (42 total):
+`/tmp/portable-drive-vm-backup-link-reuse-native-final/report.json`. Its destination
+case asserts two full payload writes on FAT32/exFAT, versus one on NTFS; the NTFS
+source case also asserts one payload write and retains its attribute-drift refusal.
+
+Selected backend/Files/daemon all-target clippy and affected-crate formatting pass:
+`/tmp/portable-drive-backup-link-reuse-clippy-final.log` and
+`/tmp/portable-drive-backup-link-reuse-fmt-final.log`. There is no new rendered UI
+acceptance. Shared installation policy and fixture setup remove new accidental
+hotspots/duplication. Architecture remains REGRESSION for the full feature, with
+4300 clone groups versus baseline 4289, duplication 7.11% versus 7.30%, average
+CCN 3.48 versus 3.44, maximum 274 and reported cycles 144 versus 143. This
+checkpoint adds no clone group or hotspot; selected fields are retained in
+`.fitness/portable-drives-backup-link-reuse-architecture.json`. Item 4.3 remains
+Partial, including selectable quiescence and broader acceptance matrices.
 
 ## Hard-link relationships in file backups
 

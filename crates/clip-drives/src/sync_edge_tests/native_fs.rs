@@ -607,12 +607,20 @@ fn native_backup_destinations_disclose_coerced_modes_owner_times_and_missing_att
         assert!(omitted("extended_attribute"));
         assert!(version.fidelity.as_ref().unwrap().omitted_fields > 0);
         assert!(omitted("hard_links"));
+        assert_eq!(
+            version.bytes_written,
+            2 * b"complete file contents".len() as u64
+        );
         assert_ne!(
             actual.ino(),
             fs::metadata(version.path.join("alias")).unwrap().ino()
         );
     } else {
         assert!(!omitted("hard_links"));
+        assert_eq!(
+            version.bytes_written,
+            b"complete file contents".len() as u64
+        );
         assert_eq!(
             actual.ino(),
             fs::metadata(version.path.join("alias")).unwrap().ino()
@@ -686,6 +694,7 @@ fn native_hard_link_sources_retain_aliases_and_refuse_divergent_captured_attribu
     )
     .unwrap();
     let first = fixture.file_backup(&drive, |_, _| {}).unwrap();
+    assert_eq!(first.bytes_written, b"shared bytes".len() as u64);
     let actual = fs::metadata(first.path.join("file")).unwrap();
     assert_eq!(actual.nlink(), 2);
     assert_eq!(

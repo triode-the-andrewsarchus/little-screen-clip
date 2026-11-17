@@ -1120,8 +1120,10 @@ mod btrfs_tests {
         fs::hard_link(&file, &alias).unwrap();
         let make = || files(&db, &drive, &source, &destination, &cancel, |_, _| {}).unwrap();
         let first = make();
+        assert_eq!(first.bytes_written, b"original".len() as u64);
         fs::write(&file, b"new bytes").unwrap();
         let second = make();
+        assert_eq!(second.bytes_written, b"new bytes".len() as u64);
         for version in [&first, &second] {
             assert!(version.incremental);
             let file = fs::metadata(version.path.join("file")).unwrap();

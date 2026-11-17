@@ -159,7 +159,7 @@ impl Collection<'_> {
         progress();
         cancelled(self.cancel)?;
         prepare_entry(self.db, self.target, entry, self.cancel)?;
-        *written += self.install(entry)?;
+        *written += self.install(entry, &snapshot)?;
         snapshot.restore(self.target, entry, self.cancel)?;
         snapshot.check(self.source, entry, self.cancel)?;
         let after = self.observe(entry, false)?;
@@ -189,7 +189,10 @@ impl Collection<'_> {
         }
     }
 
-    fn install(&self, entry: &Entry) -> Result<u64> {
+    fn install(&self, entry: &Entry, snapshot: &metadata::Snapshot) -> Result<u64> {
+        if snapshot.reuse_link(self.db, self.id, self.target, entry, self.cancel)? {
+            return Ok(0);
+        }
         let old = if self.target.metadata(&entry.path)?.is_some() {
             scan::observe(self.target, &entry.path, true, u64::MAX, self.cancel)?
         } else {

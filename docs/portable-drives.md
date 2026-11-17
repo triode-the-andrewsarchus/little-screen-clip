@@ -132,11 +132,12 @@ independent payloads and disclose the lost relationship, including errno.
 Uncaptured aliases are disclosed without following names outside the selected
 tree. Alias groups share the first inventory observation of access time.
 
-Collection currently stages independent copies before consolidating matching
-aliases. Temporary space and bytes written can exceed the final linked payload
-size; Btrfs snapshots still share unchanged extents across versions. Avoiding
-redundant staging writes and a selectable quiesced read-only collection mode
-remain unfinished.
+During collection, a later alias can reuse a matching entry already completed
+in this backup. The daemon verifies its bytes and captured source facts before
+installing the link, avoiding another payload write. Destinations that refuse
+links receive complete independent copies with fidelity warnings. Btrfs
+snapshots also share unchanged extents across versions. A selectable quiesced
+read-only collection mode remains unfinished.
 
 The source Drive record in each new manifest includes observed partition-layout
 facts: partition number, start sector and checked byte offset, logical sector
