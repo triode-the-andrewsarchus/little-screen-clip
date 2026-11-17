@@ -273,6 +273,10 @@ fn publish_record(db: &Store, parent: &Root, pin: &File, backup: &Backup) -> Res
     }
     // Artifacts and any head update precede atomic registry publication.
     let transaction = db.0.unchecked_transaction()?;
+    remember_destination(
+        db,
+        parent.path.parent().ok_or("Missing backup destination")?,
+    )?;
     db.put("backup", &backup.id, backup)?;
     if advance {
         db.put(

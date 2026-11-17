@@ -211,6 +211,10 @@ unrelated folder pairs continue while cleanup runs. Cancelling explicit pruning
 pauses its journal until another prune request; daemon shutdown leaves automatic
 recovery eligible to resume at the next start. Retiring and prepared destinations
 remain excluded from indexing and sync enrollment while their journals exist.
+Publication and final retirement enroll their destination in the persistent
+backup-root registry in the same transaction as the completed record or journal
+removal. This also migrates older destinations: removing their final version
+keeps their exclusion, including after restart with no backup preference set.
 If an older prepared backup finishes after a newer publication, it becomes
 history without replacing the newer current reference.
 

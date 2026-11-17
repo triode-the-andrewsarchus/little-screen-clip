@@ -1,6 +1,7 @@
 //! Real retirement work must not own the coordinator's event loop.
 use super::*;
 use serde_json::Value;
+use std::os::unix::ffi::OsStrExt;
 
 struct Fixture {
     drives: TestDrives,
@@ -30,7 +31,13 @@ impl Fixture {
         }
         let state = Root::create(&drives.temp.path().join("state")).unwrap();
         let db = Store::open(&state.path.join("drives.sqlite")).unwrap();
-        let legacy = Root::create(&drives.temp.path().join("legacy-backups")).unwrap();
+        let legacy = Root::create(
+            &drives
+                .temp
+                .path()
+                .join(std::ffi::OsStr::from_bytes(b"legacy-backups-\xff\\\n")),
+        )
+        .unwrap();
         let old = backup::files(
             &db,
             &drive,
@@ -54,6 +61,9 @@ impl Fixture {
             |_, _| {},
         )
         .unwrap();
+        // Model releases that predate persistent destination enrollment.
+        db.0.execute("DELETE FROM entities WHERE kind='backup-root'", [])
+            .unwrap();
         // Retention and recovery must also work with the source disconnected.
         drives.drives.lock().unwrap().retain(|d| d.id != drive.id);
         Self {
@@ -166,6 +176,19 @@ impl Fixture {
             .unwrap();
         (pair.id, local)
     }
+
+    fn assert_legacy_policy(&self, service: &Service) {
+        assert!(published_policy(service).excluded.contains(&self.legacy));
+        failed(
+            service,
+            DriveRequest::Pair {
+                drive: "part:small".into(),
+                relative: PathBuf::new(),
+                local: self.legacy.clone(),
+            },
+            "managed",
+        );
+    }
 }
 
 #[test]
@@ -173,20 +196,7 @@ fn paused_legacy_retirement_keeps_its_root_excluded_and_rejects_sync_enrollment(
     let fixture = Fixture::new(1);
     fixture.retire(true);
     let service = fixture.start();
-    assert!(
-        published_policy(&service)
-            .excluded
-            .contains(&fixture.legacy)
-    );
-    failed(
-        &service,
-        DriveRequest::Pair {
-            drive: "part:small".into(),
-            relative: PathBuf::new(),
-            local: fixture.legacy.clone(),
-        },
-        "managed",
-    );
+    fixture.assert_legacy_policy(&service);
     assert!(
         fixture
             .db
@@ -197,6 +207,80 @@ fn paused_legacy_retirement_keeps_its_root_excluded_and_rejects_sync_enrollment(
     );
     assert!(fixture.old.path.exists());
     service.shutdown().unwrap();
+}
+
+#[test]
+fn legacy_retirement_preserves_its_raw_destination_policy_atomically_after_restart() {
+    let fixture = Fixture::new(1);
+    fixture.retire(false);
+    fixture.db.0.execute_batch("CREATE TRIGGER fail_root BEFORE INSERT ON entities WHEN NEW.kind='backup-root' BEGIN SELECT RAISE(FAIL,'root enrollment fault'); END").unwrap();
+    assert!(
+        backup::recover_record(
+            &fixture.db,
+            "backup-prune",
+            &fixture.old.id,
+            &AtomicBool::new(false),
+        )
+        .is_err()
+    );
+    assert!(!fixture.old.path.exists());
+    assert!(!fixture.old.manifest.as_ref().unwrap().exists());
+    assert!(
+        fixture
+            .db
+            .get::<Value>("backup-prune", &fixture.old.id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        preflight::managed_backup_paths(&fixture.db)
+            .unwrap()
+            .contains(&fixture.legacy)
+    );
+    fixture
+        .db
+        .0
+        .execute_batch("DROP TRIGGER fail_root")
+        .unwrap();
+    assert!(
+        backup::recover_record(
+            &fixture.db,
+            "backup-prune",
+            &fixture.old.id,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    );
+    assert!(
+        fixture
+            .db
+            .get::<Value>("backup-prune", &fixture.old.id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .db
+            .get::<Value>("backup", &fixture.old.id)
+            .unwrap()
+            .is_none()
+    );
+    // The old bucket still contains its reference, although its last version is gone.
+    assert!(
+        fixture
+            .old
+            .path
+            .parent()
+            .unwrap()
+            .join("current-files.json")
+            .exists()
+    );
+    for _ in 0..2 {
+        let service = fixture.start();
+        assert!(status(&service).backup_directory.is_none());
+        fixture.assert_legacy_policy(&service);
+        service.shutdown().unwrap();
+    }
 }
 
 #[test]

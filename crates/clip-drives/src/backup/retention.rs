@@ -315,6 +315,13 @@ fn finish(db: &Store, intent: &Intent, parent: &Root, cancel: &AtomicBool) -> Re
     parent.validate()?;
     File::open(anchor(&parent.directory(Path::new(""), false)?))?.sync_all()?;
     let transaction = db.0.unchecked_transaction()?;
+    remember_destination(
+        db,
+        parent
+            .path
+            .parent()
+            .ok_or("Missing retired backup destination")?,
+    )?;
     db.remove(KIND, &intent.backup.id)?;
     db.remove("recovery", &intent.backup.id)?;
     transaction.commit()?;

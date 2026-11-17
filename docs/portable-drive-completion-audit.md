@@ -56,6 +56,35 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 
 ## Retained maintenance checkpoint
 
+Follow-up native acceptance passes all nine selected maintenance/provider/image
+cases per FAT32, exFAT and NTFS3 partition (27 cases total). The two 10,000-file
+responsiveness cases exercise explicit cancel/retry and automatic shutdown/restart
+on each source format. The guest report is
+`/tmp/portable-drive-vm-maintenance/report.json`, with test results in its
+`guest.log`. exFAT's userspace image provider still loses fractional modification
+time and correctly returns ESTALE; this does not close the precision gate.
+
+Legacy destination retirement now atomically retains its root policy enrollment
+before dropping the final cleanup journal. New publication also uses this same
+registry writer. A fault-injection test removes all prior root enrollments,
+uses an invalid-UTF-8/control-character path, withdraws the old location's last
+version with its source offline, and fails the root-registry insert after data
+and manifest removal. The journal retains the exclusion until retry succeeds.
+Two subsequent daemon starts, with no backup preference, retain the exclusion
+and reject sync enrollment into the old location. The ordinary backend suite
+passes 188 tests (79 opt-in cases ignored), and all-target Clippy passes with
+warnings denied. Evidence: `/tmp/portable-drive-legacy-root-tests.log`,
+`/tmp/portable-drive-legacy-root-backend.log`, and
+`/tmp/portable-drive-legacy-root-clippy.log`.
+The updated four-case maintenance bundle, native versioned-file backup and
+authorized image lifecycle also pass on each FAT32/exFAT/NTFS3 partition
+(18 selected cases; `/tmp/portable-drive-vm-legacy-roots/report.json`). The
+architecture comparison retains 4,300 clone groups, 144 cycles, average CCN
+3.48 and maximum 274. A repeated policy assertion was consolidated in the test
+fixture; retirement finalization's CCN 16 includes the necessary checked parent
+derivation and atomic root enrollment. No new clone group or cycle remains
+from this follow-up.
+
 Explicit pruning and startup backup recovery now share the existing retained
 bulk pool with catalog maintenance. The owner schedules bounded rowid passes;
 workers perform manifest checks, publication and tree retirement. Recovery
@@ -87,8 +116,8 @@ branch-wide findings still require final review.
 
 Items 1.5 and 4.6 remain Partial: source/destination pin admission, remaining
 mount controls, slower storage, native-format responsiveness and wider fault
-matrices need further evidence. Legacy-root protection after all old journals
-are gone remains part of the migration/no-index work.
+matrices need further evidence. Legacy roots remain protected after final journal
+removal; bind/case-fold/relocation aliases remain in the wider no-index work.
 
 ## Durable backup retirement checkpoint
 

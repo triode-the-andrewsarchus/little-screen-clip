@@ -1,16 +1,11 @@
 //! Short-lived reviewed selections retain roots without mutating backup preferences.
 use super::*;
+use backup::Destination;
 
 pub(super) type Previews = Arc<Mutex<HashMap<String, Review>>>;
 pub(super) const LIFETIME: Duration = Duration::from_secs(300);
 const MAX_PREVIEWS: usize = 16;
 const HEADROOM: u64 = 64 * 1024 * 1024;
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Destination {
-    #[serde(with = "little_clip_core::path_serde")]
-    path: PathBuf,
-}
 
 #[derive(serde::Deserialize)]
 struct RetainedDestination {
@@ -304,13 +299,7 @@ impl Owner {
             self.set_backup_directory(&review.destination)?;
         }
         if let Some(destination) = destination {
-            self.db.put(
-                "backup-root",
-                &little_clip_core::path_address::display_path(&destination.path),
-                &Destination {
-                    path: destination.path.clone(),
-                },
-            )?;
+            backup::remember_destination(&self.db, &destination.path)?;
             self.publish_policy()?;
         }
         Ok(())

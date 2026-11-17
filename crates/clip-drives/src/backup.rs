@@ -49,6 +49,25 @@ pub(crate) use publication::{completed_manifest, current as current_version, rea
 pub(crate) use retention::{provider_lease, prune};
 
 pub(crate) use crate::DriveBackup as Backup;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct Destination {
+    #[serde(with = "little_clip_core::path_serde")]
+    pub path: PathBuf,
+}
+
+/// Retains the policy boundary even after its last version or journal is removed.
+pub(crate) fn remember_destination(db: &Store, path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err("Backup destination policy requires an absolute path".into());
+    }
+    db.put(
+        "backup-root",
+        &little_clip_core::path_address::display_path(path),
+        &Destination { path: path.into() },
+    )
+}
+
 fn btrfs(root: &Root) -> Result<bool> {
     let pin = root.directory(Path::new(""), false)?;
     Ok(rustix::fs::fstatfs(&pin)?.f_type as u32 == 0x9123683e)
