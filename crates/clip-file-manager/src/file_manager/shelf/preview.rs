@@ -31,6 +31,7 @@ pub(in crate::file_manager) enum Source {
         revision: u64,
         edge: u32,
         orientation: Option<u8>,
+        animate: bool,
     },
     StudioPhoto {
         path: PathBuf,
@@ -193,7 +194,8 @@ impl Source {
                 revision,
                 edge,
                 orientation,
-            } => gallery_preview(&path, revision, edge, orientation, token),
+                animate,
+            } => gallery_preview(&path, revision, edge, orientation, animate, token),
             Source::Photo { path, revision } => {
                 super::super::image_strip::load(&path, revision, token)
             }
@@ -315,6 +317,76 @@ pub(in crate::file_manager) struct Ready {
     pub texture: Option<egui::TextureHandle>,
     pub spectrum_texture: Option<egui::TextureHandle>,
     pub hash_textures: [Option<egui::TextureHandle>; 2],
+}
+
+/// Drives frame-timed GPU texture updates for an animated hover preview.
+#[derive(Default)]
+pub(in crate::file_manager) struct AnimatedTexture {
+    key: Option<uuid::Uuid>,
+    started_at: Option<std::time::Instant>,
+    frame_index: usize,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl AnimatedTexture {
+    pub fn clear(&mut self) {
+        self.key = None;
+        self.started_at = None;
+        self.frame_index = 0;
+        self.texture = None;
+    }
+
+    pub fn poll(
+        &mut self,
+        ctx: &egui::Context,
+        id: uuid::Uuid,
+        ready: Option<&Ready>,
+        active: bool,
+    ) {
+        let Some(frames) = active
+            .then_some(ready)
+            .flatten()
+            .and_then(|ready| ready.data.animated_frames.as_ref())
+        else {
+            self.clear();
+            return;
+        };
+        if self.key != Some(id) {
+            self.key = Some(id);
+            self.started_at = Some(std::time::Instant::now());
+            self.frame_index = 0;
+            self.texture = None;
+        }
+        let elapsed = self
+            .started_at
+            .get_or_insert_with(std::time::Instant::now)
+            .elapsed();
+        let (next_index, remaining) = frames.frame_at(elapsed);
+        if self.texture.is_none() || self.frame_index != next_index {
+            self.frame_index = next_index;
+            let frame = &frames.frames[next_index].image;
+            let color_image = egui::ColorImage::from_rgba_premultiplied(
+                [frame.width as usize, frame.height as usize],
+                &frame.premultiplied_rgba,
+            );
+            if let Some(texture) = &mut self.texture {
+                texture.set(color_image, egui::TextureOptions::LINEAR);
+            } else {
+                self.texture = Some(ctx.load_texture(
+                    format!("animated_hover:{id}"),
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if !remaining.is_zero() {
+            ctx.request_repaint_after(remaining);
+        }
+    }
+
+    pub fn texture(&self) -> Option<&egui::TextureHandle> {
+        self.texture.as_ref()
+    }
 }
 
 /// One raster hover job, replaced when its source, position, or size changes.
@@ -851,6 +923,7 @@ fn gallery_preview(
     revision: u64,
     edge: u32,
     orientation: Option<u8>,
+    animate: bool,
     cancelled: &AtomicBool,
 ) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
@@ -864,23 +937,34 @@ fn gallery_preview(
     if super::super::filesystem::check_revision(path, revision).is_err() {
         return data;
     }
-    let orientation = orientation.unwrap_or_else(|| {
-        super::super::gallery::metadata::probe(path, revision)
-            .map_or(1, |metadata| metadata.orientation)
-    });
-    data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
-    if let Some(ref image) = data.image {
-        let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
-            .ok()
-            .and_then(|file| imagesize::reader_size(&mut std::io::BufReader::new(file)).ok())
-            .map(|dim| (dim.width, dim.height))
-            .unwrap_or((image.width as usize, image.height as usize));
-        if (image.width > image.height) != (w > h) {
-            std::mem::swap(&mut w, &mut h);
-        }
-        data.detail = format!("{w} × {h}");
+    if animate
+        && super::super::media::is_gif_path(path)
+        && let Ok(bytes) = crate::file_source::read_file_bytes(path, 64 * 1024 * 1024, true, true)
+        && let Some(((orig_w, orig_h), animated)) =
+            super::super::media::decode_animated_gif(&bytes, edge, cancelled)
+    {
+        data.image = Some(animated.frames[0].image.clone());
+        data.animated_frames = Some(Arc::new(animated));
+        data.detail = format!("{orig_w} × {orig_h}");
     } else {
-        data.detail = "Preview unavailable; open in Image Studio or externally".into();
+        let orientation = orientation.unwrap_or_else(|| {
+            super::super::gallery::metadata::probe(path, revision)
+                .map_or(1, |metadata| metadata.orientation)
+        });
+        data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
+        if let Some(ref image) = data.image {
+            let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
+                .ok()
+                .and_then(|file| imagesize::reader_size(&mut std::io::BufReader::new(file)).ok())
+                .map(|dim| (dim.width, dim.height))
+                .unwrap_or((image.width as usize, image.height as usize));
+            if (image.width > image.height) != (w > h) {
+                std::mem::swap(&mut w, &mut h);
+            }
+            data.detail = format!("{w} × {h}");
+        } else {
+            data.detail = "Preview unavailable; open in Image Studio or externally".into();
+        }
     }
     // Header metadata stays independent of full image/Hilbert analysis.
     data.photo_metadata = crate::file_source::read_file_bytes(path, 2 * 1024 * 1024, false, true)
@@ -891,6 +975,7 @@ fn gallery_preview(
         || crate::file_source::FileSource::capture(path).ok().as_ref() != Some(&source)
     {
         data.image = None;
+        data.animated_frames = None;
         data.photo_metadata = None;
         data.detail = "Photo changed while loading".into();
     }
@@ -1222,6 +1307,7 @@ mod guarded_gallery_tests {
             revision: entry.revision,
             edge: 128,
             orientation: None,
+            animate: false,
         }
         .load(&cancelled)
         .image
@@ -1257,7 +1343,14 @@ mod guarded_gallery_tests {
                 .unwrap()
                 .entries
                 .remove(0);
-        let data = gallery_preview(&path, entry.revision, 128, None, &AtomicBool::new(false));
+        let data = gallery_preview(
+            &path,
+            entry.revision,
+            128,
+            None,
+            false,
+            &AtomicBool::new(false),
+        );
         assert_eq!(data.photo_metadata.unwrap().make.as_deref(), Some("XO"));
         assert!(data.photo.is_none());
     }
@@ -1276,7 +1369,7 @@ mod guarded_gallery_tests {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             tx.send(
-                gallery_preview(&path, 0, 128, None, &AtomicBool::new(false))
+                gallery_preview(&path, 0, 128, None, false, &AtomicBool::new(false))
                     .image
                     .is_none(),
             )
