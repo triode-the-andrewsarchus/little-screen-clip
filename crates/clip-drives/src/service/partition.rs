@@ -182,6 +182,7 @@ enum Completion {
 struct Admission {
     drive: Drive,
     source: Option<Arc<crate::device::Source>>,
+    flush: Option<Arc<Root>>,
     destination: Option<Arc<Root>>,
     plans: Vec<reconciliation::Plan>,
     claims: Vec<Scope>,
@@ -227,6 +228,7 @@ impl Owner {
         let Admission {
             drive,
             source,
+            flush,
             destination,
             plans,
             claims,
@@ -288,6 +290,12 @@ impl Owner {
                 let result = plan.run_with_cancel(&db, &intent, &cancel, &mut progress);
                 reconciliation::persist_result(&db, &intent, &result)?;
                 result?;
+            }
+            if let Some(root) = flush {
+                cancelled(&cancel)?;
+                // Include writes from ordinary applications, even when no sync
+                // pair is enrolled. Retire this pin before admitting unmount.
+                root.flush()?;
             }
             cancelled(&cancel)
         });
@@ -352,6 +360,7 @@ impl Owner {
         Ok(Admission {
             drive,
             source: device_source,
+            flush: source,
             destination,
             plans,
             claims,

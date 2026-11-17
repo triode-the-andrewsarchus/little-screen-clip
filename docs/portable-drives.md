@@ -189,6 +189,14 @@ logical sector size. See the [upstream lsblk column definitions](https://kernel.
 
 Eject and image preparation use a retained worker for folder flushes and unmount authorization. Other independent drives can continue synchronizing while authorization is pending. Completed flush status is durable before unmount begins. The coordinator releases conflicting watch/cache pins while retaining descriptor-free scheduling claims; unrelated observed subtrees remain watched. A busy external reader produces an error with the observed mount state. Cancelling remaining work waits for an already accepted unmount result: a completed eject is still reported as completed, and a cancelled image reports that the partition is unmounted without starting the copy. Unmount authority requests keep their actual reply lifetime, so shutdown may wait for the desktop authorization dialog to resolve.
 
+After enrolled pairs finish, preparation also flushes the selected filesystem
+through its retained source directory, including when there are no pairs. That
+directory pin is released before unmount admission. A failed flush stops the
+operation before unmount. This requests filesystem writeback for ordinary
+applications too; it cannot compensate for a filesystem or device failing to
+preserve accepted writes. An exFAT durability case remains under investigation
+in the disposable-guest acceptance matrix; see the completion audit.
+
 Partition jobs retain their selected drive, destination and typed preparation phase. Image progress distinguishes copying from full verification. After restart, an unfinished job reports its last durable checkpoint and any confirmed unmount/completed-image facts. An interrupted authority request may already have taken effect; its message asks you to inspect current state. Restart does not replay mount actions automatically.
 
 **Mount again after imaging** is an optional image-backup setting, off by default.

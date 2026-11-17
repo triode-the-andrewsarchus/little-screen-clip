@@ -86,6 +86,60 @@ fn native_image_authorization_is_denied_to_unprivileged_fixture() {
 
 #[test]
 #[ignore = "requires the isolated partition/authority guest"]
+fn native_external_write_flush_survives_unmount_without_imaging() {
+    let native = native_fs::guest_drive();
+    let original = selected(&native);
+    let path = original
+        .mount
+        .as_ref()
+        .unwrap()
+        .join("durability-control.txt");
+    fs::write(&path, b"external application payload").unwrap();
+    File::open(&path)
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + Duration::new(1_600_000_000, 120_000_000)),
+        )
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"external application payload");
+    let root = Root::open(original.mount.as_ref().unwrap()).unwrap();
+    root.flush().unwrap();
+    drop(root);
+    partition::unmount(&original).unwrap();
+    assert!(selected(&original).mount.is_none());
+    let control = tempfile::tempdir().unwrap();
+    let kernel = native_fs::GuestMount::start(
+        little_clip_core::process::CommandRequest::new("/usr/bin/mount")
+            .args([
+                "--internal-only",
+                "-t",
+                &native.filesystem,
+                "-o",
+                "ro,nosuid,nodev,noexec",
+            ])
+            .arg(&original.device),
+        control.path(),
+    );
+    let bytes = fs::read(control.path().join("durability-control.txt")).unwrap();
+    eprintln!("Direct kernel flush/unmount/remount control: {bytes:?}");
+    assert_eq!(bytes, b"external application payload");
+    drop(kernel);
+    (partition::Authority::default().mount)(&original).unwrap();
+    let restored = selected(&original);
+    let path = restored
+        .mount
+        .as_ref()
+        .unwrap()
+        .join("durability-control.txt");
+    let bytes = fs::read(&path).unwrap();
+    eprintln!("Direct flush/unmount/remount control: {bytes:?}");
+    assert_eq!(bytes, b"external application payload");
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires the isolated partition/authority guest"]
 fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
     let original = selected(&native_fs::guest_drive());
     let layout = original.partition_layout.as_ref().unwrap();
@@ -138,6 +192,10 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
             )
             .unwrap();
     }
+    assert_eq!(
+        fs::read(&source_path).unwrap(),
+        b"first authorized partition backup"
+    );
     let service = Service::start_with_inventory(
         DriveConfig {
             backup_directory: Some(temp.path().join("backups")),
@@ -186,6 +244,25 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
     let expected = digest(input);
     assert_eq!(first.sha256.as_deref(), Some(expected.as_str()));
     assert_eq!(digest(File::open(&first.path).unwrap()), expected);
+    if original.filesystem == "exfat" {
+        let control = tempfile::tempdir().unwrap();
+        let kernel = native_fs::GuestMount::start(
+            little_clip_core::process::CommandRequest::new("/usr/bin/mount")
+                .args([
+                    "--internal-only",
+                    "-t",
+                    "exfat",
+                    "-o",
+                    "ro,loop,nosuid,nodev,noexec",
+                ])
+                .arg(&first.path),
+            control.path(),
+        );
+        let bytes = fs::read(control.path().join("image-source.txt")).unwrap();
+        eprintln!("Kernel exFAT image control: {bytes:?}");
+        assert_eq!(bytes, b"first authorized partition backup");
+        drop(kernel);
+    }
     let manifest_path = first.manifest.as_ref().unwrap();
     assert_eq!(
         digest(File::open(manifest_path).unwrap()),

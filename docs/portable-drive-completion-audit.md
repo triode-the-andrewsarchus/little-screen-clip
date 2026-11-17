@@ -95,6 +95,47 @@ Item 6.7 remains Partial. Unobservable same-inode changes without a trusted
 fingerprint, source remount/revision ambiguity and cross-driver precision still
 need work; this checkpoint does not claim exact byte identity from metadata.
 
+## Whole-filesystem pre-unmount flush and open exFAT failure
+
+Partition preparation now retains its admitted ordinary source root through the
+existing Flush worker and calls guarded Root::flush after enrolled pairs finish.
+This covers ordinary application writes even with no enrollment. Failure or
+cancellation prevents unmount admission, and the worker releases its root before
+the authority stage. No new executor or unmount path was added. The ordinary
+189-test backend suite and all-target Clippy with warnings denied pass as
+recorded above. An owned unprivileged FUSE fixture also passes external-reader
+busy refusal, successful pin retirement, independent RAM writeback during a held
+unmount and retained completed cancellation
+(`/tmp/portable-drive-pre-unmount-flush-live.log`).
+
+**Negative evidence remains open.** After source-file creation/deletion and
+catalog/provider operations, the guest's exFAT source can lose a newly written
+file's bytes across syncfs and unmount. The cached file reads the expected
+payload immediately before preparation; a kernel remount reads the same length
+of zeros afterward. Both the partition-image checksum and a fresh authorized
+raw-partition checksum agree, and a native kernel mount of that image also reads
+zeros. Therefore a matching raw-image checksum alone does not close this
+durability case. Adding the filesystem-wide preflush did not resolve it.
+
+The separate ignored test
+`service::tests::native_images::native_external_write_flush_survives_unmount_without_imaging`
+reproduces the exFAT failure without the backup copy or a running coordinator:
+ordinary write, modification-time restoration, Root::flush, UDisks unmount, then
+a read-only kernel remount. FAT32 and NTFS3 pass both the kernel and UDisks
+remount controls. The test follows the same three provider tests that expose the
+allocation/revision history; this context must be retained when reproducing.
+Evidence: `/tmp/portable-drive-vm-external-write-control/report.json` and its
+`guest.log`. The strengthened image test has a separate kernel image-mount
+control; evidence is `/tmp/portable-drive-vm-pre-unmount-flush/report.json`.
+Both reports correctly say failure. Do not replace these with the earlier green
+fresh-volume image results or count the exFAT format as passing this sequence.
+
+Next investigation must distinguish the filesystem/formatter/kernel fixture
+behavior from missing per-file durability barriers, including an explicit
+file-fsync control and direct remounts before any image read. Items 4.3, 5.1,
+5.6, 7.3 and the wider interruption/durability gates remain Partial. No host
+block device, privileged mount or live desktop service was used.
+
 ## Retained maintenance checkpoint
 
 Follow-up native acceptance passes all nine selected maintenance/provider/image
