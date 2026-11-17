@@ -42,6 +42,7 @@ pub mod decorrelation_stretch;
 
 pub mod metadata;
 
+pub mod document_unwarp;
 pub mod perspective;
 
 pub mod creative_fx;

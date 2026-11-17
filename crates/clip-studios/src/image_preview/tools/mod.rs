@@ -181,6 +181,8 @@ pub(super) use decorrelation_stretch::DecorrelationStretchState;
 mod depth_map;
 mod deskew;
 pub(super) use deskew::DeskewState;
+mod document_unwarp;
+pub(super) use document_unwarp::{DeskewMethod, DocumentUnwarpState};
 mod film_look;
 pub(super) use film_look::{
     FilmSimMsg, FilmSimState, FilmSimThumbnailMsg, FilmStockEntry, LightLeakPreset,

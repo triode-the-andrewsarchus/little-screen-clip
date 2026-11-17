@@ -257,6 +257,7 @@ pub struct ImagePreviewState {
 
     // 4-Point Perspective Deskew
     pub deskew_state: DeskewState,
+    document_unwarp: DocumentUnwarpState,
 }
 
 /// Immutable encoded and decoded image content shared by one or more image views.
@@ -681,6 +682,7 @@ impl ImagePreviewState {
             metadata,
             layer_inspector: layers::Inspector::new(layer_document),
             deskew_state: DeskewState::default(),
+            document_unwarp: DocumentUnwarpState::default(),
         }
     }
 
@@ -707,6 +709,7 @@ impl ImagePreviewState {
     }
 
     pub fn mark_pixels_changed(&mut self) {
+        self.cancel_document_unwarp();
         self.cancel_pixel_resize();
         self.cancel_barcode_scan();
         self.invalidate_decorrelation_stretch();

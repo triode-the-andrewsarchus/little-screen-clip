@@ -17,7 +17,7 @@ pub(super) fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
             "Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel"
         }
         ImageToolMode::Deskew => {
-            "Click 4 points (TL → TR → BR → BL) | Drag handles | Enter: Apply | Esc: Close"
+            "Choose manual or document unwarp | Enter: Preview / Apply | Ctrl+Z: Undo | Esc: Cancel / Close"
         }
         ImageToolMode::Transform => {
             "Rotate / Flip buttons in the left panel | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"

@@ -28,6 +28,8 @@ impl ImagePreviewState {
         // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, DepthMap, Ocr, Barcode, or Convert mode (when not dragging split handle)
         let middle_drag = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
         let can_drag_pan = self.active_mode == ImageToolMode::View
+            || (self.active_mode == ImageToolMode::Deskew
+                && self.deskew_state.method != DeskewMethod::Manual)
             || self.active_mode == ImageToolMode::Resize
             || self.active_mode == ImageToolMode::Palette
             || self.active_mode == ImageToolMode::RemoveBg
@@ -86,7 +88,11 @@ impl ImagePreviewState {
             );
 
             // Draw image mesh (or Squoosh-style split view in Convert mode or DCS curtain view in DecorrelationStretch mode)
-            if self.active_mode == ImageToolMode::Convert {
+            let document_preview =
+                self.active_mode == ImageToolMode::Deskew && self.document_unwarp.preview_ready();
+            if document_preview {
+                self.render_document_unwarp_preview(&painter, img_rect, ctx);
+            } else if self.active_mode == ImageToolMode::Convert {
                 self.render_convert_comparison(
                     ui,
                     &painter,
@@ -128,6 +134,9 @@ impl ImagePreviewState {
 
             // Draw any placed redaction bars so they remain visible across all modes
             for b in &self.redaction_state.boxes {
+                if document_preview {
+                    break;
+                }
                 let screen_min = Pos2::new(
                     img_rect.min.x + b.normalized_rect.min.x * img_rect.width(),
                     img_rect.min.y + b.normalized_rect.min.y * img_rect.height(),
@@ -144,7 +153,10 @@ impl ImagePreviewState {
             }
 
             // Draw any placed markup layers so they remain visible across all modes
-            if self.active_mode != ImageToolMode::Markup && !self.markup_state.items.is_empty() {
+            if !document_preview
+                && self.active_mode != ImageToolMode::Markup
+                && !self.markup_state.items.is_empty()
+            {
                 self.render_markup_passive(&painter, img_rect);
             }
 

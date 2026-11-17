@@ -91,33 +91,62 @@ fn load_session_with_options(
         ort::session::builder::SessionBuilder,
     ) -> Result<ort::session::builder::SessionBuilder, String>,
 ) -> Result<ort::session::Session, String> {
+    load_session_with_loader(
+        &path.display().to_string(),
+        ort::ep::CUDA::default(),
+        configure,
+        |mut builder| builder.commit_from_file(path).map_err(|e| e.to_string()),
+    )
+}
+
+/// Loads a bundled model using the same CUDA/CPU fallback as cached models.
+pub(crate) fn load_bundled_session(
+    name: &str,
+    bytes: &[u8],
+) -> Result<ort::session::Session, String> {
+    load_session_with_loader(
+        name,
+        // Small coordinate errors become visible pixel shifts at full resolution.
+        ort::ep::CUDA::default().with_tf32(false),
+        |builder| builder.with_intra_threads(4).map_err(|e| e.to_string()),
+        |mut builder| builder.commit_from_memory(bytes).map_err(|e| e.to_string()),
+    )
+}
+
+fn load_session_with_loader(
+    name: &str,
+    cuda: ort::ep::CUDA,
+    configure: impl Fn(
+        ort::session::builder::SessionBuilder,
+    ) -> Result<ort::session::builder::SessionBuilder, String>,
+    load: impl Fn(ort::session::builder::SessionBuilder) -> Result<ort::session::Session, String>,
+) -> Result<ort::session::Session, String> {
     use ort::ep::ExecutionProvider;
 
     let env = get_ort_environment()?;
     let build =
         || ort::session::Session::builder(&env).map_err(|e| format!("ORT builder failed: {e}"));
     let mut builder = build()?;
-    if let Err(error) = ort::ep::CUDA::default().register(&mut builder) {
-        tracing::warn!(%error, model = %path.display(), "ONNX Runtime: CUDA registration failed; using CPU");
+    if let Err(error) = cuda.register(&mut builder) {
+        tracing::warn!(%error, model = name, "ONNX Runtime: CUDA registration failed; using CPU");
         // Discard potentially modified options after failed provider registration.
-        return configure(build()?)?
-            .commit_from_file(path)
-            .map_err(|cpu_error| {
-                format!("ORT model load failed: CUDA registration: {error}; CPU: {cpu_error}")
-            });
+        return load(configure(build()?)?).map_err(|cpu_error| {
+            format!("ORT model load failed: CUDA registration: {error}; CPU: {cpu_error}")
+        });
     }
-    match configure(builder)?.commit_from_file(path) {
+    match load(configure(builder)?) {
         Ok(session) => {
-            tracing::info!(model = %path.display(), "ONNX Runtime: CUDA session initialized (device 0)");
+            tracing::info!(
+                model = name,
+                "ONNX Runtime: CUDA session initialized (device 0)"
+            );
             Ok(session)
         }
         Err(cuda_error) => {
-            tracing::warn!(%cuda_error, model = %path.display(), "ONNX Runtime: CUDA session failed; retrying on CPU");
-            configure(build()?)?
-                .commit_from_file(path)
-                .map_err(|cpu_error| {
-                    format!("ORT model load failed: CUDA: {cuda_error}; CPU: {cpu_error}")
-                })
+            tracing::warn!(%cuda_error, model = name, "ONNX Runtime: CUDA session failed; retrying on CPU");
+            load(configure(build()?)?).map_err(|cpu_error| {
+                format!("ORT model load failed: CUDA: {cuda_error}; CPU: {cpu_error}")
+            })
         }
     }
 }
@@ -424,18 +453,55 @@ fn is_valid_cached_model(model_name: &str, size: u64) -> bool {
 /// Runs an opt-in model probe and checks actual execution-provider trace events.
 #[cfg(any(test, feature = "test-support"))]
 pub fn assert_cuda_execution(model_name: &str, run: impl FnOnce(&mut ort::session::Session)) {
-    let profile = tempfile::tempdir().unwrap();
     let model = models_cache_dir().join(model_name);
     assert!(
         model.is_file(),
         "Cache {model_name} before running this test"
     );
-    let mut session = load_session_with_options(&model, |builder| {
-        builder
-            .with_profiling(profile.path().join("ort"))
-            .map_err(|e| e.to_string())
-    })
-    .unwrap();
+    assert_cuda_execution_with_loader(
+        model_name,
+        |prefix| {
+            load_session_with_options(&model, |builder| {
+                builder.with_profiling(prefix).map_err(|e| e.to_string())
+            })
+        },
+        run,
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn assert_bundled_cuda_execution(
+    name: &str,
+    bytes: &[u8],
+    run: impl FnOnce(&mut ort::session::Session),
+) {
+    assert_cuda_execution_with_loader(
+        name,
+        |prefix| {
+            load_session_with_loader(
+                name,
+                ort::ep::CUDA::default().with_tf32(false),
+                |builder| {
+                    builder
+                        .with_intra_threads(4)
+                        .and_then(|b| b.with_profiling(prefix))
+                        .map_err(|e| e.to_string())
+                },
+                |mut builder| builder.commit_from_memory(bytes).map_err(|e| e.to_string()),
+            )
+        },
+        run,
+    );
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn assert_cuda_execution_with_loader(
+    model_name: &str,
+    load: impl FnOnce(&Path) -> Result<ort::session::Session, String>,
+    run: impl FnOnce(&mut ort::session::Session),
+) {
+    let profile = tempfile::tempdir().unwrap();
+    let mut session = load(&profile.path().join("ort")).unwrap();
     run(&mut session);
     let trace = session.end_profiling().unwrap();
     let events: serde_json::Value = serde_json::from_slice(&std::fs::read(trace).unwrap()).unwrap();

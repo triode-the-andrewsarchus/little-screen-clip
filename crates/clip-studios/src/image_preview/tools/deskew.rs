@@ -34,6 +34,7 @@ fn draw_corner_label(
 
 #[derive(Clone)]
 pub struct DeskewState {
+    pub method: DeskewMethod,
     /// Normalized corner coordinates in \[0.0, 1.0] range relative to image:
     /// \[0] Top-Left, \[1] Top-Right, \[2] Bottom-Right, \[3] Bottom-Left
     pub corners: [Pos2; 4],
@@ -50,6 +51,7 @@ pub struct DeskewState {
 impl Default for DeskewState {
     fn default() -> Self {
         Self {
+            method: DeskewMethod::Manual,
             corners: [
                 Pos2::new(0.08, 0.08),
                 Pos2::new(0.92, 0.08),
@@ -93,6 +95,14 @@ impl DeskewState {
 
 impl ImagePreviewState {
     pub fn apply_deskew(&mut self) {
+        if self.deskew_state.method != DeskewMethod::Manual {
+            if self.document_unwarp.preview_ready() {
+                self.apply_document_unwarp();
+            } else {
+                self.start_document_unwarp(BackgroundJobs::global());
+            }
+            return;
+        }
         let w_f = self.current_rgba.width() as f32;
         let h_f = self.current_rgba.height() as f32;
         let c = self.deskew_state.corners;
@@ -159,6 +169,11 @@ impl ImagePreviewState {
         _ctx: &egui::Context,
         palette: &AppPalette,
     ) {
+        self.render_deskew_method(ui, palette);
+        if self.deskew_state.method != DeskewMethod::Manual {
+            self.render_document_unwarp_toolbar(ui, palette);
+            return;
+        }
         ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new("4-Point Deskew:")
@@ -301,6 +316,9 @@ impl ImagePreviewState {
         img_rect: Rect,
         palette: &AppPalette,
     ) {
+        if self.deskew_state.method != DeskewMethod::Manual {
+            return;
+        }
         let labels = ["TL (1)", "TR (2)", "BR (3)", "BL (4)"];
         let corner_names = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"];
         let overlay_bounds = painter.clip_rect();

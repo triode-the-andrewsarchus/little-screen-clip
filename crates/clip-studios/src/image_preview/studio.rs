@@ -71,6 +71,10 @@ impl ImagePreviewState {
         {
             if self.ocr_state.in_progress {
                 self.cancel_ocr();
+            } else if self.active_mode == ImageToolMode::Deskew
+                && (self.document_unwarp.pending() || self.document_unwarp.preview_ready())
+            {
+                self.cancel_document_unwarp();
             } else if self.active_mode == ImageToolMode::Crop
                 && self.crop_state.normalized_rect
                     != Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0))
@@ -336,6 +340,7 @@ impl ImagePreviewState {
         self.poll_palette_extraction(ctx);
 
         self.poll_decorrelation_stretch(ctx, BackgroundJobs::global());
+        self.poll_document_unwarp(ctx, BackgroundJobs::global());
         if self.active_mode == ImageToolMode::DecorrelationStretch {
             if let Some(retry_at) = self.dcs_state.retry_at {
                 ctx.request_repaint_after(
@@ -716,6 +721,9 @@ impl ImagePreviewState {
         }
         if prev_mode == ImageToolMode::Barcode && target_mode != ImageToolMode::Barcode {
             self.cancel_barcode_scan();
+        }
+        if prev_mode == ImageToolMode::Deskew && target_mode != prev_mode {
+            self.cancel_document_unwarp();
         }
         let leaving_active_image_tool = matches!(
             (prev_mode, self.bg_removal_operation),
