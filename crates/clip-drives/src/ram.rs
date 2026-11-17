@@ -30,13 +30,13 @@ pub(crate) fn directory(config: &DriveConfig) -> Result<Root> {
     }
     for path in candidates {
         if let Ok(root) = Root::open(&path)
-            && rustix::fs::fstatfs(&root.directory(Path::new(""), false)?)?.f_type as u32
-                == 0x01021994
+            && let Ok((pin, _)) = root.writable_directory()
+            && rustix::fs::fstatfs(&pin).is_ok_and(|stats| stats.f_type as u32 == 0x01021994)
         {
             return Ok(root);
         }
     }
-    Err("No verified tmpfs RAM destination; configure ram_directory or mount a tmpfs".into())
+    Err("No writable/searchable verified tmpfs RAM destination; configure ram_directory or mount a writable tmpfs".into())
 }
 
 pub(crate) fn helper() -> Result<PathBuf> {

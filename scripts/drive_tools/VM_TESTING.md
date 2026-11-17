@@ -72,6 +72,24 @@ Verified on this host:
 These establish a usable isolated test environment. The application-level removable
 filesystem matrix remains a separate acceptance gate.
 
+To verify RAM-directory selection without changing any host mount, use:
+
+```text
+--guest-script scripts/drive_tools/vm_filesystems.sh --memory-mib 4096 \
+  -- /absolute/backend-test-binary \
+  ram::tests::directory_tests::guest_default_ram_location_falls_back_from_non_tmpfs_and_read_only_mounts \
+  --exact --ignored --test-threads=1 --nocapture
+```
+
+Build the packaged RAM filesystem helper first. The test temporarily covers the
+guest's `/tmp` with each disposable FAT32/exFAT/NTFS filesystem and owns a bounded
+`/dev/shm` tmpfs. Child-only environment settings exercise twelve cases per source
+format: fallback order, missing/disk-backed/read-only locations, explicit overrides,
+symlink resolution, unavailable candidates and writable-tmpfs `/tmp` preference.
+Successful cases format a private 128 MiB sparse image on the selected tmpfs,
+mount/write/read it and discard it. No shared process environment is changed.
+These check filesystem selection/allocation; resource-pressure admission is separate.
+
 For bounded RAM pressure, use `vm_ram.sh` with 4096 MiB guest memory and a current
 backend test binary:
 

@@ -1,5 +1,6 @@
 use super::*;
 use std::io::Write;
+mod directory_tests;
 
 #[test]
 fn reservations_reject_aggregate_and_expanded_content_limits() {

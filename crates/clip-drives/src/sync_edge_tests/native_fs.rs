@@ -162,7 +162,7 @@ impl GuestMount {
         mount.remount("remount,ro");
         mount
     }
-    fn remount(&self, options: &str) {
+    pub(crate) fn remount(&self, options: &str) {
         crate::require_disposable_guest();
         assert_eq!(
             kernel_interface::MountIdentity::directory(&self.path).unwrap(),
@@ -196,7 +196,7 @@ impl GuestMount {
             destination,
         )
     }
-    fn start(request: CommandRequest, destination: &Path) -> Self {
+    pub(crate) fn start(request: CommandRequest, destination: &Path) -> Self {
         crate::require_disposable_guest();
         let result = request.arg(destination).run().unwrap();
         assert!(result.status.success(), "{}", result.stderr_lossy());

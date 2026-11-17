@@ -279,6 +279,22 @@ impl Root {
         let path = anchor(&parent).join(relative.file_name().ok_or("Missing filename")?);
         Ok((parent, path))
     }
+    /// Retains the directory used for effective-user access and read-only checks.
+    /// Mutations still revalidate their own held parents at execution.
+    pub fn writable_directory(&self) -> Result<(File, rustix::fs::StatVfs)> {
+        let pin = self.directory(Path::new(""), false)?;
+        let stats = rustix::fs::fstatvfs(&pin)?;
+        if stats.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY) {
+            return Err("Directory is read-only".into());
+        }
+        rustix::fs::accessat(
+            &pin,
+            ".",
+            rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+            rustix::fs::AtFlags::EACCESS,
+        )?;
+        Ok((pin, stats))
+    }
     pub fn metadata(&self, relative: &Path) -> Result<Option<Metadata>> {
         if relative.as_os_str().is_empty() {
             self.validate()?;

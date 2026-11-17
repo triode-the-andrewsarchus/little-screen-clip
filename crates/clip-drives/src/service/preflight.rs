@@ -113,20 +113,9 @@ pub(super) fn space(root: &Root, drive: &Drive, kind: BackupKind) -> Result<Back
     if kind == BackupKind::Image {
         root.check_file_size(drive.capacity)?;
     }
-    let pin = root.directory(Path::new(""), false)?;
-    rustix::fs::accessat(
-        &pin,
-        ".",
-        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
-        rustix::fs::AtFlags::EACCESS,
-    )
-    .map_err(|error| {
+    let (pin, stats) = root.writable_directory().map_err(|error| {
         format!("Backup destination is not writable/searchable by this user: {error}")
     })?;
-    let stats = rustix::fs::fstatvfs(&pin)?;
-    if stats.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY) {
-        return Err("Backup destination is read-only".into());
-    }
     let available_bytes = stats.f_bavail.saturating_mul(stats.f_frsize);
     let btrfs = rustix::fs::fstatfs(&pin)?.f_type as u32 == 0x9123683e;
     let full_image_bytes = if kind == BackupKind::Image {

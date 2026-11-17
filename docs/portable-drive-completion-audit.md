@@ -20,7 +20,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 2.6 | Partial | Native file/directory name tables verify exact directory entries and bytes, or explicit refusal with originals retained. NTFS3 alternate-stream paths and FAT32/exFAT trailing dots/spaces are refused before installation. Native FAT32 oversized-file refusal passes; link/metadata omissions, alternate mount options and ntfs-3g remain. |
 | 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real overflow delivery matrices remain. |
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
-| 3.2 | Partial | Verified tmpfs path now falls back from the default /tmp to XDG_RUNTIME_DIR and /dev/shm. Explicit disk-backed override refusal is tested; fallback branch still needs an isolated non-tmpfs-/tmp acceptance environment. |
+| 3.2 | Complete | Pinned filesystem and effective-user write/search/read-only checks select a usable tmpfs; RAM and backup admission share the directory check. A disposable guest covers /tmp with each native FAT32/exFAT/NTFS mount: all 36 selection cases pass, including XDG/shm fallback, read-only/unavailable candidates, explicit overrides and writable-tmpfs /tmp preference. Positive cases create 0700 private directories/0600 images on verified tmpfs, mount/write/read/discard successfully. Existing quota/restart/unmount tests pass. See the RAM-directory checkpoint. |
 | 3.3 | Partial | Streaming initial population and incomplete state exist; a second reconciliation after installing watches catches earlier edits. Deterministic mid-population change/failure injection remains. |
 | 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
 | 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Physical USB/device-transport and native FAT/exFAT/NTFS interrupted-I/O matrices remain. |
@@ -53,6 +53,48 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## RAM directory fallback and private backing
+
+Plan item 3.2 is now Complete. The isolated guest overlays `/tmp` with actual
+FAT32, exFAT and NTFS mounts rather than assuming the host's tmpfs layout.
+Twelve child-environment cases per source format prove default XDG/shm fallback,
+unset/missing/disk-backed XDG, a symlink resolving to verified tmpfs, explicit
+disk-backed/tmpfs/read-only overrides, no usable candidate, read-only default
+locations and writable-tmpfs `/tmp` preference. The parent environment is unchanged.
+
+The negative run reproduced selection of a read-only XDG directory on all three
+profiles: `/tmp/portable-drive-vm-ram-fallback-negative/report.json` is expected
+failure evidence. Selection now skips unusable default candidates, and an explicit
+non-default override fails instead of being redirected. The existing backup
+destination write/search/read-only check is shared through Root's retained
+directory admission, preserving execution-time mutation checks and backup space
+accounting. No configuration defaults, public formats or removable contents changed.
+
+Each successful case verifies the chosen root and backing image are actually on
+tmpfs, the directory is 0700 and image 0600, then mounts the bounded filesystem,
+writes/flushes/reads bytes, stops the helper and discards the owned backing. These
+prove location and private backing, not the separate memory/admission pressure
+requirements in 3.1/3.7. Tmpfs can still swap; there is no physical residency claim.
+
+Accepted guest evidence: `/tmp/portable-drive-vm-ram-fallback-accepted/report.json`, with
+success=true, no timeout, one successful guest marker, three passing parent tests
+and all 36 expected case markers. Each child must emit exactly one completion
+marker after its checks. The 27 successful-selection cases each exercise
+the real formatter and FUSE helper; nine cases correctly refuse selection.
+All 135 ordinary backend tests pass (62 explicit fixtures ignored), including the
+existing unprivileged unwritable-backup preview refusal. Both real RAM quota/
+restart/unmount fixtures and both real Btrfs backup cases pass. All-target drive
+clippy with warnings denied,
+targeted formatting and whitespace checks pass. Logs use
+`/tmp/portable-drive-ram-fallback-` with `backend.log`, `native-ram.log`,
+`verified-tests-build.log`, `btrfs.log`, `clippy.log` and `fmt.log`.
+
+The original-baseline architecture result remains REGRESSION:
+4300 clone groups, 144 cycles, average CCN 3.48, maximum 274 and duplication
+7.07%. This step adds no reported hotspot, clone group or dependency cycle.
+Report: `.fitness/portable-drives-ram-fallback-architecture.json`.
+The other acceptance rows retain their existing scope and unfinished status.
 
 ## Mounted-image provider lifetime
 

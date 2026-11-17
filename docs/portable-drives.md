@@ -33,7 +33,13 @@ Source inventory, quota admission, formatting and initial mounting run on one re
 
 Each RAM view uses a fixed-size image on verified tmpfs, served by the separately packaged `fuse2fs` helper. This bounds allocated bytes and inodes even when an external editor writes to it. The image grows sparsely within its reservation; session admission reserves future growth across existing sessions. Default ceilings are 6 GB and two million inodes per session, 16 GB and four million inodes in total, and eight sessions. Small cards reserve less. Expanded contents and formatting overhead must fit as well. Memory admission additionally reserves each native helper’s 512 MiB address-space limit. Reload refuses quota reductions below retained session reservations.
 
-The default RAM location is `/tmp`. If it is not tmpfs, the daemon tries the verified tmpfs at `XDG_RUNTIME_DIR`, then `/dev/shm`. An explicitly configured disk-backed directory is refused. Internal RAM images and views are excluded from indexing and managed backup/sync destinations.
+The default RAM location is `/tmp`. If it is not a usable tmpfs, the daemon tries
+`XDG_RUNTIME_DIR`, then `/dev/shm`. Selection checks the retained directory's
+actual filesystem, read-only state and effective-user write/search permissions.
+Read-only or inaccessible default candidates are skipped. An explicit override
+other than `/tmp` must itself pass these checks; it never silently selects a
+different directory. Each backing directory is private (0700), with a 0600 image.
+Internal RAM images and views are excluded from indexing and managed backup/sync destinations.
 
 Use the RAM entry's menu to flush, save a durable copy elsewhere, or explicitly discard it. A normal daemon shutdown flushes and retires its filesystem server; restart verifies the retained image and checks its filesystem before remounting. Existing open view handles must be reopened after a restart. SIGTERM and Ctrl+C drain accepted jobs before the storage owner exits. The launcher waits for that drain and retains lifecycle files if it times out, instead of forcing a kill. Its `LITTLE_CLIP_STOP_TIMEOUT_SECONDS` default is 60; zero waits without a deadline. The repository systemd unit uses an unlimited stop timeout and signals the main process first; reload an installed unit before relying on those settings. An unavailable or changed backing image is reported explicitly and is never treated as an empty folder. Initial population installs watches and performs a catch-up reconciliation before declaring the view ready.
 
