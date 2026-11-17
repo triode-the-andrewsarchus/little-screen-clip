@@ -49,6 +49,27 @@ pub(super) fn start_view(
 }
 
 impl Owner {
+    /// Validate the retained RAM owner and report whether this is initial population.
+    pub(super) fn validate_ram_reconciliation(
+        &self,
+        pair: &SyncPair,
+        drive: &Drive,
+    ) -> Result<bool> {
+        let session = self.db.get::<RamSession>("ram", &pair.id)?;
+        if pair.ram && session.is_none() {
+            return Err("RAM session metadata is missing; retained contents need recovery before synchronization".into());
+        }
+        if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
+            self.unidentified_ram
+                .get(&pair.id)
+                .ok_or("No persistent media identity; writeback requires a new explicit session")?
+                .validate()?;
+        }
+        if let Some(session) = &session {
+            self.ram_available(session)?;
+        }
+        Ok(pair.ram && session.is_some_and(|session| !session.ready))
+    }
     pub(super) fn mount_ram(&mut self, id: &str) -> Result<()> {
         let mut session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
         if self.ram_children.contains_key(id) {

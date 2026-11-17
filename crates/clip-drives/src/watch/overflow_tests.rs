@@ -9,7 +9,7 @@ use std::{
 fn settle(watch: &mut Watch) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let changes = watch.changes();
+        let changes = watch.changes(false);
         if !changes.full && changes.paths.is_empty() {
             return;
         }
@@ -40,11 +40,45 @@ fn interrupted_rebuild_retains_pending_roots_and_releases_retired_scopes() {
     settle(&mut watch);
     let file = second.path.join("still-observed");
     fs::write(&file, b"retained root").unwrap();
-    let changes = watch.changes();
+    let changes = watch.changes(false);
     assert!(!changes.full);
     assert!(changes.paths.contains(&file));
     watch.remove_scope(&second.scope());
     assert_eq!(Arc::strong_count(&second), 1);
+}
+
+#[test]
+#[ignore = "changes inotify limits only inside a disposable guest"]
+fn guest_watch_quota_recovery_retries_only_on_the_periodic_boundary() {
+    crate::require_disposable_guest();
+    let media = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").unwrap();
+    assert_eq!(Path::new(&media), Path::new("/work/media"));
+    let temp = tempfile::tempdir_in(media).unwrap();
+    let child = temp.path().join("child/deep");
+    fs::create_dir_all(&child).unwrap();
+    fs::write("/proc/sys/fs/inotify/max_user_watches", b"1").unwrap();
+    let root = Arc::new(Root::open(temp.path()).unwrap());
+    let mut watch = Watch::new().unwrap();
+    watch.add(root.clone());
+    settle(&mut watch);
+    assert_eq!(watch.locations.len(), 1);
+    assert!(watch.registration_incomplete);
+    assert!(!watch.has_complete_coverage());
+    fs::write("/proc/sys/fs/inotify/max_user_watches", b"128").unwrap();
+    let file = child.join("later");
+    fs::write(&file, b"not watched yet").unwrap();
+    let changes = watch.changes(false);
+    assert!(!changes.full);
+    assert!(!changes.paths.contains(&file));
+    assert!(!watch.has_complete_coverage());
+    assert!(watch.changes(true).full);
+    settle(&mut watch);
+    assert!(watch.has_complete_coverage());
+    assert_eq!(watch.locations.len(), 3);
+    fs::write(&file, b"recovered notification").unwrap();
+    assert!(watch.changes(false).paths.contains(&file));
+    watch.remove_scope(&root.scope());
+    assert_eq!(Arc::strong_count(&root), 1);
 }
 
 #[test]
@@ -73,7 +107,7 @@ fn guest_queue_overflow_rebuilds_missed_nested_directory_watches() {
         for directory in &directories {
             fs::create_dir_all(root.path.join(directory)).unwrap();
         }
-        let changes = watch.changes();
+        let changes = watch.changes(false);
         assert!(changes.kernel_overflow, "must consume a real IN_Q_OVERFLOW");
         assert!(changes.full);
         assert!(
@@ -87,7 +121,7 @@ fn guest_queue_overflow_rebuilds_missed_nested_directory_watches() {
         for directory in directories {
             let file = root.path.join(directory).join("later-edit");
             fs::write(&file, b"prompt notification after lost creation").unwrap();
-            let changes = watch.changes();
+            let changes = watch.changes(false);
             assert!(!changes.full, "registration must have completed");
             assert!(
                 changes.paths.contains(&file),

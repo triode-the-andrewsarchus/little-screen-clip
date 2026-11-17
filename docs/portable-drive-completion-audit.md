@@ -14,11 +14,11 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
-| 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
+| 2.3 | Partial | Watch overflow clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Full-scan fingerprint reuse additionally requires complete watch registration, while named paths retain fresh bounded comparisons. Native lost-event same-size/mtime conflicts and watcher-unavailable recovery pass. Further direct filesystem and reconnect matrices remain. |
 | 2.4 | Partial | Persistent collision-safe complete conflict variants tested; provenance and repeat behavior need a full matrix. |
 | 2.5 | Partial | Deletion and delete-versus-edit tests exist; event-loss and cancellation matrices remain. |
 | 2.6 | Partial | Native file/directory name tables verify exact directory entries and bytes, or explicit refusal with originals retained. NTFS3 alternate-stream paths and FAT32/exFAT trailing dots/spaces are refused before installation. Native FAT32 oversized-file refusal passes; link/metadata omissions, alternate mount options and ntfs-3g remain. |
-| 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real repeated kernel overflow on FAT32/exFAT/NTFS now rebuilds missed nested-directory watches within those budgets; a live daemon recovers union/conflicts and later nested edits with a one-hour scan interval. Registration-limit/retry and active-worker event-loss matrices remain. See the overflow-recovery checkpoint. |
+| 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real repeated kernel overflow on FAT32/exFAT/NTFS rebuilds missed nested-directory watches; the live daemon recovers union/conflicts and later nested edits with a one-hour scan interval. Real watch-quota and instance-exhaustion recovery now retry at the periodic boundary, avoiding a continuous full-scan loop. Configured traversal-budget/permission failures and active-worker event-loss matrices remain. See the watcher retry and overflow checkpoints. |
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
 | 3.2 | Complete | Pinned filesystem and effective-user write/search/read-only checks select a usable tmpfs; RAM and backup admission share the directory check. A disposable guest covers /tmp with each native FAT32/exFAT/NTFS mount: all 36 selection cases pass, including XDG/shm fallback, read-only/unavailable candidates, explicit overrides and writable-tmpfs /tmp preference. Positive cases create 0700 private directories/0600 images on verified tmpfs, mount/write/read/discard successfully. Existing quota/restart/unmount tests pass. See the RAM-directory checkpoint. |
 | 3.3 | Complete | Bounded streaming runs on retained workers; initial and explicit-resume jobs use catch-up before successful ready publication. Per-file callback cases deterministically change a same-size/same-mtime source and add an unenumerated path after the first installation, with a one-pass negative control. Cancellation, missing source and changed source preserve accepted files, incomplete/paused state and pending work; verified retry enables browsing. Both cases pass on real FAT32/exFAT/NTFS sources and bounded RAM destinations. Live coordinator cancel/resume and 1 GB independent-session responsiveness pass. See the initial-population checkpoint. |
@@ -53,6 +53,57 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Periodic recovery from unavailable watches
+
+Watch registration failures now retain incomplete-coverage state after the
+one-shot full-comparison request has been consumed. The configured periodic
+boundary requests another incremental rebuild, so restored kernel watch quota
+can repair previously missed descendants. Ordinary intervening polls do not
+restart the traversal. Unknown/incomplete coverage disables full-scan fingerprint
+reuse. Fresh comparisons of specifically notified paths remain available within
+validated retained roots, independently from reuse eligibility.
+
+An unavailable inotify instance previously made every 200 ms coordinator tick
+request another complete comparison. The coordinator now takes the configured
+periodic fallback and retries instance creation at that boundary. Recovery's full
+flag invalidates older cached roots and their epoch. Explicit synchronization
+still runs without inotify. RAM session/backing/lifetime validation is shared
+through the existing RAM session owner, and the symmetric prior/current root
+checks use one common comparison for both sides. No formats, public protocols,
+configuration defaults or removable-device contents are added by this change.
+
+The guest watch-quota fixture limits the kernel to one watch. Its root registers,
+the nested descendants fail, coverage remains incomplete and intervening polls
+neither claim complete coverage nor retry. After quota is restored, the periodic
+boundary rebuilds all three watches and later nested writes produce events.
+The live Service fixture sets the instance limit to zero before startup, proves
+that explicit initial synchronization still copies data, and bounds owner
+inventory calls while idle to reject continuous complete comparisons. Restoring
+capacity and advancing the configured periodic boundary creates an actual
+inotify descriptor, verified through this process's descriptor metadata. A fresh
+comparison and restored one-hour interval are followed by event-driven copying;
+shutdown releases the descriptor. Only the guarded disposable guest changes
+kernel limits.
+
+Accepted report: `/tmp/portable-drive-vm-watch-retry-accepted/report.json`. It
+runs six watcher tests, both live event-loss/retry tests and both RAM population
+recovery tests on each real FAT32/exFAT/NTFS source. The report must have
+success=true, no timeout, one successful guest marker and all nine expected
+passing test groups. All 138 ordinary backend tests pass (68 explicit fixtures
+ignored), with drive all-target clippy under denied warnings, targeted Rust
+formatting and whitespace checks. Logs use `/tmp/portable-drive-watch-retry-`
+with `accepted-build.log`, `accepted.log`, `backend-accepted.log`, `clippy.log`
+and `fmt.log`.
+
+The original-baseline architecture result remains REGRESSION: 4300 clone groups,
+144 cycles, average CCN 3.48, maximum 274 and duplication 7.07%. Cohesive RAM
+admission validation and symmetric cache checks reduce the observed
+prepare_sync_pair CCN from 27 during this step to 15, without omitting a guard.
+There are no additional reported touched hotspots, clone groups or cycles.
+Report: `.fitness/portable-drives-watch-retry-architecture.json`.
+Configured traversal-budget/permission failures, active-worker event loss and
+mount-inventory loss remain separately unfinished.
 
 ## Rebuilding directory watches after kernel queue overflow
 

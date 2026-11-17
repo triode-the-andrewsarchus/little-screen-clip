@@ -3,6 +3,90 @@ use super::*;
 use crate::sync_edge_tests::native_fs;
 use std::{fs::FileTimes, io::Write, os::unix::fs::MetadataExt};
 
+fn inotify_instances() -> usize {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.unwrap().path()).ok())
+        .filter(|target| target == Path::new("anon_inode:inotify"))
+        .count()
+}
+
+#[test]
+#[ignore = "changes inotify limits only inside a disposable guest"]
+fn guest_unavailable_watcher_uses_periodic_fallback_and_recovers_when_capacity_returns() {
+    use std::sync::atomic::AtomicU64;
+    let mut drive = native_fs::guest_drive();
+    let media = tempfile::tempdir_in(drive.mount.as_ref().unwrap()).unwrap();
+    drive.mount = Some(media.path().into());
+    fs::write(media.path().join("edit"), b"initial bytes").unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let local = temp.path().join("local");
+    let queries = Arc::new(AtomicU64::new(0));
+    let observed = queries.clone();
+    let selector = drive.id.clone();
+    fs::write("/proc/sys/fs/inotify/max_user_instances", b"0").unwrap();
+    assert_eq!(inotify_instances(), 0);
+    let service = Service::start_with_inventory(
+        DriveConfig {
+            sync_interval_seconds: 3600,
+            ..Default::default()
+        },
+        temp.path().join("state"),
+        Arc::new(move || {
+            if std::thread::current().name() == Some("portable-drive-owner") {
+                observed.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(vec![drive.clone()])
+        }),
+    )
+    .unwrap();
+    finish(
+        &service,
+        DriveRequest::Pair {
+            drive: selector,
+            relative: PathBuf::new(),
+            local: local.clone(),
+        },
+    );
+    assert_eq!(inotify_instances(), 0);
+    wait_contents(&local.join("edit"), b"initial bytes");
+    // Permit the single startup fallback to finish, then reject the former
+    // every-200ms complete-scan loop. One pending completion/query is allowed.
+    std::thread::sleep(Duration::from_secs(1));
+    let before = queries.load(Ordering::Relaxed);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        queries.load(Ordering::Relaxed) - before <= 2,
+        "missing inotify coverage caused continuously repeated full comparisons"
+    );
+    fs::write("/proc/sys/fs/inotify/max_user_instances", b"128").unwrap();
+    let mut config = status(&service).config;
+    config.sync_interval_seconds = 1;
+    finish(
+        &service,
+        DriveRequest::Configure {
+            config: config.clone(),
+        },
+    );
+    let started = Instant::now();
+    while inotify_instances() == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "inotify instance was never retried"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(inotify_instances(), 1);
+    let pair = status(&service).pairs.pop().unwrap();
+    finish(&service, DriveRequest::Sync { pair: pair.id });
+    config.sync_interval_seconds = 3600;
+    finish(&service, DriveRequest::Configure { config });
+    fs::write(media.path().join("edit"), b"event after watcher recovery").unwrap();
+    wait_contents(&local.join("edit"), b"event after watcher recovery");
+    service.shutdown().unwrap();
+    assert_eq!(inotify_instances(), 0);
+}
+
 #[test]
 #[ignore = "changes inotify limits only inside a disposable guest"]
 fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_client() {

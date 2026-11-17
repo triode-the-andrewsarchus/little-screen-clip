@@ -481,10 +481,9 @@ impl Owner {
             for envelope in std::mem::take(&mut self.deferred) {
                 self.operation(envelope);
             }
-            let mut changes = self.watch.as_mut().map(Watch::changes).unwrap_or_default();
-            changes.full |= self.watch.is_none();
             let periodic = synchronized.elapsed()
                 >= Duration::from_secs(self.config.sync_interval_seconds.max(1));
+            let changes = self.watch_changes(periodic);
             if changes.full {
                 // Lost events invalidate the observation epoch, even on precise filesystems.
                 self.sync_roots.clear();

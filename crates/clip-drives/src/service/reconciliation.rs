@@ -10,7 +10,11 @@ pub(super) struct Plan {
     pub(super) pair: SyncPair,
     portable: Arc<Root>,
     local: Arc<Root>,
+    // Matching retained roots allow named paths to be freshly compared even
+    // when unrelated directories lack watches. Full-scan fingerprint reuse
+    // additionally requires complete observation coverage.
     cached: bool,
+    observed: bool,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -84,6 +88,7 @@ impl Plan {
                     cancel,
                     &mut *progress,
                     self.cached
+                        && self.observed
                         && self.portable.reliable_revision_cache()?
                         && self.local.reliable_revision_cache()?,
                 )?
@@ -121,6 +126,22 @@ impl Plan {
     }
 }
 impl Owner {
+    pub(super) fn watch_changes(&mut self, periodic: bool) -> crate::watch::Changes {
+        let unavailable = self.watch.is_none();
+        if unavailable && periodic {
+            self.watch = Watch::new().ok();
+        }
+        let mut changes = self
+            .watch
+            .as_mut()
+            .map(|watch| watch.changes(periodic))
+            .unwrap_or_default();
+        // Missing coverage takes the periodic fallback, rather than resubmitting
+        // a complete comparison every coordinator tick. Creation/resumption
+        // invalidates earlier unobserved cached roots through the full flag.
+        changes.full |= unavailable && periodic;
+        changes
+    }
     pub(super) fn prepare_reconciliation(
         &mut self,
         request: &DriveRequest,
@@ -213,11 +234,8 @@ impl Owner {
         if drive.ambiguous || drive.evidence != pair.evidence {
             return Err("Drive identity differs from the enrollment; sync suspended".into());
         }
-        let session = self.db.get::<RamSession>("ram", &pair.id)?;
-        if pair.ram && session.is_none() {
-            return Err("RAM session metadata is missing; retained contents need recovery before synchronization".into());
-        }
-        if drive.read_only && !(pair.ram && session.as_ref().is_some_and(|s| !s.ready)) {
+        let initial_ram = self.validate_ram_reconciliation(&pair, drive)?;
+        if drive.read_only && !initial_ram {
             return Err("Drive is read-only; edits remain local".into());
         }
         let mount = drive
@@ -227,31 +245,25 @@ impl Owner {
         let partition = Root::open(mount)?;
         let selected = partition.directory(&pair.relative, false)?;
         let portable = Arc::new(Root::open(&crate::root::anchor(&selected))?);
-        if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
-            self.unidentified_ram
-                .get(&pair.id)
-                .ok_or("No persistent media identity; writeback requires a new explicit session")?
-                .validate()?;
-        }
-        if let Some(session) = &session {
-            self.ram_available(session)?;
-        }
         let local = Arc::new(Root::open(&pair.local)?);
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
         }
         self.validate_sync_storage(&portable, &local, pair.ram.then_some(pair.id.as_str()))?;
         let cached = self.sync_roots.get(&pair.id).is_some_and(|(a, b)| {
-            a.validate().is_ok()
-                && b.validate().is_ok()
-                && a.same_root(&portable)
-                && b.same_root(&local)
+            [(a, &portable), (b, &local)]
+                .into_iter()
+                .all(|(prior, current)| prior.validate().is_ok() && prior.same_root(current))
         });
         Ok(Plan {
             pair,
             portable,
             local,
             cached,
+            observed: self
+                .watch
+                .as_ref()
+                .is_some_and(Watch::has_complete_coverage),
         })
     }
     pub(super) fn queue_sync(&mut self, intent: Intent) {
@@ -347,6 +359,7 @@ impl Owner {
                         portable: save.source.clone(),
                         local: save.target.clone(),
                         cached: false,
+                        observed: false,
                     })
             } else {
                 self.prepare_sync(&intent.pair)

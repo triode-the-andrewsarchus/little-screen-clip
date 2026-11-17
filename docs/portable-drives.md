@@ -253,7 +253,13 @@ Concurrent edits preserve portable/local variants on both sides and create a per
 
 Deletion propagation starts disabled: a missing file is restored from the other side. Enable deletions explicitly after the initial merge when you want confirmed removals to propagate. Missing media, read failures, excluded coverage, and incomplete scans never count as deletions.
 
-Close/write/rename notifications reconcile changed files promptly, with periodic inventories to recover missed events. Unchanged file fingerprints are reused only within validated live root identities. Reconnection and daemon restart force fresh comparisons. Four bounded reconciliation slots keep full scans and initial RAM population off the coordinator. Work on the same partition or overlapping destination waits for its current writer to finish; independent pairs can reconcile concurrently. A separate bounded bulk worker keeps large file backups from blocking another partition’s RAM writeback. Change batches coalesce while their pair is busy. Watch registration advances incrementally and requests full coverage while incomplete.
+Close/write/rename notifications reconcile changed files promptly, with periodic inventories to recover missed events. Unchanged file fingerprints are reused only on known precise filesystems with validated live roots and complete watch coverage. Reconnection and daemon restart force fresh comparisons. Four bounded reconciliation slots keep full scans and initial RAM population off the coordinator. Work on the same partition or overlapping destination waits for its current writer to finish; independent pairs can reconcile concurrently. A separate bounded bulk worker keeps large file backups from blocking another partition’s RAM writeback. Change batches coalesce while their pair is busy. Watch registration advances incrementally and requests full coverage while incomplete.
+
+Event queue overflow rebuilds directory watches as well as comparing contents,
+so directories created during lost events regain prompt notifications. Exhausted
+watch quotas retry at the configured synchronization interval. If inotify itself
+is unavailable, synchronization uses periodic fresh comparisons and retries
+watcher creation at that interval. Explicit synchronization remains available.
 
 The daemon validates partition identity and additional device evidence before writing. Ambiguous cloned UUIDs suspend automatic synchronization. Local-folder replacement also requires re-enrollment rather than silently directing writes into a different directory.
 

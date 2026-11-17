@@ -78,6 +78,7 @@ impl Population {
             portable,
             local,
             cached: false,
+            observed: false,
         };
         let mut intent = Intent {
             queued: Instant::now(),

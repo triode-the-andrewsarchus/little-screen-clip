@@ -33,6 +33,7 @@ pub(crate) struct Watch {
     paths: HashMap<PathBuf, i32>,
     locations: HashMap<i32, Location>,
     lost: bool,
+    registration_incomplete: bool,
     rebuild_required: bool,
     tracked_bytes: usize,
     pending: VecDeque<(Arc<Root>, PathBuf)>,
@@ -51,6 +52,7 @@ impl Watch {
             paths: HashMap::new(),
             locations: HashMap::new(),
             lost: false,
+            registration_incomplete: false,
             rebuild_required: false,
             tracked_bytes: 0,
             pending: VecDeque::new(),
@@ -128,14 +130,17 @@ impl Watch {
             || self.tracked_bytes.saturating_add(bytes) > 16 * 1024 * 1024
         {
             self.lost = true;
+            self.registration_incomplete = true;
             return;
         }
         let Ok(pin) = root.directory(&relative, false) else {
             self.lost = true;
+            self.registration_incomplete = true;
             return;
         };
         let Ok(c) = CString::new(anchor(&pin).as_os_str().as_bytes()) else {
             self.lost = true;
+            self.registration_incomplete = true;
             return;
         };
         let mask = libc::IN_CLOSE_WRITE
@@ -151,6 +156,7 @@ impl Watch {
         let wd = unsafe { libc::inotify_add_watch(self.file.as_raw_fd(), c.as_ptr(), mask) };
         if wd < 0 {
             self.lost = true;
+            self.registration_incomplete = true;
             return;
         }
         self.tracked_bytes += bytes;
@@ -182,6 +188,7 @@ impl Watch {
                     Ok(frame) => self.walking = Some((root, frame)),
                     Err(_) => {
                         self.lost = true;
+                        self.registration_incomplete = true;
                         continue;
                     }
                 }
@@ -191,6 +198,7 @@ impl Watch {
                 None => self.walking = None,
                 Some(Err(_)) => {
                     self.lost = true;
+                    self.registration_incomplete = true;
                     self.walking = None;
                 }
                 Some(Ok(child)) => match child.file_type() {
@@ -199,7 +207,10 @@ impl Watch {
                         let relative = frame.relative.join(child.file_name());
                         self.add_tree(root, relative);
                     }
-                    Err(_) => self.lost = true,
+                    Err(_) => {
+                        self.lost = true;
+                        self.registration_incomplete = true;
+                    }
                     _ => (),
                 },
             }
@@ -254,7 +265,15 @@ impl Watch {
             self.add_tree(location.root.clone(), relative);
         }
     }
-    pub fn changes(&mut self) -> Changes {
+    pub fn has_complete_coverage(&self) -> bool {
+        !self.registration_incomplete
+            && !self.rebuild_required
+            && !self.lost
+            && self.pending.is_empty()
+            && self.walking.is_none()
+    }
+    pub fn changes(&mut self, retry_registration: bool) -> Changes {
+        self.rebuild_required |= retry_registration && self.registration_incomplete;
         let incomplete = self.walking.is_some() || !self.pending.is_empty();
         self.advance();
         let lost = std::mem::take(&mut self.lost);
@@ -366,7 +385,7 @@ mod tests {
         let mut watch = Watch::new().unwrap();
         watch.add(root.clone());
         assert!(Arc::strong_count(&root) > 1);
-        watch.changes();
+        watch.changes(false);
         watch.remove_scope(&root.scope());
         assert_eq!(Arc::strong_count(&root), 1);
         assert_eq!(watch.tracked_bytes, 0);
@@ -398,14 +417,19 @@ mod tests {
         let mut watch = Watch::new().unwrap();
         watch.add(Arc::new(Root::open(&path).unwrap()));
         fs::create_dir(path.join("child")).unwrap();
-        assert!(watch.changes().paths.contains(&path.join("child")));
+        assert!(watch.changes(false).paths.contains(&path.join("child")));
         fs::write(path.join("child/file"), b"changed").unwrap();
-        assert!(watch.changes().paths.contains(&path.join("child/file")));
+        assert!(
+            watch
+                .changes(false)
+                .paths
+                .contains(&path.join("child/file"))
+        );
         fs::rename(&path, temp.path().join("removed")).unwrap();
-        assert!(watch.changes().full);
+        assert!(watch.changes(false).full);
         fs::create_dir(&path).unwrap();
         watch.add(Arc::new(Root::open(&path).unwrap()));
         fs::write(path.join("new"), b"new insertion").unwrap();
-        assert!(watch.changes().paths.contains(&path.join("new")));
+        assert!(watch.changes(false).paths.contains(&path.join("new")));
     }
 }
