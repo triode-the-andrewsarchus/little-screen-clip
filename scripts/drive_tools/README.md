@@ -29,5 +29,28 @@ To run the native acceptance tests after building a debug companion:
 ```sh
 python3 scripts/build_drive_tools.py --profile debug
 cargo test -j 2 -p clip-drives --lib native_ram_quotas -- --ignored
-cargo test -j 2 -p clip-drives --lib service::tests -- --ignored --test-threads=1
+cargo test -j 2 -p clip-drives --lib daemon_sync_and_ram_survive_client_closure_and_media_removal -- --ignored
 ```
+
+The mid-write-removal fixture uses a separate, explicitly requested test helper:
+
+```sh
+python3 scripts/build_drive_tools.py --profile debug --test-io-gate
+LITTLE_CLIP_TEST_RAM_GATE_HELPER="$PWD/target/debug/drive-tools-test/fuse2fs" \
+  cargo test -j 2 -p clip-drives --lib removing_media_during_a_partial_write_retains_ram_and_queued_operation_results -- --ignored --nocapture
+```
+
+This build applies `fuse2fs-test-gate.patch` after the normal patch, and labels the
+bundle **TEST ONLY**. Its private inherited socket arms one write, reports an
+eight-byte little-endian stored position after at least 256 KiB, and waits at most
+20 seconds. `R` resumes the write; another response returns EIO. The fixture keeps
+metadata responsive while that one data request waits, detaches only its owned
+FUSE mount and checks both failure and cancellation. Rust's gated constructor is
+compiled only for tests; ordinary helpers do not contain the gate.
+
+Normal and gated builds have distinct source/cache fingerprints and default output
+directories. Test builds refuse the normal debug/release packaging paths, including
+symlinked target directories. Sources are published to their build cache only after
+all patches succeed; an interrupted patch is reapplied from the verified archive.
+Both patch files and exact rebuild steps accompany the gated executable. Do not
+install the test helper as the production companion.

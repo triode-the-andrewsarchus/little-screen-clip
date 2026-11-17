@@ -23,8 +23,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.2 | Partial | Verified tmpfs path now falls back from the default /tmp to XDG_RUNTIME_DIR and /dev/shm. Explicit disk-backed override refusal is tested; fallback branch still needs an isolated non-tmpfs-/tmp acceptance environment. |
 | 3.3 | Partial | Streaming initial population and incomplete state exist; a second reconciliation after installing watches catches earlier edits. Deterministic mid-population change/failure injection remains. |
 | 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
-| 3.5 | Partial | Removal/reconnect conflict fixture and real bounded-media ENOSPC during staging pass. Failed writeback retains the old portable file, RAM edit, pending work and previous confirmation, and recovery succeeds after capacity is released. Mid-write physical removal and other interrupted-I/O cases still need direct evidence. |
-| 3.6 | Partial | Eject now includes paused ready RAM mirrors; full-media preflush failure prevents unmount, and incomplete population refuses eject with explicit recovery choices. Native tests prove preflush before held unmount, retained RAM after eject, unrelated-drive controls, unconfirmed discard refusal and explicit discard cleanup. Eject queued behind other accepted writes and broader dirty-session/read-only/cancellation matrices remain. |
+| 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Physical USB/device-transport and native FAT/exFAT/NTFS interrupted-I/O matrices remain. |
+| 3.6 | Partial | Eject includes paused ready RAM mirrors and refuses incomplete population/failed preflush. Native tests also queue eject and unconfirmed discard behind a held write, preserve ownership through cancellation, keep unrelated controls responsive and retain terminal results after reconnect. Broader read-only, dirty-session and eject/discard cancellation matrices remain. |
 | 3.7 | Open | Fixed-size tmpfs images now enforce ongoing byte/inode growth, including external writers. Native ENOSPC for bytes/inodes, live-owner refusal, open-file graceful restart and daemon restart/removal tests pass. Forced exit after directory fsync and cancelled-initial-copy resume are tested. Unflushed-kill/underlying-tmpfs exhaustion/pressure matrix remains. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
@@ -53,6 +53,70 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup and RAM byte/inode exhaustion tests pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, pressure and underlying-tmpfs exhaustion remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Controlled mid-write removal checkpoint
+
+The separate `--test-io-gate` helper builds from the same verified e2fsprogs
+archive and normal patch, with one additional test-only patch. A private inherited
+Unix socket arms a write and reports its stored position after at least 256 KiB.
+The filesystem lock is released before the bounded 20-second control wait, so
+metadata remains responsive while this data request is held. The control protocol
+has its own mutex. The normal companion does not contain the gate; the gated Rust
+constructor exists only under `cfg(test)`.
+
+`removing_media_during_a_partial_write_retains_ram_and_queued_operation_results`
+passes both normal failure and cancellation. Each case edits an 8 MiB RAM file,
+verifies that the helper has stored a nonzero incomplete staged prefix, and queues
+eject/unconfirmed discard while the write remains active. Cancellation cannot
+release that owner early. An unrelated drive's rule operation completes while
+those requests wait. The fixture lazily detaches only its owned FUSE mount, removes
+its inventory entry, and returns a real EIO to the in-flight write.
+
+The failed/cancelled copy retains its terminal result, original media file, complete
+RAM edit, observed pending work and deliberately old drive-confirmation timestamp.
+Queued eject reports failure after removal; unconfirmed discard preserves the RAM
+view. More offline edits remain possible. Recovering the source filesystem finds
+the original file and no unpublished staging residue. A portable edit made before
+re-enrollment conflicts with the retained RAM edit: both complete variants appear
+on both sides, and the additional offline file is copied back. Resuming automatic
+catch-up clears observations generated by conflict installation without erasing
+the earlier failed/cancelled operation result.
+
+Build modes have separate fingerprints/source trees/output defaults. The builder
+refuses test output at production packaging paths, including symlinked targets;
+legacy normal caches remain accepted, and either mode change invalidates the
+opposite cache. Source extraction/patching is staged and published only with the
+matching completed-patch marker, so a failed patch cannot turn an incomplete source
+directory into an accepted build. Four delivery tests cover both mode transitions,
+path guards and interrupted-patch retry. Actual repackaging verifies source/license/
+rebuild contents and compiled gate selection for both modes. The production executable
+hash and mtime remain unchanged. Native startup now separates process launch from
+mount-readiness/quota checks while retaining its existing limits and child owner.
+
+Backend tests pass 91 cases with 30 explicit fixtures ignored. Five selected native
+tests pass: gated removal (both cases), full-media/paused eject, incomplete initial
+population/eject refusal, real owned FUSE unmount/cancellation, and offline daemon
+restart/reconnect. Backend/Files/daemon all-target clippy with warnings denied,
+Python compilation, delivery tests, repository formatting and whitespace checks
+pass. Evidence:
+`/tmp/portable-drive-ram-removal-backend-final.log`,
+`/tmp/portable-drive-ram-removal-native-accepted.log`,
+`/tmp/portable-drive-test-gate-unit-final.log`,
+`/tmp/portable-drive-test-gate-packaging-final.log`, and
+`/tmp/portable-drive-ram-removal-clippy.log`.
+
+The architecture gate remains REGRESSION with unchanged material totals: twelve
+net new clone groups, 7.14% duplication, average CCN 3.48, maximum 274 and reported
+cycles 144 versus baseline 143. Launch/readiness and source-preparation/publication
+boundaries remove the initial new Lizard CCN hotspots. The builder entrypoint still
+has a structural finding from its necessary cache-mode/path validation and verified
+archive admission. No new clone group is introduced. Report:
+`.fitness/portable-drives-ram-removal-final-architecture.json`.
+
+This is actual kernel FUSE mount removal plus controlled I/O failure, not a claim
+of physical USB unplug coverage. Items 3.5/3.6 remain Partial for their remaining
+filesystem/device and cancellation matrices. Underlying-tmpfs pressure and
+unflushed crash recovery remain open under 3.7.
 
 ## RAM pre-unmount and full-media checkpoint
 

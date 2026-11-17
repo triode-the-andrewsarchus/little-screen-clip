@@ -321,6 +321,34 @@ impl Mounted {
         fresh: bool,
         previous_mount: Option<u64>,
     ) -> Result<Self> {
+        Self::start_with(
+            backing,
+            id,
+            fresh,
+            previous_mount,
+            CommandRequest::new(helper()?).args(["-f", "-s"]),
+            |_| {},
+        )
+    }
+    #[cfg(test)]
+    pub fn start_gated(backing: &RamBacking, id: &str, control: &File) -> Result<Self> {
+        let helper = std::env::var_os("LITTLE_CLIP_TEST_RAM_GATE_HELPER").ok_or(
+            "Build the separate --test-io-gate helper and set LITTLE_CLIP_TEST_RAM_GATE_HELPER",
+        )?;
+        let (request, fd) = CommandRequest::new(helper).inherit_handle(control)?;
+        // Keep metadata responsive while one test-controlled data write waits.
+        Self::start_with(backing, id, true, None, request.arg("-f"), move |command| {
+            command.env("LITTLE_CLIP_FUSE_TEST_GATE_FD", fd.to_string());
+        })
+    }
+    fn start_with(
+        backing: &RamBacking,
+        id: &str,
+        fresh: bool,
+        previous_mount: Option<u64>,
+        request: CommandRequest,
+        configure: impl FnOnce(&mut std::process::Command),
+    ) -> Result<Self> {
         let (root, image) = open(backing)?;
         // The inherited descriptor retains this lock for the native server's whole lifetime.
         // SAFETY: flock has no pointer arguments and image is a live owned descriptor.
@@ -351,9 +379,8 @@ impl Mounted {
                 .into());
             }
         }
-        let helper = helper()?;
-        let (request, fd) = CommandRequest::new(helper).inherit_handle(&image)?;
-        let mut command = request.args(["-f", "-s", "-o"])
+        let (request, fd) = request.inherit_handle(&image)?;
+        let mut command = request.arg("-o")
             .arg(format!("no_default_opts,subtype=clip-ram,fsname={PREFIX}:{id},nodev,nosuid,cache_size=4m,attr_timeout=0,entry_timeout=0,negative_timeout=0"))
             .arg(format!("/proc/self/fd/{fd}")).arg(&path)
             .resource_limit(rustix::process::Resource::As, HELPER_MEMORY)
@@ -363,17 +390,22 @@ impl Mounted {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        configure(&mut command);
         let mut mounted = Self {
             child: command.spawn()?,
             path,
             id: id.into(),
             mount_id: None,
         };
+        mounted.await_ready(backing, fresh)?;
+        Ok(mounted)
+    }
+    fn await_ready(&mut self, backing: &RamBacking, fresh: bool) -> Result<()> {
         let started = Instant::now();
         loop {
-            if let Some(observed) = mounts::owned_mount(&mounted.path, PREFIX, id)? {
-                mounted.mount_id = Some(observed.id);
-                let file = kernel_interface::pin_content_directory(&mounted.path)?;
+            if let Some(observed) = mounts::owned_mount(&self.path, PREFIX, &self.id)? {
+                self.mount_id = Some(observed.id);
+                let file = kernel_interface::pin_content_directory(&self.path)?;
                 let stats = rustix::fs::fstatvfs(&file)?;
                 if stats.f_files > backing.inodes
                     || stats.f_blocks.saturating_mul(stats.f_frsize) > backing.capacity
@@ -381,15 +413,15 @@ impl Mounted {
                     return Err("Formatted RAM filesystem exceeds its reserved quota".into());
                 }
                 if fresh {
-                    match fs::remove_dir(mounted.path.join("lost+found")) {
+                    match fs::remove_dir(self.path.join("lost+found")) {
                         Ok(()) => (),
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
                         Err(e) => return Err(e.into()),
                     }
                 }
-                return Ok(mounted);
+                return Ok(());
             }
-            if let Some(status) = mounted.child.try_wait()? {
+            if let Some(status) = self.child.try_wait()? {
                 return Err(format!("RAM filesystem helper exited: {status}").into());
             }
             if started.elapsed() > Duration::from_secs(5) {

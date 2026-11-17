@@ -1472,6 +1472,15 @@ mod tests {
             &self,
             relative: &str,
         ) -> (RamBacking, String, crate::ram::Mounted, PathBuf) {
+            self.native_source_with(relative, |backing, id| {
+                crate::ram::Mounted::start(backing, id, true, None).unwrap()
+            })
+        }
+        fn native_source_with(
+            &self,
+            relative: &str,
+            start: impl FnOnce(&RamBacking, &str) -> crate::ram::Mounted,
+        ) -> (RamBacking, String, crate::ram::Mounted, PathBuf) {
             let base = crate::ram::directory(&DriveConfig::default()).unwrap();
             let backing = crate::ram::prepare(
                 &base,
@@ -1483,7 +1492,7 @@ mod tests {
             )
             .unwrap();
             let id = uuid::Uuid::new_v4().to_string();
-            let native = crate::ram::Mounted::start(&backing, &id, true, None).unwrap();
+            let native = start(&backing, &id);
             let source = backing.directory.join("contents").join(relative);
             fs::create_dir_all(&source).unwrap();
             fs::write(source.join("edit"), b"original portable content").unwrap();
