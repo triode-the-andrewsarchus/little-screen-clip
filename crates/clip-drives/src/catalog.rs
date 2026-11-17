@@ -382,19 +382,27 @@ impl CatalogFs {
             path.starts_with(&managed_mounts)
                 || catalog_mounts.iter().any(|mount| path.starts_with(mount))
         };
+        let admit = |path: &Path| {
+            // Reject our own FUSE paths before opening even their directory metadata.
+            if recursive(path) {
+                return None;
+            }
+            let root = Root::open(path).ok()?;
+            if recursive(&root.path) {
+                return None;
+            }
+            Some(root)
+        };
+        let original_entry = self.original_entry(entry, &providers, admit);
         let mut stale = false;
         for (path, identity) in providers {
-            // Reject our own FUSE paths before opening even their directory metadata.
-            if recursive(&path) {
-                continue;
-            }
-            let Ok(root) = Root::open(&path) else {
-                continue;
+            let Some(root) = admit(&path) else { continue };
+            let expected = if matches!(identity, ProviderIdentity::Original) {
+                original_entry.as_ref().unwrap_or(entry)
+            } else {
+                entry
             };
-            if recursive(&root.path) {
-                continue;
-            }
-            match identity.open(root, self, entry) {
+            match identity.open(root, self, expected) {
                 Ok(Some(open)) => return Ok(open),
                 Ok(None) => {}
                 Err(_) => stale = true,

@@ -2,6 +2,41 @@
 use super::*;
 
 #[test]
+fn metadata_only_original_requires_the_captured_root_and_full_file_revision() {
+    for fault in ["contents", "inode", "root", "legacy", "changed-unknown"] {
+        let fixture = fixture();
+        let (mut view, mut entry) = fixture.captured_file(Path::new("file.txt"));
+        assert!(
+            ProviderIdentity::Original
+                .open(Root::open(&fixture.source.path).unwrap(), &view, &entry)
+                .unwrap()
+                .is_some()
+        );
+        let path = fixture.source.path.join(&entry.path);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        match fault {
+            "contents" => write_revision(&path, b"changed payload", modified),
+            "inode" => {
+                fs::rename(&path, path.with_extension("retained")).unwrap();
+                write_revision(&path, b"changed payload", modified);
+                let current = Entry::from_metadata(&entry.path, &fs::metadata(&path).unwrap());
+                assert_ne!(current.inode, entry.inode);
+                entry.changed = current.changed;
+            }
+            "root" => view.catalog.details.as_mut().unwrap().source_mount.inode += 1,
+            "legacy" => view.catalog.details = None,
+            "changed-unknown" => entry.changed = None,
+            _ => unreachable!(),
+        }
+        let error = ProviderIdentity::Original
+            .open(Root::open(&fixture.source.path).unwrap(), &view, &entry)
+            .err()
+            .expect(fault);
+        assert!(error.to_string().contains("stale"), "{fault}: {error}");
+    }
+}
+
+#[test]
 fn metadata_only_catalog_rejects_same_size_mtime_backup_tampering() {
     check_backup_tampering(&fixture(), Path::new("file.txt"));
 }
@@ -177,6 +212,12 @@ fn a_saved_catalog_digest_can_authorize_a_provider_without_optional_manifest_enr
     version.manifest = None;
     fixture.db.put("backup", &version.id, &version).unwrap();
     view.catalog.details = None;
+    let original = ProviderIdentity::Original
+        .open(Root::open(&fixture.source.path).unwrap(), &view, &entry)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.root.path, fixture.source.path);
+    drop(original);
     let open = view.resolve(&entry).unwrap();
     assert_eq!(open.root.path, version.path);
     drop(open);
@@ -245,4 +286,73 @@ fn native_metadata_only_catalog_validates_file_backup_bytes() {
     let (_native, fixture) = native_fixture();
     check_backup_tampering(&fixture, Path::new("file.txt"));
     check_fuse_revision(&fixture);
+}
+
+#[test]
+#[ignore = "requires the disposable native partition guest and current FUSE helper"]
+fn native_original_revision_changes_fall_back_to_backup_and_refresh_through_fuse() {
+    let native = crate::sync_edge_tests::native_fs::guest_drive();
+    let mut fixture = fixture();
+    fixture.drive = discovery::select(discovery::discover().unwrap(), &native.id).unwrap();
+    fixture.source = Root::open(fixture.drive.mount.as_ref().unwrap()).unwrap();
+    let relative = Path::new("catalog-original.txt");
+    let source = fixture.source.path.join(relative);
+    fs::write(&source, b"catalog payload").unwrap();
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    let view = filesystem(&fixture.state.path, catalog.clone());
+    let entry = view.lookup_path(relative).unwrap().unwrap().1;
+    assert!(entry.hash.is_none());
+    let original = view.resolve(&entry).unwrap();
+    assert_eq!(original.root.path, fixture.source.path);
+    drop(original);
+    let version = fixture.backup().unwrap();
+    let server = CatalogProcess::start(&fixture, &catalog);
+    let path = server.mount.join(relative);
+    assert_eq!(fs::read(&path).unwrap(), b"catalog payload");
+    let held = File::open(&path).unwrap();
+    let modified = fs::metadata(&source).unwrap().modified().unwrap();
+    // Ensure even the coarsest native ctime clock advances; mtime is restored.
+    std::thread::sleep(Duration::from_millis(2100));
+    write_revision(&source, b"changed payload", modified);
+    let changed = Entry::from_metadata(relative, &fs::metadata(&source).unwrap());
+    assert_eq!(
+        (changed.size, changed.modified, changed.nanos),
+        (entry.size, entry.modified, entry.nanos)
+    );
+    if entry.same_revision(&changed) {
+        assert_eq!(fixture.drive.filesystem, "vfat");
+        eprintln!(
+            "FAT32 rewrite left the entire metadata revision unchanged; verify against the backup fingerprint"
+        );
+    }
+    let fallback = view.resolve(&entry).unwrap();
+    assert_eq!(fallback.root.path, version.path);
+    drop(fallback);
+    assert_eq!(fs::read(&path).unwrap(), b"catalog payload");
+    fixture.db.remove("backup", &version.id).unwrap();
+    // With the fingerprint provider gone, an observed inode replacement still
+    // requires refresh even when its size and modification time are restored.
+    fs::rename(&source, source.with_extension("retained")).unwrap();
+    write_revision(&source, b"changed payload", modified);
+    let replacement = Entry::from_metadata(relative, &fs::metadata(&source).unwrap());
+    assert_ne!(replacement.inode, entry.inode);
+    assert_eq!(
+        held.read_at(&mut [0; 1], 0).unwrap_err().raw_os_error(),
+        Some(libc::ESTALE)
+    );
+    drop(held);
+    assert_eq!(
+        fs::read(&path).unwrap_err().raw_os_error(),
+        Some(libc::ESTALE)
+    );
+    let refreshed = fixture.capture(&DriveConfig::default()).unwrap();
+    let newer = CatalogProcess::start(&fixture, &refreshed);
+    assert_eq!(
+        fs::read(newer.mount.join(relative)).unwrap(),
+        b"changed payload"
+    );
+    drop(newer);
+    drop(server);
+    fs::remove_file(source).unwrap();
+    fs::remove_file(fixture.source.path.join("catalog-original.retained")).unwrap();
 }

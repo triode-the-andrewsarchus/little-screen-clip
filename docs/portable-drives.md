@@ -374,6 +374,17 @@ retain version 1. Keep the helper and applications from the same build together.
 
 Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
+For mounted originals without a saved fingerprint, validation compares the
+captured root and the file's complete observable revision, including inode and
+change time, using the retained descriptor. Unknown legacy root/revision facts
+require refresh. A verified matching file-backup manifest can also supply a
+fingerprint for checking the mounted original; a changed original then falls
+back to an intact backup. This lookup reuses the bounded provider candidates and
+the catalog-mount exclusion guard. It does not read source payloads during
+catalog capture. FAT32 can retain every observable revision field after a
+same-size rewrite with restored modification time: metadata alone cannot prove
+identical contents in that case.
+
 Capture can reuse SHA-256 fingerprints from completed file backups without
 reading the source file contents. It prefers the explicit current version, then
 visits completed history in reverse registration order until eligible files are

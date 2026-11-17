@@ -54,6 +54,47 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Mounted-original revision checkpoint
+
+Metadata-only mounted originals now require their captured root and full
+observable per-file revision, rather than only size and modification time.
+Validation uses the same retained descriptor as FileSource and repeats its
+revision check after the fuller comparison. The regression test failed before
+the change and passes afterward for changed bytes/ctime, replaced inode,
+different captured root, legacy missing details and unknown change time.
+Known digests retain their existing content-validation path.
+
+Mounted originals can also reuse a verified matching file-backup manifest's
+fingerprint at open time. This uses the existing bounded candidate list,
+manifest verification and catalog-mount admission guard; it does not add another
+registry scan, retain all candidate roots or alter capture's metadata-only
+policy. Real source/FUSE tests pass on FAT32, exFAT and NTFS3: unchanged originals
+read normally; a same-size/restored-mtime rewrite falls back to a valid backup;
+replacing the original inode invalidates an already-open source handle; absent
+backup plus changed identity returns ESTALE; explicit refresh reads new bytes.
+The FAT32 fixture actually retains its entire metadata revision after the
+rewrite, exercising fingerprint validation instead of assuming ctime changed.
+
+The three provider cases (original revisions, file-backup tampering and nested
+catalog-mount refusal) pass on all three formats in
+`/tmp/portable-drive-vm-external-write-control/guest.log`. That whole guest report
+is **not** green: its separate exFAT durability control fails, as described in
+the following checkpoint. Host provider/FUSE acceptance passes all 31 selected
+cases (`/tmp/portable-drive-original-provider-fuse-verified.log`), and the
+source-payload-read trace control passes
+(`/tmp/portable-drive-original-provider-source-trace.log`). Ordinary backend
+tests pass 189 cases, with 81 opt-in cases ignored
+(`/tmp/portable-drive-provider-and-flush-backend.log`).
+All-target backend Clippy passes with warnings denied
+(`/tmp/portable-drive-provider-and-flush-clippy-final.log`). The original-baseline
+architecture comparison still reports REGRESSION across the branch, with 4,300
+clone groups, 144 cycles, average CCN 3.49, maximum 274 and duplication 7.02%.
+There is no additional clone group or cycle from this checkpoint.
+
+Item 6.7 remains Partial. Unobservable same-inode changes without a trusted
+fingerprint, source remount/revision ambiguity and cross-driver precision still
+need work; this checkpoint does not claim exact byte identity from metadata.
+
 ## Retained maintenance checkpoint
 
 Follow-up native acceptance passes all nine selected maintenance/provider/image

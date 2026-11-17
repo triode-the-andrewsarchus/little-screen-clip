@@ -35,12 +35,63 @@ impl ProviderIdentity {
             return Ok(None);
         };
         let mut open = OpenFile::validated(root, file, &expected)?;
+        if matches!(self, Self::Original) && entry.hash.is_none() {
+            view.validate_original(&open, entry)?;
+        }
         open._provider_lease = lease;
         Ok(Some(open))
     }
 }
 
 impl CatalogFs {
+    pub(super) fn original_entry(
+        &self,
+        entry: &Entry,
+        providers: &[(PathBuf, ProviderIdentity)],
+        admit: impl Fn(&Path) -> Option<Root>,
+    ) -> Option<Entry> {
+        if entry.hash.is_some()
+            || !providers
+                .iter()
+                .any(|(_, owner)| matches!(owner, ProviderIdentity::Original))
+        {
+            return None;
+        }
+        // Reuse the same bounded candidates and verified manifest mechanism as
+        // file providers. Coarse source metadata can hide a same-size rewrite.
+        providers.iter().find_map(|(path, owner)| match owner {
+            ProviderIdentity::Files(version) => {
+                let root = admit(path)?;
+                let expected = self.backup_entry(version, entry).ok()?;
+                root.validate().ok()?;
+                Some(expected)
+            }
+            _ => None,
+        })
+    }
+
+    fn validate_original(&self, open: &OpenFile, entry: &Entry) -> Result<()> {
+        let captured = &self
+            .catalog
+            .details
+            .as_ref()
+            .ok_or("Catalog original source identity is stale or unknown")?
+            .source_mount;
+        let pin = open.root.directory(Path::new(""), false)?;
+        let current = little_clip_core::kernel_interface::MountIdentity::pinned(&pin)?;
+        let observed = Entry::from_metadata(&entry.path, &open.file.metadata()?);
+        if captured.device != current.device
+            || captured.inode != current.inode
+            || !entry.same_revision(&observed)
+        {
+            return Err("Catalog original source revision is stale".into());
+        }
+        // Close the interval between OpenFile's initial capture and this fuller
+        // metadata check; both observations describe the same retained handle.
+        open.source.check_file(&open.file)?;
+        open.root.validate()
+    }
+
     fn backup_entry(&self, version: &Backup, entry: &Entry) -> Result<Entry> {
         let path = backup::completed_manifest(version).ok_or("Backup manifest is unavailable")?;
         let mut bytes = u64::MAX;
