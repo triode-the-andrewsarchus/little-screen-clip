@@ -331,10 +331,15 @@ fn real_prune_keeps_controls_and_an_independent_pair_live_until_cleanup_complete
 #[ignore = "creates 10000 owned files to verify live startup recovery responsiveness"]
 fn real_startup_retirement_recovery_runs_while_controls_and_an_independent_pair_progress() {
     let fixture = Fixture::new(10_000);
+    // Startup recovery normally resumes alongside an already enrolled pair.
+    // Put enrollment outside the measured interval: on fast cleanup filesystems
+    // it can otherwise outlast the entire retirement before controls are tested.
+    let setup = fixture.start();
+    let (pair, local) = fixture.pair(&setup);
+    setup.shutdown().unwrap();
     fixture.retire(false);
     let service = fixture.start();
     fixture.wait_quarantine();
-    let (pair, local) = fixture.pair(&service);
     fixture.assert_live();
     fixture.independent_controls(&service, &pair, &local);
     service.shutdown().unwrap();
