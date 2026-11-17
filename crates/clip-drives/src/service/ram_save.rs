@@ -151,6 +151,8 @@ mod tests {
             backing: None,
             last_saved: None,
             save_status: None,
+            last_flushed: None,
+            pending: None,
         };
         let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
         let save = Save {

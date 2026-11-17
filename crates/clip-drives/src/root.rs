@@ -251,6 +251,12 @@ impl Root {
         }
         Ok(source.sha256(&file, cancel, std::time::Duration::MAX)?)
     }
+    pub fn flush(&self) -> Result<()> {
+        self.validate()?;
+        let directory = File::open(anchor(&self.file))?;
+        rustix::fs::syncfs(&directory)?;
+        self.validate()
+    }
     pub fn ensure_directory(&self, relative: &Path) -> Result<()> {
         let directory = self.directory(relative, true)?;
         File::open(anchor(&directory))?.sync_all()?;

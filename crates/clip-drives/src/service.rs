@@ -41,6 +41,7 @@ mod lifetime;
 mod partition;
 mod policy;
 mod preflight;
+mod ram_pending;
 mod ram_save;
 mod ram_sessions;
 mod ram_setup;
@@ -294,8 +295,25 @@ impl Service {
             .map_err(|_| "Drive status unavailable")?
             .clone();
         let db = Store::existing(&self.state.join("drives.sqlite"), true)?;
+        let transaction = db.0.unchecked_transaction()?;
         status.pairs = db.list("pair", offset, 100)?;
         status.ram = db.list("ram", offset, 100)?;
+        for session in &mut status.ram {
+            let mut pending = ram_pending::snapshot(&db, &session.id)?;
+            pending.full_check_required |= !session.ready
+                || session.last_flushed.is_none()
+                || status.ram_pending_error.is_some();
+            session.pending = Some(pending);
+            let pair: Option<SyncPair> = db.get("pair", &session.id)?;
+            session.connected = pair.as_ref().is_some_and(|pair| {
+                status.drives.iter().any(|drive| {
+                    drive.id == pair.drive
+                        && drive.evidence == pair.evidence
+                        && !drive.ambiguous
+                        && drive.mount.is_some()
+                })
+            });
+        }
         status.operations = db.list("operation", offset, 100)?;
         status.catalogs = db.list("catalog", offset, 100)?;
         status.conflicts = db.list("conflict", offset, 100)?;
@@ -332,6 +350,7 @@ impl Service {
                     && evidence.as_ref() == Some(&d.evidence)
             });
         }
+        transaction.commit()?;
         Ok(status)
     }
 }
@@ -352,6 +371,7 @@ fn title(request: &DriveRequest) -> &'static str {
 }
 impl Owner {
     fn recover(&mut self) -> Result<()> {
+        ram_pending::recover(&self.db)?;
         let mut offset = 0;
         loop {
             let operations: Vec<DriveOperation> = self.db.list("operation", offset, 128)?;
@@ -469,10 +489,10 @@ impl Owner {
                 self.sync_epoch = self.sync_epoch.wrapping_add(1);
             }
             if periodic || changes.full {
-                self.automatic();
+                self.automatic_changed(Some(&changes.paths), true);
                 synchronized = Instant::now();
             } else if !changes.paths.is_empty() {
-                self.automatic_changed(Some(&changes.paths));
+                self.automatic_changed(Some(&changes.paths), false);
             }
             self.reap_ram();
             let retired = self
@@ -661,6 +681,7 @@ impl Owner {
                     cancel: envelope.cancel,
                     paths: None,
                     save,
+                    writeback: None,
                 }),
                 Err(error) => self.finish_operation(&envelope.id, &envelope.cancel, Err(error)),
             }
@@ -832,6 +853,9 @@ impl Owner {
                 self.discard_ram(&session, cancel)?;
                 self.db.remove("pair", &session.id)?;
                 self.db.remove("ram", &session.id)?;
+                self.db
+                    .0
+                    .execute("DELETE FROM ram_pending WHERE pair=?1", [&session.id])?;
                 self.unidentified_ram.remove(&session.id);
                 Ok("RAM copy discarded".into())
             }
@@ -855,12 +879,20 @@ impl Owner {
         }
     }
     fn automatic(&mut self) {
-        self.automatic_changed(None);
+        self.automatic_changed(None, true);
     }
-    fn automatic_changed(&mut self, paths: Option<&std::collections::HashSet<PathBuf>>) {
+    fn automatic_changed(
+        &mut self,
+        paths: Option<&std::collections::HashSet<PathBuf>>,
+        full: bool,
+    ) {
         if self.closing.load(Ordering::Acquire) {
             return;
         }
+        let Ok(full) = self.track_ram_changes(paths, full) else {
+            return;
+        };
+        let paths = if full { None } else { paths };
         let Ok(pairs) = self.db.list::<SyncPair>("pair", 0, 1000) else {
             return;
         };
@@ -882,14 +914,23 @@ impl Owner {
             {
                 continue;
             }
+            let selected_paths = if pair.ram
+                && ram_pending::snapshot(&self.db, &pair.id)
+                    .is_ok_and(|pending| pending.full_check_required)
+            {
+                None
+            } else {
+                shared_paths.clone()
+            };
             self.queue_sync(reconciliation::Intent {
                 queued: Instant::now(),
                 pair: pair.id,
                 operation: None,
                 cancel: Arc::new(AtomicBool::new(false)),
-                paths: shared_paths.clone(),
+                paths: selected_paths,
                 initialize: false,
                 save: None,
+                writeback: None,
             });
         }
     }
@@ -1344,6 +1385,27 @@ mod tests {
                 path.display()
             );
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn wait_ram(
+        service: &Service,
+        id: &str,
+        predicate: impl Fn(&RamSession) -> bool,
+    ) -> RamSession {
+        let started = Instant::now();
+        loop {
+            if let Some(session) = status(service)
+                .ram
+                .into_iter()
+                .find(|session| session.id == id && predicate(session))
+            {
+                return session;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "RAM session {id} did not reach its expected state"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
     #[test]
@@ -2730,10 +2792,18 @@ mod tests {
         );
         let ram = status(&service).ram.into_iter().next().unwrap();
         assert!(ram.ready);
+        assert!(ram.last_flushed.is_some());
         inventory.lock().unwrap().clear();
         fs::rename(&source, temp.path().join("removed")).unwrap();
         fs::write(ram.path.join("x"), b"RAM offline").unwrap();
         assert_eq!(fs::read(ram.path.join("x")).unwrap(), b"RAM offline");
+        let offline = wait_ram(&service, &ram.id, |session| {
+            !session.connected
+                && session
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.paths >= 1)
+        });
         let baseline = status(&service)
             .pairs
             .into_iter()
@@ -2766,6 +2836,8 @@ mod tests {
             baseline
         );
         let saved_session = after_save.ram.iter().find(|s| s.id == ram.id).unwrap();
+        assert_eq!(saved_session.last_flushed, offline.last_flushed);
+        assert!(saved_session.pending.as_ref().unwrap().paths >= 1);
         let export = saved_session.last_saved.as_ref().unwrap();
         assert_eq!(export.path, saved_copy);
         assert!(export.populated);
@@ -2776,8 +2848,30 @@ mod tests {
                 .unwrap()
                 .contains("RAM copy saved")
         );
-        std::thread::sleep(Duration::from_millis(1200));
-        assert!(ram.path.exists());
+        service.shutdown().unwrap();
+        drop(service);
+        let service = Service::start_with_inventory(
+            DriveConfig {
+                sync_interval_seconds: 1,
+                ram_min_available: 0,
+                ..Default::default()
+            },
+            state.clone(),
+            callback.clone(),
+        )
+        .unwrap();
+        let recovered = wait_ram(&service, &ram.id, |session| session.browsable());
+        assert!(!recovered.connected);
+        assert_eq!(recovered.last_flushed, offline.last_flushed);
+        assert!(recovered.pending.as_ref().unwrap().full_check_required);
+        assert!(recovered.pending.as_ref().unwrap().paths >= 1);
+        fs::write(ram.path.join("after-offline-restart"), b"still in RAM").unwrap();
+        wait_ram(&service, &ram.id, |session| {
+            session
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.paths >= 2)
+        });
         fs::rename(temp.path().join("removed"), &source).unwrap();
         fs::write(source.join("x"), b"portable offline").unwrap();
         inventory.lock().unwrap().push(drive.clone());
@@ -2788,6 +2882,18 @@ mod tests {
             },
         );
         assert!(!status(&service).conflicts.is_empty());
+        let flushed = wait_ram(&service, &ram.id, |session| {
+            session.connected
+                && session
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.paths == 0 && !pending.full_check_required)
+        });
+        assert!(flushed.last_flushed >= offline.last_flushed);
+        assert_eq!(
+            fs::read(source.join("after-offline-restart")).unwrap(),
+            b"still in RAM"
+        );
         use std::io::Write;
         let mut held = File::create(ram.path.join("daemon-held-open")).unwrap();
         held.write_all(b"accepted before graceful shutdown")

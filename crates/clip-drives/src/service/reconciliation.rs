@@ -19,6 +19,7 @@ pub(super) struct Intent {
     pub paths: Option<Arc<HashSet<PathBuf>>>,
     pub initialize: bool,
     pub save: Option<Arc<super::ram_save::Save>>,
+    pub writeback: Option<super::ram_pending::Checkpoint>,
 }
 pub(super) struct Pending {
     pub drive: String,
@@ -52,6 +53,10 @@ pub(super) fn persist_result(db: &Store, intent: &Intent, result: &Result<String
             if result.is_ok() {
                 session.ready = true;
                 session.connected = true;
+                if let Some(checkpoint) = &intent.writeback {
+                    super::ram_pending::acknowledge(db, checkpoint)?;
+                    session.last_flushed = Some(now());
+                }
             }
             db.put("ram", &pair.id, &session)?;
         }
@@ -95,7 +100,33 @@ impl Plan {
             files += result.files;
             conflicts += result.conflicts;
         }
+        if self.pair.ram {
+            self.portable.flush()?;
+        }
         Ok(format!("{files} files copied · {conflicts} conflicts"))
+    }
+    pub(super) fn writeback_checkpoint(
+        &self,
+        db: &Store,
+        intent: &Intent,
+    ) -> Result<Option<super::ram_pending::Checkpoint>> {
+        if !self.pair.ram || intent.save.is_some() {
+            return Ok(None);
+        }
+        let paths = intent.paths.as_ref().filter(|_| self.cached).map(|paths| {
+            Arc::new(
+                paths
+                    .iter()
+                    .filter_map(|path| {
+                        path.strip_prefix(&self.local.path)
+                            .or_else(|_| path.strip_prefix(&self.portable.path))
+                            .ok()
+                            .map(Path::to_path_buf)
+                    })
+                    .collect(),
+            )
+        });
+        super::ram_pending::checkpoint(db, &self.pair.id, paths).map(Some)
     }
 }
 impl Owner {
@@ -293,7 +324,7 @@ impl Owner {
             .collect::<Vec<_>>();
         automatic.sort_by_key(|intent| intent.queued);
         ready.extend(automatic);
-        while let Some(intent) = ready.pop_front() {
+        while let Some(mut intent) = ready.pop_front() {
             if intent.cancel.load(Ordering::Acquire) {
                 self.sync_result(
                     &intent,
@@ -351,6 +382,13 @@ impl Owner {
             if self.claims_busy(&plan.scopes()) || self.check_busy(&plan.pair.drive).is_err() {
                 self.queue_sync(intent);
                 continue;
+            }
+            match plan.writeback_checkpoint(&self.db, &intent) {
+                Ok(checkpoint) => intent.writeback = checkpoint,
+                Err(error) => {
+                    self.sync_result(&intent, Err(error), None);
+                    continue;
+                }
             }
             // Watch before population, retaining/coalescing notifications while the task runs.
             if let Some(watch) = &mut self.watch

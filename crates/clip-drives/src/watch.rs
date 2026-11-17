@@ -14,6 +14,8 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+pub(crate) const MAX_CHANGED_PATHS: usize = 4096;
+pub(crate) const MAX_CHANGED_BYTES: usize = 1024 * 1024;
 #[derive(Default)]
 pub(crate) struct Changes {
     pub full: bool,
@@ -224,7 +226,8 @@ impl Watch {
         let path = location.root.path.join(&relative);
         if !changes.paths.contains(&path) {
             let bytes = path.as_os_str().as_bytes().len();
-            if changes.paths.len() < 4096 && changes.path_bytes.saturating_add(bytes) <= 1024 * 1024
+            if changes.paths.len() < MAX_CHANGED_PATHS
+                && changes.path_bytes.saturating_add(bytes) <= MAX_CHANGED_BYTES
             {
                 changes.paths.insert(path);
                 changes.path_bytes += bytes;

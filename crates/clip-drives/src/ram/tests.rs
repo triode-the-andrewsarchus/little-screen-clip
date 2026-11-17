@@ -148,6 +148,8 @@ fn native_ram_quotas_atomic_install_and_open_file_restart_preserve_edits() {
         backing: Some(backing.clone()),
         last_saved: None,
         save_status: None,
+        last_flushed: None,
+        pending: None,
     };
     let stats = rustix::fs::fstatvfs(base.directory(Path::new(""), false).unwrap()).unwrap();
     let mut limited = config.clone();

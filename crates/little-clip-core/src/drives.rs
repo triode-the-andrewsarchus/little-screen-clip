@@ -271,6 +271,9 @@ pub struct DriveStatus {
     #[serde(with = "crate::path_serde::optional")]
     pub backup_directory: Option<PathBuf>,
     pub ram_unavailable: Option<String>,
+    /// Lost pending-event persistence makes all RAM change counts uncertain.
+    #[serde(default)]
+    pub ram_pending_error: Option<String>,
     pub next_offset: Option<usize>,
     pub discovery_error: Option<String>,
 }
@@ -311,6 +314,21 @@ pub struct RamSession {
     pub last_saved: Option<RamSave>,
     #[serde(default)]
     pub save_status: Option<String>,
+    /// Last successful drive reconciliation followed by a filesystem flush.
+    #[serde(default)]
+    pub last_flushed: Option<u64>,
+    /// Advisory queued-change snapshot; never authorizes discard or eject.
+    #[serde(default)]
+    pub pending: Option<RamPending>,
+}
+
+/// Observed RAM changes awaiting reconciliation, independently of durable exports.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RamPending {
+    /// Distinct observed relative paths, including renames and removals.
+    pub paths: u64,
+    /// Event loss, bounded tracking or restart requires a complete comparison.
+    pub full_check_required: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -537,16 +555,22 @@ mod tests {
             backing: None,
             last_saved: None,
             save_status: None,
+            last_flushed: None,
+            pending: None,
         };
         let mut json = serde_json::to_value(&session).unwrap();
         json.as_object_mut().unwrap().remove("backing");
         json.as_object_mut().unwrap().remove("last_saved");
         json.as_object_mut().unwrap().remove("save_status");
+        json.as_object_mut().unwrap().remove("last_flushed");
+        json.as_object_mut().unwrap().remove("pending");
         let recovered: RamSession = serde_json::from_value(json).unwrap();
         assert_eq!(recovered.path, session.path);
         assert!(recovered.backing.is_none());
         assert!(recovered.last_saved.is_none());
         assert!(recovered.save_status.is_none());
+        assert!(recovered.last_flushed.is_none());
+        assert!(recovered.pending.is_none());
         assert!(recovered.browsable());
     }
 }

@@ -242,7 +242,7 @@ impl Owner {
             phase(&db, &operation, PartitionPhase::Flushing, None)?;
             for plan in plans {
                 cancelled(&cancel)?;
-                let intent = reconciliation::Intent {
+                let mut intent = reconciliation::Intent {
                     queued: Instant::now(),
                     pair: plan.pair.id.clone(),
                     operation: None,
@@ -250,7 +250,9 @@ impl Owner {
                     paths: None,
                     initialize: false,
                     save: None,
+                    writeback: None,
                 };
+                intent.writeback = plan.writeback_checkpoint(&db, &intent)?;
                 let result = plan.run_with_cancel(&db, &intent, &cancel, &mut progress);
                 reconciliation::persist_result(&db, &intent, &result)?;
                 result?;

@@ -116,6 +116,7 @@ impl Owner {
                     paths: None,
                     initialize: true,
                     save: None,
+                    writeback: None,
                 };
                 if self.closing.load(Ordering::Acquire) || intent.cancel.load(Ordering::Acquire) {
                     self.sync_result(
@@ -298,6 +299,8 @@ impl Preparation<'_> {
             backing: Some(backing),
             last_saved: None,
             save_status: None,
+            last_flushed: None,
+            pending: None,
         };
         {
             let transaction = db.0.unchecked_transaction()?;
@@ -507,6 +510,8 @@ mod tests {
                 backing: Some(replaced),
                 last_saved: None,
                 save_status: None,
+                last_flushed: None,
+                pending: None,
             },
         )
         .unwrap();

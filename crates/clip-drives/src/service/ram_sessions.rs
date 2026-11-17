@@ -57,6 +57,9 @@ impl Owner {
         if let Some(helper) = start_view(&self.db, &mut session)? {
             self.ram_children.insert(id.into(), helper);
         }
+        if let Some(watch) = &mut self.watch {
+            watch.add(Arc::new(Root::open(&session.path)?));
+        }
         self.sync_roots.remove(id);
         Ok(())
     }
