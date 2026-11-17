@@ -25,9 +25,25 @@ pub(crate) use image_mount::ImageMount;
 mod metadata;
 mod publication;
 mod retention;
+#[cfg(test)]
 pub(crate) fn recover_publications(db: &Store) -> Result<()> {
-    publication::recover(db)?;
-    retention::recover(db)
+    recover_with_cancel(db, &AtomicBool::new(false))
+}
+pub(crate) fn recover_with_cancel(db: &Store, cancel: &AtomicBool) -> Result<()> {
+    publication::recover(db, cancel)?;
+    retention::recover(db, cancel)
+}
+pub(crate) fn recover_record(
+    db: &Store,
+    kind: &str,
+    id: &str,
+    cancel: &AtomicBool,
+) -> Result<bool> {
+    match kind {
+        "backup-publication" => publication::recover_one(db, id, cancel),
+        "backup-prune" => retention::resume_one(db, id, None, cancel),
+        _ => Err("Unknown backup maintenance record".into()),
+    }
 }
 pub(crate) use publication::{completed_manifest, current as current_version, read_manifest};
 pub(crate) use retention::{provider_lease, prune};
@@ -640,6 +656,16 @@ mod tests {
                 progress,
             )
         }
+        fn prepare_blocked_reference(&self, contents: &[u8]) -> (Backup, PathBuf, PathBuf) {
+            let first = self.backup(|_, _| {}).unwrap();
+            let pointer = first.path.parent().unwrap().join("current-files.json");
+            let retained = self.temp.path().join("old-current.json");
+            fs::rename(&pointer, &retained).unwrap();
+            fs::create_dir(&pointer).unwrap();
+            fs::write(self.source.path.join("file"), contents).unwrap();
+            assert!(self.backup(|_, _| {}).is_err());
+            (first, pointer, retained)
+        }
         pub(super) fn new(contents: &[u8]) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let source = Root::create(&temp.path().join("source")).unwrap();
@@ -730,19 +756,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reference.id, second.id);
-        publication::check_manifest(&first).unwrap();
-        publication::check_manifest(&second).unwrap();
+        publication::check_manifest(&first, &AtomicBool::new(false)).unwrap();
+        publication::check_manifest(&second, &AtomicBool::new(false)).unwrap();
     }
     #[test]
     fn interrupted_reference_installation_is_recovered_without_recopying_or_advancing_early() {
         let fixture = FileFixture::new(b"first");
-        let first = fixture.backup(|_, _| {}).unwrap();
-        let pointer = first.path.parent().unwrap().join("current-files.json");
-        let retained = fixture.temp.path().join("old-current.json");
-        fs::rename(&pointer, &retained).unwrap();
-        fs::create_dir(&pointer).unwrap();
-        fs::write(fixture.source.path.join("file"), b"second").unwrap();
-        assert!(fixture.backup(|_, _| {}).is_err());
+        let (first, pointer, retained) = fixture.prepare_blocked_reference(b"second");
         assert_eq!(
             publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
                 .unwrap()
@@ -772,15 +792,46 @@ mod tests {
         assert_eq!(recorded.id, second.id);
     }
     #[test]
+    fn retrying_an_older_prepared_backup_cannot_replace_a_newer_current_version() {
+        let fixture = FileFixture::new(b"first");
+        let (_first, pointer, retained) = fixture.prepare_blocked_reference(b"prepared second");
+        let mut pending: serde_json::Value = fixture
+            .db
+            .list("backup-publication", 0, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        pending["backup"]["created"] = u64::MAX.into();
+        let prepared: Backup = serde_json::from_value(pending["backup"].clone()).unwrap();
+        fixture
+            .db
+            .put("backup-publication", &prepared.id, &pending)
+            .unwrap();
+        fs::remove_dir(&pointer).unwrap();
+        fs::rename(&retained, &pointer).unwrap();
+        fs::write(fixture.source.path.join("file"), b"newest third").unwrap();
+        let newest = fixture.backup(|_, _| {}).unwrap();
+        recover_publications(&fixture.db).unwrap();
+        assert_eq!(
+            publication::current(&fixture.db, &fixture.drive.id, BackupKind::Files)
+                .unwrap()
+                .unwrap()
+                .id,
+            newest.id
+        );
+        let reference: Backup = serde_json::from_slice(&fs::read(pointer).unwrap()).unwrap();
+        assert_eq!(reference.id, newest.id);
+        assert_eq!(
+            fs::read(prepared.path.join("file")).unwrap(),
+            b"prepared second"
+        );
+        assert_eq!(fs::read(newest.path.join("file")).unwrap(), b"newest third");
+        assert_eq!(fixture.db.list::<Backup>("backup", 0, 10).unwrap().len(), 3);
+    }
+    #[test]
     fn recovery_refuses_a_modified_manifest_and_exposes_the_retained_artifact() {
         let fixture = FileFixture::new(b"first");
-        let first = fixture.backup(|_, _| {}).unwrap();
-        let pointer = first.path.parent().unwrap().join("current-files.json");
-        let retained = fixture.temp.path().join("old-current.json");
-        fs::rename(&pointer, &retained).unwrap();
-        fs::create_dir(&pointer).unwrap();
-        fs::write(fixture.source.path.join("file"), b"second").unwrap();
-        assert!(fixture.backup(|_, _| {}).is_err());
+        let (first, pointer, retained) = fixture.prepare_blocked_reference(b"second");
         let pending: serde_json::Value = fixture
             .db
             .list("backup-publication", 0, 1)
@@ -911,7 +962,7 @@ mod tests {
         assert_eq!(fs::read(&result.path).unwrap(), bytes);
         use sha2::{Digest, Sha256};
         assert_eq!(result.sha256, Some(format!("{:x}", Sha256::digest(&bytes))));
-        publication::check_manifest(&result).unwrap();
+        publication::check_manifest(&result, &AtomicBool::new(false)).unwrap();
         assert_eq!(
             *phases.borrow(),
             [
@@ -1154,7 +1205,7 @@ mod btrfs_tests {
             );
             assert_eq!(file.nlink(), 2);
             assert_eq!(version.fidelity.as_ref().unwrap().omitted_fields, 0);
-            publication::check_manifest(version).unwrap();
+            publication::check_manifest(version, &AtomicBool::new(false)).unwrap();
         }
         fs::remove_file(&alias).unwrap();
         fs::write(&alias, b"independent").unwrap();
@@ -1169,7 +1220,7 @@ mod btrfs_tests {
         assert_eq!(fs::read(first.path.join("alias")).unwrap(), b"original");
         assert_eq!(fs::read(second.path.join("alias")).unwrap(), b"new bytes");
         assert_eq!(fs::metadata(second.path.join("alias")).unwrap().nlink(), 2);
-        publication::check_manifest(&third).unwrap();
+        publication::check_manifest(&third, &AtomicBool::new(false)).unwrap();
     }
 }
 

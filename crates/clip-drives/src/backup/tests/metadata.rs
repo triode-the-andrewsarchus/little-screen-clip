@@ -94,7 +94,7 @@ fn file_metadata_and_raw_attributes_are_verified_and_recorded_without_omissions(
         ),
         (2, 0, 0)
     );
-    publication::check_manifest(&version).unwrap();
+    publication::check_manifest(&version, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]
@@ -290,8 +290,8 @@ fn hard_links_share_a_backup_inode_and_retain_original_relationship_facts() {
         fs::read(next.path.join("nested/alias")).unwrap(),
         b"new shared contents"
     );
-    publication::check_manifest(&version).unwrap();
-    publication::check_manifest(&next).unwrap();
+    publication::check_manifest(&version, &AtomicBool::new(false)).unwrap();
+    publication::check_manifest(&next, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn raw_named_hard_linked_symlinks_preserve_the_link_inode_and_leave_the_referent
     let captured = facts(&version, &alias);
     assert_eq!(captured["links"], 2);
     assert_eq!(fs::read(referent).unwrap(), b"outside canary");
-    publication::check_manifest(&version).unwrap();
+    publication::check_manifest(&version, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]
@@ -512,5 +512,5 @@ fn bounded_attribute_collection_preserves_payload_and_reports_uncaptured_metadat
         1
     );
     assert!(version.fidelity.as_ref().unwrap().omitted_fields > 0);
-    publication::check_manifest(&version).unwrap();
+    publication::check_manifest(&version, &AtomicBool::new(false)).unwrap();
 }

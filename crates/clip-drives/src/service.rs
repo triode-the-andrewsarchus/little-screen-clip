@@ -36,8 +36,8 @@ pub struct Service {
 }
 mod admission;
 mod background;
-mod catalog_cleanup;
 mod lifetime;
+mod maintenance;
 mod partition;
 mod policy;
 mod preflight;
@@ -56,7 +56,7 @@ struct Owner {
     deferred: std::collections::VecDeque<Envelope>,
     sync_epoch: u64,
     background: HashMap<String, background::Pending>,
-    catalog_cleanup: catalog_cleanup::Cleanup,
+    maintenance: maintenance::Cleanup,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
     authority: Arc<partition::Authority>,
@@ -190,7 +190,7 @@ impl Service {
             deferred: Default::default(),
             sync_epoch: 0,
             background: HashMap::new(),
-            catalog_cleanup: Default::default(),
+            maintenance: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             authority,
@@ -441,10 +441,6 @@ impl Owner {
         previous != status.drives
     }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
-        // Manifest verification can involve substantial disk I/O; keep it off daemon startup.
-        if let Err(error) = backup::recover_publications(&self.db) {
-            tracing::warn!("Prepared backup recovery failed: {error}");
-        }
         self.recover_ram();
         let mut discovered = Instant::now();
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
@@ -469,7 +465,7 @@ impl Owner {
                 discovered = Instant::now();
             }
             self.poll_background();
-            self.catalog_cleanup.poll(
+            self.maintenance.poll(
                 &self.backup_jobs,
                 &self.db,
                 &self.state,
@@ -557,8 +553,8 @@ impl Owner {
             self.poll_background();
             std::thread::sleep(Duration::from_millis(20));
         }
-        while self.catalog_cleanup.busy() {
-            self.catalog_cleanup.poll(
+        while self.maintenance.busy() {
+            self.maintenance.poll(
                 &self.backup_jobs,
                 &self.db,
                 &self.state,
@@ -593,6 +589,11 @@ impl Owner {
         }
         if let Err(error) = self.validate_backup_request(&envelope) {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+            return;
+        }
+        // Retention owns only backup storage; it does not need a source-drive pin.
+        if matches!(envelope.request, DriveRequest::PruneBackups { .. }) {
+            self.start_background(envelope);
             return;
         }
         if self.ram_setup.is_some()
@@ -753,15 +754,8 @@ impl Owner {
             }
             DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
             DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
-            DriveRequest::PruneBackups { drive } => {
-                if !self.background.is_empty() {
-                    return Err("Wait for the active backup or catalog before pruning".into());
-                }
-                let keep = self
-                    .config
-                    .backup_keep_versions
-                    .ok_or("Set drives.backup_keep_versions before explicitly pruning backups")?;
-                backup::prune(&self.db, &drive, keep, cancel)
+            DriveRequest::PruneBackups { .. } => {
+                Err("Backup retirement requires retained worker admission".into())
             }
             DriveRequest::Configure { config } => {
                 policy::validate_config(&config)?;
@@ -1225,6 +1219,7 @@ mod tests {
     mod catalog_workers;
     mod event_loss;
     mod guest_ram;
+    mod maintenance;
     mod native_images;
     mod native_read_only;
     mod policy_coverage;

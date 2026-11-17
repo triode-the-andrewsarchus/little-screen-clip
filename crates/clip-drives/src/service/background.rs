@@ -58,13 +58,17 @@ impl Owner {
             self.background.is_empty()
         };
         if !available
-            || self.catalog_cleanup.busy()
+            || self.maintenance.busy()
             || self
                 .partition
                 .as_ref()
                 .is_some_and(partition::Pending::is_backup)
         {
             self.defer_operation(envelope);
+            return;
+        }
+        if matches!(envelope.request, DriveRequest::PruneBackups { .. }) {
+            self.start_prune(envelope);
             return;
         }
         let (drive, roots) = match self.bulk_roots(&envelope) {
@@ -90,6 +94,36 @@ impl Owner {
         }
         drop(envelope.review.take());
         self.launch_bulk(envelope, drive, self.config.clone(), roots, None);
+    }
+    fn start_prune(&mut self, envelope: Envelope) {
+        let prepared = (|| {
+            let drive = self
+                .request_drive(&envelope.request)?
+                .ok_or("Missing retirement drive")?;
+            let keep = self
+                .config
+                .backup_keep_versions
+                .ok_or("Set drives.backup_keep_versions before explicitly pruning backups")?;
+            Ok::<_, Error>((drive, keep))
+        })();
+        let (drive, keep) = match prepared {
+            Ok(value) => value,
+            Err(error) => {
+                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+                return;
+            }
+        };
+        if self.check_busy(&drive).is_err() {
+            self.defer_operation(envelope);
+            return;
+        }
+        let state = self.state.clone();
+        let cancel = envelope.cancel.clone();
+        let selected = drive.clone();
+        self.launch(envelope, drive, Vec::new(), None, move || {
+            let db = Store::existing(&state.join("drives.sqlite"), false)?;
+            backup::prune(&db, &selected, keep, &cancel)
+        });
     }
     fn bulk_roots(&self, envelope: &Envelope) -> Result<(Drive, Vec<Arc<Root>>)> {
         let selector = match &envelope.request {
@@ -129,11 +163,33 @@ impl Owner {
         roots: Vec<Arc<Root>>,
         context: Option<partition::BackupContext>,
     ) {
+        let drive_id = drive.id.clone();
+        let worker = worker::Worker {
+            state: self.state.clone(),
+            id: envelope.id.clone(),
+            request: envelope.request.clone(),
+            drive,
+            config,
+            roots: roots.clone(),
+            context: context.clone(),
+            cancel: envelope.cancel.clone(),
+            authority: self.authority.clone(),
+            inventory: self.inventory.clone(),
+        };
+        self.launch(envelope, drive_id, roots, context, move || worker.run());
+    }
+    fn launch(
+        &mut self,
+        envelope: Envelope,
+        drive_id: String,
+        roots: Vec<Arc<Root>>,
+        context: Option<partition::BackupContext>,
+        work: impl FnOnce() -> Result<String> + Send + 'static,
+    ) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", &envelope.id) {
             operation.state = "running".into();
             let _ = self.db.put("operation", &envelope.id, &operation);
         }
-        let drive_id = drive.id.clone();
         let destination = matches!(
             envelope.request,
             DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
@@ -147,19 +203,7 @@ impl Owner {
             envelope.request,
             DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. }
         );
-        let worker = worker::Worker {
-            state: self.state.clone(),
-            id: envelope.id.clone(),
-            request: envelope.request,
-            drive,
-            config,
-            roots: roots.clone(),
-            context: context.clone(),
-            cancel: envelope.cancel.clone(),
-            authority: self.authority.clone(),
-            inventory: self.inventory.clone(),
-        };
-        let task = write_task(&self.backup_jobs, move || worker.run());
+        let task = write_task(&self.backup_jobs, work);
         self.background.insert(
             envelope.id.clone(),
             Pending {

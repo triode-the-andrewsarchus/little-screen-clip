@@ -217,7 +217,9 @@ impl Owner {
             envelope.request,
             DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
         );
-        if self.partition.is_some() || (backup && !self.background.is_empty()) {
+        if self.partition.is_some()
+            || (backup && (!self.background.is_empty() || self.maintenance.busy()))
+        {
             self.defer_operation(envelope);
             return;
         }

@@ -77,6 +77,15 @@ impl Store {
             })?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+    /// Bounded key pages remain stable when completed entities are removed.
+    pub fn ids(&self, kind: &str, after: &str, limit: usize) -> Result<Vec<String>> {
+        let mut statement = self.0.prepare("SELECT CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind=?1 AND id>?2 ORDER BY id LIMIT ?3")?;
+        let rows = statement.query_map(params![kind, after, limit.min(1000) as i64], |row| {
+            row.get::<_, Option<String>>(0)
+        })?;
+        rows.map(|row| Ok(row?.ok_or("Entity identifier exceeds its decoding budget")?))
+            .collect()
+    }
     /// Limits decoding before materializing a potentially corrupt metadata record.
     pub fn get_bounded<T: DeserializeOwned>(
         &self,
@@ -140,5 +149,45 @@ impl Store {
         self.0
             .execute("DELETE FROM entries WHERE scan=?1", [scan])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entity_key_pages_survive_removals_without_skipping_and_reject_oversized_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        for index in 0..257 {
+            let id = format!("key-{index:04}");
+            db.put("pending", &id, &()).unwrap();
+            db.put("unrelated", &id, &()).unwrap();
+        }
+        let mut after = String::new();
+        let mut removed = 0;
+        loop {
+            let page = db.ids("pending", &after, 128).unwrap();
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = last.clone();
+            for id in page {
+                db.remove("pending", &id).unwrap();
+                removed += 1;
+            }
+        }
+        assert_eq!(removed, 257);
+        assert_eq!(db.ids("unrelated", "", 1000).unwrap().len(), 257);
+        let oversized = "x".repeat(129);
+        db.put("pending", &oversized, &()).unwrap();
+        assert!(
+            db.ids("pending", "", 128)
+                .unwrap_err()
+                .to_string()
+                .contains("decoding budget")
+        );
+        assert!(db.get::<()>("pending", &oversized).unwrap().is_some());
     }
 }

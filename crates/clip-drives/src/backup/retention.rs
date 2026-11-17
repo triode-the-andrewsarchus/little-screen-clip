@@ -138,7 +138,7 @@ fn protected(db: &Store, backup: &Backup) -> Result<bool> {
 fn withdraw(db: &Store, version: &Backup, parent: &Root, cancel: &AtomicBool) -> Result<Intent> {
     cancelled(cancel)?;
     artifact_name(version)?;
-    publication::check_manifest(version)?;
+    publication::check_manifest(version, cancel)?;
     let intent = Intent {
         version: 1,
         backup: version.clone(),
@@ -299,7 +299,7 @@ fn apply(
         None => retained(db, intent, &parent, cancel)?,
     };
     if let Some(artifact) = artifact {
-        publication::check_manifest(&intent.backup)?;
+        publication::check_manifest(&intent.backup, cancel)?;
         remove_artifact(&parent, intent, artifact, cancel)?;
     }
     finish(db, intent, &parent, cancel)
@@ -326,9 +326,10 @@ fn attempt(
     intent: &mut Intent,
     cancel: &AtomicBool,
     initial: Option<Artifact>,
+    pause_on_cancel: bool,
 ) -> Result<()> {
     if let Err(error) = apply(db, intent, cancel, initial) {
-        intent.paused = cancel.load(std::sync::atomic::Ordering::Relaxed);
+        intent.paused = pause_on_cancel && cancel.load(std::sync::atomic::Ordering::Relaxed);
         let transaction = db.0.unchecked_transaction()?;
         db.put(KIND, &intent.backup.id, intent)?;
         db.put(
@@ -357,16 +358,12 @@ fn attempt(
     Ok(())
 }
 
-fn pending_ids(db: &Store, after: &str) -> Result<Vec<String>> {
-    let mut statement = db.0.prepare("SELECT CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind=?1 AND id>?2 ORDER BY id LIMIT 128")?;
-    let rows = statement.query_map(rusqlite::params![KIND, after], |row| {
-        row.get::<_, Option<String>>(0)
-    })?;
-    rows.map(|row| Ok(row?.ok_or("Retirement identifier exceeds its decoding budget")?))
-        .collect()
-}
-
-fn resume_one(db: &Store, id: &str, drive: Option<&str>, cancel: &AtomicBool) -> Result<bool> {
+pub(super) fn resume_one(
+    db: &Store,
+    id: &str,
+    drive: Option<&str>,
+    cancel: &AtomicBool,
+) -> Result<bool> {
     let Some(mut intent) = db.get_bounded::<Intent>(KIND, id, 64 * 1024)? else {
         return Ok(false);
     };
@@ -381,7 +378,7 @@ fn resume_one(db: &Store, id: &str, drive: Option<&str>, cancel: &AtomicBool) ->
         intent.paused = false;
         db.put(KIND, id, &intent)?;
     }
-    attempt(db, &mut intent, cancel, None)?;
+    attempt(db, &mut intent, cancel, None, drive.is_some())?;
     Ok(true)
 }
 
@@ -389,12 +386,14 @@ fn resume(db: &Store, drive: Option<&str>, cancel: &AtomicBool) -> Result<usize>
     let mut after = String::new();
     let mut removed = 0;
     loop {
-        let page = pending_ids(db, &after)?;
+        cancelled(cancel)?;
+        let page = db.ids(KIND, &after, 128)?;
         let Some(last) = page.last() else {
             return Ok(removed);
         };
         after = last.clone();
         for id in page {
+            cancelled(cancel)?;
             match resume_one(db, &id, drive, cancel) {
                 Ok(done) => removed += usize::from(done),
                 Err(error) if drive.is_some() => {
@@ -409,8 +408,8 @@ fn resume(db: &Store, drive: Option<&str>, cancel: &AtomicBool) -> Result<usize>
     }
 }
 
-pub(super) fn recover(db: &Store) -> Result<()> {
-    resume(db, None, &AtomicBool::new(false)).map(|_| ())
+pub(super) fn recover(db: &Store, cancel: &AtomicBool) -> Result<()> {
+    resume(db, None, cancel).map(|_| ())
 }
 
 pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -> Result<String> {
@@ -461,7 +460,7 @@ fn prune_version(db: &Store, version: &Backup, cancel: &AtomicBool) -> Result<()
     }
     let mut intent = withdraw(db, version, &parent, cancel)?;
     // Keep the exclusive lease across withdrawal and the first cleanup attempt.
-    attempt(db, &mut intent, cancel, Some(artifact))
+    attempt(db, &mut intent, cancel, Some(artifact), true)
 }
 
 fn planned_versions(db: &Store, drive: &str) -> Result<Vec<Backup>> {

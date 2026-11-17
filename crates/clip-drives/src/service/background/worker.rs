@@ -92,7 +92,7 @@ impl Worker {
         kind: BackupKind,
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
-        backup::recover_publications(db)?;
+        backup::recover_with_cancel(db, &self.cancel)?;
         let destination = self
             .roots
             .last()

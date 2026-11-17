@@ -96,7 +96,7 @@ pub(super) fn publish(
         manifest_staged,
     };
     db.put("backup-publication", &pending.backup.id, &pending)?;
-    install(db, parent, pending)
+    install(db, parent, pending, cancel)
 }
 fn artifact_identity(path: &Path, kind: BackupKind) -> Result<crate::StorageIdentity> {
     let held = kernel_interface::pin(path, false)?;
@@ -108,16 +108,9 @@ fn artifact_identity(path: &Path, kind: BackupKind) -> Result<crate::StorageIden
     }
     Ok(crate::StorageIdentity::pinned(&held)?)
 }
-fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
+fn validate_manifest(backup: &Backup, path: &Path, cancel: &AtomicBool) -> Result<()> {
     let mut bytes = u64::MAX;
-    read_manifest(
-        backup,
-        path,
-        &AtomicBool::new(false),
-        &mut bytes,
-        Duration::MAX,
-        |_| Ok(()),
-    )
+    read_manifest(backup, path, cancel, &mut bytes, Duration::MAX, |_| Ok(()))
 }
 
 /// Validates the locally owned completed manifest location.
@@ -204,7 +197,7 @@ fn validate_header(backup: &Backup, manifest: &Store) -> Result<()> {
     }
     Ok(())
 }
-fn install(db: &Store, parent: &Root, mut pending: Pending) -> Result<Backup> {
+fn install(db: &Store, parent: &Root, mut pending: Pending, cancel: &AtomicBool) -> Result<Backup> {
     let backup = &mut pending.backup;
     let manifest = backup.manifest.as_ref().ok_or("Missing manifest path")?;
     if parent.storage_identity()? != pending.parent_identity
@@ -235,7 +228,7 @@ fn install(db: &Store, parent: &Root, mut pending: Pending) -> Result<Backup> {
     } else {
         &pending.manifest_staged
     };
-    validate_manifest(backup, manifest_input)?;
+    validate_manifest(backup, manifest_input, cancel)?;
     if !manifest_ready {
         rename_noreplace(
             manifest_input,
@@ -261,34 +254,7 @@ fn install(db: &Store, parent: &Root, mut pending: Pending) -> Result<Backup> {
         backup.revision = Some(FileSource::capture_file(&file)?.revision_key());
     }
     parent.validate()?;
-    let pointer = parent.path.join(if backup.kind == BackupKind::Files {
-        "current-files.json"
-    } else {
-        "current-image.json"
-    });
-    let bytes = serde_json::to_vec(backup)?;
-    if parent
-        .metadata(Path::new(
-            pointer
-                .file_name()
-                .ok_or("Missing current reference name")?,
-        ))?
-        .is_some()
-    {
-        FileSource::capture(&pointer)?.write_in(&pointer, &bytes, &pin)?;
-    } else {
-        create_file_in(&pointer, &bytes, &pin)?;
-    }
-    // Both durable artifacts and the filesystem reference precede the atomic registry update.
-    let transaction = db.0.unchecked_transaction()?;
-    db.put("backup", &backup.id, backup)?;
-    db.put(
-        "backup-current",
-        &current_key(&backup.drive, backup.kind),
-        &backup.id,
-    )?;
-    db.remove("backup-publication", &backup.id)?;
-    transaction.commit()?;
+    publish_record(db, parent, &pin, backup)?;
     if let Some(directory) = pending.manifest_staged.parent() {
         // Remove only our now-empty scratch directory; never recursively delete recovery metadata.
         if directory
@@ -300,9 +266,59 @@ fn install(db: &Store, parent: &Root, mut pending: Pending) -> Result<Backup> {
     }
     Ok(pending.backup)
 }
-pub(super) fn check_manifest(backup: &Backup) -> Result<()> {
+fn publish_record(db: &Store, parent: &Root, pin: &File, backup: &Backup) -> Result<()> {
+    let advance = advance_current(db, backup)?;
+    if advance {
+        write_current(parent, pin, backup)?;
+    }
+    // Artifacts and any head update precede atomic registry publication.
+    let transaction = db.0.unchecked_transaction()?;
+    db.put("backup", &backup.id, backup)?;
+    if advance {
+        db.put(
+            "backup-current",
+            &current_key(&backup.drive, backup.kind),
+            &backup.id,
+        )?;
+    }
+    db.remove("backup-publication", &backup.id)?;
+    transaction.commit()?;
+    Ok(())
+}
+fn write_current(parent: &Root, pin: &File, backup: &Backup) -> Result<()> {
+    let name = if backup.kind == BackupKind::Files {
+        "current-files.json"
+    } else {
+        "current-image.json"
+    };
+    let pointer = parent.path.join(name);
+    let bytes = serde_json::to_vec(backup)?;
+    if parent.metadata(Path::new(name))?.is_some() {
+        FileSource::capture(&pointer)?.write_in(&pointer, &bytes, pin)?;
+    } else {
+        create_file_in(&pointer, &bytes, pin)?;
+    }
+    Ok(())
+}
+
+fn advance_current(db: &Store, backup: &Backup) -> Result<bool> {
+    let Some(current) = db.get_bounded::<String>(
+        "backup-current",
+        &current_key(&backup.drive, backup.kind),
+        128,
+    )?
+    else {
+        return Ok(true);
+    };
+    // Retry may finish an older prepared version after a newer version was
+    // published. Registry registration order, not wall-clock time, owns the head.
+    let superseded: bool = db.0.query_row("SELECT EXISTS(SELECT 1 FROM entities published JOIN entities pending ON pending.kind='backup-publication' AND pending.id=?1 WHERE published.kind='backup' AND published.id=?2 AND published.rowid>pending.rowid)", rusqlite::params![backup.id, current], |row| row.get(0))?;
+    Ok(!superseded)
+}
+
+pub(super) fn check_manifest(backup: &Backup, cancel: &AtomicBool) -> Result<()> {
     if let Some(path) = &backup.manifest {
-        validate_manifest(backup, path)?;
+        validate_manifest(backup, path, cancel)?;
     }
     Ok(())
 }
@@ -323,38 +339,58 @@ pub(super) fn remove_manifest(parent: &Root, backup: &Backup, cancel: &AtomicBoo
     Ok(())
 }
 /// Reconcile only fully prepared publications; copying-stage data is never advertised as complete.
-pub(crate) fn recover(db: &Store) -> Result<()> {
-    let pending: Vec<Pending> = db.list("backup-publication", 0, 1000)?;
-    for pending in pending {
-        let id = pending.backup.id.clone();
-        let drive = pending.backup.drive.clone();
-        let artifact = pending.backup.path.clone();
-        let outcome = (|| {
-            let parent = Root::open(
-                pending
-                    .backup
-                    .path
-                    .parent()
-                    .ok_or("Missing publication parent")?,
-            )?;
-            install(db, &parent, pending)
-        })();
-        if let Err(error) = outcome {
-            let cause = error.recovery_cause();
-            db.put(
-                "recovery",
-                &id,
-                &crate::DriveRecovery {
-                    id: id.clone(),
-                    drive,
-                    cause,
-                    artifact,
-                    message: error.to_string(),
-                },
-            )?;
-        } else {
-            db.remove("recovery", &id)?;
+pub(crate) fn recover(db: &Store, cancel: &AtomicBool) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        cancelled(cancel)?;
+        let page = db.ids("backup-publication", &after, 128)?;
+        let Some(last) = page.last() else {
+            return Ok(());
+        };
+        after = last.clone();
+        for id in page {
+            cancelled(cancel)?;
+            if let Err(error) = recover_one(db, &id, cancel) {
+                tracing::warn!("Prepared backup {id} remains pending: {error}");
+            }
         }
     }
-    Ok(())
+}
+
+pub(super) fn recover_one(db: &Store, id: &str, cancel: &AtomicBool) -> Result<bool> {
+    cancelled(cancel)?;
+    let Some(pending) = db.get_bounded::<Pending>("backup-publication", id, 64 * 1024)? else {
+        return Ok(false);
+    };
+    if pending.backup.id != id {
+        return Err("Prepared backup record identifier changed".into());
+    }
+    let drive = pending.backup.drive.clone();
+    let artifact = pending.backup.path.clone();
+    let outcome = (|| {
+        let parent = Root::open(
+            pending
+                .backup
+                .path
+                .parent()
+                .ok_or("Missing publication parent")?,
+        )?;
+        install(db, &parent, pending, cancel)
+    })();
+    if let Err(error) = outcome {
+        db.put(
+            "recovery",
+            id,
+            &crate::DriveRecovery {
+                id: id.into(),
+                drive,
+                cause: error.recovery_cause(),
+                artifact,
+                message: error.to_string(),
+            },
+        )?;
+        return Err(error);
+    }
+    db.remove("recovery", id)?;
+    Ok(true)
 }

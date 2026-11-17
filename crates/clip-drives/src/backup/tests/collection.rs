@@ -30,7 +30,7 @@ impl FileFixture {
         )
         .unwrap();
         assert_eq!(reference.id, expected.id);
-        publication::check_manifest(expected).unwrap();
+        publication::check_manifest(expected, &AtomicBool::new(false)).unwrap();
     }
 }
 
@@ -85,7 +85,7 @@ fn changed_file_is_recollected_and_manifest_describes_the_installed_revision() {
     let started: u64 = manifest.get("collection", "started_at").unwrap().unwrap();
     let completed: u64 = manifest.get("collection", "completed_at").unwrap().unwrap();
     assert!(started > 0 && completed > 0);
-    publication::check_manifest(&second).unwrap();
+    publication::check_manifest(&second, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]

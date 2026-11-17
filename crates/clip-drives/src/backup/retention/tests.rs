@@ -30,7 +30,7 @@ fn a_current_pointer_cannot_be_hidden_by_removing_its_completed_record() {
     };
     fixture.db.put(KIND, &current.id, &intent).unwrap();
     fixture.db.remove("backup", &current.id).unwrap();
-    recover(&fixture.db).unwrap();
+    recover(&fixture.db, &AtomicBool::new(false)).unwrap();
     assert!(current.path.exists());
     assert!(
         fixture
@@ -126,8 +126,8 @@ fn retirement_reopens_after_each_durable_filesystem_boundary() {
                 .is_none()
         );
         let reopened = Store::existing(&fixture.temp.path().join("db"), false).unwrap();
-        recover(&reopened).unwrap();
-        recover(&reopened).unwrap();
+        recover(&reopened, &AtomicBool::new(false)).unwrap();
+        recover(&reopened, &AtomicBool::new(false)).unwrap();
         assert!(!old.path.exists() && !target.exists(), "{boundary}");
         assert!(!old.manifest.as_ref().unwrap().exists(), "{boundary}");
         assert!(
@@ -148,10 +148,10 @@ fn cancelled_retirement_stays_paused_across_restart_until_explicit_retry() {
     let parent = Root::open(old.path.parent().unwrap()).unwrap();
     let mut intent = withdraw(&fixture.db, &old, &parent, &fixture.cancel).unwrap();
     fixture.cancel.store(true, Ordering::Relaxed);
-    assert!(attempt(&fixture.db, &mut intent, &fixture.cancel, None).is_err());
+    assert!(attempt(&fixture.db, &mut intent, &fixture.cancel, None, true).is_err());
     assert!(intent.paused);
     let reopened = Store::existing(&fixture.temp.path().join("db"), false).unwrap();
-    recover(&reopened).unwrap();
+    recover(&reopened, &AtomicBool::new(false)).unwrap();
     assert!(old.path.exists());
     assert!(
         reopened
@@ -168,6 +168,26 @@ fn cancelled_retirement_stays_paused_across_restart_until_explicit_retry() {
     );
     assert!(!old.path.exists());
     assert!(current.path.exists());
+}
+
+#[test]
+fn automatic_recovery_cancellation_does_not_turn_into_a_user_pause() {
+    let (fixture, old, _) = versions();
+    let parent = Root::open(old.path.parent().unwrap()).unwrap();
+    withdraw(&fixture.db, &old, &parent, &fixture.cancel).unwrap();
+    fixture.cancel.store(true, Ordering::Release);
+    assert!(resume_one(&fixture.db, &old.id, None, &fixture.cancel).is_err());
+    assert!(
+        !fixture
+            .db
+            .get::<Intent>(KIND, &old.id)
+            .unwrap()
+            .unwrap()
+            .paused
+    );
+    fixture.cancel.store(false, Ordering::Release);
+    recover(&fixture.db, &fixture.cancel).unwrap();
+    assert!(!old.path.exists());
 }
 
 #[test]
@@ -210,7 +230,7 @@ fn replaced_or_corrupt_retirement_inputs_are_retained_without_deleting_foreign_d
             _ => unreachable!(),
         }
         fixture.db.put(KIND, &old.id, &intent).unwrap();
-        recover(&fixture.db).unwrap();
+        recover(&fixture.db, &AtomicBool::new(false)).unwrap();
         assert!(
             fixture.db.get::<Intent>(KIND, &old.id).unwrap().is_some(),
             "{fault}"

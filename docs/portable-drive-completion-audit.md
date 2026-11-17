@@ -54,6 +54,42 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Retained maintenance checkpoint
+
+Explicit pruning and startup backup recovery now share the existing retained
+bulk pool with catalog maintenance. The owner schedules bounded rowid passes;
+workers perform manifest checks, publication and tree retirement. Recovery
+identifiers and pending publication decoding are bounded. Cancellation reaches
+manifest hashing and retirement. User cancellation persists a paused retirement;
+shutdown cancellation leaves automatic recovery resumable. Prepared and retiring
+legacy destinations remain excluded during their journal lifetime. A recovered
+older publication cannot roll the current registry or filesystem reference back
+over a newer completed version, including with misleading wall-clock dates.
+
+Host acceptance uses 10,000-file withdrawn versions with the source offline.
+Both explicit pruning and startup recovery keep Configure and an independent
+pair's sync responsive while retirement remains active. The explicit case cancels
+and retries; the startup case shuts down and restarts before completion. All three
+maintenance tests pass (28.50 seconds, 18,596 KiB peak child RSS). The ordinary
+backend suite passes 187 tests, with 79 opt-in cases ignored; all-target backend
+Clippy passes with warnings denied. Unprivileged real Btrfs retention also passes
+after these changes. Evidence: `/tmp/portable-drive-maintenance-live.log`,
+`/tmp/portable-drive-maintenance-backend-final.log`,
+`/tmp/portable-drive-maintenance-clippy-final.log`, and
+`/tmp/portable-drive-maintenance-btrfs.log`.
+
+The original architecture-baseline comparison still reports REGRESSION across
+the full branch: 4,300 clone groups and 144 cycles, unchanged from the preceding
+retention checkpoint. Average CCN is 3.48, maximum 274 and duplication 7.03%.
+Publication installation drops from CCN 51 to 39 by separating artifact
+installation from current-reference/registry publication. The remaining
+branch-wide findings still require final review.
+
+Items 1.5 and 4.6 remain Partial: source/destination pin admission, remaining
+mount controls, slower storage, native-format responsiveness and wider fault
+matrices need further evidence. Legacy-root protection after all old journals
+are gone remains part of the migration/no-index work.
+
 ## Durable backup retirement checkpoint
 
 Pruning now withdraws a selected completed version and inserts its versioned local

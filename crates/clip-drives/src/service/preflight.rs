@@ -12,32 +12,41 @@ struct Destination {
     path: PathBuf,
 }
 
+#[derive(serde::Deserialize)]
+struct RetainedDestination {
+    backup: Destination,
+}
+
 pub(super) fn managed_backup_paths(db: &Store) -> Result<Vec<PathBuf>> {
+    let snapshot = if db.0.is_autocommit() {
+        Some(db.0.unchecked_transaction()?)
+    } else {
+        None
+    };
     let mut paths = Vec::new();
-    let mut offset = 0;
-    loop {
-        let roots = db.list::<Destination>("backup-root", offset, 128)?;
-        if roots.is_empty() {
-            break;
+    db.visit::<Destination>("backup-root", |root| {
+        paths.push(root.path);
+        Ok(())
+    })?;
+    // Keep legacy destinations protected across the atomic completed-to-retiring
+    // transition, including roots absent from the current preference.
+    let mut collect = |path: PathBuf| {
+        if let Some(base) = path.parent().and_then(Path::parent) {
+            paths.push(base.to_path_buf());
         }
-        paths.extend(roots.into_iter().map(|root| root.path));
-        offset += 128;
+    };
+    db.visit::<Destination>("backup", |version| {
+        collect(version.path);
+        Ok(())
+    })?;
+    for kind in ["backup-publication", "backup-prune"] {
+        db.visit::<RetainedDestination>(kind, |retained| {
+            collect(retained.backup.path);
+            Ok(())
+        })?;
     }
-    // Completed versions from older service releases predate destination enrollment.
-    offset = 0;
-    loop {
-        let versions = db.list::<DriveBackup>("backup", offset, 128)?;
-        if versions.is_empty() {
-            break;
-        }
-        paths.extend(versions.into_iter().filter_map(|version| {
-            version
-                .path
-                .parent()
-                .and_then(Path::parent)
-                .map(Path::to_path_buf)
-        }));
-        offset += 128;
+    if let Some(snapshot) = snapshot {
+        snapshot.commit()?;
     }
     paths.sort();
     paths.dedup();

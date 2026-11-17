@@ -204,6 +204,16 @@ File and image backups validate their selected destination against managed stora
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
 
+Explicit pruning uses the same retained worker pool and works when the source
+partition is offline. Startup recovery visits prepared publications, withdrawn
+versions and catalog maintenance in bounded passes on that pool. Controls and
+unrelated folder pairs continue while cleanup runs. Cancelling explicit pruning
+pauses its journal until another prune request; daemon shutdown leaves automatic
+recovery eligible to resume at the next start. Retiring and prepared destinations
+remain excluded from indexing and sync enrollment while their journals exist.
+If an older prepared backup finishes after a newer publication, it becomes
+history without replacing the newer current reference.
+
 Child lookups use Linux `openat2` (available since Linux 5.6), with
 `RESOLVE_NO_XDEV` to refuse nested mounts before entering their metadata or
 content handlers. The check covers same-filesystem bind mounts too, including
