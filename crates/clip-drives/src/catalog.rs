@@ -24,6 +24,8 @@ use std::{
 };
 mod capture_details;
 mod hashes;
+mod providers;
+use providers::ProviderIdentity;
 pub(crate) mod redaction;
 mod server;
 pub(crate) mod staging;
@@ -120,21 +122,6 @@ impl OpenFile {
         source.check_file(&file)?;
         root.validate()?;
         Ok(Self { file, source, root })
-    }
-}
-enum ProviderIdentity {
-    Original,
-    Files(crate::StorageIdentity),
-    Image(backup::ImageMount),
-}
-impl ProviderIdentity {
-    fn validate(&self, root: &Root) -> Result<()> {
-        match self {
-            Self::Original => root.validate(),
-            Self::Files(identity) if root.storage_identity()? == *identity => Ok(()),
-            Self::Files(_) => Err("Backup directory identity changed".into()),
-            Self::Image(mount) => mount.validate(root),
-        }
     }
 }
 struct CatalogFs {
@@ -356,8 +343,9 @@ impl CatalogFs {
                 if version.drive == self.catalog.drive && version.evidence == self.catalog.evidence
                 {
                     if version.kind == crate::BackupKind::Files {
-                        if let Some(identity) = version.identity {
-                            providers.push((version.path, ProviderIdentity::Files(identity)));
+                        if version.identity.is_some() {
+                            providers
+                                .push((version.path.clone(), ProviderIdentity::Files(version)));
                         }
                     } else if let Some(mount) = version.mount.clone()
                         && let Some(observed) =
@@ -400,15 +388,9 @@ impl CatalogFs {
             if recursive(&root.path) {
                 continue;
             }
-            if identity.validate(&root).is_err() {
-                stale = true;
-                continue;
-            }
-            let Ok(file) = root.input(&entry.path) else {
-                continue;
-            };
-            match OpenFile::validated(root, file, entry) {
-                Ok(open) => return Ok(open),
+            match identity.open(root, self, entry) {
+                Ok(Some(open)) => return Ok(open),
+                Ok(None) => {}
                 Err(_) => stale = true,
             }
         }
@@ -654,6 +636,14 @@ mod tests {
     }
     fn fixture() -> Fixture {
         fixture_in(None)
+    }
+    fn native_fixture() -> (tempfile::TempDir, Fixture) {
+        let mut fixture = fixture();
+        let (native, _, drive) = crate::sync_edge_tests::native_fs::fixture();
+        std::fs::write(native.path().join("file.txt"), b"catalog payload").unwrap();
+        fixture.source = Root::open(native.path()).unwrap();
+        fixture.drive = drive;
+        (native, fixture)
     }
     fn fixture_in(base: Option<&Path>) -> Fixture {
         let base = base

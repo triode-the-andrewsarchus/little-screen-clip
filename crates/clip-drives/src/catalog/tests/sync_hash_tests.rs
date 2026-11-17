@@ -354,11 +354,7 @@ fn a_sync_digest_cannot_replace_a_verified_completed_backup_digest() {
 #[test]
 #[ignore = "requires isolated native FAT32/exFAT/NTFS sources"]
 fn native_coarse_sources_do_not_promote_sync_hashes_without_tracking_provenance() {
-    let mut fixture = fixture();
-    let (native, _, drive) = crate::sync_edge_tests::native_fs::fixture();
-    fs::write(native.path().join("file.txt"), b"catalog payload").unwrap();
-    fixture.source = Root::open(native.path()).unwrap();
-    fixture.drive = drive;
+    let (_native, fixture) = native_fixture();
     let pair = fixture.pair(Path::new(""));
     assert!(
         scan::entry(&fixture.db, &cache(&pair), Path::new("file.txt"))

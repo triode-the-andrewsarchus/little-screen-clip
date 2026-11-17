@@ -107,16 +107,7 @@ impl Reuse<'_> {
             .path
             .strip_prefix(prefix)
             .map_err(|error| error.to_string())?;
-        // Bound optional row decoding even if the registry contains oversized data.
-        use rusqlite::OptionalExtension;
-        let row: Option<String> = manifest.0.query_row(
-            "SELECT json FROM entries WHERE scan=?1 AND path=?2 AND length(CAST(json AS BLOB))<=65536",
-            rusqlite::params![scan, relative.as_os_str().as_bytes()], |row| row.get(0),
-        ).optional()?;
-        let Some(saved) = row
-            .map(|json| serde_json::from_str::<Entry>(&json))
-            .transpose()?
-        else {
+        let Some(saved) = scan::entry(manifest, scan, relative)? else {
             return Ok(false);
         };
         self.promote(saved, prefix, generation, entry)

@@ -1,20 +1,6 @@
 //! Bounded, current-first discovery of completed file-backup fingerprints.
 use super::*;
 
-fn manifest(version: &Backup, drive: &crate::Drive) -> Option<PathBuf> {
-    let path = version.manifest.as_ref()?;
-    if version.kind != crate::BackupKind::Files
-        || version.drive != drive.id
-        || version.evidence != drive.evidence
-        || uuid::Uuid::parse_str(&version.id).is_err()
-        || path.parent() != version.path.parent()
-        || path.file_name() != Some(OsStr::new(&format!("{}.manifest.sqlite", version.id)))
-    {
-        return None;
-    }
-    Some(path.clone())
-}
-
 impl Reuse<'_> {
     fn candidate(
         &self,
@@ -27,7 +13,10 @@ impl Reuse<'_> {
         if self.remaining().is_zero() || *bytes == 0 {
             return Ok(());
         }
-        let Some(path) = manifest(version, drive) else {
+        if version.drive != drive.id || version.evidence != drive.evidence {
+            return Ok(());
+        }
+        let Some(path) = backup::files_manifest(version) else {
             return Ok(());
         };
         let pending = match *missing {
@@ -44,7 +33,7 @@ impl Reuse<'_> {
         let transaction = self.catalog.0.unchecked_transaction()?;
         let mut imported = 0;
         let result =
-            backup::read_manifest(version, &path, self.cancel, bytes, self.remaining(), |db| {
+            backup::read_manifest(version, path, self.cancel, bytes, self.remaining(), |db| {
                 imported = self.merge(db, &format!("backup:{}", version.id), pending)?;
                 Ok(())
             });

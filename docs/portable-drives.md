@@ -411,6 +411,18 @@ File-backup providers must retain their saved directory identity; replacing a
 backup directory does not authorize the replacement to supply catalog contents.
 Older records without that identity cannot supply file contents. When a catalog
 entry has a digest, validation hashes the same retained descriptor used for reads.
+Without a catalog digest, a file backup additionally needs its verified completed
+manifest. The manifest must describe the same captured source root and full file
+revision, including change time and inode, and supply a valid SHA-256 fingerprint.
+The provider's retained file is checked against that fingerprint before any bytes
+are returned. Equal size and modification time alone cannot authorize altered
+backup contents or a later, different source revision. A legacy catalog without
+source identity needs a refresh or an already captured content digest. Manifest
+verification streams the full manifest for each such open; it does not load the
+whole hierarchy into memory or hash source payloads during catalog capture.
+Manifest names use guarded parent-relative opens, rejecting leaf bind mounts
+before opening a foreign FUSE file. The file-backup manifest location and bounded
+entry lookup are shared with catalog fingerprint enrichment.
 A stale candidate can fall back to another matching backup, while an already open
 file keeps its chosen provider and reports stale data if that provider changes.
 

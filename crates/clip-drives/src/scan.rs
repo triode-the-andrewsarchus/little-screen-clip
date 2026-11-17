@@ -351,14 +351,18 @@ pub(crate) fn entries(db: &Store, scan: &str, after: &[u8], limit: usize) -> Res
 }
 pub(crate) fn entry(db: &Store, scan: &str, path: &Path) -> Result<Option<Entry>> {
     use rusqlite::OptionalExtension;
-    let json: Option<String> =
+    let json: Option<Option<String>> =
         db.0.query_row(
-            "SELECT json FROM entries WHERE scan=?1 AND path=?2",
+            "SELECT CASE WHEN length(CAST(json AS BLOB))<=65536 THEN json END FROM entries WHERE scan=?1 AND path=?2",
             params![scan, path.as_os_str().as_bytes()],
             |r| r.get(0),
         )
         .optional()?;
-    Ok(json.map(|s| serde_json::from_str(&s)).transpose()?)
+    json.map(|json| {
+        let json = json.ok_or("Inventory entry exceeds its decoding budget")?;
+        Ok(serde_json::from_str(&json)?)
+    })
+    .transpose()
 }
 /// A bounded keyset cursor that remains valid while other scan rows are updated.
 pub(crate) struct Cursor<'a> {

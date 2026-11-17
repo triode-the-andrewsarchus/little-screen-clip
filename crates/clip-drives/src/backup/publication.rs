@@ -120,6 +120,20 @@ fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
     )
 }
 
+/// Validates the locally owned completed file-manifest location.
+pub(crate) fn files_manifest(backup: &Backup) -> Option<&Path> {
+    let path = backup.manifest.as_deref()?;
+    (backup.kind == BackupKind::Files
+        && uuid::Uuid::parse_str(&backup.id).is_ok()
+        && path.parent() == backup.path.parent()
+        && path.file_name()
+            == Some(std::ffi::OsStr::new(&format!(
+                "{}.manifest.sqlite",
+                backup.id
+            ))))
+    .then_some(path)
+}
+
 /// Keeps checksum verification, SQLite queries and the final revision check on
 /// one retained file. The callback cannot retarget a verified pathname.
 /// Reserves its observed length from the remaining verification allowance before
@@ -137,8 +151,26 @@ pub(crate) fn read_manifest<T>(
     if timeout.is_zero() {
         return Err("Backup manifest read timed out before admission".into());
     }
-    let file = kernel_interface::open_content(path, false)?;
-    let source = FileSource::capture_file(&file)?;
+    // A manifest may be used by a single-threaded catalog server. Refuse leaf
+    // mount crossings before opening a foreign FUSE inode, including our own.
+    let parent = Root::open(path.parent().ok_or("Missing manifest parent")?)?;
+    let file = parent.input(Path::new(path.file_name().ok_or("Missing manifest name")?))?;
+    let (source, manifest) = verified_manifest(backup, &file, cancel, bytes, timeout)?;
+    let result = read(&manifest)?;
+    source.check_file(&file)?;
+    parent.validate()?;
+    Ok(result)
+}
+
+/// Verifies the retained input before admitting any caller's SQLite queries.
+fn verified_manifest(
+    backup: &Backup,
+    file: &File,
+    cancel: &AtomicBool,
+    bytes: &mut u64,
+    timeout: Duration,
+) -> Result<(FileSource, Store)> {
+    let source = FileSource::capture_file(file)?;
     let length = source.observed_size();
     if length > *bytes {
         return Err("Backup manifest exceeds the metadata reuse byte budget".into());
@@ -146,16 +178,14 @@ pub(crate) fn read_manifest<T>(
     // Reserve the exact revision length before hashing, including failed checks.
     // FileSource hashes only that observed length and rejects a changed revision.
     *bytes -= length;
-    let hash = source.sha256(&file, cancel, timeout)?;
+    let hash = source.sha256(file, cancel, timeout)?;
     if backup.manifest_sha256.as_deref() != Some(hash.as_str()) {
         return Err("Prepared backup manifest changed; publication suspended".into());
     }
-    let manifest = Store::existing(&anchor(&file), true)?;
+    let manifest = Store::existing(&anchor(file), true)?;
     validate_header(backup, &manifest)?;
-    source.check_file(&file)?;
-    let result = read(&manifest)?;
-    source.check_file(&file)?;
-    Ok(result)
+    source.check_file(file)?;
+    Ok((source, manifest))
 }
 fn validate_header(backup: &Backup, manifest: &Store) -> Result<()> {
     let header: Backup = manifest

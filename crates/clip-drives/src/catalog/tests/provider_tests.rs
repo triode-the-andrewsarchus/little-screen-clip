@@ -3,6 +3,7 @@ use std::fs::{self, FileTimes};
 use std::time::SystemTime;
 mod inodes;
 mod metadata;
+mod revisions;
 mod types;
 
 struct CatalogProcess {
@@ -204,19 +205,31 @@ fn guest_nested_catalog_mounts_are_rejected_before_payload_open() {
     // server recursively open itself without the lookup-time mount boundary.
     let version = fixture.backup().unwrap();
     let copied = version.path.join("file.txt");
-    let bind = GuestMount::attach(&server.mount.join("file.txt"), &copied);
-    let output = little_clip_core::process::CommandRequest::new("cat")
-        .arg(server.mount.join("file.txt"))
-        .timeout(Duration::from_secs(3))
-        .own_process_group()
-        .die_with_parent()
-        .run()
-        .expect("Recursive provider refusal must finish without a timeout");
-    assert!(!output.status.success());
-    assert!(output.stderr_lossy().contains("No medium found"));
-    assert!(fs::metadata(server.mount.join("file.txt")).is_ok());
-    drop(bind);
+    let manifest = version.manifest.as_ref().unwrap();
+    let retained_manifest = fs::read(manifest).unwrap();
+    for (target, reason) in [
+        (&copied, "No medium found"),
+        (manifest, "Stale file handle"),
+    ] {
+        let bind = GuestMount::attach(&server.mount.join("file.txt"), target);
+        let output = little_clip_core::process::CommandRequest::new("cat")
+            .arg(server.mount.join("file.txt"))
+            .timeout(Duration::from_secs(3))
+            .own_process_group()
+            .die_with_parent()
+            .run()
+            .expect("Recursive provider refusal must finish without a timeout");
+        assert!(!output.status.success());
+        assert!(
+            output.stderr_lossy().contains(reason),
+            "{}",
+            output.stderr_lossy()
+        );
+        assert!(fs::metadata(server.mount.join("file.txt")).is_ok());
+        drop(bind);
+    }
     assert_eq!(fs::read(copied).unwrap(), b"catalog payload");
+    assert_eq!(fs::read(manifest).unwrap(), retained_manifest);
 }
 
 #[test]
