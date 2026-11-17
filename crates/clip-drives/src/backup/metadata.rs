@@ -315,6 +315,11 @@ impl<'a> Report<'a> {
                 .f_flag
                 .contains(rustix::fs::StatVfsMountFlags::RDONLY),
         )?;
+        db.put(
+            "collection",
+            "source_queried_change_tracking",
+            &source.queried_change_tracking().unwrap_or(false),
+        )?;
         Ok(Self {
             db,
             summary: BackupFidelity::default(),

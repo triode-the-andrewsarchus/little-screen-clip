@@ -158,19 +158,31 @@ pub(crate) fn publish(db: &Store, catalog: &Catalog, applied: &[PathBuf]) -> Res
     let transaction = db.0.unchecked_transaction()?;
     let mut catalog = catalog.clone();
     db.put("catalog", &catalog.id, &catalog)?;
-    db.visit::<DriveRule>("rule", |rule| {
-        if rule.drive == catalog.drive
-            && !rule.catalog
-            && !applied
-                .iter()
-                .any(|prefix| rule.relative.starts_with(prefix))
-        {
-            enqueue(db, &mut catalog, rule.relative)?;
+    let drive = catalog.drive.clone();
+    visit_exclusions(db, &drive, |relative| {
+        if !applied.iter().any(|prefix| relative.starts_with(prefix)) {
+            enqueue(db, &mut catalog, relative)?;
         }
         Ok(())
     })?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Shares the same catalog policy selection for capture and late-rule publication.
+/// The caller retains its policy transaction; visits stay paginated in Store.
+pub(super) fn visit_exclusions(
+    db: &Store,
+    drive: &str,
+    mut visit: impl FnMut(PathBuf) -> Result<()>,
+) -> Result<()> {
+    db.visit::<DriveRule>("rule", |rule| {
+        if rule.drive == drive && !rule.catalog {
+            visit(rule.relative)
+        } else {
+            Ok(())
+        }
+    })
 }
 
 fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {

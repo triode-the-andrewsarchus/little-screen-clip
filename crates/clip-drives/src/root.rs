@@ -162,6 +162,22 @@ impl Root {
             rustix::fs::fstatfs(&self.file)?.f_type as u64,
         ))
     }
+    /// Stronger eligibility for importing fingerprints without event coverage.
+    /// Keep the conservative kernel/driver allowlist separate from nanosecond
+    /// storage precision. Legacy/coarse inode timestamps are rejected per entry.
+    pub fn queried_change_tracking(&self) -> Result<bool> {
+        if !self.reliable_revision_cache()? {
+            return Ok(false);
+        }
+        let filesystem = crate::mounts::inventory()?
+            .into_iter()
+            .find(|mount| mount.id == self.identity.mount)
+            .map(|mount| mount.filesystem);
+        let uname = rustix::system::uname();
+        Ok(filesystem.is_some_and(|filesystem| {
+            queried_change_metadata(uname.release().to_bytes(), &filesystem)
+        }))
+    }
     pub fn same_root(&self, other: &Self) -> bool {
         self.identity == other.identity && self.namespace == other.namespace
     }
@@ -480,10 +496,50 @@ fn reliable_change_metadata(filesystem: u64) -> bool {
         0xef53 | 0x9123683e | 0x58465342 | 0x01021994
     )
 }
+fn queried_change_metadata(release: &[u8], filesystem: &str) -> bool {
+    let version = std::str::from_utf8(release).ok().and_then(|release| {
+        let (major, rest) = release.split_once('.')?;
+        let minor = rest.split('.').next()?.parse::<u32>().ok()?;
+        Some((major.parse::<u32>().ok()?, minor))
+    });
+    version.is_some_and(|(major, _)| major >= 7)
+        && matches!(filesystem, "ext4" | "btrfs" | "xfs" | "tmpfs")
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queried_change_tracking_requires_a_known_kernel_and_opted_in_driver() {
+        for filesystem in ["ext4", "btrfs", "xfs", "tmpfs"] {
+            for release in [b"7.0.0".as_slice(), b"7.3.4-custom", b"8.1.0"] {
+                assert!(queried_change_metadata(release, filesystem));
+            }
+            for release in [
+                b"6.12.0".as_slice(),
+                b"6.19.2",
+                b"7.invalid",
+                b"7",
+                b"",
+                b"\xff",
+            ] {
+                assert!(!queried_change_metadata(release, filesystem));
+            }
+        }
+        for filesystem in [
+            "ext2",
+            "ext3",
+            "vfat",
+            "exfat",
+            "ntfs3",
+            "fuse.ntfs",
+            "nfs",
+            "cifs",
+            "unknown",
+        ] {
+            assert!(!queried_change_metadata(b"7.3.4", filesystem));
+        }
+    }
     #[test]
     fn read_only_collection_refuses_an_ordinary_writable_source() {
         let temp = tempfile::tempdir().unwrap();

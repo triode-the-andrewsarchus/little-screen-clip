@@ -1021,6 +1021,45 @@ fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
         fs::read(version.path.join("excluded/child.txt")).unwrap(),
         b"included in a full backup"
     );
+    // A saved digest exists, but these source drivers cannot certify unchanged
+    // revisions for metadata-only hash reuse. Do not import it by mtime/size.
+    let manifest = Store::existing(version.manifest.as_ref().unwrap(), true).unwrap();
+    assert!(
+        scan::entry(
+            &manifest,
+            &format!("backup:{}", version.id),
+            Path::new("metadata.bin")
+        )
+        .unwrap()
+        .unwrap()
+        .hash
+        .is_some()
+    );
+    let later = catalog::capture(
+        &fixture.db,
+        &state,
+        &drive,
+        &source,
+        &DriveConfig::default(),
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    let later_db = Store::existing(
+        &state
+            .path
+            .join("catalogs")
+            .join(format!("{}.sqlite", later.id)),
+        true,
+    )
+    .unwrap();
+    assert!(
+        scan::entry(&later_db, "catalog", Path::new("metadata.bin"))
+            .unwrap()
+            .unwrap()
+            .hash
+            .is_none()
+    );
     fixture.run().unwrap();
     assert_eq!(
         fs::read(fixture.b.join("excluded/child.txt")).unwrap(),

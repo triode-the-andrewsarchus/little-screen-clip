@@ -66,7 +66,7 @@ struct Pending {
 fn current_key(drive: &str, kind: BackupKind) -> String {
     format!("{drive}:{kind:?}")
 }
-pub(super) fn current(db: &Store, drive: &str, kind: BackupKind) -> Result<Option<Backup>> {
+pub(crate) fn current(db: &Store, drive: &str, kind: BackupKind) -> Result<Option<Backup>> {
     let id = db.get::<String>("backup-current", &current_key(drive, kind))?;
     id.map(|id| db.get("backup", &id))
         .transpose()
@@ -106,13 +106,43 @@ fn artifact_identity(path: &Path, kind: BackupKind) -> Result<crate::StorageIden
     Ok(crate::StorageIdentity::pinned(&held)?)
 }
 fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
+    read_manifest(
+        backup,
+        path,
+        &AtomicBool::new(false),
+        u64::MAX,
+        Duration::MAX,
+        |_| Ok(()),
+    )
+}
+
+/// Keeps checksum verification, SQLite queries and the final revision check on
+/// one retained file. The callback cannot retarget a verified pathname.
+pub(crate) fn read_manifest<T>(
+    backup: &Backup,
+    path: &Path,
+    cancel: &AtomicBool,
+    bytes: u64,
+    timeout: Duration,
+    read: impl FnOnce(&Store) -> Result<T>,
+) -> Result<T> {
     let file = kernel_interface::open_content(path, false)?;
     let source = FileSource::capture_file(&file)?;
-    let hash = source.sha256(&file, &AtomicBool::new(false), Duration::MAX)?;
+    if file.metadata()?.len() > bytes {
+        return Err("Backup manifest exceeds the metadata reuse byte budget".into());
+    }
+    let hash = source.sha256(&file, cancel, timeout)?;
     if backup.manifest_sha256.as_deref() != Some(hash.as_str()) {
         return Err("Prepared backup manifest changed; publication suspended".into());
     }
     let manifest = Store::existing(&anchor(&file), true)?;
+    validate_header(backup, &manifest)?;
+    source.check_file(&file)?;
+    let result = read(&manifest)?;
+    source.check_file(&file)?;
+    Ok(result)
+}
+fn validate_header(backup: &Backup, manifest: &Store) -> Result<()> {
     let header: Backup = manifest
         .get("backup", &backup.id)?
         .ok_or("Missing manifest backup header")?;
@@ -128,7 +158,6 @@ fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
     {
         return Err("Manifest does not describe the prepared backup".into());
     }
-    source.check_file(&file)?;
     Ok(())
 }
 fn install(db: &Store, parent: &Root, mut pending: Pending) -> Result<Backup> {

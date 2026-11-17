@@ -290,6 +290,24 @@ retain version 1. Keep the helper and applications from the same build together.
 
 Listing and stat operations work offline. Opening a regular file requires a matching mounted original or available backup provider; unavailable contents return a media error. Changed provider revisions return a stale-entry error. A metadata catalog is a dated observation, not a frozen copy of payload bytes. Some exFAT FUSE drivers drop fractional modification times: catalog entries captured through a more precise driver currently return a stale-entry error in that case. The read-only image can still be browsed directly. Cross-driver catalog compatibility remains unfinished. Symlink targets outside the captured tree remain metadata-only.
 
+Capture can reuse SHA-256 fingerprints from the current completed file backup
+without reading the source file contents. This optional enrichment requires a
+matching drive/evidence, source-root identity and full per-file revision, plus
+recorded support for queried change timestamps during backup collection. The
+current conservative eligibility is Linux 7 or later with an observed ext4,
+Btrfs, XFS or tmpfs driver and nonzero fractional change time. This follows the
+kernel's [multigrain timestamp model](https://docs.kernel.org/7.2/filesystems/multigrain-ts.html);
+nanosecond storage precision alone does not qualify. FAT32, exFAT, NTFS, unknown
+drivers, older kernels and legacy manifests do not import hashes by size/mtime.
+Their ordinary metadata capture still works.
+
+The backup manifest is checksummed and queried through one retained descriptor,
+within the catalog byte/time budgets. Corrupt, replaced, oversized or unsupported
+manifests leave the metadata catalog usable and roll back imported hashes.
+The additional collection-provenance field is optional; existing manifest and
+catalog versions are unchanged. Sync fingerprint reuse, searching older manifests
+for capture enrichment and the full uncertain-provider policy remain unfinished.
+
 File-backup providers must retain their saved directory identity; replacing a
 backup directory does not authorize the replacement to supply catalog contents.
 Older records without that identity cannot supply file contents. When a catalog

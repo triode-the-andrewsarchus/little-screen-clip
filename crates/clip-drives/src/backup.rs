@@ -23,6 +23,7 @@ mod collection;
 mod metadata;
 mod publication;
 pub(crate) use publication::recover as recover_publications;
+pub(crate) use publication::{current as current_version, read_manifest};
 
 pub(crate) use crate::DriveBackup as Backup;
 fn btrfs(root: &Root) -> Result<bool> {

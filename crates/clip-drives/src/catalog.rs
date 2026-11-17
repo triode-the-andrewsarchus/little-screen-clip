@@ -23,6 +23,7 @@ use std::{
     time::Duration,
 };
 mod capture_details;
+mod hashes;
 pub(crate) mod redaction;
 mod server;
 
@@ -35,6 +36,7 @@ pub(crate) fn capture(
     cancel: &AtomicBool,
     progress: impl FnMut(u64, u64),
 ) -> Result<Catalog> {
+    let started = std::time::Instant::now();
     root.validate()?;
     let id = uuid::Uuid::new_v4().to_string();
     let catalogs = state.directory(Path::new("catalogs"), true)?;
@@ -42,13 +44,11 @@ pub(crate) fn capture(
     let mut exclusions = Vec::new();
     {
         let transaction = db.0.unchecked_transaction()?;
-        db.visit::<DriveRule>("rule", |rule| {
-            if rule.drive == drive.id && !rule.catalog {
-                if rule.relative.as_os_str().is_empty() {
-                    return Err("Cataloging is disabled for this drive".into());
-                }
-                exclusions.push(rule.relative);
+        redaction::visit_exclusions(db, &drive.id, |relative| {
+            if relative.as_os_str().is_empty() {
+                return Err("Cataloging is disabled for this drive".into());
             }
+            exclusions.push(relative);
             Ok(())
         })?;
         transaction.commit()?;
@@ -67,6 +67,7 @@ pub(crate) fn capture(
     };
     let (cat_db, pages) = capture_details::database(&path, config.catalog_max_bytes)?;
     let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
+    hashes::from_backup(db, &cat_db, drive, root, config, cancel, started)?;
     cat_db.0.pragma_update(None, "max_page_count", pages)?;
     let details = capture_details::source(root, coverage.directory, coverage.stopped)?;
     let catalog = Catalog {
@@ -495,6 +496,7 @@ pub fn mount_catalog(state: &Path, id: &str, mount: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     mod coverage_tests;
+    mod hash_tests;
     mod provider_tests;
     mod redaction_tests;
     use super::*;
@@ -529,7 +531,13 @@ mod tests {
         }
     }
     fn fixture() -> Fixture {
-        let temp = if let Some(base) = std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE") {
+        fixture_in(None)
+    }
+    fn fixture_in(base: Option<&Path>) -> Fixture {
+        let base = base
+            .map(Path::to_owned)
+            .or_else(|| std::env::var_os("CLIP_DRIVE_CATALOG_FIXTURE").map(PathBuf::from));
+        let temp = if let Some(base) = base {
             tempfile::Builder::new()
                 .prefix("catalog-scale-")
                 .tempdir_in(base)
