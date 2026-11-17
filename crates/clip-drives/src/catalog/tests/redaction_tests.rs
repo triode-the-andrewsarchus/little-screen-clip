@@ -44,6 +44,55 @@ fn saved(fixture: &Fixture, id: &str) -> Store {
 }
 
 #[test]
+fn legacy_spelling_intents_redact_offline_and_keep_their_original_replay_identity() {
+    let fixture = fixture();
+    let folder = PathBuf::from(OsString::from_vec(b"private_\xff/nested".to_vec()));
+    std::fs::create_dir_all(fixture.source.path.join(&folder)).unwrap();
+    std::fs::write(
+        fixture.source.path.join(&folder).join("secret"),
+        b"retained payload",
+    )
+    .unwrap();
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    let spelling = PathBuf::from(OsString::from_vec(b"private_\xff//./nested/".to_vec()));
+    let intent = exclude(&fixture, &spelling);
+    assert_eq!(intent.relative.as_os_str(), spelling.as_os_str());
+    let offline = fixture.temp.path().join("offline-source");
+    std::fs::rename(&fixture.source.path, &offline).unwrap();
+    assert!(apply(&fixture, &intent).unwrap());
+    let database = saved(&fixture, &catalog.id);
+    assert!(
+        scan::entry(&database, "catalog", &folder.join("secret"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        scan::entry(&database, "catalog", &folder)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "excluded"
+    );
+    assert!(
+        database
+            .get::<u64>("redaction", &intent.id)
+            .unwrap()
+            .is_some()
+    );
+    drop(database);
+    let completed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(completed.pending_redactions, 0);
+    assert_eq!(completed.redaction_generation, 1);
+    assert!(apply(&fixture, &intent).unwrap());
+    let replayed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(replayed.redaction_generation, 1);
+    assert_eq!(
+        std::fs::read(offline.join(&folder).join("secret")).unwrap(),
+        b"retained payload"
+    );
+}
+
+#[test]
 fn reader_leases_defer_raw_name_redaction_without_omitting_backup_payloads() {
     let fixture = fixture();
     let folder = PathBuf::from(OsString::from_vec(b"private_\xff".to_vec()));

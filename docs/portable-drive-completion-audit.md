@@ -54,6 +54,33 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Legacy offline redaction spelling checkpoint
+
+A control reproduced silent cleanup failure for an older accepted intent using
+`private//./nested/`: the operation completed but left the canonical saved
+descendant row. Evidence: `/tmp/portable-drive-legacy-redaction-before.log`.
+The attempted `.` control failed input validation during setup; it is not
+evidence of silent root-redaction failure and does not change root-address rules.
+
+Redaction now derives SQL boundaries and ancestor updates through the same
+`Path::components` lexical normalization used for current rule addresses. The
+accepted intent ID and durable replay marker remain unchanged. The regression
+test uses a raw non-UTF-8 name, makes the original source path unavailable before
+cleanup, verifies the excluded boundary and removed descendants, checks preserved
+source bytes, and replays the original intent without a second metadata revision.
+No source lookup, collation guess or new normalization helper is introduced.
+
+The full ordinary backend suite passes **205 tests** with 86 opt-in tests ignored
+(`/tmp/portable-drive-legacy-redaction-verified.log`); backend all-target Clippy
+passes with warnings denied (`/tmp/portable-drive-legacy-redaction-clippy.log`).
+Architecture retains 4,300 clone groups and 144 cycles, average CCN 3.49, maximum
+274 and 7.00% duplication, with no new hotspot from this fix. Whole-branch
+REGRESSION remains open. Targeted formatting and `git diff --check` pass.
+
+Filesystem case aliases in historical offline snapshots are still a separate
+gap: lexical normalization does not supply an old volume's name-equivalence
+table. Items 6.2–6.4 remain Partial.
+
 ## Catalog capture name-equivalence checkpoint
 
 A separate native control reproduced the same lexical bypass in catalog metadata

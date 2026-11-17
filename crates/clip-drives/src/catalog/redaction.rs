@@ -207,7 +207,10 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
         return Ok(());
     }
     let transaction = db.0.unchecked_transaction()?;
-    let prefix = intent.relative.as_os_str().as_bytes();
+    // Older accepted intents retain their original idempotency key, but SQL
+    // boundaries use the same lexical spelling as current rule addresses.
+    let relative: PathBuf = intent.relative.components().collect();
+    let prefix = relative.as_os_str().as_bytes();
     let removed = if prefix.is_empty() {
         catalog.root_excluded = true;
         db.0.execute("DELETE FROM entries WHERE scan='catalog'", [])?
@@ -220,7 +223,7 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
             "DELETE FROM entries WHERE scan='catalog' AND path>=?1 AND path<?2",
             params![lower, upper],
         )?;
-        if let Some(mut entry) = scan::entry(db, "catalog", &intent.relative)? {
+        if let Some(mut entry) = scan::entry(db, "catalog", &relative)? {
             entry.kind = "excluded".into();
             entry.hash = None;
             entry.link = None;
@@ -236,8 +239,7 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
         details.directory.subtree_complete = false;
         details.directory.incomplete_child = true;
     }
-    for parent in intent
-        .relative
+    for parent in relative
         .ancestors()
         .skip(1)
         .filter(|path| !path.as_os_str().is_empty())
