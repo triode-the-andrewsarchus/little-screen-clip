@@ -76,7 +76,7 @@ impl Root {
             mounts
                 .into_iter()
                 .find(|mount| mount.id == identity.mount)
-                .and_then(|mount| project_path(&path, &mount))
+                .and_then(|mount| mount.project(&path))
         });
         let root = Self {
             path,
@@ -523,10 +523,6 @@ impl Root {
     }
 }
 
-fn project_path(path: &Path, mount: &crate::mounts::Mount) -> Option<PathBuf> {
-    Some(mount.root.join(path.strip_prefix(&mount.target).ok()?))
-}
-
 fn reliable_change_metadata(filesystem: u64) -> bool {
     matches!(
         filesystem as u32,
@@ -648,6 +644,7 @@ mod tests {
     #[test]
     fn bind_subtrees_project_into_the_original_filesystem_coordinates() {
         let mount = crate::mounts::Mount {
+            device: 0,
             id: 1,
             target: "/alias".into(),
             root: "/original/child".into(),
@@ -657,10 +654,10 @@ mod tests {
             super_read_only: false,
         };
         assert_eq!(
-            project_path(Path::new("/alias/nested"), &mount),
+            mount.project(Path::new("/alias/nested")),
             Some(PathBuf::from("/original/child/nested"))
         );
-        assert!(project_path(Path::new("/elsewhere"), &mount).is_none());
+        assert!(mount.project(Path::new("/elsewhere")).is_none());
         let namespace = Namespace::current();
         let source = Scope {
             path: "/mounted".into(),
@@ -679,7 +676,7 @@ mod tests {
                 inode: 2,
                 mount: 2,
             },
-            physical: project_path(Path::new("/alias/nested"), &mount),
+            physical: mount.project(Path::new("/alias/nested")),
             namespace,
         };
         assert!(source.overlap(&alias));

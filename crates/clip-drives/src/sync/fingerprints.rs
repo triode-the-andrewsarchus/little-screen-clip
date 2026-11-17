@@ -70,7 +70,7 @@ impl Provenance {
         {
             return Err("Sync fingerprints belong to another source".into());
         }
-        self.context.lifetime.validate(&pin)
+        Ok(self.context.lifetime.validate(&pin)?)
     }
 }
 

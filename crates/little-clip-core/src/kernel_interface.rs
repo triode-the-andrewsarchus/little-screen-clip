@@ -1,6 +1,8 @@
 //! Shared Linux kernel-interface routing, before ordinary content readers run.
 mod identity;
+mod lifetime;
 pub use identity::{MountIdentity, Namespace};
+pub use lifetime::{MountLifetime, current_boot_id, unique_mount_id};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,6 +14,30 @@ use std::{
     },
     path::Path,
 };
+
+/// Fixed, non-consuming metadata interfaces used by namespace observations.
+pub(crate) enum ProcMetadata {
+    Mounts,
+    Boot,
+}
+pub(crate) fn proc_metadata(source: ProcMetadata) -> io::Result<File> {
+    let path = match source {
+        ProcMetadata::Mounts => Path::new("/proc/self/mountinfo"),
+        ProcMetadata::Boot => Path::new("/proc/sys/kernel/random/boot_id"),
+    };
+    // O_PATH validates a replaced leaf before any filesystem/device open callback.
+    let pin = pin(path, false)?;
+    if rustix::fs::fstatfs(&pin)?.f_type != libc::PROC_SUPER_MAGIC || !pin.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Fixed metadata source is not a procfs file",
+        ));
+    }
+    File::options()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(format!("/proc/self/fd/{}", pin.as_raw_fd()))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Kind {
