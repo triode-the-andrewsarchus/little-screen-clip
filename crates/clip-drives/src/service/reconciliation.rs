@@ -48,18 +48,7 @@ pub(super) fn persist_result(db: &Store, intent: &Intent, result: &Result<String
             }
         }
         db.put("pair", &pair.id, &pair)?;
-        if let Some(mut session) = db.get::<RamSession>("ram", &pair.id)? {
-            session.status = pair.status.clone();
-            if result.is_ok() {
-                session.ready = true;
-                session.connected = true;
-                if let Some(checkpoint) = &intent.writeback {
-                    super::ram_pending::acknowledge(db, checkpoint)?;
-                    session.last_flushed = Some(now());
-                }
-            }
-            db.put("ram", &pair.id, &session)?;
-        }
+        super::ram_pending::persist_session(db, &pair, intent.writeback.as_ref(), result.is_ok())?;
     }
     transaction.commit()?;
     Ok(())

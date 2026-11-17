@@ -130,6 +130,36 @@ pub(super) fn recover(db: &Store) -> Result<()> {
     Ok(())
 }
 
+/// Updates the RAM view and its acknowledged work in the pair-result transaction.
+pub(super) fn persist_session(
+    db: &Store,
+    pair: &SyncPair,
+    checkpoint: Option<&Checkpoint>,
+    succeeded: bool,
+) -> Result<()> {
+    transaction_required(db)?;
+    let Some(mut session) = db.get::<RamSession>("ram", &pair.id)? else {
+        return Ok(());
+    };
+    session.status = if succeeded {
+        pair.status.clone()
+    } else {
+        format!(
+            "RAM reconciliation incomplete: {}; RAM contents retained",
+            pair.status
+        )
+    };
+    if succeeded {
+        session.ready = true;
+        session.connected = true;
+        if let Some(checkpoint) = checkpoint {
+            acknowledge(db, checkpoint)?;
+            session.last_flushed = Some(now());
+        }
+    }
+    db.put("ram", &pair.id, &session)
+}
+
 impl Owner {
     pub(super) fn track_ram_changes(
         &self,

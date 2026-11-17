@@ -1210,6 +1210,7 @@ mod tests {
     mod catalog_cleanup;
     mod native_images;
     mod policy_coverage;
+    mod ram_writeback;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
@@ -1467,6 +1468,28 @@ mod tests {
         drives: Arc<Mutex<Vec<Drive>>>,
     }
     impl TestDrives {
+        fn native_source(
+            &self,
+            relative: &str,
+        ) -> (RamBacking, String, crate::ram::Mounted, PathBuf) {
+            let base = crate::ram::directory(&DriveConfig::default()).unwrap();
+            let backing = crate::ram::prepare(
+                &base,
+                &crate::ram::Budget {
+                    bytes: 128 * 1024 * 1024,
+                    inodes: 4096,
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let native = crate::ram::Mounted::start(&backing, &id, true, None).unwrap();
+            let source = backing.directory.join("contents").join(relative);
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("edit"), b"original portable content").unwrap();
+            self.drives.lock().unwrap()[1].mount = Some(source.clone());
+            (backing, id, native, source)
+        }
         fn new(bytes: u64) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let small = temp.path().join("small");
@@ -2149,21 +2172,7 @@ mod tests {
     #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; unmounts only an owned FUSE fixture"]
     fn partition_unmount_keeps_other_ram_responsive_and_retains_completed_cancellation() {
         let fixture = TestDrives::new(0);
-        let base = crate::ram::directory(&DriveConfig::default()).unwrap();
-        let backing = crate::ram::prepare(
-            &base,
-            &crate::ram::Budget {
-                bytes: 128 * 1024 * 1024,
-                inodes: 4096,
-            },
-            |_| Ok(()),
-        )
-        .unwrap();
-        let source_id = uuid::Uuid::new_v4().to_string();
-        let native = crate::ram::Mounted::start(&backing, &source_id, true, None).unwrap();
-        let source = backing.directory.join("contents");
-        fs::write(source.join("edit"), b"original portable content").unwrap();
-        fixture.drives.lock().unwrap()[1].mount = Some(source.clone());
+        let (backing, source_id, native, source) = fixture.native_source("");
         let drives = fixture.drives.clone();
         let blocked = Arc::new(AtomicBool::new(false));
         let block = blocked.clone();
@@ -2483,6 +2492,24 @@ mod tests {
             operation.message
         );
         operation
+    }
+
+    fn discard_ram(service: &Service, session: &RamSession) {
+        finish(
+            service,
+            DriveRequest::DiscardRam {
+                session: session.id.clone(),
+                confirmed: true,
+            },
+        );
+        assert!(!session.path.exists());
+        let snapshot = status(service);
+        assert!(!snapshot.ram.iter().any(|ram| ram.id == session.id));
+        assert!(!snapshot.pairs.iter().any(|pair| pair.id == session.id));
+        let db = Store::existing(&service.state.join("drives.sqlite"), true).unwrap();
+        let pending = ram_pending::snapshot(&db, &session.id).unwrap();
+        assert_eq!(pending.paths, 0);
+        assert!(!pending.full_check_required);
     }
 
     #[test]
@@ -2935,14 +2962,7 @@ mod tests {
             b"accepted before graceful shutdown"
         );
         drop(held);
-        finish(
-            &service,
-            DriveRequest::DiscardRam {
-                session: ram.id,
-                confirmed: true,
-            },
-        );
-        assert!(!ram.path.exists());
+        discard_ram(&service, &ram);
         service.shutdown().unwrap();
         drop(service);
     }
@@ -3015,6 +3035,13 @@ mod tests {
         assert_eq!(
             fs::read(retained.path.join("a")).unwrap(),
             b"accepted before cancellation"
+        );
+        failed(
+            &service,
+            DriveRequest::Eject {
+                drive: "part:cancelled".into(),
+            },
+            "RAM population is incomplete",
         );
         finish(
             &service,

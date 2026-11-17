@@ -301,14 +301,11 @@ impl Owner {
                 Ok::<_, Error>(root)
             })
             .transpose()?;
-        let mut plans = Vec::new();
-        if source.is_some() {
-            for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-                if pair.drive == drive.id && !pair.paused {
-                    plans.push(self.prepare_sync_pair(pair, &drive)?);
-                }
-            }
-        }
+        let plans = if source.is_some() {
+            self.pre_unmount_sync(&drive)?
+        } else {
+            Vec::new()
+        };
         let mut claims = Vec::new();
         claims.extend(source.as_ref().map(|root| root.scope()));
         claims.extend(destination.as_ref().map(|root| root.scope()));
@@ -328,6 +325,25 @@ impl Owner {
             plans,
             claims,
         })
+    }
+
+    fn pre_unmount_sync(&self, drive: &Drive) -> Result<Vec<reconciliation::Plan>> {
+        let mut plans = Vec::new();
+        for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
+            if pair.drive != drive.id || (pair.paused && !pair.ram) {
+                continue;
+            }
+            if pair.ram
+                && self
+                    .db
+                    .get::<RamSession>("ram", &pair.id)?
+                    .is_some_and(|session| !session.ready)
+            {
+                return Err("RAM population is incomplete; resume synchronization or explicitly discard this RAM copy before ejecting or imaging. Save it elsewhere first if you need its current contents".into());
+            }
+            plans.push(self.prepare_sync_pair(pair, drive)?);
+        }
+        Ok(plans)
     }
 
     pub(super) fn poll_partition(&mut self) {

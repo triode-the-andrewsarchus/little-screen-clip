@@ -37,6 +37,15 @@ The default RAM location is `/tmp`. If it is not tmpfs, the daemon tries the ver
 
 Use the RAM entry's menu to flush, save a durable copy elsewhere, or explicitly discard it. A normal daemon shutdown flushes and retires its filesystem server; restart verifies the retained image and checks its filesystem before remounting. Existing open view handles must be reopened after a restart. SIGTERM and Ctrl+C drain accepted jobs before the storage owner exits. The launcher waits for that drain and retains lifecycle files if it times out, instead of forcing a kill. Its `LITTLE_CLIP_STOP_TIMEOUT_SECONDS` default is 60; zero waits without a deadline. The repository systemd unit uses an unlimited stop timeout and signals the main process first; reload an installed unit before relying on those settings. An unavailable or changed backing image is reported explicitly and is never treated as an empty folder. Initial population installs watches and performs a catch-up reconciliation before declaring the view ready.
 
+Eject and partition imaging flush ready RAM mirrors even when their automatic
+synchronization is paused. A failed flush stops before unmount and leaves RAM
+contents, pending observations and the previous drive confirmation available for
+retry or export. An incomplete initial RAM population must be resumed or explicitly
+discarded before these operations proceed; save it elsewhere first if needed.
+Paused ordinary folder pairs
+retain their paused behavior. Eject preserves the RAM view; discarding it requires
+explicit confirmation, including when the portable partition is already offline.
+
 Saving elsewhere runs on a retained reconciliation worker and creates a new private output folder. Completed files remain there if cancelled or interrupted. A saved copy does not advance the removable media's common baseline or count as a media flush. Details reports the last successful export separately from media writeback, including whether the initial RAM population was complete. Unavailable and incomplete RAM views cannot be opened from the sidebar.
 
 Unsynchronized contents remain temporary: rebooting or losing tmpfs loses RAM-only data. Tmpfs can use swap. Legacy directory sessions remain recoverable, but must be saved/discarded before admitting another bounded session.
