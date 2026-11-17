@@ -160,14 +160,15 @@ fn backing_tmpfs_exhaustion_retains_acknowledged_edits_through_restart() {
         fill.metadata().unwrap().len()
     );
     assert!(logical.f_bavail * logical.f_frsize > 64 * MIB);
-    let mut growth = File::create(ram.path.join("unacknowledged-growth")).unwrap();
-    let failure = write_chunks(&mut growth, 64 * MIB).unwrap_err();
+    let failure = match File::create(ram.path.join("unacknowledged-growth")) {
+        Ok(mut growth) => write_chunks(&mut growth, 64 * MIB).unwrap_err(),
+        Err(error) => error,
+    };
     eprintln!("RAM growth failed with {failure}");
     assert!(
         matches!(failure.raw_os_error(), Some(libc::ENOSPC | libc::EIO)),
         "{failure}"
     );
-    drop(growth);
     assert!(backing.directory.join("volume.ext4").exists());
     assert_eq!(status(&service).ram[0].path, ram.path);
     drop(fill);
@@ -225,6 +226,15 @@ fn crash_owner_probe() {
     )
     .unwrap();
     let ram = paused_copy(&service);
+    fs::create_dir(ram.path.join("existing-directory")).unwrap();
+    rustix::fs::setxattr(
+        ram.path.join("acknowledged"),
+        "user.little_clip.old",
+        b"old",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+    File::open(&ram.path).unwrap().sync_all().unwrap();
     fs::write(root.join("ready.json"), serde_json::to_vec(&ram).unwrap()).unwrap();
     // This child owns the service, but never owns the external writer's file.
     // Bound its lifetime even if its test parent fails before terminating it.
@@ -260,6 +270,196 @@ fn abrupt_daemon_death_recovers_an_external_unflushed_write() {
 }
 
 fn crash_write(relative: &str, expected: &[u8]) {
+    crash_case(
+        |path| {
+            let mut held = File::create(path.join(relative)).unwrap();
+            let writing = Instant::now();
+            for chunk in expected.chunks(4096) {
+                held.write_all(chunk).unwrap();
+            }
+            eprintln!(
+                "crash write {relative}: {} bytes in {:?}, external fd still open",
+                expected.len(),
+                writing.elapsed()
+            );
+            Some(held)
+        },
+        |path| {
+            assert!(
+                fs::read(path.join(relative)).unwrap() == expected,
+                "recovered contents differ for {relative}"
+            );
+        },
+        true,
+    );
+}
+
+#[test]
+#[ignore = "requires the disposable vm_ram.sh guest with bounded tmpfs mounts"]
+fn abrupt_daemon_death_recovers_namespace_only_edits() {
+    for operation in [
+        "empty-file",
+        "mkdir",
+        "unlink",
+        "rmdir",
+        "truncate",
+        "chmod",
+        "mtime",
+        "link",
+        "symlink",
+        "rename",
+        "chown",
+        "setxattr",
+        "removexattr",
+    ] {
+        eprintln!("namespace-only crash: {operation}");
+        crash_case(
+            |path| namespace_edit(path, operation),
+            |path| verify_namespace_edit(path, operation),
+            false,
+        );
+    }
+}
+
+fn namespace_edit(path: &Path, operation: &str) -> Option<File> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let original = path.join("acknowledged");
+    match operation {
+        "empty-file" => return Some(File::create(path.join("empty-file")).unwrap()),
+        "mkdir" => fs::create_dir(path.join("new-directory")).unwrap(),
+        "unlink" => fs::remove_file(original).unwrap(),
+        "rmdir" => fs::remove_dir(path.join("existing-directory")).unwrap(),
+        "truncate" => {
+            let file = File::options().write(true).open(original).unwrap();
+            file.set_len(3).unwrap();
+            return Some(file);
+        }
+        "chmod" => fs::set_permissions(original, fs::Permissions::from_mode(0o400)).unwrap(),
+        "mtime" => {
+            let file = File::open(original).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_672_531_200)),
+            )
+            .unwrap();
+            return Some(file);
+        }
+        "link" => fs::hard_link(original, path.join("hard-link")).unwrap(),
+        "symlink" => symlink("acknowledged", path.join("symbolic-link")).unwrap(),
+        "rename" => fs::rename(original, path.join("renamed")).unwrap(),
+        "chown" => std::os::unix::fs::chown(original, Some(1000), Some(1001)).unwrap(),
+        "setxattr" => rustix::fs::setxattr(
+            original,
+            "user.little_clip.new",
+            b"new metadata",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .unwrap(),
+        "removexattr" => rustix::fs::removexattr(original, "user.little_clip.old").unwrap(),
+        _ => panic!("unknown operation {operation}"),
+    }
+    None
+}
+
+fn verify_namespace_edit(path: &Path, operation: &str) {
+    let original = path.join("acknowledged");
+    match operation {
+        "empty-file" => assert_eq!(fs::metadata(path.join("empty-file")).unwrap().len(), 0),
+        "mkdir" => assert!(path.join("new-directory").is_dir()),
+        "unlink" => assert!(!original.exists()),
+        "rmdir" => assert!(!path.join("existing-directory").exists()),
+        "truncate" => assert_eq!(fs::read(original).unwrap(), b"ret"),
+        "chmod" => assert_eq!(fs::metadata(original).unwrap().mode() & 0o777, 0o400),
+        "mtime" => assert_eq!(fs::metadata(original).unwrap().mtime(), 1_672_531_200),
+        "link" => {
+            let original = fs::metadata(original).unwrap();
+            assert_eq!(original.nlink(), 2);
+            assert_eq!(
+                fs::metadata(path.join("hard-link")).unwrap().ino(),
+                original.ino()
+            );
+        }
+        "symlink" => assert_eq!(
+            fs::read_link(path.join("symbolic-link")).unwrap(),
+            Path::new("acknowledged")
+        ),
+        "rename" => {
+            assert!(!original.exists());
+            assert_eq!(
+                fs::read(path.join("renamed")).unwrap(),
+                b"retained RAM edit"
+            );
+        }
+        "chown" => {
+            let metadata = fs::metadata(original).unwrap();
+            assert_eq!((metadata.uid(), metadata.gid()), (1000, 1001));
+        }
+        "setxattr" => {
+            let mut bytes = [0; 16];
+            let count =
+                rustix::fs::getxattr(original, "user.little_clip.new", &mut bytes[..]).unwrap();
+            assert_eq!(&bytes[..count], b"new metadata");
+        }
+        "removexattr" => assert_eq!(
+            rustix::fs::getxattr(original, "user.little_clip.old", &mut [0; 16][..]),
+            Err(rustix::io::Errno::NODATA)
+        ),
+        _ => panic!("unknown operation {operation}"),
+    }
+}
+
+#[test]
+#[ignore = "requires the disposable vm_ram.sh guest with bounded tmpfs mounts"]
+fn abrupt_daemon_death_recovers_inode_flags_and_refuses_truncation() {
+    const IMMUTABLE: libc::c_long = 0x10;
+    crash_case(
+        |path| {
+            let file = File::options()
+                .read(true)
+                .write(true)
+                .open(path.join("acknowledged"))
+                .unwrap();
+            let flags = inode_flags(&file, None);
+            inode_flags(&file, Some(flags | IMMUTABLE));
+            assert_eq!(
+                file.set_len(1).unwrap_err().raw_os_error(),
+                Some(libc::EPERM)
+            );
+            Some(file)
+        },
+        |path| {
+            let file = File::open(path.join("acknowledged")).unwrap();
+            assert_ne!(inode_flags(&file, None) & IMMUTABLE, 0);
+            assert_eq!(
+                fs::read(path.join("acknowledged")).unwrap(),
+                b"retained RAM edit"
+            );
+        },
+        false,
+    );
+}
+
+fn inode_flags(file: &File, replacement: Option<libc::c_long>) -> libc::c_long {
+    use std::os::fd::AsRawFd;
+    let mut flags = replacement.unwrap_or(0);
+    let request = if replacement.is_some() {
+        libc::FS_IOC_SETFLAGS
+    } else {
+        libc::FS_IOC_GETFLAGS
+    };
+    // SAFETY: file is an owned guest fixture descriptor and flags supplies the
+    // live, long-sized buffer encoded by these Linux inode-flag ioctl requests.
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), request, &mut flags) };
+    assert_eq!(
+        result,
+        0,
+        "inode flags: {}",
+        std::io::Error::last_os_error()
+    );
+    flags
+}
+
+fn crash_case(edit: impl FnOnce(&Path) -> Option<File>, verify: impl Fn(&Path), writeback: bool) {
     use std::os::fd::AsRawFd;
 
     let config = config();
@@ -296,19 +496,10 @@ fn crash_write(relative: &str, expected: &[u8]) {
     let backing = ram.backing.as_ref().unwrap();
     let (_, image) = crate::ram::open(backing).unwrap();
     let identity = image.metadata().unwrap();
-    let mut held = File::create(ram.path.join(relative)).unwrap();
-    let writing = Instant::now();
-    for chunk in expected.chunks(4096) {
-        held.write_all(chunk).unwrap();
-    }
-    let elapsed = writing.elapsed();
-    // No close, fsync, rename, or service request between acknowledgement and kill.
+    let held = edit(&ram.path);
+    // No close, fsync, or service request between the final edit and kill.
     owner.0.kill().unwrap();
     assert!(!owner.0.wait().unwrap().success());
-    eprintln!(
-        "crash write {relative}: {} bytes in {elapsed:?}, external fd still open",
-        expected.len()
-    );
     let started = Instant::now();
     loop {
         // SAFETY: the validated image descriptor is live; flock takes no pointers.
@@ -333,21 +524,17 @@ fn crash_write(relative: &str, expected: &[u8]) {
     let after = image.metadata().unwrap();
     assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
     drop(image);
-    assert!(
-        fs::read(ram.path.join(relative)).unwrap() == expected,
-        "recovered contents differ for {relative}"
-    );
+    verify(&ram.path);
     assert!(recovered.pending.as_ref().unwrap().full_check_required);
-    finish(
-        &service,
-        DriveRequest::FlushRam {
-            session: ram.id.clone(),
-        },
-    );
-    assert!(
-        fs::read(root.join("large").join(relative)).unwrap() == expected,
-        "portable writeback differs for {relative}"
-    );
+    if writeback {
+        finish(
+            &service,
+            DriveRequest::FlushRam {
+                session: ram.id.clone(),
+            },
+        );
+        verify(&root.join("large"));
+    }
     discard_ram(&service, &ram);
     service.shutdown().unwrap();
 }

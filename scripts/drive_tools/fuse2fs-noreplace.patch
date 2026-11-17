@@ -1,6 +1,64 @@
 --- a/misc/fuse2fs.c
 +++ b/misc/fuse2fs.c
-@@ -1971,9 +1971,9 @@
+@@ -1262,6 +1262,17 @@
+ 	return 0;
+ }
+ 
++/* Called while bfl is held; publish successful mutations to the RAM image. */
++static int flush_mutation(struct fuse2fs *ff, int ret)
++{
++	errcode_t err;
++
++	if (ret || !fs_writeable(ff->fs))
++		return ret;
++	err = ext2fs_flush2(ff->fs, 0);
++	return err ? translate_error(ff->fs, 0, err) : 0;
++}
++
+ static int op_mknod(const char *path, mode_t mode, dev_t dev)
+ {
+ 	struct fuse_context *ctxt = fuse_get_context();
+@@ -1382,6 +1393,7 @@
+ 	if (ret)
+ 		goto out2;
+ out2:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ out:
+ 	free(temp_path);
+@@ -1513,6 +1525,7 @@
+ out3:
+ 	ext2fs_free_mem(&block);
+ out2:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ out:
+ 	free(temp_path);
+@@ -1701,6 +1714,7 @@
+ 	FUSE2FS_CHECK_CONTEXT(ff);
+ 	pthread_mutex_lock(&ff->bfl);
+ 	ret = __op_unlink(ff, path);
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -1821,6 +1835,7 @@
+ 	FUSE2FS_CHECK_CONTEXT(ff);
+ 	pthread_mutex_lock(&ff->bfl);
+ 	ret = __op_rmdir(ff, path);
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -1924,6 +1939,7 @@
+ 		goto out2;
+ 	}
+ out2:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ out:
+ 	free(temp_path);
+@@ -1971,9 +1987,9 @@
  	int ret = 0;
  
  #if FUSE_VERSION >= FUSE_MAKE_VERSION(3, 0)
@@ -13,7 +71,7 @@
  #endif
  
  	FUSE2FS_CHECK_CONTEXT(ff);
-@@ -1999,6 +1999,13 @@
+@@ -1999,6 +2015,13 @@
  
  	if (err == EXT2_ET_FILE_NOT_FOUND)
  		to_ino = 0;
@@ -27,7 +85,67 @@
  
  	/* Already the same file? */
  	if (to_ino != 0 && to_ino == from_ino) {
-@@ -2871,6 +2878,15 @@
+@@ -2175,15 +2198,11 @@
+ 	if (ret)
+ 		goto out2;
+ 
+-	/* Flush the whole mess out */
+-	err = ext2fs_flush2(fs, 0);
+-	if (err)
+-		ret = translate_error(fs, 0, err);
+-
+ out2:
+ 	free(temp_from);
+ 	free(temp_to);
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -2276,6 +2295,7 @@
+ 		goto out2;
+ 
+ out2:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ out:
+ 	free(temp_path);
+@@ -2439,6 +2459,7 @@
+ 	}
+ 
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -2512,6 +2533,7 @@
+ 	}
+ 
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -2624,8 +2646,9 @@
+ 		goto out;
+ 
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+-	return err;
++	return ret;
+ }
+ 
+ #ifdef __linux__
+@@ -2719,6 +2742,7 @@
+ 
+ 	if (fp->flags & O_TRUNC) {
+ 		ret = fuse2fs_truncate(ff, file->ino, 0);
++		ret = flush_mutation(ff, ret);
+ 		if (ret)
+ 			goto out;
+ 	}
+@@ -2871,6 +2895,15 @@
  		goto out;
  
  out:
@@ -43,7 +161,7 @@
  	pthread_mutex_unlock(&ff->bfl);
  	return got ? (int) got : ret;
  }
-@@ -2922,7 +2938,8 @@
+@@ -2922,7 +2955,8 @@
  	dbg_printf(ff, "%s: ino=%d\n", __func__, fh->ino);
  	/* For now, flush everything, even if it's slow */
  	pthread_mutex_lock(&ff->bfl);
@@ -53,6 +171,65 @@
  		err = ext2fs_flush2(fs, 0);
  		if (err)
  			ret = translate_error(fs, fh->ino, err);
+@@ -3244,6 +3278,7 @@
+ 	if (!ret && err)
+ 		ret = translate_error(fs, ino, err);
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 
+ 	return ret;
+@@ -3340,6 +3375,7 @@
+ 	if (err && !ret)
+ 		ret = translate_error(fs, ino, err);
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 
+ 	return ret;
+@@ -3589,6 +3625,10 @@
+ 	if (ret)
+ 		goto out2;
+ 
++	ret = flush_mutation(ff, ret);
++	if (ret)
++		goto out2;
++
+ 	fp->flags &= ~O_TRUNC;
+ 	ret = __op_open(ff, path, fp);
+ 	if (ret)
+@@ -3650,6 +3690,7 @@
+ 		goto out;
+ 
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -3747,6 +3788,7 @@
+ 	}
+ 
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 	return ret;
+ }
+@@ -4147,6 +4189,7 @@
+ 		dbg_printf(ff, "%s: Unknown ioctl %d\n", __func__, cmd);
+ 		ret = -ENOTTY;
+ 	}
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 
+ 	return ret;
+@@ -4442,6 +4485,7 @@
+ 	else
+ 		ret = fallocate_helper(fp, mode, offset, len);
+ out:
++	ret = flush_mutation(ff, ret);
+ 	pthread_mutex_unlock(&ff->bfl);
+ 
+ 	return ret;
 --- a/lib/ext2fs/unix_io.c
 +++ b/lib/ext2fs/unix_io.c
 @@ -1347,8 +1347,10 @@

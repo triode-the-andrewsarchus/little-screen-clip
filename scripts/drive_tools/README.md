@@ -33,8 +33,18 @@ parent-bound helper were killed before that writer closed or fsynced the file.
 The disposable guest crash test now recovers a new file, an overwritten file and an
 8 MiB file written in 4 KiB chunks, then writes each back to the simulated source.
 The external writer retains its open descriptor throughout the kill. This covers
-acknowledged file data across process death, not host restart/power loss, namespace-only
-mutations or a kill during an unacknowledged write. The image remains RAM-backed.
+acknowledged file data across process death. Successful namespace and metadata
+mutations also flush through a shared completion helper under the existing lock.
+Creation flushes before publishing its open handle, so a failed flush cannot leak
+a handle FUSE will never release. The truncate callback now returns its operation's
+error instead of the earlier successful lookup result; an immutable-file test proves
+EPERM reaches the caller and the original bytes/flags survive daemon death.
+
+A separate guest crash matrix checks empty-file creation (kept open), mkdir, unlink,
+rmdir, truncate (kept open), chmod, mtime, hard links, symlinks, rename, chown and xattr
+addition/removal, with no later data write or explicit fsync before the kill.
+These tests do not cover host restart/power loss or a kill during an unacknowledged
+operation. The image remains RAM-backed.
 
 Every generated `drive-tools/` directory includes the executable, original source
 archive, patch, upstream license notice, source hashes and a rebuild script. The

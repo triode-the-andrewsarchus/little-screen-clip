@@ -115,8 +115,21 @@ because the crash test supplies its private fixture and invokes it explicitly.
 The original helper loses the new file in
 `/tmp/portable-drive-vm-ram-crash-negative/report.json`; the write-acknowledgement
 patch passes all three cases in `/tmp/portable-drive-vm-ram-crash-matrix/report.json`.
-Namespace-only mutations and death during an unacknowledged operation remain separate
-checks. None of these tests implies persistence through host reboot or power loss.
+The fourth case uses the same owned-child lifecycle to independently check 13
+namespace-only edits: empty-file creation, mkdir, unlink, rmdir, truncate, chmod,
+mtime, hard links, symlinks, rename, chown and xattr addition/removal. The writer keeps
+create/truncate descriptors open and performs no later data write or fsync. The
+previous helper loses the empty file in
+`/tmp/portable-drive-vm-ram-namespace-negative/report.json`.
+
+The fifth case sets the immutable inode flag, requires a held writable descriptor's
+truncate to report EPERM, kills the daemon and checks the original bytes and retained
+flag. The previous helper falsely returns success for that refused truncate in
+`/tmp/portable-drive-vm-ram-truncate-negative/report.json`.
+`/tmp/portable-drive-vm-ram-namespace-accepted/report.json` records all five guest tests
+passing with synchronous mutation completion and corrected truncate error reporting.
+Death during an unacknowledged operation remains a separate check. None of these
+tests implies persistence through host reboot or power loss.
 
 The metadata handoff and tmpfs working-directory follow-up passed all three command
 invocations in `/tmp/portable-drive-vm-native-bootstrap/report.json`. The updated
