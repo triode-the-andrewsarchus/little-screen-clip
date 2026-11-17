@@ -526,6 +526,13 @@ cannot open an editor with default flags. A missing exact rule means there is no
 explicit override for that subtree; parent exclusions still apply. Saving a rule
 publishes the indexing exclusions before its job reports success.
 
+The job shows **Updating indexing exclusions** while filesystem observations are
+pending. A changed policy pauses automatic indexing until it can be verified;
+unrelated drive synchronization and configuration continue. If observation fails,
+indexing stays paused and the job reports the failure. Saving the rule again
+requests a fresh observation. Cancelling an already-applied rule retains its
+saved settings and eventual publication result.
+
 `clipctl drives get-policy DRIVE_ID [RELATIVE_FOLDER]` reads the same exact rule
 without creating a job. Omit the folder for the whole partition. The `policy`
 write command requires both `--catalog true|false` and `--index true|false`, so an

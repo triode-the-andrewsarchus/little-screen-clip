@@ -275,7 +275,12 @@ impl Owner {
             self.automatic();
         }
     }
-    pub(super) fn finish_operation(&self, id: &str, cancel: &AtomicBool, result: Result<String>) {
+    pub(super) fn finish_operation(
+        &mut self,
+        id: &str,
+        cancel: &AtomicBool,
+        result: Result<String>,
+    ) {
         // Status combines shared settings with durable operation pages. Publish
         // the accepted settings before a completed record becomes visible; the
         // later inventory refresh can be slow or unavailable.
@@ -290,7 +295,7 @@ impl Owner {
             tokens.remove(id);
         }
         self.discover();
-        let _ = self.publish_policy();
+        let _ = self.publish_policy(false);
     }
 }
 

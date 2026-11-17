@@ -13,6 +13,24 @@ fn policy_fixture() -> (TestDrives, Drive, Store) {
     (fixture, drive, db)
 }
 
+fn policy_observer_once(
+    relative: &'static str,
+    before: impl Fn() + Send + Sync + 'static,
+) -> publication::Publication {
+    let notified = AtomicBool::new(false);
+    publication::Publication::new(Arc::new(move |input, previous| {
+        if input
+            .rules
+            .iter()
+            .any(|rule| rule.relative == Path::new(relative))
+            && !notified.swap(true, Ordering::AcqRel)
+        {
+            before();
+        }
+        publication::observe(input, previous)
+    }))
+}
+
 #[test]
 fn a_saved_rule_is_published_before_its_completion_is_reported() {
     let (fixture, drive, _) = policy_fixture();
@@ -631,6 +649,16 @@ fn failed_policy_observation_installs_a_fail_closed_publication_and_can_recover(
     let source = drive.mount.as_ref().unwrap();
     std::os::unix::fs::symlink("loop", source.join("loop")).unwrap();
     let service = fixture.start_authority(None, fixture.image_authority());
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "private".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    let verified = published_policy(&service);
     let request = DriveRequest::Rule {
         drive: drive.id,
         relative: "loop".into(),
@@ -645,8 +673,11 @@ fn failed_policy_observation_installs_a_fail_closed_publication_and_can_recover(
         failed.message
     );
     let policy = published_policy(&service);
-    assert_eq!(policy.excluded, [PathBuf::from("/")]);
-    assert!(policy.context.is_none());
+    assert!(policy.excluded.contains(&PathBuf::from("/")));
+    assert_eq!(
+        policy.context, verified.context,
+        "A failed refresh retains offline-owner observations behind the root exclusion"
+    );
     fs::remove_file(source.join("loop")).unwrap();
     let recovered = completed(&service, request);
     assert_eq!(recovered.state, "complete", "{}", recovered.message);
@@ -654,4 +685,314 @@ fn failed_policy_observation_installs_a_fail_closed_publication_and_can_recover(
     assert!(policy.context.is_some());
     assert!(policy.excluded.contains(&source.join("loop")));
     service.shutdown().unwrap();
+}
+
+#[test]
+fn held_policy_observation_coalesces_rules_without_blocking_controls_or_sync() {
+    let (fixture, drive, _) = policy_fixture();
+    let (entered, release, gate) = worker_gate();
+    let held = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observations = seen.clone();
+    let publisher = publication::Publication::new(Arc::new(move |input, previous| {
+        let selected = input
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.relative == Path::new("private") || rule.relative.starts_with("queued")
+            })
+            .count();
+        observations.lock().unwrap().push(selected);
+        if selected == 1 && !held.swap(true, Ordering::AcqRel) {
+            gate();
+        }
+        publication::observe(input, previous)
+    }));
+    let service = fixture.start_with_publication(
+        DriveConfig {
+            ram_min_available: 0,
+            sync_interval_seconds: 3600,
+            backup_directory: Some(fixture.temp.path().join("backup")),
+            ..Default::default()
+        },
+        None,
+        fixture.image_authority(),
+        publisher,
+    );
+    let local = fixture.pair(&service, "large", "");
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "seed".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    let first = accept(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "private".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_unfinished(&service, &first);
+    let started = Instant::now();
+    let mut config = status(&service).config;
+    config.sync_interval_seconds = 3601;
+    finish(&service, DriveRequest::Configure { config });
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "Control waited for held policy metadata"
+    );
+    let portable = fixture.drives.lock().unwrap()[1].mount.clone().unwrap();
+    fs::write(local.join("independent"), b"sync remains live").unwrap();
+    wait_contents(&portable.join("independent"), b"sync remains live");
+    let mut later = Vec::new();
+    for number in 0..15 {
+        let id = accept(
+            &service,
+            DriveRequest::Rule {
+                drive: drive.id.clone(),
+                relative: format!("queued/{number}").into(),
+                catalog: true,
+                index: false,
+            },
+        );
+        wait_operation(&service, &id, |operation| operation.state == "publishing");
+        later.push(id);
+    }
+    // Sixteen applied rules may await one observer. A further request stays
+    // queued, and cancelling it must not wait or mutate the saved policy.
+    let queued = accept(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "not-applied".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    service
+        .request(DriveRequest::Cancel {
+            operation: queued.clone(),
+        })
+        .unwrap();
+    let cancelled = wait_operation(&service, &queued, |operation| operation.finished.is_some());
+    assert_eq!(cancelled.state, "cancelled", "{}", cancelled.message);
+    assert!(matches!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: drive.id.clone(),
+                relative: "not-applied".into(),
+            })
+            .unwrap(),
+        DriveReply::Rule(None)
+    ));
+    assert!(
+        published_policy(&service)
+            .excluded
+            .contains(&PathBuf::from("/"))
+    );
+    service
+        .request(DriveRequest::Cancel {
+            operation: first.clone(),
+        })
+        .unwrap();
+    assert_unfinished(&service, &first);
+    release.send(()).unwrap();
+    for id in std::iter::once(&first).chain(&later) {
+        let result = wait_operation(&service, id, |operation| operation.finished.is_some());
+        assert_eq!(result.state, "complete", "{}", result.message);
+    }
+    let policy = published_policy(&service);
+    assert!(!policy.excluded.contains(&PathBuf::from("/")));
+    for relative in std::iter::once("private".to_owned())
+        .chain((0..15).map(|number| format!("queued/{number}")))
+    {
+        assert!(
+            policy
+                .excluded
+                .contains(&drive.mount.as_ref().unwrap().join(relative))
+        );
+    }
+    service.shutdown().unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(seen.contains(&1) && seen.contains(&16), "{seen:?}");
+    assert!(
+        !seen.iter().any(|count| (2..16).contains(count)),
+        "Intermediate policy backlog was replayed: {seen:?}"
+    );
+}
+
+#[test]
+fn shutdown_retains_policy_ownership_until_observation_and_rule_completion_exit() {
+    let (fixture, drive, _) = policy_fixture();
+    let (entered, release, gate) = worker_gate();
+    let publisher = policy_observer_once("private", move || gate());
+    let service = fixture.start_with_publication(
+        DriveConfig::default(),
+        None,
+        fixture.image_authority(),
+        publisher,
+    );
+    let request = DriveRequest::Rule {
+        drive: drive.id,
+        relative: "private".into(),
+        catalog: true,
+        index: false,
+    };
+    let identity = uuid::Uuid::new_v4();
+    let DriveReply::Accepted(id) = service.submit(identity, request.clone()).unwrap() else {
+        panic!("expected accepted rule");
+    };
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let draining = service.clone();
+    let (exited, completed) = mpsc::channel();
+    let shutdown = std::thread::spawn(move || {
+        let result = draining.shutdown();
+        exited.send(()).unwrap();
+        result
+    });
+    let started = Instant::now();
+    while !service.runtime.closing.load(Ordering::Acquire) {
+        assert!(started.elapsed() < Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        completed.try_recv().is_err(),
+        "Shutdown dropped a live observer"
+    );
+    assert_unfinished(&service, &id);
+    let config = status(&service).config;
+    assert!(
+        service
+            .request(DriveRequest::Configure {
+                config: config.clone()
+            })
+            .is_err()
+    );
+    let competing = Service::start_with_inventory(
+        config.clone(),
+        service.state.clone(),
+        Arc::new(|| Ok(Vec::new())),
+    );
+    assert!(
+        matches!(competing, Err(error) if error.to_string().contains("Another drive coordinator"))
+    );
+    release.send(()).unwrap();
+    completed.recv_timeout(Duration::from_secs(5)).unwrap();
+    shutdown.join().unwrap().unwrap();
+    let result = wait_operation(&service, &id, |operation| operation.finished.is_some());
+    assert_eq!(result.state, "complete", "{}", result.message);
+    let drives = fixture.drives.clone();
+    let restarted = Service::start_with_inventory(
+        config,
+        service.state.clone(),
+        Arc::new(move || Ok(drives.lock().unwrap().clone())),
+    )
+    .unwrap();
+    assert!(
+        matches!(restarted.submit(identity, request).unwrap(), DriveReply::Accepted(replayed) if replayed == id)
+    );
+    assert_eq!(
+        wait_operation(&restarted, &id, |operation| operation.finished.is_some()).state,
+        "complete"
+    );
+    restarted.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; suspends only its owned FUSE child"]
+fn stalled_fuse_policy_metadata_leaves_controls_and_another_pair_responsive() {
+    let fixture = TestDrives::new(0);
+    let (backing, source_id, mut native, source) = fixture.native_source("partition");
+    let (entered, observing) = mpsc::channel();
+    let publisher = policy_observer_once("unseen-policy-boundary", move || {
+        // SAFETY: gettid has no arguments or memory effects.
+        entered
+            .send(unsafe { libc::syscall(libc::SYS_gettid) })
+            .unwrap();
+    });
+    let service = fixture.start_with_publication(
+        DriveConfig {
+            sync_interval_seconds: 3600,
+            ..Default::default()
+        },
+        None,
+        fixture.image_authority(),
+        publisher,
+    );
+    let local = fixture.pair(&service, "small", "");
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: "part:large".into(),
+            relative: "seed".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    let mut accepted = None;
+    native.with_suspended(|| {
+        let id = accept(
+            &service,
+            DriveRequest::Rule {
+                drive: "part:large".into(),
+                relative: "unseen-policy-boundary".into(),
+                catalog: true,
+                index: false,
+            },
+        );
+        let tid = observing.recv_timeout(Duration::from_secs(5)).unwrap();
+        let started = Instant::now();
+        loop {
+            let wait = fs::read_to_string(format!("/proc/self/task/{tid}/wchan")).unwrap();
+            if wait.contains("request_wait_answer") || wait.contains("fuse") {
+                eprintln!("POLICY_FUSE_METADATA_BLOCKED tid={tid} wchan={wait}");
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "Policy worker did not enter a kernel FUSE wait: {wait}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_unfinished(&service, &id);
+        assert!(
+            published_policy(&service)
+                .excluded
+                .contains(&PathBuf::from("/"))
+        );
+        let mut config = status(&service).config;
+        config.sync_interval_seconds = 3601;
+        let started = Instant::now();
+        finish(&service, DriveRequest::Configure { config });
+        assert!(started.elapsed() < Duration::from_secs(2));
+        fs::write(
+            local.join("independent"),
+            b"sync through a real metadata stall",
+        )
+        .unwrap();
+        let portable = fixture.temp.path().join("small/independent");
+        wait_contents(&portable, b"sync through a real metadata stall");
+        assert_unfinished(&service, &id);
+        accepted = Some(id);
+    });
+    let id = accepted.unwrap();
+    let completed = wait_operation(&service, &id, |operation| operation.finished.is_some());
+    assert_eq!(completed.state, "complete", "{}", completed.message);
+    let policy = published_policy(&service);
+    assert!(!policy.excluded.contains(&PathBuf::from("/")));
+    assert!(
+        policy
+            .excluded
+            .contains(&source.join("unseen-policy-boundary"))
+    );
+    service.shutdown().unwrap();
+    drop(native);
+    crate::ram::discard(&backing, &source_id).unwrap();
 }

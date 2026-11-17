@@ -212,6 +212,7 @@ fn failed_preference_write_never_starts_the_reviewed_backup() {
             Arc::new(move || Ok(drives.lock().unwrap().clone())),
             Some(settings.clone()),
             Arc::new(authority),
+            publication::Publication::default(),
         )
         .unwrap();
         let review = preview(&service, kind, &path);

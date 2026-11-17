@@ -38,6 +38,7 @@ fn native_read_only_backup_restores_access_and_retains_completed_copy_after_late
         Arc::new(discovery::discover),
         None,
         Arc::new(authority),
+        publication::Publication::default(),
     )
     .unwrap();
     // Release the gate before Service joins its owner during unwinding.
@@ -149,6 +150,7 @@ fn native_cancel_after_read_only_mount_restores_access_and_keeps_other_pair_resp
         inventory,
         None,
         Arc::new(authority),
+        publication::Publication::default(),
     )
     .unwrap();
     let cleanup_release = release;

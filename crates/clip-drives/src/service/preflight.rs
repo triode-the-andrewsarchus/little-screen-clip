@@ -300,7 +300,7 @@ impl Owner {
         }
         if let Some(destination) = destination {
             backup::remember_destination(&self.db, &destination.path)?;
-            self.publish_policy()?;
+            self.publish_policy(false)?;
         }
         Ok(())
     }

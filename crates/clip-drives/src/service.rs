@@ -41,6 +41,7 @@ mod maintenance;
 mod partition;
 mod policy;
 mod preflight;
+mod publication;
 mod ram_pending;
 mod ram_save;
 mod ram_sessions;
@@ -58,6 +59,8 @@ struct Owner {
     sync_epoch: u64,
     background: HashMap<String, background::Pending>,
     maintenance: maintenance::Cleanup,
+    publication: publication::Publication,
+    policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
     authority: Arc<partition::Authority>,
@@ -141,6 +144,7 @@ impl Service {
             inventory,
             config_path,
             Arc::new(partition::Authority::default()),
+            publication::Publication::default(),
         )
     }
     fn start_with_authority(
@@ -149,6 +153,7 @@ impl Service {
         inventory: Inventory,
         config_path: Option<PathBuf>,
         authority: Arc<partition::Authority>,
+        publication: publication::Publication,
     ) -> Result<Self> {
         policy::validate_config(&config)?;
         let root = Root::create(&state)?;
@@ -192,6 +197,8 @@ impl Service {
             sync_epoch: 0,
             background: HashMap::new(),
             maintenance: Default::default(),
+            publication,
+            policy_waiting: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
             authority,
@@ -220,7 +227,7 @@ impl Service {
         catalog::redaction::migrate(&owner.db)?;
         owner.recover()?;
         owner.discover();
-        owner.publish_policy()?;
+        owner.publish_policy(false)?;
         let thread = std::thread::Builder::new()
             .name("portable-drive-owner".into())
             .spawn(move || owner.run(receiver))?;
@@ -449,13 +456,14 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
+            self.poll_policy();
             if discovered.elapsed() >= Duration::from_secs(5) {
                 if self.discover() {
                     self.sync_roots.clear();
                     self.sync_epoch = self.sync_epoch.wrapping_add(1);
                     self.automatic();
                 }
-                let _ = self.publish_policy();
+                let _ = self.publish_policy(false);
                 discovered = Instant::now();
             }
             self.poll_background();
@@ -571,6 +579,14 @@ impl Owner {
             let _ = child.kill();
             let _ = child.wait();
         }
+        // Policy observations own temporary media pins until their actual exit.
+        // Shutdown also installs the latest retained exclusions before releasing
+        // the singleton, including startup followed immediately by shutdown.
+        let _ = self.publish_policy(false);
+        while self.publication.busy() {
+            self.poll_policy();
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
     fn operation(&mut self, envelope: Envelope) {
         if envelope.cancel.load(Ordering::Acquire) {
@@ -579,6 +595,10 @@ impl Owner {
                 &envelope.cancel,
                 Err("Cancelled before operation setup".into()),
             );
+            return;
+        }
+        if matches!(envelope.request, DriveRequest::Rule { .. }) {
+            self.rule_operation(envelope);
             return;
         }
         if let Err(error) = self.validate_backup_request(&envelope) {
@@ -715,18 +735,25 @@ impl Owner {
             return;
         }
         let id = &envelope.id;
-        let mut op = match self.db.get::<DriveOperation>("operation", id) {
-            Ok(Some(op)) => op,
-            _ => return,
-        };
-        op.state = "running".into();
-        let _ = self.db.put("operation", id, &op);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute(envelope.request, &envelope.cancel)
-        }));
-        let result = result
-            .unwrap_or_else(|_| Err("Storage worker failed; completed writes retained".into()));
+        let result = self.execute_recorded(id, envelope.request, &envelope.cancel);
         self.finish_operation(id, &envelope.cancel, result);
+    }
+    fn execute_recorded(
+        &mut self,
+        id: &str,
+        request: DriveRequest,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let mut op = self
+            .db
+            .get::<DriveOperation>("operation", id)?
+            .ok_or("Accepted storage operation is missing")?;
+        op.state = "running".into();
+        self.db.put("operation", id, &op)?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute(request, cancel)
+        }));
+        result.unwrap_or_else(|_| Err("Storage worker failed; completed writes retained".into()))
     }
     fn defer_operation(&mut self, envelope: Envelope) {
         if self.deferred.len() < 16 {
@@ -837,7 +864,7 @@ impl Owner {
                     index,
                 };
                 catalog::redaction::set_rule(&self.db, &rule)?;
-                self.publish_policy()?;
+                self.publish_policy(true)?;
                 Ok(if catalog {
                     "Catalog and indexing policy updated; saved catalogs retain their capture date"
                 } else {
@@ -1059,8 +1086,7 @@ impl Owner {
         self.db.put("catalog", id, &catalog)?;
         Ok("Catalog unmounted".into())
     }
-    fn publish_policy(&self) -> Result<()> {
-        let routed = little_clip_core::mount_inventory::Snapshot::capture()?;
+    fn publish_policy(&mut self, fresh: bool) -> Result<()> {
         let transaction = self.db.0.unchecked_transaction()?;
         let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
@@ -1098,78 +1124,24 @@ impl Owner {
             .map_err(|_| "Drive status unavailable")?
             .drives
             .clone();
-        let sources = rules::IndexSources::observed(&drives, &routed.mounts);
-        let mut requested = Vec::new();
+        let mut rules = Vec::new();
         self.db.visit::<DriveRule>("rule", |rule| {
-            requested.extend(sources.requests(&rule));
+            rules.push(rule);
             Ok(())
         })?;
         transaction.commit()?;
-        requested.extend(excluded.iter().map(|path| {
-            (
-                format!(
-                    "path:{}",
-                    little_clip_core::path_address::display_path(path)
-                ),
-                Some(path.clone()),
-            )
-        }));
         excluded.sort();
         excluded.dedup();
-        let previous = kernel_interface::read_content_bounded(
-            &self.state.join("index-policy.json"),
-            1024 * 1024,
-        )
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<IndexPolicy>(&bytes).ok());
-        let (policy, failure) = match IndexPolicy::observed_rules(requested, previous.as_ref())
-            .and_then(|policy| {
-                if policy
-                    .context
-                    .as_ref()
-                    .is_some_and(|context| context.signature == routed.signature)
-                {
-                    Ok(policy)
-                } else {
-                    Err(std::io::Error::other(
-                        "Mount routing changed during policy publication",
-                    ))
-                }
-            }) {
-            Ok(policy) => (policy, None),
-            Err(error) => (
-                IndexPolicy {
-                    excluded: vec![PathBuf::from("/")],
-                    ..Default::default()
-                },
-                Some(format!(
-                    "Background indexing paused: could not establish drive-policy mount context: {error}"
-                )),
-            ),
-        };
-        let json = serde_json::to_vec(&policy)?;
-        let root = kernel_interface::pin_content_directory(&self.state)?;
-        let path = self.state.join("index-policy.json");
-        if path.exists() {
-            if kernel_interface::open_content(&path, false)
-                .and_then(|mut file| {
-                    use std::io::Read;
-                    let mut old = Vec::new();
-                    file.by_ref()
-                        .take((json.len() as u64).saturating_add(1))
-                        .read_to_end(&mut old)?;
-                    Ok(old == json)
-                })
-                .unwrap_or(false)
-            {
-                return failure.map_or(Ok(()), |error| Err(error.into()));
-            }
-            little_clip_core::file_source::FileSource::capture(&path)?
-                .write_in(&path, &json, &root)?;
-        } else {
-            little_clip_core::file_source::create_file_in(&path, &json, &root)?;
-        }
-        failure.map_or(Ok(()), |error| Err(error.into()))
+        self.publication.request(
+            &self.state,
+            publication::Input {
+                paths: excluded,
+                drives,
+                rules,
+            },
+            fresh,
+        )?;
+        Ok(())
     }
 }
 fn rule_id(drive: &str, relative: &Path) -> String {
@@ -1650,6 +1622,15 @@ mod tests {
             observed: Option<Arc<dyn Fn() + Send + Sync>>,
             authority: partition::Authority,
         ) -> Service {
+            self.start_with_publication(config, observed, authority, Default::default())
+        }
+        fn start_with_publication(
+            &self,
+            config: DriveConfig,
+            observed: Option<Arc<dyn Fn() + Send + Sync>>,
+            authority: partition::Authority,
+            publisher: publication::Publication,
+        ) -> Service {
             let drives = self.drives.clone();
             Service::start_with_authority(
                 config,
@@ -1662,6 +1643,7 @@ mod tests {
                 }),
                 None,
                 Arc::new(authority),
+                publisher,
             )
             .unwrap()
         }
@@ -2463,6 +2445,7 @@ mod tests {
             Arc::new(move || Ok(drives.lock().unwrap().clone())),
             None,
             Arc::new(partition::Authority::default()),
+            publication::Publication::default(),
         )
         .unwrap();
         let id = accept(

@@ -564,7 +564,7 @@ pub struct Catalog {
     pub mount: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriveRule {
     pub id: String,
     pub drive: String,

@@ -124,7 +124,7 @@ impl Owner {
                         Err("RAM setup finished; initial copy cancelled before population".into()),
                         None,
                     );
-                } else if let Err(error) = self.publish_policy() {
+                } else if let Err(error) = self.publish_policy(false) {
                     self.sync_result(
                         &intent,
                         Err(format!(
