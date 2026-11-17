@@ -39,7 +39,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Complete | Version-2 paginated SQLite catalogs preserve raw names, numeric sizes/types, original modification/ctime fields, captured Drive and pinned source mount/namespace, explicit known/unknown driver precision, per-directory coverage and typed stage/reason/errno. Host permission/replacement/raw-name tests, indexed multi-page reads, real FUSE details/errors and native FAT32/exFAT/NTFS precision/metadata checks pass. See the typed catalog coverage checkpoint. |
-| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Rule-address alias/selector handling remains. |
+| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Device selectors bind to persistent IDs before acceptance; lexical spelling aliases migrate transactionally with exclusions preserved. Queue-time device reuse, replay, clone refusal, offline editing, 1,100-rule migration rollback and dark/light CLI/editor checks pass. Filesystem case-fold/bind aliases and legacy device-only policy review remain. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
@@ -53,6 +53,61 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Persistent policy address checkpoint
+
+Rule writes now resolve a discovered device selector to an unambiguous persistent
+drive ID before acceptance. Execution uses that binding; it does not resolve the
+device node again. A controlled queue test reuses the node for another partition
+before delivery and proves the saved policy remains with the original ID. The
+same request identity returns the original accepted/completed operation after
+reuse. Duplicate persistent identities are refused even when one device node
+would otherwise select a single clone. Stable identities remain editable offline.
+
+Relative paths now share canonical lexical keys across repeated separators,
+trailing separators and interior dot components. Raw Unix bytes survive. A
+versioned, bounded-page local migration merges legacy aliases with logical AND
+for each admission flag, preserving all exclusions. An injected failure after
+more than one page rolls back every replacement and the migration marker;
+retry and a second no-op migration preserve all 1,100 rules. Explicit replacement
+can subsequently enable both flags without leaving a hidden old exclusion.
+Mismatched saved keys are refused before writes, and invalid parent/NUL addresses
+create neither rules nor accepted operations.
+
+Preparation runs outside the cancellation/admission mutex and SQLite write
+transaction. Admission then repeats its existing replay and closing checks before
+recording the prepared request. A held-inventory test proves an independent
+Configure request completes and another connection can take a write transaction
+before selector preparation is released. This necessary two-stage admission
+raises its measured CCN from 16 to 18; it avoids introducing a second state owner,
+lock wrapper or pool. Per-record migration and its transaction boundary are
+separate, with neither flagged for excessive complexity. Clone groups remain
+4,300 and dependency cycles 144, unchanged from the accounting checkpoint;
+whole-branch architecture classification remains REGRESSION, with average CCN
+3.49, maximum 274 and duplication 7.01%.
+
+The ordinary backend suite passes **203 tests**, with **82 opt-in tests ignored**
+(`/tmp/portable-drive-rule-address-backend-verified.log`). Eleven ordinary policy
+coverage tests include the eight new address cases; backend all-target Clippy
+passes with warnings denied (`/tmp/portable-drive-rule-address-clippy.log`). The
+queued RAM-save cancellation fixture now waits for the owner's actual periodic
+inventory gate instead of relying on a Rule request to trigger discovery: Rule
+selector preparation intentionally happens before admission. Its original
+no-destination-creation and retained cancellation assertions remain and pass.
+
+Private dark/light acceptance seeds policies via actual `clipctl drives policy`
+commands with a device selector and `many//`, verifies their stored canonical
+persistent address, ages them beyond status pagination, then opens both editors
+and saves unchanged flags. Reports:
+`/tmp/portable-drive-rule-address-dark/report.json` and
+`/tmp/portable-drive-rule-address-light/report.json`. No live desktop service,
+privileged host mount or real device payload was used.
+
+Item 6.2 remains Partial: lexical spelling normalization is not filesystem
+case-fold, directory-bind or policy relocation coverage. Legacy development
+records containing only `/dev/...` have no evidence to safely attach them to a
+current partition; they are retained without automatic rebinding, and the full
+review/migration experience remains unfinished with the wider alias work.
 
 ## Explicit local metadata accounting checkpoint
 

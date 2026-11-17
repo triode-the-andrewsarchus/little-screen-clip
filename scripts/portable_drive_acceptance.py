@@ -465,9 +465,18 @@ def catalog_context_menu(session, name, expected):
 
 
 def seed_old_policy_rules(env):
-    drive = status(env)['drives'][0]['id']
-    for relative, catalog, index in [('', False, True), ('many', True, False)]:
-        completed(env, request(env, {'Rule': {'drive': drive, 'relative': relative, 'catalog': catalog, 'index': index}}))
+    observed = status(env)['drives'][0]
+    drive = observed['id']
+    cli = Path(__file__).resolve().parent.parent / 'target/debug/clipctl'
+    for relative, catalog, index in [('', False, True), ('many//', True, False)]:
+        arguments = [str(cli), 'drives', 'policy', observed['device']]
+        if relative:
+            arguments.append(relative)
+        arguments += ['--catalog', str(catalog).lower(), '--index', str(index).lower()]
+        completed(env, json.loads(private.run_checked(arguments, env=env)))
+        saved = request(env, {'GetRule': {'drive': drive, 'relative': relative}})['Rule']
+        assert saved['drive'] == drive and saved['relative'] == relative.rstrip('/'), saved
+        assert (saved['catalog'], saved['index']) == (catalog, index), saved
     for number in range(105):
         completed(env, request(env, {'Rule': {'drive': drive, 'relative': f'old-policy-{number}', 'catalog': True, 'index': True}}))
     assert all(rule['relative'] not in ['', 'many'] for rule in status(env)['rules'])

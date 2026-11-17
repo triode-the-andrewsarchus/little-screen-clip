@@ -46,6 +46,7 @@ mod ram_save;
 mod ram_sessions;
 mod ram_setup;
 mod reconciliation;
+mod rules;
 
 struct Owner {
     closing: Arc<AtomicBool>,
@@ -215,6 +216,7 @@ impl Service {
             ram_setup: None,
             ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
         };
+        rules::migrate(&owner.db)?;
         catalog::redaction::migrate(&owner.db)?;
         owner.recover()?;
         owner.discover();
@@ -261,18 +263,9 @@ impl Service {
             return self.status(offset).map(|s| DriveReply::Status(Box::new(s)));
         }
         if let DriveRequest::GetRule { drive, relative } = request {
-            if !valid_relative(&relative) {
-                return Err("Invalid rule subtree".into());
-            }
+            let drive = rules::drive((self.inventory)()?, &drive)?;
             let db = Store::existing(&self.state.join("drives.sqlite"), true)?;
-            let rule: Option<DriveRule> = db.get("rule", &rule_id(&drive, &relative))?;
-            if rule
-                .as_ref()
-                .is_some_and(|rule| rule.drive != drive || rule.relative != relative)
-            {
-                return Err("Saved rule address does not match its key".into());
-            }
-            return Ok(DriveReply::Rule(rule));
+            return Ok(DriveReply::Rule(rules::get(&db, &drive, &relative)?));
         }
         if let DriveRequest::Cancel { operation } = request {
             let tokens = self
@@ -834,9 +827,7 @@ impl Owner {
                 catalog,
                 index,
             } => {
-                if !valid_relative(&relative) {
-                    return Err("Invalid rule subtree".into());
-                }
+                rules::get(&self.db, &drive, &relative)?;
                 let id = rule_id(&drive, &relative);
                 let rule = DriveRule {
                     id: id.clone(),
@@ -1146,9 +1137,10 @@ impl Owner {
     }
 }
 fn rule_id(drive: &str, relative: &Path) -> String {
+    let relative: PathBuf = relative.components().collect();
     format!(
         "{drive}:{}",
-        little_clip_core::path_address::display_path(relative)
+        little_clip_core::path_address::display_path(&relative)
     )
 }
 
@@ -1455,15 +1447,9 @@ mod tests {
         )
         .unwrap();
         block.store(true, Ordering::Release);
-        service
-            .request(DriveRequest::Rule {
-                drive: "part:queued-cancel".into(),
-                relative: PathBuf::new(),
-                catalog: false,
-                index: false,
-            })
-            .unwrap();
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Block the owner's periodic discovery, independently of any client's
+        // read-only selector preparation before operation admission.
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let destination = temp.path().join("must-not-be-created");
         let id = accept(
             &service,

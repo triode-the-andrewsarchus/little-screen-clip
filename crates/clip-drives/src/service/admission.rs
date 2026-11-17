@@ -101,47 +101,61 @@ impl Service {
         request_id: uuid::Uuid,
         request: DriveRequest,
     ) -> Result<DriveReply> {
-        let mut tokens = self
-            .runtime
-            .tokens
-            .lock()
-            .map_err(|_| "Drive admission unavailable")?;
         let id = request_id.to_string();
-        let db = Store::existing(&self.state.join("drives.sqlite"), false)?;
-        let transaction = Transaction::new_unchecked(&db.0, TransactionBehavior::Immediate)?;
         let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
-        if replay(&db, &id, &fingerprint, tokens.contains_key(&id))? {
-            transaction.commit()?;
-            return Ok(DriveReply::Accepted(id));
-        }
-        if self.runtime.closing.load(Ordering::Acquire) {
-            return Err("Drive services are shutting down; admission is closed".into());
-        }
-        let (request, mut review) = self.take_backup_review(request)?;
-        let result = (|| {
-            let operation = record(&db, transaction, &id, &request, fingerprint)?;
-            let cancel = Arc::new(AtomicBool::new(false));
-            tokens.insert(id.clone(), cancel.clone());
-            if let Err(error) = self.sender.try_send(Envelope {
-                id: id.clone(),
-                request,
-                cancel,
-                review: review.take(),
-            }) {
-                let (mpsc::TrySendError::Full(envelope)
-                | mpsc::TrySendError::Disconnected(envelope)) = error;
-                review = envelope.review;
-                tokens.remove(&id);
-                return Err(rejected(&db, operation));
-            }
-            Ok(DriveReply::Accepted(id))
-        })();
-        if let Some(review) = review {
-            self.previews
+        let mut prepared = None;
+        loop {
+            let mut tokens = self
+                .runtime
+                .tokens
                 .lock()
-                .map_err(|_| "Backup review storage unavailable")?
-                .insert(review.info.token.clone(), review);
+                .map_err(|_| "Drive admission unavailable")?;
+            let db = Store::existing(&self.state.join("drives.sqlite"), false)?;
+            let transaction = Transaction::new_unchecked(&db.0, TransactionBehavior::Immediate)?;
+            if replay(&db, &id, &fingerprint, tokens.contains_key(&id))? {
+                transaction.commit()?;
+                return Ok(DriveReply::Accepted(id));
+            }
+            if self.runtime.closing.load(Ordering::Acquire) {
+                return Err("Drive services are shutting down; admission is closed".into());
+            }
+            if matches!(request, DriveRequest::Rule { .. }) && prepared.is_none() {
+                // Resolve device selectors before acceptance, without holding either
+                // the SQLite write transaction or cancellation/admission mutex while
+                // lsblk runs. Recheck durable replay/closure after preparation.
+                drop(transaction);
+                drop(db);
+                drop(tokens);
+                prepared = Some(rules::bind(request.clone(), &self.inventory)?);
+                continue;
+            }
+            let request = prepared.take().unwrap_or(request);
+            let (request, mut review) = self.take_backup_review(request)?;
+            let result = (|| {
+                let operation = record(&db, transaction, &id, &request, fingerprint)?;
+                let cancel = Arc::new(AtomicBool::new(false));
+                tokens.insert(id.clone(), cancel.clone());
+                if let Err(error) = self.sender.try_send(Envelope {
+                    id: id.clone(),
+                    request,
+                    cancel,
+                    review: review.take(),
+                }) {
+                    let (mpsc::TrySendError::Full(envelope)
+                    | mpsc::TrySendError::Disconnected(envelope)) = error;
+                    review = envelope.review;
+                    tokens.remove(&id);
+                    return Err(rejected(&db, operation));
+                }
+                Ok(DriveReply::Accepted(id))
+            })();
+            if let Some(review) = review {
+                self.previews
+                    .lock()
+                    .map_err(|_| "Backup review storage unavailable")?
+                    .insert(review.info.token.clone(), review);
+            }
+            return result;
         }
-        result
     }
 }

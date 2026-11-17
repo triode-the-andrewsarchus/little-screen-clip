@@ -6,6 +6,9 @@ fn policy_fixture() -> (TestDrives, Drive, Store) {
     let state = fixture.temp.path().join("state");
     fs::create_dir(&state).unwrap();
     let db = Store::open(&state.join("drives.sqlite")).unwrap();
+    // Policy tests never open this device; use the same selector namespace as
+    // production discovery rather than the ordinary-file imaging fixture.
+    fixture.drives.lock().unwrap()[0].device = "/dev/portable-policy-fixture".into();
     let drive = fixture.drives.lock().unwrap()[0].clone();
     (fixture, drive, db)
 }
@@ -122,7 +125,7 @@ fn exact_rule_reads_preserve_raw_addresses_and_do_not_create_operations() {
         let rule = DriveRule {
             id: format!("other-{index}"),
             drive: "other-drive".into(),
-            relative: PathBuf::new(),
+            relative: format!("folder-{index}").into(),
             catalog: true,
             index: true,
         };
@@ -216,4 +219,406 @@ fn index_policy_client_probe() {
     fs::write(&registry, original).unwrap();
     assert!(!little_clip_core::drives::index_excluded(&allowed));
     println!("POLICY_CLIENT_VERIFIED");
+}
+
+#[test]
+fn device_policy_selectors_bind_to_the_persistent_identity_and_remain_editable_offline() {
+    let (fixture, drive, _) = policy_fixture();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let selector = drive.device.to_str().unwrap().to_owned();
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: selector.clone(),
+            relative: "private".into(),
+            catalog: false,
+            index: false,
+        },
+    );
+    for selected in [&selector, &drive.id] {
+        let DriveReply::Rule(Some(rule)) = service
+            .request(DriveRequest::GetRule {
+                drive: selected.clone(),
+                relative: "private".into(),
+            })
+            .unwrap()
+        else {
+            panic!("Missing bound rule for {selected}")
+        };
+        assert_eq!(rule.drive, drive.id);
+        assert!(!rule.catalog && !rule.index);
+    }
+    assert!(
+        published_policy(&service)
+            .excluded
+            .contains(&drive.mount.unwrap().join("private"))
+    );
+    fixture.drives.lock().unwrap().clear();
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "private".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    let DriveReply::Rule(Some(rule)) = service
+        .request(DriveRequest::GetRule {
+            drive: drive.id,
+            relative: "private".into(),
+        })
+        .unwrap()
+    else {
+        panic!("Offline rule disappeared")
+    };
+    assert!(rule.catalog && !rule.index);
+    assert!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: selector,
+                relative: "private".into()
+            })
+            .is_err()
+    );
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn equivalent_rule_paths_share_one_address_and_legacy_duplicates_preserve_exclusions() {
+    let (fixture, drive, db) = policy_fixture();
+    let canonical = "private/child";
+    for (path, catalog, index) in [("private//child/", false, true), (canonical, true, false)] {
+        let id = format!("{}:{path}", drive.id);
+        db.put(
+            "rule",
+            &id,
+            &DriveRule {
+                id: id.clone(),
+                drive: drive.id.clone(),
+                relative: path.into(),
+                catalog,
+                index,
+            },
+        )
+        .unwrap();
+    }
+    let service = fixture.start_authority(None, fixture.image_authority());
+    for path in [canonical, "private//child/", "private/./child"] {
+        let DriveReply::Rule(Some(rule)) = service
+            .request(DriveRequest::GetRule {
+                drive: drive.id.clone(),
+                relative: path.into(),
+            })
+            .unwrap()
+        else {
+            panic!("Missing equivalent rule {path}")
+        };
+        assert!(!rule.catalog && !rule.index, "{rule:?}");
+        assert_eq!(rule.relative.as_os_str(), std::ffi::OsStr::new(canonical));
+    }
+    assert_eq!(db.list::<DriveRule>("rule", 0, 100).unwrap().len(), 1);
+    assert!(
+        published_policy(&service)
+            .excluded
+            .contains(&drive.mount.unwrap().join(canonical))
+    );
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id.clone(),
+            relative: "private//child/".into(),
+            catalog: true,
+            index: true,
+        },
+    );
+    let rules = db.list::<DriveRule>("rule", 0, 100).unwrap();
+    assert_eq!(rules.len(), 1);
+    assert!(rules[0].catalog && rules[0].index);
+    service.shutdown().unwrap();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let DriveReply::Rule(Some(rule)) = service
+        .request(DriveRequest::GetRule {
+            drive: drive.id,
+            relative: canonical.into(),
+        })
+        .unwrap()
+    else {
+        panic!("Canonical rule lost after restart")
+    };
+    assert!(rule.catalog && rule.index);
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn policy_writes_refuse_a_colliding_saved_key_instead_of_overwriting_another_address() {
+    let (fixture, drive, db) = policy_fixture();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let id = rule_id(&drive.id, Path::new("private"));
+    let other = DriveRule {
+        id: id.clone(),
+        drive: "another-drive".into(),
+        relative: "kept".into(),
+        catalog: false,
+        index: false,
+    };
+    db.put("rule", &id, &other).unwrap();
+    let operation = completed(
+        &service,
+        DriveRequest::Rule {
+            drive: drive.id,
+            relative: "private".into(),
+            catalog: true,
+            index: true,
+        },
+    );
+    assert_eq!(operation.state, "failed", "{}", operation.message);
+    let retained: DriveRule = db.get("rule", &id).unwrap().unwrap();
+    assert_eq!(retained.drive, other.drive);
+    assert_eq!(retained.relative, other.relative);
+    assert!(!retained.catalog && !retained.index);
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn policy_device_selectors_refuse_cloned_persistent_identities() {
+    let (fixture, drive, db) = policy_fixture();
+    // Explicit device selection cannot disambiguate a policy which would later
+    // apply automatically to both partitions with the same persistent key.
+    fixture.drives.lock().unwrap()[1].id = drive.id.clone();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let selector = drive.device.to_str().unwrap().to_owned();
+    assert!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: selector.clone(),
+                relative: PathBuf::new()
+            })
+            .is_err()
+    );
+    assert!(
+        service
+            .request(DriveRequest::Rule {
+                drive: selector,
+                relative: PathBuf::new(),
+                catalog: false,
+                index: false
+            })
+            .is_err()
+    );
+    assert!(db.list::<DriveRule>("rule", 0, 100).unwrap().is_empty());
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn accepted_policy_binds_before_a_device_node_is_reused_and_retry_keeps_the_original_binding() {
+    let (fixture, drive, _) = policy_fixture();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let mut intercepted = service.clone();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    intercepted.sender = sender;
+    let key = uuid::Uuid::new_v4();
+    let request = DriveRequest::Rule {
+        drive: drive.device.to_str().unwrap().into(),
+        relative: "private//child/".into(),
+        catalog: false,
+        index: false,
+    };
+    let DriveReply::Accepted(id) = intercepted.submit(key, request.clone()).unwrap() else {
+        panic!("Missing acceptance")
+    };
+    let envelope = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    let DriveRequest::Rule {
+        drive: bound,
+        relative,
+        ..
+    } = &envelope.request
+    else {
+        panic!("Wrong queued request")
+    };
+    assert_eq!(bound, &drive.id);
+    assert_eq!(relative.as_os_str(), std::ffi::OsStr::new("private/child"));
+    fixture.drives.lock().unwrap()[0].id = "part:replacement".into();
+    service.sender.send(envelope).unwrap();
+    let operation = wait_operation(&service, &id, |op| op.finished.is_some());
+    assert_eq!(operation.state, "complete", "{}", operation.message);
+    let DriveReply::Accepted(retried) = service.submit(key, request).unwrap() else {
+        panic!("Missing replay")
+    };
+    assert_eq!(retried, id);
+    for (selector, present) in [(drive.id, true), ("part:replacement".into(), false)] {
+        let DriveReply::Rule(rule) = service
+            .request(DriveRequest::GetRule {
+                drive: selector,
+                relative: "private/child".into(),
+            })
+            .unwrap()
+        else {
+            panic!("Wrong reply")
+        };
+        assert_eq!(rule.is_some(), present);
+    }
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn rule_alias_migration_spans_pages_and_rolls_back_completely_on_install_failure() {
+    let (_fixture, drive, db) = policy_fixture();
+    for index in 0..1100 {
+        let relative = if index == 0 {
+            PathBuf::from(OsString::from_vec(b"private_\xff//child/".to_vec()))
+        } else {
+            format!("folder-{index}//child/").into()
+        };
+        let id = format!(
+            "{}:{}",
+            drive.id,
+            little_clip_core::path_address::display_path(&relative)
+        );
+        db.put(
+            "rule",
+            &id,
+            &DriveRule {
+                id: id.clone(),
+                drive: drive.id.clone(),
+                relative,
+                catalog: false,
+                index: false,
+            },
+        )
+        .unwrap();
+    }
+    db.0.execute_batch("CREATE TRIGGER fail_rule_address_install BEFORE INSERT ON entities WHEN NEW.kind='rule' AND NEW.id LIKE '%:folder-1001/child' BEGIN SELECT RAISE(ABORT,'owned rule migration failure'); END").unwrap();
+    let error = rules::migrate(&db).unwrap_err();
+    assert!(
+        error.to_string().contains("owned rule migration failure"),
+        "{error}"
+    );
+    assert!(
+        db.get::<u32>("migration", "rule-address")
+            .unwrap()
+            .is_none()
+    );
+    let count: u64 =
+        db.0.query_row(
+            "SELECT count(*) FROM entities WHERE kind='rule'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1100);
+    assert!(
+        db.get::<DriveRule>("rule", &format!("{}:folder-1//child/", drive.id))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        rules::get(&db, &drive.id, Path::new("folder-1/child"))
+            .unwrap()
+            .is_none()
+    );
+    db.0.execute_batch("DROP TRIGGER fail_rule_address_install")
+        .unwrap();
+    rules::migrate(&db).unwrap();
+    assert_eq!(db.get::<u32>("migration", "rule-address").unwrap(), Some(1));
+    for index in 0..1100 {
+        let relative = if index == 0 {
+            PathBuf::from(OsString::from_vec(b"private_\xff/child".to_vec()))
+        } else {
+            format!("folder-{index}/child").into()
+        };
+        let rule = rules::get(&db, &drive.id, &relative).unwrap().unwrap();
+        assert_eq!(rule.relative.as_os_str(), relative.as_os_str());
+        assert!(!rule.catalog && !rule.index);
+    }
+    rules::migrate(&db).unwrap();
+    let count: u64 =
+        db.0.query_row(
+            "SELECT count(*) FROM entities WHERE kind='rule'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1100);
+}
+
+#[test]
+fn slow_policy_identity_preparation_holds_neither_admission_nor_sqlite_write_ownership() {
+    let (fixture, drive, db) = policy_fixture();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let mut preparing = service.clone();
+    let inventory = preparing.inventory.clone();
+    let (entered, release, gate) = worker_gate();
+    preparing.inventory = Arc::new(move || {
+        gate();
+        inventory()
+    });
+    std::thread::scope(|scope| {
+        let pending = scope.spawn(|| {
+            preparing.request(DriveRequest::Rule {
+                drive: drive.device.to_str().unwrap().into(),
+                relative: PathBuf::new(),
+                catalog: false,
+                index: false,
+            })
+        });
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (sent, received) = mpsc::channel();
+        let controls = &service;
+        scope.spawn(move || {
+            finish(
+                controls,
+                DriveRequest::Configure {
+                    config: DriveConfig::default(),
+                },
+            );
+            sent.send(()).unwrap();
+        });
+        let responsive = received.recv_timeout(Duration::from_secs(3));
+        let unlocked = db.0.execute_batch("BEGIN IMMEDIATE; ROLLBACK");
+        release.send(()).unwrap();
+        let accepted = pending.join().unwrap().unwrap();
+        assert!(
+            responsive.is_ok(),
+            "Selector preparation blocked independent admission"
+        );
+        unlocked.expect("Selector preparation held the SQLite write transaction");
+        let DriveReply::Accepted(id) = accepted else {
+            panic!("Missing prepared request")
+        };
+        assert_eq!(
+            wait_operation(&service, &id, |op| op.finished.is_some()).state,
+            "complete"
+        );
+    });
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn policy_addresses_refuse_nul_and_parent_escapes_without_saving_rules() {
+    let (fixture, drive, db) = policy_fixture();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    for path in ["../private", "private/../../escape", "private\0/child"] {
+        assert!(
+            service
+                .request(DriveRequest::GetRule {
+                    drive: drive.id.clone(),
+                    relative: path.into()
+                })
+                .is_err()
+        );
+        assert!(
+            service
+                .request(DriveRequest::Rule {
+                    drive: drive.id.clone(),
+                    relative: path.into(),
+                    catalog: false,
+                    index: false
+                })
+                .is_err()
+        );
+    }
+    assert!(db.list::<DriveRule>("rule", 0, 100).unwrap().is_empty());
+    assert!(status(&service).operations.is_empty());
+    service.shutdown().unwrap();
 }

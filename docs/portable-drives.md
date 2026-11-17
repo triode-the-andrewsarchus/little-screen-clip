@@ -532,6 +532,27 @@ write command requires both `--catalog true|false` and `--index true|false`, so 
 omitted flag cannot reset the other setting. Whole-partition `pair` commands also
 accept an omitted `--subtree`.
 
+Policy commands also accept a currently discovered `/dev/...` selector. It must
+resolve to one unambiguous persistent identity, which is bound before the write
+is accepted. A reused device node cannot retarget an already accepted rule, and
+retrying the same request identity returns its original result. Persistent IDs
+remain editable without the media. Selector preparation does not hold the
+admission/cancellation mutex or a database write transaction while inventory runs.
+
+Equivalent relative spellings such as `folder//child/` and `folder/./child` use
+one rule address, preserving non-UTF-8 path bytes. A local transactional migration
+combines legacy spelling aliases conservatively: either alias excluding catalog
+or indexing keeps that exclusion until an explicit replacement is saved. The
+migration is paginated and rolls back completely on failure. An inconsistent
+saved key is refused instead of overwriting another policy. Parent escapes and
+NUL bytes are invalid. This normalization does not claim filesystem case-fold or
+bind-mount alias coverage.
+
+Legacy development records naming only a device node have no persistent identity
+evidence. They remain retained without being attached to a potentially reused
+node. Inspect their flags in paginated status and explicitly save the reviewed
+policy using the persistent ID; automatic rebinding would be unsafe.
+
 Catalog collection and published indexing policy load every saved rule through
 bounded SQLite pages from one retained snapshot. The page size does not limit the
 number of rules honored. Published paths are sorted and deduplicated. Background
@@ -540,8 +561,9 @@ malformed registry blocks background indexing rather than accepting a partial li
 
 The focused private desktop acceptance scenario uses `--policy-editor-only` with
 `scripts/portable_drive_acceptance.py` in either appearance. It seeds rules older
-than the first status page, reopens both editors and verifies that saving unchanged
-settings retains both stored flags.
+than the first status page through actual CLI device selectors (including an
+alternate folder spelling), reopens both editors and verifies that saving
+unchanged settings retains both stored flags.
 
 Files labels excluded catalog folders **Not catalogued**, while a captured empty
 folder remains empty. Opening an excluded folder reports that its contents were
