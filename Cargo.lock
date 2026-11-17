@@ -6203,6 +6203,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 1.0.69",
+ "tiff",
  "tinypsd",
  "tobj",
  "toml 0.8.23",

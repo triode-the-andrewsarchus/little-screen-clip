@@ -169,3 +169,27 @@ audio_spectrum = false
 
 [file_manager.search]
 roots = []
+
+[geography]
+# Ask to download offline basemap assets the first time a geography file is opened.
+prompt_on_open = true
+# Total on-disk budget for downloaded geography datasets in bytes (default: 18 GiB < 20 GB).
+# max_assets_bytes = 19327352832
+# Optional custom directory for downloaded offline globe/map assets (outside git).
+# Defaults to $XDG_DATA_HOME/little-screen-clip/geography
+# assets_dir = "/path/to/offline-geo-assets"
+# Optional local directory for higher-resolution terrain DEM overrides (.hgt, .raw16, .tif).
+# terrain_override_dir = "/path/to/highres-dem"
+# Optional download URL overrides:
+# ne2_texture_url = "https://naciscdn.org/naturalearth/10m/raster/NE2_HR_LC_SR_W_DR.zip"
+# cities_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson"
+# countries_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson"
+# states_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson"
+# roads_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson"
+# lakes_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson"
+# grwl_summary_url = "https://zenodo.org/api/records/18624542/files/GRWL_summaryStats_V01.02.zip/content"
+# grwl_mask_url = "https://zenodo.org/api/records/18624542/files/GRWL_mask_V01.01.zip/content"
+# gshhg_water_url = "https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-bin-2.3.7.zip"
+# hydrorivers_url = "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_shp.zip"
+# gebco_terrain_url = "https://data.source.coop/ausantarctic/gebco/GEBCO_2025.tif"
+# land_cover_url = "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content"

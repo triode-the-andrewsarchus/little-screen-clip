@@ -40,6 +40,9 @@ pub struct AppConfig {
     /// AI/ONNX neural network model download URL configuration.
     #[serde(default, alias = "models")]
     pub ai_models: AiModelsConfig,
+    /// Offline globe/map basemap and terrain asset configuration.
+    #[serde(default)]
+    pub geography: GeographyConfig,
 }
 
 /// Standalone Files media view preferences.
@@ -368,6 +371,103 @@ pub struct AiModelsConfig {
         alias = "siglip_tokenizer_url"
     )]
     pub siglip2_giant_tokenizer_url: Option<String>,
+}
+
+/// Default URL for Natural Earth II shaded-relief/water/vegetation global texture.
+pub const DEFAULT_GEO_NE2_TEXTURE_URL: &str =
+    "https://naciscdn.org/naturalearth/10m/raster/NE2_HR_LC_SR_W_DR.zip";
+/// Default URL for Natural Earth 10m Populated Places (filtered to POP_MAX >= 250,000).
+pub const DEFAULT_GEO_CITIES_URL: &str = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson";
+/// Default URL for Natural Earth 1:10m Admin 0 country land boundary lines (no maritime borders).
+pub const DEFAULT_GEO_COUNTRIES_URL: &str = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson";
+/// Default URL for Natural Earth 1:10m Admin 1 state/province boundary lines (global coverage).
+pub const DEFAULT_GEO_STATES_URL: &str = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson";
+/// Default URL for Natural Earth 1:10m global roads (major & secondary highways).
+pub const DEFAULT_GEO_ROADS_URL: &str = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson";
+/// Default URL for Natural Earth 1:10m lakes & reservoirs.
+pub const DEFAULT_GEO_LAKES_URL: &str = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson";
+/// Default URL for Global River Widths from Landsat (GRWL) simplified summary centerlines (43.3 MB).
+pub const DEFAULT_GEO_GRWL_SUMMARY_URL: &str =
+    "https://zenodo.org/api/records/18624542/files/GRWL_summaryStats_V01.02.zip/content";
+/// Default URL for GRWL 30 m water mask GeoTIFF archive (394 MB).
+pub const DEFAULT_GEO_GRWL_MASK_URL: &str =
+    "https://zenodo.org/api/records/18624542/files/GRWL_mask_V01.01.zip/content";
+/// Default URL for GSHHG coastlines and lake outlines (GMT binary archive).
+pub const DEFAULT_GEO_GSHHG_WATER_URL: &str =
+    "https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-bin-2.3.7.zip";
+/// Default URL for HydroRIVERS global river network shapefile archive (optional).
+pub const DEFAULT_GEO_HYDRORIVERS_URL: &str =
+    "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_shp.zip";
+/// Default URL for GEBCO 2025 sub-ice global 15 arc-second terrain grid (Cloud-Optimized GeoTIFF mirror).
+pub const DEFAULT_GEO_GEBCO_TERRAIN_URL: &str =
+    "https://data.source.coop/ausantarctic/gebco/GEBCO_2025.tif";
+/// Default URL for Copernicus/ESA CCI 300 m global land cover snapshot (public Zenodo mirror).
+pub const DEFAULT_GEO_LAND_COVER_URL: &str =
+    "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content";
+
+/// Default maximum disk budget for offline geography datasets (< 20 GB).
+pub const DEFAULT_GEO_MAX_ASSETS_BYTES: u64 = 18 * 1024 * 1024 * 1024;
+
+/// Offline 3D globe / 2D map basemap and elevation asset configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GeographyConfig {
+    /// Directory where downloaded basemap assets are stored (outside git).
+    /// Defaults to `$XDG_DATA_HOME/little-screen-clip/geography`.
+    pub assets_dir: Option<PathBuf>,
+    /// Optional local directory containing higher-resolution DEM overrides (`.hgt`, `.tif`, `.raw16`).
+    pub terrain_override_dir: Option<PathBuf>,
+    /// Prompt to download missing offline basemap assets when opening a geography file.
+    pub prompt_on_open: bool,
+    /// Maximum total on-disk bytes allowed for downloaded geography datasets (default: 18 GiB < 20 GB).
+    pub max_assets_bytes: u64,
+    /// Optional URL override for the Natural Earth II global texture archive.
+    pub ne2_texture_url: Option<String>,
+    /// Optional URL override for Natural Earth Populated Places GeoJSON.
+    pub cities_url: Option<String>,
+    /// Optional URL override for Natural Earth 1:10m Admin 0 country land boundary lines.
+    pub countries_url: Option<String>,
+    /// Optional URL override for Natural Earth 1:10m Admin 1 state/province boundary lines.
+    pub states_url: Option<String>,
+    /// Optional URL override for Natural Earth 1:10m global roads GeoJSON.
+    pub roads_url: Option<String>,
+    /// Optional URL override for Natural Earth 1:10m lakes GeoJSON.
+    pub lakes_url: Option<String>,
+    /// Optional URL override for GRWL summary centerlines (`width_med`).
+    pub grwl_summary_url: Option<String>,
+    /// Optional URL override for GRWL 30 m water masks.
+    pub grwl_mask_url: Option<String>,
+    /// Optional URL override for GSHHG coastlines & lakes binary archive.
+    pub gshhg_water_url: Option<String>,
+    /// Optional URL override for HydroRIVERS shapefile archive.
+    pub hydrorivers_url: Option<String>,
+    /// Optional URL override for GEBCO 2026 15" ice-surface terrain grid.
+    pub gebco_terrain_url: Option<String>,
+    /// Optional URL override for Copernicus/ESA 300 m global land cover.
+    pub land_cover_url: Option<String>,
+}
+
+impl Default for GeographyConfig {
+    fn default() -> Self {
+        Self {
+            assets_dir: None,
+            terrain_override_dir: None,
+            prompt_on_open: true,
+            max_assets_bytes: DEFAULT_GEO_MAX_ASSETS_BYTES,
+            ne2_texture_url: None,
+            cities_url: None,
+            countries_url: None,
+            states_url: None,
+            roads_url: None,
+            lakes_url: None,
+            grwl_summary_url: None,
+            grwl_mask_url: None,
+            gshhg_water_url: None,
+            hydrorivers_url: None,
+            gebco_terrain_url: None,
+            land_cover_url: None,
+        }
+    }
 }
 
 /// External tool paths for image viewing, editing, and background removal.
@@ -828,6 +928,132 @@ impl AppConfig {
             .as_deref()
             .or(self.image.lama_model_url.as_deref())
             .unwrap_or(DEFAULT_BIG_LAMA_MODEL_URL)
+    }
+
+    /// Resolves the local directory for offline globe/map basemap and terrain assets.
+    pub fn geo_assets_dir(&self) -> PathBuf {
+        if let Some(dir) = &self.geography.assets_dir {
+            return dir.clone();
+        }
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|home| PathBuf::from(home).join(".local/share"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("little-screen-clip")
+            .join("geography")
+    }
+
+    /// Returns the Natural Earth II texture download URL.
+    pub fn geo_ne2_texture_url(&self) -> &str {
+        self.geography
+            .ne2_texture_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_NE2_TEXTURE_URL)
+    }
+
+    /// Returns the Natural Earth Populated Places download URL.
+    pub fn geo_cities_url(&self) -> &str {
+        self.geography
+            .cities_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_CITIES_URL)
+    }
+
+    /// Returns the Natural Earth 1:10m Admin 0 country land boundary lines URL.
+    pub fn geo_countries_url(&self) -> &str {
+        self.geography
+            .countries_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_COUNTRIES_URL)
+    }
+
+    /// Returns the Natural Earth 1:10m Admin 1 state/province boundary lines URL.
+    pub fn geo_states_url(&self) -> &str {
+        self.geography
+            .states_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_STATES_URL)
+    }
+
+    /// Returns the Natural Earth 1:10m global roads GeoJSON URL.
+    pub fn geo_roads_url(&self) -> &str {
+        self.geography
+            .roads_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_ROADS_URL)
+    }
+
+    /// Returns the Natural Earth 1:10m lakes GeoJSON URL.
+    pub fn geo_lakes_url(&self) -> &str {
+        self.geography
+            .lakes_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_LAKES_URL)
+    }
+
+    /// Returns the GRWL summary centerlines download URL.
+    pub fn geo_grwl_summary_url(&self) -> &str {
+        self.geography
+            .grwl_summary_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_GRWL_SUMMARY_URL)
+    }
+
+    /// Returns the GRWL 30 m water masks download URL.
+    pub fn geo_grwl_mask_url(&self) -> &str {
+        self.geography
+            .grwl_mask_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_GRWL_MASK_URL)
+    }
+
+    /// Returns the GSHHG coastlines/lakes archive download URL.
+    pub fn geo_gshhg_water_url(&self) -> &str {
+        self.geography
+            .gshhg_water_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_GSHHG_WATER_URL)
+    }
+
+    /// Returns the optional HydroRIVERS shapefile archive download URL.
+    pub fn geo_hydrorivers_url(&self) -> &str {
+        self.geography
+            .hydrorivers_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_HYDRORIVERS_URL)
+    }
+
+    /// Returns the GEBCO 2026 15" ice-surface terrain download URL.
+    pub fn geo_gebco_terrain_url(&self) -> &str {
+        self.geography
+            .gebco_terrain_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_GEBCO_TERRAIN_URL)
+    }
+
+    /// Returns the Copernicus/ESA 300 m land-cover download URL.
+    pub fn geo_land_cover_url(&self) -> &str {
+        self.geography
+            .land_cover_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or(DEFAULT_GEO_LAND_COVER_URL)
     }
 
     /// Returns the URL for downloading the background removal (FeyNoBg) ONNX model.

@@ -1,5 +1,10 @@
-//! Offline geographic maps with a linked supplied-elevation profile.
-use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
+//! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
+use super::{
+    filesystem::Entry,
+    geography_downloader::{AssetDownloader, DownloadPack},
+    media::PreviewData,
+    shelf::preview::Ready,
+};
 use crate::ui_ext::fit_cartesian_point as project;
 use crate::{
     icons::Icon,
@@ -7,7 +12,14 @@ use crate::{
     ui_appearance::WorkbenchColors,
 };
 use little_clip_core::{
-    geography::{Document, Feature, Kind, MAX_BYTES, Sample},
+    config::AppConfig,
+    geography::{
+        Document, Feature, Kind, MAX_BYTES, Sample,
+        basemap::{
+            BasemapAssets, BasemapStyle, GlobeCamera, ProjectionMode, oilslick_color,
+            render_basemap_frame,
+        },
+    },
     palette::AppPalette,
 };
 use std::{
@@ -15,6 +27,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
 };
 
@@ -32,6 +45,7 @@ fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
         Document::gpx(&bytes)
     }
 }
+
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Geography".into(), Icon::Image);
     match read(path, token) {
@@ -78,19 +92,63 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     }
     data
 }
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Hit {
     feature: usize,
     path: usize,
     point: usize,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RasterKey {
+    lat_q: i32,
+    lon_q: i32,
+    zoom_q: u32,
+    mode: u8,
+    style: u8,
+    contours: bool,
+    width: u32,
+    height: u32,
+    assets_gen: u64,
+}
+
+struct RasterJob {
+    key: RasterKey,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    contour_interval_m: Option<f32>,
+    local_min_m: f32,
+    local_max_m: f32,
+}
+
 pub(super) struct Viewer {
     document: Document,
     selected: usize,
     current: Option<Hit>,
-    zoom: f32,
-    pan: egui::Vec2,
+    camera: GlobeCamera,
+    style: BasemapStyle,
+    show_country_borders: bool,
+    show_state_borders: bool,
+    show_rivers: bool,
+    show_roads: bool,
+    show_contours: bool,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+    config: AppConfig,
+    downloader: AssetDownloader,
+    assets: Option<Arc<BasemapAssets>>,
+    assets_gen: u64,
+    assets_rx: Option<mpsc::Receiver<Arc<BasemapAssets>>>,
+    prompt_dismissed: bool,
+    show_assets_panel: bool,
+    raster_texture: Option<egui::TextureHandle>,
+    raster_key: Option<RasterKey>,
+    raster_rx: Option<mpsc::Receiver<RasterJob>>,
+    raster_in_flight: Option<RasterKey>,
 }
+
 impl Viewer {
     pub fn load(path: &Path) -> Result<Self, String> {
         let document = read(path, &AtomicBool::new(false))?;
@@ -100,16 +158,46 @@ impl Viewer {
             .enumerate()
             .max_by_key(|(_, f)| f.points)
             .map_or(0, |(i, _)| i);
+        let config = AppConfig::load();
+        let downloader = AssetDownloader::new(&config);
+        let assets_dir = downloader.assets_dir.clone();
+        let override_dir = downloader.terrain_override_dir.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let loaded = BasemapAssets::load(&assets_dir, override_dir.as_deref());
+            let _ = tx.send(Arc::new(loaded));
+        });
+
         let mut viewer = Self {
             document,
             selected,
             current: None,
-            zoom: 1.0,
-            pan: egui::Vec2::ZERO,
+            camera: GlobeCamera::default(),
+            style: BasemapStyle::Natural,
+            show_country_borders: true,
+            show_state_borders: true,
+            show_rivers: true,
+            show_roads: true,
+            show_contours: true,
+            contour_interval_m: None,
+            local_elev_range: [0.0, 1000.0],
+            config,
+            downloader,
+            assets: None,
+            assets_gen: 0,
+            assets_rx: Some(rx),
+            prompt_dismissed: false,
+            show_assets_panel: false,
+            raster_texture: None,
+            raster_key: None,
+            raster_rx: None,
+            raster_in_flight: None,
         };
+        viewer.fit_document();
         viewer.select(selected);
         Ok(viewer)
     }
+
     pub fn select(&mut self, index: usize) {
         if index < self.document.features.len() {
             self.selected = index;
@@ -124,8 +212,147 @@ impl Viewer {
                 });
         }
     }
+
+    fn fit_document(&mut self) {
+        let mut min_lat = 90.0_f64;
+        let mut max_lat = -90.0_f64;
+        let mut min_lon = 180.0_f64;
+        let mut max_lon = -180.0_f64;
+        let mut any = false;
+        for feat in &self.document.features {
+            for path in &feat.paths {
+                for s in path {
+                    any = true;
+                    min_lat = min_lat.min(s.point.lat);
+                    max_lat = max_lat.max(s.point.lat);
+                    min_lon = min_lon.min(s.point.lon);
+                    max_lon = max_lon.max(s.point.lon);
+                }
+            }
+        }
+        if !any {
+            self.camera = GlobeCamera::default();
+            return;
+        }
+        self.camera.center_lat = ((min_lat + max_lat) * 0.5).clamp(-85.0, 85.0);
+        self.camera.center_lon = (min_lon + max_lon) * 0.5;
+        let span = (max_lat - min_lat).max(max_lon - min_lon).max(0.05);
+        // Start in 3D globe for continental/global files, and smooth-transition into 2D for local tracks.
+        self.camera.zoom = (90.0 / span).clamp(1.15, 64.0);
+    }
+
+    fn poll_background(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.assets_rx
+            && let Ok(loaded) = rx.try_recv()
+        {
+            self.assets = Some(loaded);
+            self.assets_gen = self.assets_gen.wrapping_add(1);
+            self.assets_rx = None;
+            self.raster_key = None;
+            ctx.request_repaint();
+        }
+        if let Some(downloaded) = self.downloader.poll(ctx) {
+            self.assets = Some(downloaded);
+            self.assets_gen = self.assets_gen.wrapping_add(1);
+            self.raster_key = None;
+            ctx.request_repaint();
+        }
+        if let Some(rx) = &self.raster_rx
+            && let Ok(job) = rx.try_recv()
+        {
+            self.raster_rx = None;
+            self.raster_in_flight = None;
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [job.width as usize, job.height as usize],
+                &job.rgba,
+            );
+            self.raster_texture = Some(ctx.load_texture(
+                "geography-basemap-raster",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
+            self.raster_key = Some(job.key);
+            self.contour_interval_m = job.contour_interval_m;
+            self.local_elev_range = [job.local_min_m, job.local_max_m];
+            ctx.request_repaint();
+        }
+    }
+
+    fn ensure_raster(
+        &mut self,
+        ctx: &egui::Context,
+        rect: egui::Rect,
+        bg_rgb: [u8; 3],
+        interactive: bool,
+    ) {
+        let max_w = if interactive { 280.0 } else { 960.0 };
+        let scale = (max_w / rect.width().max(1.0)).min(1.0);
+        let rw = (rect.width() * scale).round().clamp(64.0, 960.0) as u32;
+        let rh = (rect.height() * scale).round().clamp(48.0, 720.0) as u32;
+        let key = RasterKey {
+            lat_q: (self.camera.center_lat * 100.0).round() as i32,
+            lon_q: (self.camera.center_lon * 100.0).round() as i32,
+            zoom_q: (self.camera.zoom * 100.0).round() as u32,
+            mode: match self.camera.mode {
+                ProjectionMode::Auto => 0,
+                ProjectionMode::Globe3D => 1,
+                ProjectionMode::Map2D => 2,
+            },
+            style: match self.style {
+                BasemapStyle::Natural => 0,
+                BasemapStyle::Hypsometric => 1,
+                BasemapStyle::Oilslick => 2,
+                BasemapStyle::Hillshade => 3,
+            },
+            contours: self.show_contours,
+            width: rw,
+            height: rh,
+            assets_gen: self.assets_gen,
+        };
+        if self.raster_key == Some(key) || self.raster_in_flight == Some(key) {
+            return;
+        }
+        if self.raster_in_flight.is_some() {
+            return;
+        }
+        self.raster_in_flight = Some(key);
+        let assets = self.assets.clone();
+        let camera = self.camera;
+        let style = self.style;
+        let show_contours = self.show_contours;
+        let (tx, rx) = mpsc::channel();
+        self.raster_rx = Some(rx);
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let frame = render_basemap_frame(
+                assets.as_deref(),
+                &camera,
+                style,
+                show_contours,
+                rw,
+                rh,
+                bg_rgb,
+            );
+            let _ = tx.send(RasterJob {
+                key,
+                width: rw,
+                height: rh,
+                rgba: frame.rgba,
+                contour_interval_m: frame.contour_interval_m,
+                local_min_m: frame.local_min_m,
+                local_max_m: frame.local_max_m,
+            });
+            ctx_clone.request_repaint();
+        });
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
+        self.poll_background(ui.ctx());
         StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |_| {});
+
+        let colors = WorkbenchColors::from_palette(palette);
+        self.download_prompt_banner(ui, palette, colors);
+
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
             ui.allocate_ui_at_rect(left, |ui| {
@@ -135,34 +362,117 @@ impl Viewer {
         }
         ui.allocate_ui_at_rect(layout.center, |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
-            let colors = WorkbenchColors::from_palette(palette);
+            self.toolbar(ui, palette);
+
             let feature = &self.document.features[self.selected];
-            let profile_visible = feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
-            let map_height = (ui.available_height() - if profile_visible { 190.0 } else { 26.0 }).max(80.0);
+            let profile_visible =
+                feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
+            let legend_h = if self.style == BasemapStyle::Oilslick {
+                26.0
+            } else {
+                0.0
+            };
+            let map_height =
+                (ui.available_height() - legend_h - if profile_visible { 190.0 } else { 26.0 })
+                    .max(80.0);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), map_height),
                 egui::Sense::click_and_drag(),
             );
-            crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut self.zoom, &mut self.pan, 16.0);
-            let hit = paint_map(
-                ui, rect, &self.document, Some(self.selected), self.zoom, self.pan, colors,
+
+            // Handle drag-to-rotate/pan and scroll-to-zoom with smooth 3D -> 2D transition
+            let mut interacting = false;
+            if response.dragged() {
+                let delta = response.drag_delta();
+                if delta.length_sq() > 0.0 {
+                    self.camera
+                        .pan_by(delta.x, delta.y, rect.width(), rect.height());
+                    interacting = true;
+                }
+            }
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.01 {
+                    let factor = (scroll * 0.004).exp() as f64;
+                    self.camera.zoom = (self.camera.zoom * factor).clamp(0.75, 512.0);
+                    interacting = true;
+                }
+            }
+
+            let bg_rgb = [
+                colors.recessed.r(),
+                colors.recessed.g(),
+                colors.recessed.b(),
+            ];
+            self.ensure_raster(ui.ctx(), rect, bg_rgb, interacting);
+
+            let hit = paint_globe_map(
+                ui,
+                rect,
+                &self.document,
+                Some(self.selected),
+                &self.camera,
+                self.raster_texture.as_ref(),
+                self.assets.as_deref(),
+                self.show_country_borders,
+                self.show_state_borders,
+                self.show_rivers,
+                self.show_roads,
+                self.contour_interval_m,
+                self.local_elev_range,
+                colors,
             );
             if response.clicked()
-                && let Some(hit) = hit {
-                    self.selected = hit.feature;
-                    self.current = Some(hit);
-                }
-            if let Some(sample) = self.current.and_then(|hit| self.sample(hit)) {
-                let point = project(rect, self.document.bounds, sample.xy, self.zoom, self.pan);
+                && let Some(hit) = hit
+            {
+                self.selected = hit.feature;
+                self.current = Some(hit);
+            }
+            if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
+                && let Some([px, py]) = self.camera.project(
+                    sample.point.lat,
+                    sample.point.lon,
+                    rect.width(),
+                    rect.height(),
+                )
+            {
+                let point = egui::pos2(rect.left() + px, rect.top() + py);
                 if rect.contains(point) {
                     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
                     painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
-                    painter.circle_filled(point, 2.0, colors.text_primary);
+                    painter.circle_filled(point, 2.5, colors.text_primary);
                 }
             }
-            ui.label("Offline map · north up · drag to pan, scroll to zoom")
-                .on_hover_text("Local equirectangular projection. Supplied positions only; no basemap or terrain information.");
-            if !profile_visible { return; }
+
+            if self.style == BasemapStyle::Oilslick {
+                paint_oilslick_legend(ui, colors);
+            }
+
+            let blend = self.camera.globe_blend();
+            let proj_label = if blend > 0.9 {
+                "3D Globe"
+            } else if blend < 0.1 {
+                "2D Map"
+            } else {
+                "3D → 2D Transition"
+            };
+            let dem_source = if self
+                .assets
+                .as_ref()
+                .is_some_and(|a| !a.terrain_tiles.is_empty() || a.global_dem.is_some())
+            {
+                "DEM loaded"
+            } else {
+                "Coarse/supplied elevation"
+            };
+            ui.label(format!(
+                "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
+                self.camera.zoom
+            ));
+
+            if !profile_visible {
+                return;
+            }
             let feature = &self.document.features[self.selected];
             let (profile, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
@@ -175,6 +485,301 @@ impl Viewer {
             }
         });
     }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("View:");
+            for (label, mode) in [
+                ("Auto 3D→2D", ProjectionMode::Auto),
+                ("3D Globe", ProjectionMode::Globe3D),
+                ("2D Map", ProjectionMode::Map2D),
+            ] {
+                if ui
+                    .selectable_label(self.camera.mode == mode, label)
+                    .clicked()
+                {
+                    self.camera.mode = mode;
+                }
+            }
+            ui.separator();
+            ui.label("Shading:");
+            for (label, style) in [
+                ("Natural", BasemapStyle::Natural),
+                ("Hypsometric", BasemapStyle::Hypsometric),
+                ("Oilslick", BasemapStyle::Oilslick),
+                ("Hillshade", BasemapStyle::Hillshade),
+            ] {
+                if ui.selectable_label(self.style == style, label).clicked() {
+                    self.style = style;
+                }
+            }
+            ui.separator();
+            ui.checkbox(&mut self.show_country_borders, "Countries");
+            ui.checkbox(&mut self.show_state_borders, "States");
+            ui.checkbox(&mut self.show_rivers, "Rivers");
+            ui.checkbox(&mut self.show_roads, "Roads");
+            ui.checkbox(&mut self.show_contours, "Contours");
+            ui.separator();
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Globe", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.camera.zoom = 1.0;
+            }
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Fit", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.fit_document();
+            }
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Offline Assets…", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.show_assets_panel = !self.show_assets_panel;
+            }
+        });
+    }
+
+    fn download_prompt_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        colors: WorkbenchColors,
+    ) {
+        let needs_prompt = self.config.geography.prompt_on_open
+            && !self.downloader.status.has_quick_start()
+            && !self.prompt_dismissed;
+        if !needs_prompt && !self.show_assets_panel && self.downloader.active.is_none() {
+            return;
+        }
+        egui::Frame::none()
+            .fill(colors.recessed)
+            .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(pack) = self.downloader.active {
+                        let prog = self.downloader.progress_snapshot();
+                        ui.strong(pack.label());
+                        ui.add(
+                            egui::ProgressBar::new(prog.fraction)
+                                .desired_width(180.0)
+                                .text(prog.message),
+                        );
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Cancel", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.cancel();
+                        }
+                        return;
+                    }
+                    if needs_prompt {
+                        ui.strong("Download offline globe & map basemap?");
+                        ui.label(format!(
+                            "Assets folder: {} (configurable in config.toml [geography])",
+                            self.downloader.assets_dir.display()
+                        ));
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Primary
+                                    .button("Download Quick Start (NE2 + Cities ≥ 250k)", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.start(DownloadPack::QuickStart, &self.config);
+                        }
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Get all", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.start(DownloadPack::All, &self.config);
+                        }
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Not now", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.prompt_dismissed = true;
+                        }
+                    }
+                    if self.show_assets_panel {
+                        ui.separator();
+                        let st = self.downloader.status.clone();
+                        let used_gb =
+                            self.downloader.disk_usage_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                        let budget_gb =
+                            self.downloader.max_assets_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                        ui.label(format!(
+                            "Disk: {used_gb:.2}/{budget_gb:.1} GB · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
+                            yes_no(st.has_ne2),
+                            yes_no(st.has_cities),
+                            yes_no(st.has_borders),
+                            yes_no(st.has_roads_lakes),
+                            yes_no(st.has_grwl),
+                            yes_no(st.has_grwl_masks),
+                            yes_no(st.has_gshhg),
+                            yes_no(st.has_gebco),
+                            yes_no(st.has_land_cover),
+                            st.local_hgt_count
+                        ));
+                        if (!st.has_ne2
+                            || !st.has_cities
+                            || !st.has_borders
+                            || !st.has_roads_lakes
+                            || !st.has_grwl
+                            || !st.has_grwl_masks
+                            || !st.has_gshhg
+                            || !st.has_gebco
+                            || !st.has_land_cover
+                            || !st.has_hydrorivers)
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Primary
+                                        .button("Get all", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::All, &self.config);
+                        }
+                        if !st.has_ne2
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get NE2 + Cities", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::QuickStart, &self.config);
+                        }
+                        if !st.has_borders
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Borders (~7 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::Borders, &self.config);
+                        }
+                        if !st.has_roads_lakes
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Roads & Lakes (~55 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::RoadsAndLakes, &self.config);
+                        }
+                        if !st.has_grwl
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GRWL Widths (43 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::GrwlSummary, &self.config);
+                        }
+                        if !st.has_grwl_masks
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GRWL 30m Masks (394 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::GrwlMasks, &self.config);
+                        }
+                        if !st.has_gshhg
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GSHHG Water (~113 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::WaterOutlines, &self.config);
+                        }
+                        if !st.has_gebco
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GEBCO 2026 Terrain", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::TerrainGebco, &self.config);
+                        }
+                        if !st.has_land_cover
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Land Cover", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::LandCover, &self.config);
+                        }
+                        if !st.has_hydrorivers
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get HydroRIVERS", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::HydroRivers, &self.config);
+                        }
+                    }
+                    if let Some(err) = &self.downloader.last_error {
+                        ui.colored_label(colors.warning, err);
+                    }
+                });
+            });
+    }
+
     fn sample(&self, hit: Hit) -> Option<&Sample> {
         self.document
             .features
@@ -183,6 +788,7 @@ impl Viewer {
             .get(hit.path)?
             .get(hit.point)
     }
+
     fn details(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if !self.document.title.is_empty() {
             ui.heading(&self.document.title);
@@ -192,6 +798,7 @@ impl Viewer {
             self.document.features.len(),
             self.document.points
         ));
+        let mut zoom_f32 = self.camera.zoom as f32;
         ui.horizontal(|ui| {
             if ui
                 .add(
@@ -201,14 +808,20 @@ impl Viewer {
                 )
                 .clicked()
             {
-                self.zoom = 1.0;
-                self.pan = egui::Vec2::ZERO;
+                self.fit_document();
+                zoom_f32 = self.camera.zoom as f32;
             }
-            ui.add(
-                egui::Slider::new(&mut self.zoom, 1.0..=16.0)
-                    .show_value(false)
-                    .text("Zoom"),
-            );
+            if ui
+                .add(
+                    egui::Slider::new(&mut zoom_f32, 0.75..=128.0)
+                        .logarithmic(true)
+                        .show_value(false)
+                        .text("Zoom"),
+                )
+                .changed()
+            {
+                self.camera.zoom = zoom_f32 as f64;
+            }
         });
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut chosen = None;
@@ -279,6 +892,626 @@ impl Viewer {
             });
     }
 }
+
+fn yes_no(v: bool) -> &'static str {
+    if v { "ok" } else { "missing" }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Renders projected basemap raster, coastlines, cities, and GeoJSON/GPX overlay"
+)]
+fn paint_globe_map(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    doc: &Document,
+    selected: Option<usize>,
+    camera: &GlobeCamera,
+    raster: Option<&egui::TextureHandle>,
+    assets: Option<&BasemapAssets>,
+    show_country_borders: bool,
+    show_state_borders: bool,
+    show_rivers: bool,
+    show_roads: bool,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+    colors: WorkbenchColors,
+) -> Option<Hit> {
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 3.0, colors.recessed);
+    if let Some(tex) = raster {
+        painter.image(
+            tex.id(),
+            rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+
+    // Graticule lines
+    let step_deg: i32 = if camera.zoom < 3.0 {
+        30
+    } else if camera.zoom < 12.0 {
+        10
+    } else if camera.zoom < 40.0 {
+        2
+    } else {
+        1
+    };
+    let grid_stroke = egui::Stroke::new(1.0_f32, colors.text_secondary.gamma_multiply(0.18));
+    for lat in (-60..=60).step_by(step_deg as usize) {
+        let mut pts = Vec::new();
+        for lon in (-180..=180).step_by(6) {
+            if let Some([px, py]) =
+                camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+            {
+                pts.push(egui::pos2(rect.left() + px, rect.top() + py));
+            } else if pts.len() > 1 {
+                painter.add(egui::Shape::line(std::mem::take(&mut pts), grid_stroke));
+            } else {
+                pts.clear();
+            }
+        }
+        if pts.len() > 1 {
+            painter.add(egui::Shape::line(pts, grid_stroke));
+        }
+    }
+    for lon in (-180..180).step_by(step_deg as usize) {
+        let mut pts = Vec::new();
+        for lat in (-84..=84).step_by(6) {
+            if let Some([px, py]) =
+                camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+            {
+                pts.push(egui::pos2(rect.left() + px, rect.top() + py));
+            } else if pts.len() > 1 {
+                painter.add(egui::Shape::line(std::mem::take(&mut pts), grid_stroke));
+            } else {
+                pts.clear();
+            }
+        }
+        if pts.len() > 1 {
+            painter.add(egui::Shape::line(pts, grid_stroke));
+        }
+    }
+
+    // GSHHG coastlines & lakes when downloaded
+    if let Some(assets) = assets
+        && !assets.coastlines.is_empty()
+    {
+        let coast_stroke = egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgba_unmultiplied(180, 215, 245, 130),
+        );
+        let lake_stroke = egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgba_unmultiplied(120, 185, 240, 150),
+        );
+        for poly in &assets.coastlines {
+            let stroke = if poly.level == 2 {
+                lake_stroke
+            } else {
+                coast_stroke
+            };
+            let mut pts: Vec<egui::Pos2> = Vec::new();
+            for &[lon, lat] in &poly.points {
+                if let Some([px, py]) =
+                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+                {
+                    let pos = egui::pos2(rect.left() + px, rect.top() + py);
+                    if let Some(prev) = pts.last().copied()
+                        && prev.distance_sq(pos) > (rect.width() * 0.45).powi(2)
+                    {
+                        if pts.len() > 1 {
+                            painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
+                        } else {
+                            pts.clear();
+                        }
+                    }
+                    pts.push(pos);
+                } else if pts.len() > 1 {
+                    painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
+                } else {
+                    pts.clear();
+                }
+            }
+            if pts.len() > 1 {
+                painter.add(egui::Shape::line(pts, stroke));
+            }
+        }
+    }
+
+    // HydroRIVERS network (spatially indexed, filtered by stream order & visible bbox)
+    if show_rivers
+        && camera.zoom >= 2.5
+        && let Some(assets) = assets
+        && let Some(rivers) = &assets.rivers
+    {
+        let mut min_lat = 90.0_f64;
+        let mut max_lat = -90.0_f64;
+        let mut min_lon = 180.0_f64;
+        let mut max_lon = -180.0_f64;
+        let mut any_corner = false;
+        for (cx, cy) in [
+            (0.0, 0.0),
+            (rect.width(), 0.0),
+            (0.0, rect.height()),
+            (rect.width(), rect.height()),
+            (rect.width() * 0.5, rect.height() * 0.5),
+        ] {
+            if let Some((lat, lon)) = camera.unproject(cx, cy, rect.width(), rect.height()) {
+                any_corner = true;
+                min_lat = min_lat.min(lat);
+                max_lat = max_lat.max(lat);
+                min_lon = min_lon.min(lon);
+                max_lon = max_lon.max(lon);
+            }
+        }
+        if any_corner && (max_lon - min_lon) < 160.0 {
+            let min_ord = if camera.zoom < 4.5 {
+                6
+            } else if camera.zoom < 9.0 {
+                4
+            } else {
+                3
+            };
+            let visible_rivers = rivers.query_bbox(
+                min_lon - 2.0,
+                min_lat - 2.0,
+                max_lon + 2.0,
+                max_lat + 2.0,
+                min_ord,
+                4500,
+            );
+            for seg in visible_rivers {
+                let has_fill = camera.zoom >= 4.5
+                    && (!assets.terrain_tiles.is_empty()
+                        || assets.global_dem.is_some()
+                        || assets.cog_dem.is_some());
+                let width = (0.7 + 0.22 * (seg.ord_stra.saturating_sub(3) as f32)).min(1.8);
+                let alpha = if has_fill { 50 } else { 200 };
+                let stroke = egui::Stroke::new(
+                    width,
+                    egui::Color32::from_rgba_unmultiplied(64, 146, 224, alpha),
+                );
+                let mut pts: Vec<egui::Pos2> = Vec::new();
+                for &[lon, lat] in &seg.points {
+                    if let Some([px, py]) =
+                        camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+                    {
+                        pts.push(egui::pos2(rect.left() + px, rect.top() + py));
+                    } else if pts.len() > 1 {
+                        painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
+                    } else {
+                        pts.clear();
+                    }
+                }
+                if pts.len() > 1 {
+                    painter.add(egui::Shape::line(pts, stroke));
+                }
+            }
+        }
+    }
+
+    // Natural Earth 1:10m lakes & reservoirs (when Rivers/water is enabled)
+    if show_rivers
+        && camera.zoom >= 2.0
+        && let Some(assets) = assets
+        && !assets.lakes.is_empty()
+    {
+        let lake_fill = egui::Color32::from_rgba_unmultiplied(38, 102, 172, 220);
+        let lake_edge = egui::Stroke::new(
+            0.9_f32,
+            egui::Color32::from_rgba_unmultiplied(110, 178, 235, 190),
+        );
+        for lake in &assets.lakes {
+            let mut pts: Vec<egui::Pos2> = Vec::new();
+            for &[lon, lat] in &lake.points {
+                if let Some([px, py]) =
+                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+                {
+                    pts.push(egui::pos2(rect.left() + px, rect.top() + py));
+                }
+            }
+            if pts.len() >= 3 && pts.iter().any(|p| rect.contains(*p)) {
+                painter.add(egui::Shape::convex_polygon(pts, lake_fill, lake_edge));
+            }
+        }
+    }
+
+    // Natural Earth 1:10m roads (major highways at zoom >= 3.0, secondary roads at zoom >= 5.5)
+    if show_roads
+        && camera.zoom >= 3.0
+        && let Some(assets) = assets
+        && !assets.roads.is_empty()
+    {
+        let major_stroke = egui::Stroke::new(
+            if camera.zoom >= 8.0 { 1.8_f32 } else { 1.2_f32 },
+            egui::Color32::from_rgba_unmultiplied(238, 182, 86, 200),
+        );
+        let minor_stroke = egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgba_unmultiplied(212, 204, 186, 130),
+        );
+        for road in &assets.roads {
+            if !road.major && camera.zoom < 5.5 {
+                continue;
+            }
+            let mut pts: Vec<egui::Pos2> = Vec::new();
+            let mut any_in = false;
+            for &[lon, lat] in &road.points {
+                if let Some([px, py]) =
+                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+                {
+                    let pos = egui::pos2(rect.left() + px, rect.top() + py);
+                    if rect.contains(pos) {
+                        any_in = true;
+                    }
+                    pts.push(pos);
+                }
+            }
+            if any_in && pts.len() > 1 {
+                painter.add(egui::Shape::line(
+                    pts,
+                    if road.major {
+                        major_stroke
+                    } else {
+                        minor_stroke
+                    },
+                ));
+            }
+        }
+    }
+
+    // Natural Earth 1:10m Admin 0 country borders (all zooms) & Admin 1 state/province lines (regional zoom fade-in)
+    if let Some(assets) = assets {
+        let draw_borders = |lines: &[little_clip_core::geography::basemap::BorderLine],
+                            stroke: egui::Stroke,
+                            disputed_stroke: egui::Stroke| {
+            for line in lines {
+                let st = if line.disputed {
+                    disputed_stroke
+                } else {
+                    stroke
+                };
+                let mut pts: Vec<egui::Pos2> = Vec::new();
+                for &[lon, lat] in &line.points {
+                    if let Some([px, py]) =
+                        camera.project(lat as f64, lon as f64, rect.width(), rect.height())
+                    {
+                        let pos = egui::pos2(rect.left() + px, rect.top() + py);
+                        if let Some(prev) = pts.last().copied()
+                            && prev.distance_sq(pos) > (rect.width() * 0.45).powi(2)
+                        {
+                            if pts.len() > 1 {
+                                painter.add(egui::Shape::line(std::mem::take(&mut pts), st));
+                            } else {
+                                pts.clear();
+                            }
+                        }
+                        pts.push(pos);
+                    } else if pts.len() > 1 {
+                        painter.add(egui::Shape::line(std::mem::take(&mut pts), st));
+                    } else {
+                        pts.clear();
+                    }
+                }
+                if pts.len() > 1 {
+                    if line.disputed {
+                        for pair in pts.chunks(2) {
+                            if pair.len() == 2 {
+                                painter.line_segment([pair[0], pair[1]], st);
+                            }
+                        }
+                    } else {
+                        painter.add(egui::Shape::line(pts, st));
+                    }
+                }
+            }
+        };
+
+        if show_state_borders && !assets.state_borders.is_empty() && camera.zoom >= 2.0 {
+            let fade = ((camera.zoom - 2.0) / 3.0).clamp(0.0, 1.0) as f32;
+            let a = (95.0 * fade) as u8;
+            let state_stroke = egui::Stroke::new(
+                0.9_f32,
+                egui::Color32::from_rgba_unmultiplied(210, 215, 222, a),
+            );
+            let state_disputed = egui::Stroke::new(
+                0.8_f32,
+                egui::Color32::from_rgba_unmultiplied(210, 180, 140, a),
+            );
+            draw_borders(&assets.state_borders, state_stroke, state_disputed);
+        }
+        if show_country_borders && !assets.country_borders.is_empty() {
+            let country_stroke = egui::Stroke::new(
+                1.2_f32,
+                egui::Color32::from_rgba_unmultiplied(235, 238, 245, 165),
+            );
+            let country_disputed = egui::Stroke::new(
+                1.0_f32,
+                egui::Color32::from_rgba_unmultiplied(235, 195, 130, 140),
+            );
+            draw_borders(&assets.country_borders, country_stroke, country_disputed);
+        }
+    }
+
+    // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
+    if let Some(assets) = assets
+        && !assets.cities.is_empty()
+    {
+        let min_pop = if camera.zoom < 3.0 {
+            250_000
+        } else if camera.zoom < 8.0 {
+            50_000
+        } else {
+            0
+        };
+        let mut occupied: Vec<egui::Rect> = Vec::new();
+        for city in &assets.cities {
+            if city.pop_max < min_pop {
+                break;
+            }
+            let Some([px, py]) = camera.project(city.lat, city.lon, rect.width(), rect.height())
+            else {
+                continue;
+            };
+            let pos = egui::pos2(rect.left() + px, rect.top() + py);
+            if !rect.contains(pos) {
+                continue;
+            }
+            let font_size = if city.pop_max >= 1_000_000 {
+                13.5
+            } else {
+                12.0
+            };
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    city.name.clone(),
+                    egui::FontId::proportional(font_size),
+                    egui::Color32::from_rgb(248, 250, 252),
+                )
+            });
+            let label_pos = pos + egui::vec2(6.0, -galley.size().y * 0.5);
+            let pill_rect =
+                egui::Rect::from_min_size(label_pos, galley.size()).expand2(egui::vec2(4.0, 1.5));
+            let box_rect = pill_rect.expand(4.0);
+            if occupied.iter().any(|r| r.intersects(box_rect)) {
+                continue;
+            }
+            occupied.push(box_rect);
+            painter.circle_filled(pos, 3.0, egui::Color32::from_rgb(255, 214, 96));
+            painter.circle_stroke(
+                pos,
+                3.0,
+                egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(180)),
+            );
+            painter.rect_filled(pill_rect, 3.0, egui::Color32::from_black_alpha(150));
+            painter.galley(label_pos, galley, egui::Color32::from_rgb(248, 250, 252));
+            if occupied.len() >= 56 {
+                break;
+            }
+        }
+    }
+
+    // User GeoJSON / GPX features
+    let pointer = super::ui::preview_hovered(ui, rect)
+        .then(|| ui.input(|i| i.pointer.hover_pos()))
+        .flatten();
+    let mut nearest = 64.0;
+    let mut hit = None;
+    for (index, feature) in doc.features.iter().enumerate() {
+        let color = if selected == Some(index) {
+            colors.accent
+        } else {
+            colors.text_primary.gamma_multiply(0.85)
+        };
+        for (path_index, path) in feature.paths.iter().enumerate() {
+            let mut positions = Vec::with_capacity(path.len());
+            let mut sample_indices = Vec::with_capacity(path.len());
+            for (s_idx, sample) in path.iter().enumerate() {
+                if let Some([px, py]) = camera.project(
+                    sample.point.lat,
+                    sample.point.lon,
+                    rect.width(),
+                    rect.height(),
+                ) {
+                    positions.push(egui::pos2(rect.left() + px, rect.top() + py));
+                    sample_indices.push(s_idx);
+                } else if positions.len() > 1 && matches!(feature.kind, Kind::Line | Kind::Polygon)
+                {
+                    painter.add(egui::Shape::line(
+                        std::mem::take(&mut positions),
+                        egui::Stroke::new(
+                            if selected == Some(index) {
+                                3.0_f32
+                            } else {
+                                1.75_f32
+                            },
+                            color,
+                        ),
+                    ));
+                    sample_indices.clear();
+                } else {
+                    positions.clear();
+                    sample_indices.clear();
+                }
+            }
+            if matches!(feature.kind, Kind::Line | Kind::Polygon) && positions.len() > 1 {
+                painter.add(egui::Shape::line(
+                    positions.clone(),
+                    egui::Stroke::new(
+                        if selected == Some(index) {
+                            3.0_f32
+                        } else {
+                            1.75_f32
+                        },
+                        color,
+                    ),
+                ));
+            }
+            if feature.kind == Kind::Point || path.len() == 1 {
+                for position in &positions {
+                    painter.circle_filled(*position, 4.5, color);
+                }
+            }
+            if let Some(pointer) = pointer
+                && let Some((pos_idx, distance)) = nearest_on_path(
+                    &positions,
+                    pointer,
+                    matches!(feature.kind, Kind::Line | Kind::Polygon),
+                )
+                && distance < nearest
+                && let Some(&orig_point) = sample_indices.get(pos_idx)
+            {
+                nearest = distance;
+                hit = Some(Hit {
+                    feature: index,
+                    path: path_index,
+                    point: orig_point,
+                });
+            }
+        }
+    }
+    if let Some(hit) = hit {
+        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
+        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+            ui.label(&doc.features[hit.feature].name);
+            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+        });
+    }
+    paint_scale_and_contour_overlay(
+        ui,
+        &painter,
+        rect,
+        camera,
+        contour_interval_m,
+        local_elev_range,
+    );
+    hit
+}
+
+fn paint_scale_and_contour_overlay(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &GlobeCamera,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+) {
+    let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
+    let meters_per_px = 6_371_000.0 / scale_px;
+    let target_m = meters_per_px * 110.0;
+    let nice_m = [
+        500.0,
+        1_000.0,
+        2_000.0,
+        5_000.0,
+        10_000.0,
+        20_000.0,
+        50_000.0,
+        100_000.0,
+        200_000.0,
+        500_000.0,
+        1_000_000.0,
+        2_000_000.0,
+        5_000_000.0,
+    ]
+    .into_iter()
+    .rfind(|&v| v <= target_m)
+    .unwrap_or(500.0);
+    let bar_w = (nice_m / meters_per_px).clamp(32.0, 180.0) as f32;
+    let scale_label = if nice_m >= 1000.0 {
+        format!("{:.0} km", nice_m / 1000.0)
+    } else {
+        format!("{nice_m:.0} m")
+    };
+
+    let mut text = scale_label;
+    if let Some(interval) = contour_interval_m {
+        text.push_str(&format!(
+            "  ·  Contour: {interval:.0} m (index {:.0} m)  ·  Elev: {:.0}–{:.0} m",
+            interval * 5.0,
+            local_elev_range[0],
+            local_elev_range[1]
+        ));
+    }
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(
+            text,
+            egui::FontId::proportional(11.5),
+            egui::Color32::from_rgb(244, 246, 250),
+        )
+    });
+    let box_w = (bar_w + galley.size().x + 26.0).min(rect.width() - 20.0);
+    let box_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.bottom() - 32.0),
+        egui::vec2(box_w, 22.0),
+    );
+    painter.rect_filled(box_rect, 4.0, egui::Color32::from_black_alpha(165));
+    let bar_y = box_rect.center().y + 2.0;
+    let bar_x0 = box_rect.left() + 8.0;
+    let bar_x1 = bar_x0 + bar_w;
+    let stroke = egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(244, 246, 250));
+    painter.line_segment(
+        [egui::pos2(bar_x0, bar_y), egui::pos2(bar_x1, bar_y)],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(bar_x0, bar_y - 4.0),
+            egui::pos2(bar_x0, bar_y + 1.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(bar_x1, bar_y - 4.0),
+            egui::pos2(bar_x1, bar_y + 1.0),
+        ],
+        stroke,
+    );
+    painter.galley(
+        egui::pos2(bar_x1 + 8.0, box_rect.center().y - galley.size().y * 0.5),
+        galley,
+        egui::Color32::from_rgb(244, 246, 250),
+    );
+}
+
+fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    let bar = egui::Rect::from_min_max(
+        rect.min + egui::vec2(4.0, 4.0),
+        egui::pos2(
+            (rect.right() - 190.0).max(rect.left() + 80.0),
+            rect.bottom() - 4.0,
+        ),
+    );
+    let steps = 64usize;
+    let step_w = bar.width() / steps as f32;
+    for i in 0..steps {
+        let elev = if i < 4 {
+            0.0
+        } else {
+            ((i - 4) as f32 / (steps - 4) as f32) * 3500.0
+        };
+        let [r, g, b] = oilslick_color(elev, 0.9);
+        let seg = egui::Rect::from_min_size(
+            egui::pos2(bar.left() + i as f32 * step_w, bar.top()),
+            egui::vec2(step_w + 0.5, bar.height()),
+        );
+        painter.rect_filled(seg, 0.0, egui::Color32::from_rgb(r, g, b));
+    }
+    painter.text(
+        egui::pos2(bar.right() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Oilslick: 500m cyclic lightness + sea-level break",
+        egui::TextStyle::Small.resolve(ui.style()),
+        colors.text_secondary,
+    );
+}
+
 fn paint_map(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -350,6 +1583,7 @@ fn paint_map(
     }
     hit
 }
+
 fn nearest_on_path(
     positions: &[egui::Pos2],
     pointer: egui::Pos2,
@@ -370,6 +1604,7 @@ fn nearest_on_path(
     }
     Some(best)
 }
+
 fn paint_profile(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -454,6 +1689,7 @@ fn paint_profile(
     }
     hit
 }
+
 pub(super) fn show_list(
     ui: &mut egui::Ui,
     row: egui::Rect,
