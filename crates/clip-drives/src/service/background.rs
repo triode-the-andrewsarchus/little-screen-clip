@@ -4,7 +4,7 @@ use little_clip_core::jobs::task::Task;
 mod worker;
 
 pub(super) struct Pending {
-    pub(super) drive: String,
+    pub(super) drive: Option<String>,
     catalog: bool,
     pub(super) roots: Vec<Arc<Root>>,
     pub(super) destination: Option<PathBuf>,
@@ -39,7 +39,10 @@ impl Owner {
                 .partition
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)
-            || self.background.values().any(|job| job.drive == drive)
+            || self
+                .background
+                .values()
+                .any(|job| job.drive.as_deref() == Some(drive))
             || self.sync_jobs.values().any(|job| job.drive == drive)
         {
             return Err("This partition has an active storage operation; synchronization resumes when it finishes".into());
@@ -69,6 +72,20 @@ impl Owner {
         }
         if matches!(envelope.request, DriveRequest::PruneBackups { .. }) {
             self.start_prune(envelope);
+            return;
+        }
+        if matches!(envelope.request, DriveRequest::MeasureStorage) {
+            let state = match Root::open(&self.state) {
+                Ok(root) => Arc::new(root),
+                Err(error) => {
+                    self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+                    return;
+                }
+            };
+            let cancel = envelope.cancel.clone();
+            self.launch(envelope, None, Vec::new(), None, move || {
+                crate::storage::measure(state, cancel)
+            });
             return;
         }
         let (drive, roots) = match self.bulk_roots(&envelope) {
@@ -120,7 +137,7 @@ impl Owner {
         let state = self.state.clone();
         let cancel = envelope.cancel.clone();
         let selected = drive.clone();
-        self.launch(envelope, drive, Vec::new(), None, move || {
+        self.launch(envelope, Some(drive), Vec::new(), None, move || {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
             backup::prune(&db, &selected, keep, &cancel)
         });
@@ -176,12 +193,14 @@ impl Owner {
             authority: self.authority.clone(),
             inventory: self.inventory.clone(),
         };
-        self.launch(envelope, drive_id, roots, context, move || worker.run());
+        self.launch(envelope, Some(drive_id), roots, context, move || {
+            worker.run()
+        });
     }
     fn launch(
         &mut self,
         envelope: Envelope,
-        drive_id: String,
+        drive_id: Option<String>,
         roots: Vec<Arc<Root>>,
         context: Option<partition::BackupContext>,
         work: impl FnOnce() -> Result<String> + Send + 'static,

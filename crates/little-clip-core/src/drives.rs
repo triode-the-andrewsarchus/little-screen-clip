@@ -152,6 +152,8 @@ pub enum DriveRequest {
     Status {
         offset: usize,
     },
+    /// Measures local sync bookkeeping and optional catalog storage on a retained worker.
+    MeasureStorage,
     BackupDirectory {
         #[serde(with = "crate::path_serde")]
         path: PathBuf,

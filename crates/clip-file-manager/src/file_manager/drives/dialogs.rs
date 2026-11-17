@@ -262,6 +262,7 @@ fn policy_dialog(
     ui.checkbox(catalog, "Include metadata in future contents catalogs");
     ui.checkbox(index, "Allow explicitly configured search indexing");
     ui.label("Excluding metadata also removes saved descendant catalog records after mounted catalog views are unmounted. Catalogs retain their capture date and show a separate redaction date. These settings do not exclude files from backups or folder synchronization.");
+    ui.small("Enrolled folder sync keeps the names and fingerprints it needs to track changes. Jobs → Measure local metadata shows its storage separately from saved catalogs.");
     ui.small(format!(
         "Catalog limit: {} entries, {} MiB. Parent exclusions also apply.",
         status.config.catalog_max_entries,
@@ -270,6 +271,10 @@ fn policy_dialog(
 }
 fn details(ui: &mut Ui, status: &DriveStatus, requests: &mut Vec<DriveRequest>) {
     egui::ScrollArea::vertical().max_height(450.0).show(ui, |ui| {
+        if ui.button("Measure local metadata").clicked() {
+            requests.push(DriveRequest::MeasureStorage);
+        }
+        ui.small("Folder sync keeps operational metadata even when indexing and catalogs are excluded. Measurement runs in the background and saves its result as a job.");
         for session in &status.ram {
             ui.group(|ui| {
                 ui.label(ram_description(session));
@@ -308,6 +313,9 @@ fn details(ui: &mut Ui, status: &DriveStatus, requests: &mut Vec<DriveRequest>) 
 fn operation_details(ui: &mut Ui, operation: &DriveOperation, requests: &mut Vec<DriveRequest>) {
     ui.group(|ui| {
         ui.label(format!("{} · {}", operation.title, operation.state));
+        if let Some(finished) = operation.finished {
+            ui.small(format!("Finished {}", recorded_time(finished)));
+        }
         ui.small(format!(
             "{} files · {} bytes",
             operation.files, operation.bytes

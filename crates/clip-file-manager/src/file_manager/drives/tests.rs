@@ -2,6 +2,34 @@
 use super::*;
 
 #[test]
+fn multiline_job_notice_keeps_the_full_report_in_persistent_details() {
+    let operation = DriveOperation {
+        id: "owned-report".into(),
+        title: "Measure local metadata".into(),
+        state: "complete".into(),
+        message: "Local drive metadata\nSync baselines: 12 paths".into(),
+        files: 0,
+        bytes: 0,
+        started: 1,
+        finished: Some(2),
+        partition: None,
+    };
+    let mut drives = Drives {
+        initialized: true,
+        ..Default::default()
+    };
+    drives.accept_status(DriveStatus {
+        operations: vec![operation.clone()],
+        ..Default::default()
+    });
+    let (notice, failed) = drives.notice.as_ref().unwrap();
+    assert!(!failed);
+    assert!(notice.contains("Local drive metadata") && notice.contains("Open Jobs"));
+    assert!(!notice.contains("Sync baselines"));
+    assert_eq!(drives.status.operations[0].message, operation.message);
+}
+
+#[test]
 fn ram_status_distinguishes_observed_changes_full_checks_and_export_history() {
     let mut session: RamSession = serde_json::from_value(serde_json::json!({
         "identity": {"device":1,"inode":2,"mount":3},

@@ -359,6 +359,7 @@ impl Service {
 }
 fn title(request: &DriveRequest) -> &'static str {
     match request {
+        DriveRequest::MeasureStorage => "Measure local metadata",
         DriveRequest::CopyToRam { .. } => "Copy to RAM",
         DriveRequest::Backup {
             kind: BackupKind::Files,
@@ -591,8 +592,11 @@ impl Owner {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
         }
-        // Retention owns only backup storage; it does not need a source-drive pin.
-        if matches!(envelope.request, DriveRequest::PruneBackups { .. }) {
+        // State measurements and retirement do not need a source-drive pin.
+        if matches!(
+            envelope.request,
+            DriveRequest::PruneBackups { .. } | DriveRequest::MeasureStorage
+        ) {
             self.start_background(envelope);
             return;
         }
@@ -756,6 +760,9 @@ impl Owner {
             DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
             DriveRequest::PruneBackups { .. } => {
                 Err("Backup retirement requires retained worker admission".into())
+            }
+            DriveRequest::MeasureStorage => {
+                Err("Metadata measurement requires retained worker admission".into())
             }
             DriveRequest::Configure { config } => {
                 policy::validate_config(&config)?;
@@ -1225,6 +1232,7 @@ mod tests {
     mod policy_coverage;
     mod ram_writeback;
     mod read_only;
+    mod storage;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {

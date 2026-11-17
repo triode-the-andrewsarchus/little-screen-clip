@@ -39,7 +39,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Complete | Version-2 paginated SQLite catalogs preserve raw names, numeric sizes/types, original modification/ctime fields, captured Drive and pinned source mount/namespace, explicit known/unknown driver precision, per-directory coverage and typed stage/reason/errno. Host permission/replacement/raw-name tests, indexed multi-page reads, real FUSE details/errors and native FAT32/exFAT/NTFS precision/metadata checks pass. See the typed catalog coverage checkpoint. |
-| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Operational-baseline accounting and rule-address alias/selector handling remain. |
+| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Rule-address alias/selector handling remains. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
@@ -53,6 +53,55 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Explicit local metadata accounting checkpoint
+
+Jobs → Measure local metadata and `clipctl drives storage` now submit a retained
+background operation. Routine status polling and opening Jobs do not measure or
+prompt for a backup directory. The report separates baseline names/fingerprints,
+sync/RAM inventories, pending paths and registry rows from registered optional
+catalog files. Logical row bytes exclude page/index overhead; database/WAL/shared
+memory lengths are separate apparent-size observations and must not be added to
+their logical components. Missing catalog files are counted explicitly. Search
+service databases and backup payloads remain outside this owner's report.
+
+The implementation reuses the retained bulk pool and keeps control requests and
+independent synchronization responsive. One read-only SQLite snapshot uses
+byte-length aggregates instead of decoding all stored JSON. Keyset pages bound
+catalog identifiers; catalog files are only statted, including invalid SQLite
+payloads in the test. O_PATH identity pins avoid disturbing SQLite's process-wide
+POSIX locks. Replaced state roots and database/working-file aliases are refused.
+Cancellation interrupts the SQL VM; the actual 30-second deadline also interrupts
+a streamed billion-row query without publishing a partial successful report.
+
+A no-index/no-catalog enrolled pair still copies its complete payload and retains
+its required baseline. Measurement succeeds after removing the source from the
+inventory and renaming its directory; the dated completed report survives daemon
+shutdown. The ordinary backend suite passes **195 tests**, with **82 opt-in tests
+ignored** (`/tmp/portable-drive-storage-backend-verified.log`). The explicit real
+budget run passes six selected cases including the 30-second timeout
+(`/tmp/portable-drive-storage-budget-tests.log`); the later additional alias guard
+passes with the six ordinary accounting checks
+(`/tmp/portable-drive-storage-guard-tests.log`). Core/CLI/Files drive tests pass
+**26 cases**, and all-target Clippy for all four affected packages passes with
+warnings denied (`/tmp/portable-drive-storage-host-tests-final.log` and
+`/tmp/portable-drive-storage-clippy.log`).
+
+Dark/light private-desktop acceptance exercises explicit Jobs measurement with
+both policy flags disabled, verifies the full four-path sync baseline and zero
+optional catalogs, then submits and completes a separate actual CLI measurement.
+Reports: `/tmp/portable-drive-storage-dark-v5/report.json` and
+`/tmp/portable-drive-storage-light-final/report.json`. Screenshots retain the dated
+report and separate categories. Setup completion notices are dismissed before
+locating Jobs because their status dock moves the sidebar; earlier locator-only
+failures are not evidence of product acceptance.
+
+The original-baseline architecture comparison remains REGRESSION: 4,300 clone
+groups, 144 cycles, average CCN 3.49, maximum 274, duplication 7.02%. This checkpoint
+adds no further clone group or dependency cycle and no flagged production
+function in the measurement, worker or dialog paths. Existing branch-wide
+architecture findings still need final review. Item 6.2 remains Partial for rule
+address aliases and selector handling.
 
 ## Mounted-original revision checkpoint
 

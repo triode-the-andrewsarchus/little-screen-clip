@@ -8,6 +8,7 @@ mod ram;
 mod root;
 mod scan;
 mod service;
+mod storage;
 mod store;
 mod sync;
 mod watch;

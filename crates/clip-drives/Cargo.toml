@@ -22,7 +22,7 @@ rustix = { workspace = true, features = ["system"] }
 tracing.workspace = true
 libc = "0.2"
 tempfile = "3.27"
-rusqlite = { version = "0.35", features = ["bundled"] }
+rusqlite = { version = "0.35", features = ["bundled", "hooks"] }
 sha2 = "0.10"
 fuser = { version = "0.18", default-features = false }
 zbus = { version = "5.19.0", features = ["blocking-api"] }

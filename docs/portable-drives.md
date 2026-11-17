@@ -502,6 +502,24 @@ returns the completed result. Previously published catalogs remain available.
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
+Use **Jobs → Measure local metadata** or `clipctl drives storage` to account for
+that retained state. The dated job reports baseline names/fingerprints, retained
+sync/RAM inventories, pending-path bookkeeping and registry rows separately from
+optional saved catalog files. It works without the original media or a backup
+directory setting. Opening Jobs or polling status does not start a measurement.
+The report remains in job history after restart. Cancel stops an active query;
+SQL work also has a 30-second measurement budget and does not publish a partial
+successful report.
+
+Logical row bytes count stored text and raw path bytes without materializing
+every JSON record. They are components of registry storage, with page/index
+overhead excluded. The registry file observation includes `drives.sqlite`, its
+WAL and shared-memory file. Saved catalog file sizes are separate; missing saved
+files are explicitly counted as unavailable. File lengths may change during
+measurement. The report's scope is local drive-service metadata and registered
+catalogs; backup payloads and the search service's own databases have separate
+owners.
+
 Whole-drive and folder editors read the exact saved rule before displaying editable
 settings, independently of the recent status page. A failed or cancelled lookup
 cannot open an editor with default flags. A missing exact rule means there is no
@@ -645,6 +663,7 @@ requests remain supported; new clients use the `SubmitDrive` envelope.
 ```sh
 clipctl drives status
 clipctl drives status --offset 100
+clipctl drives storage
 clipctl drives backup-directory /path/to/backups
 clipctl drives ram DRIVE_ID
 clipctl drives backup DRIVE_ID

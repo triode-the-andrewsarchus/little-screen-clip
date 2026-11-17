@@ -383,8 +383,15 @@ impl Drives {
                 && self.seen.insert(operation.id.clone())
                 && self.initialized
             {
+                let mut lines = operation.message.lines();
+                let summary = lines.next().unwrap_or_default();
+                let details = if lines.next().is_some() {
+                    " · Open Jobs for details"
+                } else {
+                    ""
+                };
                 self.notice = Some((
-                    format!("{}: {}", operation.title, operation.message),
+                    format!("{}: {summary}{details}", operation.title),
                     operation.state != "complete",
                 ));
             }

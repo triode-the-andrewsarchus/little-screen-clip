@@ -66,19 +66,20 @@ def click_word(session, shot, word, *, tree=False):
                 break
     if position is None:
         # Rounded small buttons can disappear in full-window segmentation.
-        for bounds in [(105, 270, 225, 325), (105, 320, 240, 380), (105, 390, 300, 670), (820, 505, 888, 520), (1030, 440, 1184, 526)]:
+        for bounds in [(105, 270, 225, 325), (105, 320, 240, 400), (105, 390, 300, 670), (820, 505, 888, 520), (1030, 440, 1184, 526)]:
             crop = session.output / 'drive-button.png'
             with Image.open(session.output / (shot + '.png')) as screen:
                 region = screen.crop(bounds)
                 region.resize((region.width * 6, region.height * 6)).save(crop)
             data = private.run_checked(['tesseract', str(crop), 'stdout', '--psm', '6', '-c', 'tessedit_create_tsv=1', '-c', 'tessedit_create_txt=0'], env=session.env)
             for item in csv.DictReader(io.StringIO(data), delimiter='\t', quoting=csv.QUOTE_NONE):
-                if item['text'].strip().strip('()[]{}|').lower() == word.lower():
+                if item['text'].strip().strip('()[]{}|').rstrip('.…:;').lower() == word.lower():
                     position = (bounds[0] + int(item['left']) // 6 + 5, bounds[1] + (int(item['top']) + int(item['height']) // 2) // 6)
                     break
             if position:
                 break
     assert position, (shot, word)
+    print(f'{shot}: clicking {word!r} at {position[0] + 8},{position[1]}', flush=True)
     session.click(position[0] + 8, position[1])
 
 
@@ -567,6 +568,46 @@ def exercise_catalog_redaction(session, root):
             completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
 
+def exercise_storage(session, root):
+    """Measure required sync metadata through Jobs with catalogs/indexing excluded."""
+    env = session.env
+    initial = session.observe('storage-initial', ['Portable test drive', 'Jobs'])
+    assert 'Choose backup directory' not in initial
+    assert not any(item['title'] == 'Measure local metadata' for item in status(env)['operations'])
+    completed(env, request(env, {'Rule': {'drive': 'part:portable-test', 'relative': '', 'catalog': False, 'index': False}}))
+    dismiss_completion_notice(session, 'storage-policy-notice', 'Drive settings')
+    completed(env, request(env, {'Pair': {'drive': 'part:portable-test', 'relative': '', 'local': str(root / 'local')}}))
+    dismiss_completion_notice(session, 'storage-pair-notice', 'Enroll folder sync')
+    assert (root / 'local/many/hidden.txt').read_bytes() == (root / 'portable/many/hidden.txt').read_bytes()
+    assert not status(env)['catalogs']
+    session.observe('storage-jobs-ready', ['Jobs'])
+    click_word(session, 'storage-jobs-ready', 'Jobs', tree=True)
+    session.observe('storage-before-measure', ['Drive operations and conflicts', 'Measure local metadata', 'operational metadata'])
+    assert not any(item['title'] == 'Measure local metadata' for item in status(env)['operations'])
+    click_word(session, 'storage-before-measure', 'Measure')
+    result = {}
+    def measured():
+        for item in status(env)['operations']:
+            if item['title'] == 'Measure local metadata' and item['finished'] is not None:
+                result.update(item)
+                return True
+        return False
+    wait_for(measured, 'explicit local metadata measurement')
+    assert result['state'] == 'complete', result
+    assert 'Sync baselines: 4 paths' in result['message'], result
+    assert 'Saved catalogs (optional): 0 snapshots' in result['message'], result
+    session.observe('storage-report', ['Sync baselines', 'Saved catalogs', 'Finished', 'Registry'])
+    assert status(env)['backup_directory'] is None
+    assert not (Path(env['XDG_DATA_HOME']) / 'little-screen-clip/search/index.sqlite').exists()
+    session.key('Escape')
+
+    cli = Path(__file__).resolve().parent.parent / 'target/debug/clipctl'
+    reply = json.loads(private.run_checked([str(cli), 'drives', 'storage'], env=env))
+    cli_result = completed(env, reply)
+    assert cli_result['id'] != result['id']
+    assert 'Sync baselines: 4 paths' in cli_result['message'], cli_result
+
+
 def exercise_catalog_limits(session, root):
     """Review, cancel, reset and explicitly expand this run's bounded capture."""
     env = session.env
@@ -642,6 +683,7 @@ def main():
         scenarios.add_argument('--policy-editor-only', action='store_true')
         scenarios.add_argument('--ram-pending-only', action='store_true')
         scenarios.add_argument('--catalog-limits-only', action='store_true')
+        scenarios.add_argument('--storage-only', action='store_true')
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
@@ -665,7 +707,9 @@ def main():
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
         if args.policy_editor_only:
             seed_old_policy_rules(env)
-    if args.catalog_limits_only:
+    if args.storage_only:
+        scenario, scope = exercise_storage, 'Explicit Jobs measurement separates sync baselines from optional catalogs without enabling indexing'
+    elif args.catalog_limits_only:
         scenario, scope = exercise_catalog_limits, 'Per-run catalog review, cancellation, configured-limit reset and explicit larger capture without changing defaults'
     elif args.ram_pending_only:
         scenario, scope = exercise_ram_pending, 'RAM pending changes and confirmed drive sync across removal, export and reconnect'

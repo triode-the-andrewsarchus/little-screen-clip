@@ -17,6 +17,8 @@ pub(super) enum DriveCommand {
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
+    /// Measure local sync metadata and optional catalog storage; results appear in jobs
+    Storage,
     /// Configure the backup destination (does not start a backup)
     BackupDirectory { path: PathBuf },
     /// Copy a small mounted partition into RAM and enable writeback
@@ -135,6 +137,7 @@ impl DriveCommand {
             Self::UnmountImage { backup } => DriveRequest::UnmountImage { backup },
             Self::Prune { drive } => DriveRequest::PruneBackups { drive },
             Self::Status { offset } => DriveRequest::Status { offset },
+            Self::Storage => DriveRequest::MeasureStorage,
             Self::BackupDirectory { path } => DriveRequest::BackupDirectory { path },
             Self::Ram { drive } => DriveRequest::CopyToRam { drive },
             Self::Backup {
@@ -267,6 +270,13 @@ mod tests {
     struct Command {
         #[command(subcommand)]
         drive: DriveCommand,
+    }
+    #[test]
+    fn storage_measurement_uses_a_retained_operation_identity() {
+        let command = Command::try_parse_from(["clipctl", "storage"]).unwrap();
+        let request = command.drive.request();
+        assert!(matches!(request, DriveRequest::MeasureStorage));
+        assert!(request.is_operation());
     }
     #[test]
     fn read_only_flags_select_file_collection_and_cannot_be_combined_with_imaging() {
