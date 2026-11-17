@@ -5,6 +5,7 @@
 pub mod animation;
 pub mod audio;
 pub mod blend_image;
+pub mod brushes;
 pub mod calendar;
 pub mod clipboard;
 pub mod color;

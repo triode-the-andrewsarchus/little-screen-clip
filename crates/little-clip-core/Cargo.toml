@@ -82,3 +82,7 @@ zip = { version = "7.4", default-features = false, features = ["deflate"] }
 anydoc = "0.2"
 rdocx = "0.17"
 proj4rs = { version = "0.3", default-features = false }
+brushkit = "0.14.1"
+hokusai-brush = "0.3.0"
+hokusai-core = "0.3.0"
+rusqlite = { version = "0.35", features = ["bundled", "limits"] }

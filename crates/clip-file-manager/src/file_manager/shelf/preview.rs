@@ -78,6 +78,8 @@ pub(in crate::file_manager) enum Source {
     },
     Midi(PathBuf),
     Blend(PathBuf),
+    Brush(PathBuf),
+    BrushStroke(super::super::brush_strip::StrokeRequest),
     Material(super::super::material_strip::Request),
     MidiRaster {
         document: Arc<super::super::midi_strip::Document>,
@@ -142,7 +144,9 @@ impl Source {
             | Self::PdfPage { .. }
             | Self::Photo { .. }
             | Self::StudioPhoto { .. }
-            | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
+            | Self::Blend(_)
+            | Self::Brush(_)
+            | Self::BrushStroke(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
             | Self::Markdown { .. }
             | Self::Font(_)
@@ -218,6 +222,8 @@ impl Source {
                 super::super::music::preview::load(&path, spectrum, token)
             }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
+            Source::Brush(path) => super::super::brush_strip::load(&path, token),
+            Source::BrushStroke(request) => request.render(),
             Source::Material(request) => request.load(token),
             Source::Handwritten(path) => {
                 if little_clip_core::notebook::has_header(&path, token).unwrap_or(false) {
@@ -880,7 +886,13 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         return;
     }
     data.icon = Icon::Text;
-    if little_clip_core::item::is_image_path(path) {
+    if little_clip_core::brushes::is_brush_file(path) {
+        let loaded = super::super::brush_strip::load(path, &AtomicBool::new(false));
+        data.icon = Icon::Brush;
+        data.detail = loaded.detail;
+        data.image = loaded.image;
+        data.brush = loaded.brush;
+    } else if little_clip_core::item::is_image_path(path) {
         data.icon = Icon::Image;
         data.image = crate::file_source::read_file_bytes(path, 8 * 1024 * 1024, true, false)
             .ok()

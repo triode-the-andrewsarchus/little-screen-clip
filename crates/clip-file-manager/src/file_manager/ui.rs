@@ -1094,6 +1094,8 @@ fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &A
 pub(super) fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
     if entry.directory {
         Icon::Folder
+    } else if entry.is_brush() {
+        Icon::Brush
     } else if super::container_preview::inventory::archive(&entry.path) {
         Icon::FolderZip
     } else if little_clip_core::audio::is_audio_path(&entry.path) {

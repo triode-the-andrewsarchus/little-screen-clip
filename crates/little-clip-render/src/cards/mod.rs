@@ -252,6 +252,10 @@ impl ScreenRenderer {
                 self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
                 return;
             }
+            Some(Preview::Brush(library)) => {
+                self.draw_brush_card(pixmap, library, rx, ry, rw, rh, is_hero);
+                return;
+            }
             Some(Preview::Page(page)) => {
                 self.draw_image_thumbnail(
                     pixmap,

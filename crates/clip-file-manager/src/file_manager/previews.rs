@@ -38,6 +38,7 @@ pub(super) struct EntryPreviews {
     markdown_hover: super::markdown_hover::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
+    brushes: super::brush_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
@@ -52,6 +53,7 @@ impl EntryPreviews {
             self.image_hover.context = context.clone();
             self.scenes.set_context(context);
             self.materials.context = context.clone();
+            self.brushes.context = context.clone();
         }
     }
     pub(super) fn cached_dhash(&self, entry: &Entry) -> Option<u64> {
@@ -155,6 +157,7 @@ impl EntryPreviews {
         self.markdown_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
+        self.brushes.poll(ctx);
         let now = std::time::Instant::now();
 
         let systems = self
@@ -243,6 +246,7 @@ impl EntryPreviews {
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
         self.vcv_hover.retain(&ids);
         self.materials.retain(&ids);
+        self.brushes.retain(&ids);
         self.markdown_hover.retain(&ids);
         self.system_refresh.retain(|id, _| ids.contains(id));
         self.raster_sizes.retain(|id, _| ids.contains(id));
@@ -295,6 +299,7 @@ impl EntryPreviews {
         self.markdown_hover.clear();
         self.scenes.clear();
         self.materials.clear();
+        self.brushes.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
         self.rasters.clear();
@@ -317,6 +322,8 @@ impl EntryPreviews {
                     Source::for_document(format, entry.path.clone())
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
+                } else if entry.is_brush() {
+                    Source::Brush(entry.path.clone())
                 } else if entry.is_material() {
                     Source::Material(super::material_strip::Request::Library(entry.path.clone()))
                 } else if super::midi_strip::is_midi(&entry.path) {
@@ -465,6 +472,9 @@ impl EntryPreviews {
             }
         } else if entry.is_blend() {
             super::blend_preview::show(ui, row, entry, columns, self.cache.get(id), colors);
+        } else if entry.is_brush() {
+            self.brushes
+                .show(ui, row, entry, columns, id, self.cache.get(id), colors);
         } else if entry.is_material() {
             self.materials
                 .show(ui, row, entry, columns, id, self.cache.get(id), colors);

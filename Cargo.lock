@@ -1003,6 +1003,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "brushkit"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f9e74fd8d342553e2e9dfb3063ab5a4c204f471ac22e4075c05188ce610ffcd"
+dependencies = [
+ "brushkit-abr",
+ "brushkit-preview",
+]
+
+[[package]]
+name = "brushkit-abr"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53b00da4c1f347a02d68bf72da2cdd149e6fe75be653f6075effa4f3069695e3"
+dependencies = [
+ "byteorder",
+ "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "brushkit-preview"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f6112fe4e2b1e7b7edce0a806d6eff242795183221c68e6f969a5cf8296adb1"
+dependencies = [
+ "ab_glyph",
+ "brushkit-abr",
+ "image 0.25.10",
+ "plist",
+ "png 0.18.1",
+ "zip 9.5.1",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
+]
+
+[[package]]
 name = "bstr"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4877,6 +4914,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hokusai-brush"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553185ffcdcf55251cd02a2d0be297cd2ac0bf9f8fae50cffb70ddbadc70fee4"
+dependencies = [
+ "hokusai-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "hokusai-core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d0fdc01003e0256eb9bed701ce25b12f9af19bb33bf2340b77babc56960dce9"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6228,6 +6286,7 @@ version = "0.1.0"
 dependencies = [
  "anydoc",
  "base64 0.22.1",
+ "brushkit",
  "calamine",
  "chrono",
  "clip-media-protocol",
@@ -6238,6 +6297,8 @@ dependencies = [
  "flate2",
  "gltf",
  "hayro-jpeg2000",
+ "hokusai-brush",
+ "hokusai-core",
  "hound",
  "ical",
  "image 0.25.10",
@@ -6268,6 +6329,7 @@ dependencies = [
  "remarkable_lines",
  "resvg 0.37.0",
  "roxmltree 0.20.0",
+ "rusqlite",
  "rustchord",
  "rustix 1.1.6",
  "scenix-loader",
@@ -8554,13 +8616,13 @@ dependencies = [
 
 [[package]]
 name = "plist"
-version = "1.10.3"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "327a4cb2ad49dc48adfdc9da89e22c64d488b508c67a044d71ba729e4521a285"
+checksum = "740ebea15c5d1428f910cd1a5f52cebf8d25006245ed8ade92702f4943d91e07"
 dependencies = [
- "base64 0.23.1",
+ "base64 0.22.1",
  "indexmap",
- "quick-xml 0.42.0",
+ "quick-xml 0.38.4",
  "serde",
  "time",
 ]
@@ -8930,6 +8992,15 @@ name = "quick-xml"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
 ]
