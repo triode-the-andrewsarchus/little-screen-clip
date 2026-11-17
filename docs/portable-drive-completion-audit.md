@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Open | File copy preserves modes/times; bounded live-source retry, omission records and optional quiesced collection remain. |
+| 4.3 | Partial | Per-file checks now recollect changed files within three attempts, update the manifest to the installed revision and preserve current on repeated changes, cancellation or type replacement. Same-size/preserved-mtime races pass on real FAT32/exFAT/NTFS guest mounts; real Btrfs extent sharing and old bytes remain intact. Review and completion text disclose live collection rather than an atomic source snapshot. Metadata fidelity/omission records and optional quiesced read-only collection remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -53,6 +53,62 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Bounded live-file backup collection
+
+File backups now enumerate metadata without hashing the entire tree in advance,
+then collect each file with a fresh fingerprint immediately before its guarded
+copy. The existing keyset cursor reads bounded manifest pages while successful
+entries replace their original inventory rows with the revision actually copied.
+Copying still uses the shared checked streaming/staging/no-overwrite mechanisms;
+retry does not bypass root or namespace validation. A changed entry gets at most
+three attempts, while cancellation, source type changes and root replacement
+refuse collection. A failed copy with unchanged source is not repeatedly replayed.
+On coarse/uncertain filesystems, an additional hash determines whether unchanged
+metadata conceals changed contents before retrying a failed attempt.
+
+The checksummed SQLite manifest records collection start/completion observations,
+the per-file attempt limit, total retried entries and individual retry paths using
+the existing lossless Unix path codec. Only successful revisions are published.
+Continuous changes leave the previous immutable version, database current record,
+filesystem current reference and old manifest intact. Backup review and completion
+messages explicitly disclose per-file verified live collection rather than an
+atomic source snapshot. A later source edit is not a promise to retroactively change
+an already collected file or include paths added after directory enumeration.
+
+Four new backend cases prove a successful retry with a raw non-UTF8 filename and
+preserved mtime, three-attempt exhaustion, cancellation between fingerprint capture
+and copy, and refusal of a file replaced by a symlink. They validate the final
+manifest fingerprint against the installed bytes and source revision, and all
+failed cases check both current references plus the old manifest checksum. A shared
+fault-injection fixture binds edits to the existing progress callback after capture;
+there is no process-global test hook or production bypass.
+
+The disposable native guest adds the same preserved-mtime/same-size successful
+retry and continuous-change bound on actual FAT32, exFAT and NTFS3 sources. The
+complete native module passes nine cases on each filesystem (27 total):
+`/tmp/portable-drive-vm-backup-retry-matrix/report.json` and its guest log. The real
+Btrfs fixture in the explicitly authorized backup-testing directory also passes;
+4 KiB data edits still allocate 256 KiB while old versions remain unchanged.
+Evidence: `/tmp/portable-drive-backup-retry-btrfs-final.log`. Backend tests pass 95 cases
+with 37 explicit fixtures ignored; affected-crate formatting and selected
+backend/Files/daemon all-target clippy pass. The fourteen Files drive-controller tests
+also pass (`/tmp/portable-drive-backup-retry-files-ui-tests.log`); this is not a new
+rendered UI acceptance run. Final logs:
+`/tmp/portable-drive-backup-retry-backend-final.log` and
+`/tmp/portable-drive-backup-retry-clippy-final.log`.
+
+The first architecture pass found an additional metadata-setting clone and repeated
+test setup. Shared file/directory metadata application and the common fault-injection
+fixture remove that accidental duplication. The backup entrypoint's CCN decreases
+from 58 to 40; collection methods introduce no new hotspot. The final comparison
+reports 4300 clone groups versus baseline 4289 (one fewer than the preceding
+checkpoint), 7.13% duplication, average CCN 3.48, maximum 274 and reported cycles
+144 versus 143. Selected fields are retained in
+`.fitness/portable-drives-backup-retry-architecture.json`. The feature-wide gate
+remains REGRESSION and stays open. Item 4.3 is Partial: available metadata fidelity,
+explicit omission records and a selectable quiesced read-only source still need
+implementation and acceptance.
 
 ## Namespace and metadata changes across abrupt daemon death
 

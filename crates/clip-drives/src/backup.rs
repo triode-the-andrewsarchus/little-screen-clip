@@ -19,6 +19,7 @@ use std::{
     time::Duration,
 };
 
+mod collection;
 mod publication;
 pub(crate) use publication::recover as recover_publications;
 
@@ -132,6 +133,7 @@ pub(crate) fn files(
     let root_metadata = scan::observe(source, Path::new(""), false, u64::MAX, cancel)?
         .ok_or("Missing source root metadata")?;
     manifest.db.put("source", "root", &root_metadata)?;
+    manifest.db.put("collection", "started_at", &now())?;
     manifest.db.put(
         "collection",
         "consistency",
@@ -142,64 +144,25 @@ pub(crate) fn files(
         &manifest.db,
         source,
         &scan_id,
-        &Limits::default(),
+        &Limits {
+            hashes: false,
+            ..Default::default()
+        },
         cancel,
         &mut progress,
     )?;
     if !coverage.complete {
         return Err(format!("Incomplete source: {}", coverage.message).into());
     }
-    let mut after = Vec::new();
-    let mut count = 0;
-    let mut written = 0;
-    loop {
-        let batch = scan::entries(&manifest.db, &scan_id, &after, 128)?;
-        if batch.is_empty() {
-            break;
-        }
-        for entry in batch {
-            cancelled(cancel)?;
-            prepare_entry(&manifest.db, &target, &entry, cancel)?;
-            let existing = target.metadata(&entry.path)?;
-            if entry.kind == "directory" {
-                target.ensure_directory(&entry.path)?;
-            } else {
-                let old = if existing.is_some() {
-                    scan::observe(&target, &entry.path, true, u64::MAX, cancel)?
-                } else {
-                    None
-                };
-                if old.as_ref().and_then(|e| e.hash.as_ref()) != entry.hash.as_ref()
-                    || entry.kind != "file"
-                {
-                    written += sync::install(
-                        source,
-                        &target,
-                        &entry,
-                        &entry.path,
-                        old.as_ref(),
-                        cancel,
-                        incremental,
-                    )?;
-                } else {
-                    let observed = scan::observe(source, &entry.path, false, u64::MAX, cancel)?
-                        .ok_or("Unchanged source disappeared")?;
-                    if !entry.same_revision(&observed) {
-                        return Err("Source changed before backup publication".into());
-                    }
-                    let file = target.input(&entry.path)?;
-                    file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;
-                    if let Some(time) = time(entry.modified, entry.nanos) {
-                        file.set_times(fs::FileTimes::new().set_modified(time))?;
-                    }
-                    file.sync_all()?;
-                }
-            }
-            count += 1;
-            progress(count, written);
-            after = entry.path.as_os_str().as_encoded_bytes().to_vec();
-        }
+    let written = collection::Collection {
+        db: &manifest.db,
+        id: &scan_id,
+        source,
+        target: &target,
+        cancel,
+        incremental,
     }
+    .populate(&mut progress)?;
     // Remove only entries absent from the complete source manifest in this private version.
     if prior.is_some() && incremental {
         remove_obsolete(&manifest.db, &scan_id, &target, cancel)?;
@@ -208,6 +171,7 @@ pub(crate) fn files(
     target.validate()?;
     finish_directories(&manifest.db, &scan_id, &target, cancel)?;
     apply_directory_metadata(&target, &root_metadata)?;
+    manifest.db.put("collection", "completed_at", &now())?;
     if incremental {
         // Property arguments follow the path, unlike subvolume commands.
         let (request, fd) = CommandRequest::new("btrfs")
@@ -270,6 +234,9 @@ pub(crate) fn finish_directories(
 pub(crate) fn apply_directory_metadata(target: &Root, entry: &scan::Entry) -> Result<()> {
     let held = target.directory(&entry.path, false)?;
     let file = File::open(anchor(&held))?;
+    apply_metadata(&file, entry)
+}
+fn apply_metadata(file: &File, entry: &scan::Entry) -> Result<()> {
     file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o777))?;
     if let Some(time) = time(entry.modified, entry.nanos) {
         file.set_times(fs::FileTimes::new().set_modified(time))?;
@@ -617,6 +584,7 @@ fn copy_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod collection;
     fn drive(mount: Option<PathBuf>) -> Drive {
         Drive {
             id: "part:test".into(),

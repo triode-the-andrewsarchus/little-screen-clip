@@ -200,9 +200,14 @@ impl Owner {
                         }
                     };
                     Ok(format!(
-                        "Backup completed: {} ({} bytes written)",
+                        "Backup completed: {} ({} bytes written){}",
                         version.path.display(),
-                        version.bytes_written
+                        version.bytes_written,
+                        if version.kind == BackupKind::Files {
+                            "; per-file verified collection, not an atomic source snapshot"
+                        } else {
+                            ""
+                        }
                     ))
                 }
                 DriveRequest::Catalog { .. } => {

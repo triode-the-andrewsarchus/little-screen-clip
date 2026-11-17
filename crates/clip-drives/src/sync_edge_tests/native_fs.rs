@@ -240,6 +240,101 @@ fn native_file_backups_keep_versions_and_observed_timestamps() {
 
 #[test]
 #[ignore = "requires the isolated removable-filesystem guest"]
+fn native_live_backup_retries_preserved_timestamp_edits_and_bounds_unstable_sources() {
+    let (_native, fixture, drive) = fixture();
+    let path = fixture.a.join("changing.txt");
+    fs::write(&path, b"false-0").unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let source = Root::open(&fixture.a).unwrap();
+    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+    let mut current = backup::files(
+        &fixture.db,
+        &drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    for continuous in [false, true] {
+        let mut changes = 0;
+        let result = backup::files(
+            &fixture.db,
+            &drive,
+            &source,
+            &destination,
+            &fixture.cancel,
+            |count, _| {
+                if count == 0 && (continuous || changes == 0) {
+                    changes += 1;
+                    fs::write(&path, format!("{continuous}-{changes}")).unwrap();
+                    File::open(&path)
+                        .unwrap()
+                        .set_times(FileTimes::new().set_modified(modified))
+                        .unwrap();
+                }
+            },
+        );
+        if continuous {
+            let error = result.unwrap_err();
+            assert_eq!(changes, 3);
+            assert!(error.to_string().contains("after 3 attempt(s)"), "{error}");
+            assert_eq!(
+                fixture
+                    .db
+                    .list::<crate::DriveBackup>("backup", 0, 10)
+                    .unwrap()
+                    .len(),
+                2
+            );
+            let reference: crate::DriveBackup = serde_json::from_slice(
+                &fs::read(current.path.parent().unwrap().join("current-files.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(reference.id, current.id);
+        } else {
+            let version = result.unwrap();
+            assert_eq!(changes, 1);
+            assert_eq!(
+                fs::read(current.path.join("changing.txt")).unwrap(),
+                b"false-0"
+            );
+            assert_eq!(
+                fs::read(version.path.join("changing.txt")).unwrap(),
+                b"false-1"
+            );
+            let manifest = Store::existing(version.manifest.as_ref().unwrap(), true).unwrap();
+            assert_eq!(
+                manifest
+                    .get::<u64>("collection", "retried_entries")
+                    .unwrap(),
+                Some(1)
+            );
+            let actual = source
+                .digest(Path::new("changing.txt"), u64::MAX, &fixture.cancel)
+                .unwrap();
+            assert_eq!(
+                scan::entry(
+                    &manifest,
+                    &format!("backup:{}", version.id),
+                    Path::new("changing.txt")
+                )
+                .unwrap()
+                .unwrap()
+                .hash,
+                Some(actual)
+            );
+            current = version;
+        }
+    }
+    assert_eq!(
+        fs::read(current.path.join("changing.txt")).unwrap(),
+        b"false-1"
+    );
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
 fn native_catalog_exclusion_keeps_backup_and_sync_inclusion() {
     let (_native, fixture, drive) = fixture();
     fs::write(fixture.a.join("metadata.bin"), b"\x00\xffpayload").unwrap();

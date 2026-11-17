@@ -201,6 +201,8 @@ fn backup_review(
             preview.drive.mount.is_some(),
             egui::Checkbox::new(restore_mounted, "Mount again after imaging"),
         );
+    } else {
+        ui.label("Files are checked as they are copied. A writable source can change during the backup, so files may represent different moments. Files that keep changing stop the backup after three attempts.");
     }
     ui.checkbox(
         remember_destination,
