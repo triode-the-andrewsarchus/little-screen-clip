@@ -83,6 +83,25 @@ pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
     (native, fixture, drive)
 }
 
+impl Fixture {
+    fn file_backup(
+        &self,
+        drive: &Drive,
+        progress: impl FnMut(u64, u64),
+    ) -> crate::Result<crate::DriveBackup> {
+        let source = Root::open(&self.a)?;
+        let destination = Root::create(&self._temp.path().join("backups"))?;
+        backup::files(
+            &self.db,
+            drive,
+            &source,
+            &destination,
+            &self.cancel,
+            progress,
+        )
+    }
+}
+
 fn verified_file_manifest(version: &crate::DriveBackup, retried: u64) -> Store {
     let held = kernel_interface::open_content(version.manifest.as_ref().unwrap(), false).unwrap();
     let checksum = little_clip_core::file_source::FileSource::capture_file(&held)
@@ -113,17 +132,7 @@ struct GuestFileBind {
 }
 
 fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: &str) {
-    let source = Root::open(&fixture.a).unwrap();
-    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
-    let error = backup::files(
-        &fixture.db,
-        drive,
-        &source,
-        &destination,
-        &fixture.cancel,
-        |_, _| {},
-    )
-    .unwrap_err();
+    let error = fixture.file_backup(drive, |_, _| {}).unwrap_err();
     assert!(error.to_string().contains(reason), "{error}");
     assert!(
         fixture
@@ -318,17 +327,7 @@ fn native_file_backups_keep_versions_and_observed_timestamps() {
         )
         .unwrap();
     let observed = fs::metadata(fixture.a.join(relative)).unwrap();
-    let source = Root::open(&fixture.a).unwrap();
-    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
-    let first = backup::files(
-        &fixture.db,
-        &drive,
-        &source,
-        &destination,
-        &fixture.cancel,
-        |_, _| {},
-    )
-    .unwrap();
+    let first = fixture.file_backup(&drive, |_, _| {}).unwrap();
     assert!(!first.incremental);
     assert_eq!(
         fs::read(first.path.join(relative)).unwrap(),
@@ -359,15 +358,7 @@ fn native_file_backups_keep_versions_and_observed_timestamps() {
     );
     assert!(entry.hash.is_some());
     fs::write(fixture.a.join(relative), b"second version").unwrap();
-    let second = backup::files(
-        &fixture.db,
-        &drive,
-        &source,
-        &destination,
-        &fixture.cancel,
-        |_, _| {},
-    )
-    .unwrap();
+    let second = fixture.file_backup(&drive, |_, _| {}).unwrap();
     assert!(!second.incremental);
     assert_eq!(
         fs::read(first.path.join(relative)).unwrap(),
@@ -547,6 +538,7 @@ fn native_backup_destinations_disclose_coerced_modes_owner_times_and_missing_att
     let source = Root::open(&fixture.b).unwrap();
     let path = fixture.b.join("file");
     fs::write(&path, b"complete file contents").unwrap();
+    fs::hard_link(&path, fixture.b.join("alias")).unwrap();
     std::os::unix::fs::chown(&path, Some(1001), Some(1002)).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
     File::open(&path)
@@ -614,8 +606,50 @@ fn native_backup_destinations_disclose_coerced_modes_owner_times_and_missing_att
         assert!(omitted("mode"));
         assert!(omitted("extended_attribute"));
         assert!(version.fidelity.as_ref().unwrap().omitted_fields > 0);
+        assert!(omitted("hard_links"));
+        assert_ne!(
+            actual.ino(),
+            fs::metadata(version.path.join("alias")).unwrap().ino()
+        );
+    } else {
+        assert!(!omitted("hard_links"));
+        assert_eq!(
+            actual.ino(),
+            fs::metadata(version.path.join("alias")).unwrap().ino()
+        );
+        assert_eq!(actual.nlink(), 2);
     }
     assert_eq!(fs::read(target).unwrap(), b"complete file contents");
+    assert_eq!(
+        fs::read(version.path.join("alias")).unwrap(),
+        b"complete file contents"
+    );
+    let alias_json: String = manifest
+        .0
+        .query_row(
+            "SELECT json FROM backup_metadata WHERE path=?1",
+            [b"alias".as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let alias_facts: serde_json::Value = serde_json::from_str(&alias_json).unwrap();
+    if format == "vfat" || format == "exfat" {
+        assert!(
+            alias_facts["omissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["field"] == "hard_links")
+        );
+        assert!(
+            facts["omissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(alias_facts["omissions"].as_array().unwrap())
+                .any(|item| item["field"] == "hard_links" && item["errno"].is_number())
+        );
+    }
     assert_eq!(
         facts["attributes"][0]["value"],
         serde_json::json!(b"source attribute".as_slice())
@@ -624,6 +658,87 @@ fn native_backup_destinations_disclose_coerced_modes_owner_times_and_missing_att
         "{format} destination: {:?}; per-path report {}",
         version.fidelity, facts["omissions"]
     );
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_hard_link_sources_retain_aliases_and_refuse_divergent_captured_attributes() {
+    let (_native, fixture, drive) = fixture();
+    let file = fixture.a.join("file");
+    fs::write(&file, b"shared bytes").unwrap();
+    if let Err(error) = fs::hard_link(&file, fixture.a.join("alias")) {
+        assert!(
+            matches!(error.raw_os_error(), Some(libc::EPERM | libc::EOPNOTSUPP)),
+            "{error}"
+        );
+        assert!(matches!(drive.filesystem.as_str(), "vfat" | "exfat"));
+        eprintln!(
+            "{} does not support source hard links: {error}",
+            drive.filesystem
+        );
+        return;
+    }
+    rustix::fs::setxattr(
+        &file,
+        "user.live",
+        b"before",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+    let first = fixture.file_backup(&drive, |_, _| {}).unwrap();
+    let actual = fs::metadata(first.path.join("file")).unwrap();
+    assert_eq!(actual.nlink(), 2);
+    assert_eq!(
+        actual.ino(),
+        fs::metadata(first.path.join("alias")).unwrap().ino()
+    );
+    verified_file_manifest(&first, 0);
+    let modified = fs::metadata(&file).unwrap().modified().unwrap();
+    let mut edited = false;
+    let error = fixture
+        .file_backup(&drive, |count, _| {
+            if count == 1 && !edited {
+                rustix::fs::setxattr(
+                    &file,
+                    "user.live",
+                    b"after",
+                    rustix::fs::XattrFlags::empty(),
+                )
+                .unwrap();
+                File::open(&file)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(modified))
+                    .unwrap();
+                edited = true;
+            }
+        })
+        .unwrap_err();
+    assert!(edited);
+    assert!(
+        error
+            .to_string()
+            .contains("Hard-linked source revisions differ"),
+        "{error}"
+    );
+    let versions = fixture
+        .db
+        .list::<crate::DriveBackup>("backup", 0, 10)
+        .unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].id, first.id);
+    let reference: crate::DriveBackup = serde_json::from_slice(
+        &fs::read(first.path.parent().unwrap().join("current-files.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reference.id, first.id);
+    for name in ["file", "alias"] {
+        assert_eq!(fs::read(first.path.join(name)).unwrap(), b"shared bytes");
+        let mut value = [0; 64];
+        let count =
+            rustix::fs::getxattr(first.path.join(name), "user.live", &mut value[..]).unwrap();
+        assert_eq!(&value[..count], b"before");
+    }
+    verified_file_manifest(&first, 0);
 }
 
 #[test]

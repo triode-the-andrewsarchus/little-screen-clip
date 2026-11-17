@@ -229,34 +229,150 @@ fn symlink_metadata_never_changes_or_reads_its_outside_referent() {
 }
 
 #[test]
-fn independently_materialized_hard_links_have_explicit_original_relationship_facts() {
+fn hard_links_share_a_backup_inode_and_retain_original_relationship_facts() {
     let fixture = FileFixture::new(b"linked bytes");
+    fs::create_dir(fixture.source.path.join("nested")).unwrap();
     fs::hard_link(
         fixture.source.path.join("file"),
-        fixture.source.path.join("alias"),
+        fixture.source.path.join("nested/alias"),
     )
     .unwrap();
     let version = fixture.backup(|_, _| {}).unwrap();
-    assert_ne!(
+    assert_eq!(
         fs::metadata(version.path.join("file")).unwrap().ino(),
-        fs::metadata(version.path.join("alias")).unwrap().ino()
+        fs::metadata(version.path.join("nested/alias"))
+            .unwrap()
+            .ino()
     );
-    for relative in [Path::new("file"), Path::new("alias")] {
+    for relative in [Path::new("file"), Path::new("nested/alias")] {
         assert_eq!(
             fs::read(version.path.join(relative)).unwrap(),
             b"linked bytes"
         );
         let captured = facts(&version, relative);
         assert_eq!(captured["links"], 2);
-        assert!(
-            captured["omissions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|item| item["field"] == "hard_links")
-        );
+        assert_eq!(captured["omissions"], serde_json::json!([]));
     }
-    assert_eq!(version.fidelity.as_ref().unwrap().entries_with_omissions, 2);
+    assert_eq!(fs::metadata(version.path.join("file")).unwrap().nlink(), 2);
+    assert_eq!(version.fidelity.as_ref().unwrap().entries_with_omissions, 0);
+    let file = facts(&version, Path::new("file"));
+    let alias = facts(&version, Path::new("nested/alias"));
+    assert!(file["hard_link_to"] == "nested/alias" || alias["hard_link_to"] == "file");
+    fs::write(fixture.source.path.join("file"), b"new shared contents").unwrap();
+    let next = fixture.backup(|_, _| {}).unwrap();
+    assert_eq!(
+        fs::metadata(next.path.join("file")).unwrap().ino(),
+        fs::metadata(next.path.join("nested/alias")).unwrap().ino()
+    );
+    assert_ne!(
+        fs::metadata(next.path.join("file")).unwrap().ino(),
+        fs::metadata(version.path.join("file")).unwrap().ino()
+    );
+    assert_eq!(
+        fs::read(version.path.join("nested/alias")).unwrap(),
+        b"linked bytes"
+    );
+    assert_eq!(
+        fs::read(next.path.join("nested/alias")).unwrap(),
+        b"new shared contents"
+    );
+    publication::check_manifest(&version).unwrap();
+    publication::check_manifest(&next).unwrap();
+}
+
+#[test]
+fn hard_link_names_outside_the_selected_tree_are_disclosed_without_being_copied() {
+    let fixture = FileFixture::new(b"selected payload");
+    let outside = fixture.temp.path().join("outside");
+    fs::hard_link(fixture.source.path.join("file"), &outside).unwrap();
+    let version = fixture.backup(|_, _| {}).unwrap();
+    assert_eq!(fs::metadata(version.path.join("file")).unwrap().nlink(), 1);
+    assert!(!version.path.join("outside").exists());
+    let captured = facts(&version, Path::new("file"));
+    assert_eq!(captured["links"], 2);
+    assert!(
+        captured["omissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["field"] == "hard_links"
+                && item["reason"].as_str().unwrap().contains("Only 1 of 2"))
+    );
+    assert_eq!(fs::read(outside).unwrap(), b"selected payload");
+    assert_eq!(version.fidelity.as_ref().unwrap().entries_with_omissions, 1);
+}
+
+#[test]
+fn raw_named_hard_linked_symlinks_preserve_the_link_inode_and_leave_the_referent_alone() {
+    use std::os::unix::ffi::OsStringExt;
+    let fixture = FileFixture::new(b"ordinary");
+    let referent = fixture.temp.path().join("referent");
+    fs::write(&referent, b"outside canary").unwrap();
+    let before = fs::metadata(&referent).unwrap();
+    let first = fixture.source.path.join("symbolic");
+    std::os::unix::fs::symlink(&referent, &first).unwrap();
+    let alias = PathBuf::from(std::ffi::OsString::from_vec(b"raw-\xff".to_vec()));
+    fs::hard_link(&first, fixture.source.path.join(&alias)).unwrap();
+    let version = fixture.backup(|_, _| {}).unwrap();
+    let a = version.path.join("symbolic");
+    let b = version.path.join(&alias);
+    assert_eq!(
+        fs::symlink_metadata(&a).unwrap().ino(),
+        fs::symlink_metadata(&b).unwrap().ino()
+    );
+    assert_eq!(fs::symlink_metadata(&a).unwrap().nlink(), 2);
+    assert_eq!(fs::read_link(&a).unwrap(), referent);
+    assert_eq!(fs::read_link(&b).unwrap(), referent);
+    let after = fs::metadata(&referent).unwrap();
+    assert_eq!(
+        (
+            before.atime(),
+            before.atime_nsec(),
+            before.mtime(),
+            before.mode()
+        ),
+        (
+            after.atime(),
+            after.atime_nsec(),
+            after.mtime(),
+            after.mode()
+        )
+    );
+    assert_eq!(version.fidelity.as_ref().unwrap().entries_with_omissions, 0);
+    let captured = facts(&version, &alias);
+    assert_eq!(captured["links"], 2);
+    assert_eq!(fs::read(referent).unwrap(), b"outside canary");
+    publication::check_manifest(&version).unwrap();
+}
+
+#[test]
+fn differing_hard_link_revisions_stop_publication_and_keep_the_previous_version() {
+    let fixture = FileFixture::new(b"before");
+    fs::hard_link(
+        fixture.source.path.join("file"),
+        fixture.source.path.join("alias"),
+    )
+    .unwrap();
+    let first = fixture.backup(|_, _| {}).unwrap();
+    let mut edited = false;
+    let error = fixture
+        .backup(|count, _| {
+            if count == 1 && !edited {
+                fs::write(fixture.source.path.join("file"), b"edited between aliases").unwrap();
+                edited = true;
+            }
+        })
+        .unwrap_err();
+    assert!(edited);
+    assert!(
+        error
+            .to_string()
+            .contains("Hard-linked source revisions differ"),
+        "{error}"
+    );
+    fixture.assert_only_current(&first);
+    assert_eq!(fs::read(first.path.join("file")).unwrap(), b"before");
+    assert_eq!(fs::read(first.path.join("alias")).unwrap(), b"before");
 }
 
 #[test]

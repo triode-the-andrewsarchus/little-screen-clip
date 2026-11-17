@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Partial | Bounded per-file retries and installed revisions pass native FAT32/exFAT/NTFS races. Ownership, modes, original access/modification dates and exposed xattrs/ACLs now have verified restoration and checksummed per-path fidelity records; native targets disclose unsupported/coerced values. Symlink descriptor/replacement and mount boundaries pass guest checks. Btrfs metadata-only versions write zero payload bytes and retain earlier attributes. Hard-link relationships are recorded but materialized independently with explicit omissions; relationship preservation and optional quiesced read-only collection remain. |
+| 4.3 | Partial | Bounded per-file retries, available metadata and fidelity records pass native tests. Regular-file/symlink hard-link groups are now preserved on supporting destinations, with raw reference paths and explicit destination/uncaptured-alias omissions. Divergent captured revisions refuse publication; Btrfs versions preserve and later split groups independently. Staging still copies aliases separately before consolidation; eliminating redundant writes and optional quiesced read-only collection remain. Broader fidelity/consistency matrices stay open. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -53,6 +53,69 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Hard-link relationships in file backups
+
+Matching captured regular-file and symlink aliases now share a backup inode on
+supporting filesystems. A disk-backed `backup_links` table indexes exact source
+device/inode strings and raw relative paths, without a whole-tree in-memory map
+or SQLite integer coercion of large unsigned identities. Group members must agree
+on captured source revision, content/link target, exposed attributes, original
+creation time, attribute coverage and source link count. A revision mismatch
+stops publication and retains current. Access time can change from our own
+inventory reads; each group uses the first inventory insertion's observation.
+
+The installation path links the retained descriptor into an owned staging
+directory, validates the existing destination, atomically installs the alias,
+and verifies the installed inode and bytes. This works for held symlink inodes
+without following their user referents. Cancellation and guard/install failures
+stop publication. A link syscall failure retains the complete independent copy
+and records its errno; all affected group paths disclose incomplete relationships.
+Missing aliases are disclosed with captured versus original link counts and
+never expand the selected source scope. Completed per-path facts include an
+optional `hard_link_to` using core's lossless text/raw-byte path codec. Final
+fidelity summaries are derived after consolidation and directory restoration.
+
+Host regressions verify nested regular-file aliases, independent completed
+versions, raw-named linked symlinks with untouched outside referents, uncaptured
+aliases and changed revisions preserving the previous current version. Backend
+tests pass 104 cases with 45 explicit fixtures ignored:
+`/tmp/portable-drive-backup-links-backend-final.log`.
+
+The native guest passes fourteen tests on each FAT32, exFAT and NTFS3 mount
+(42 total): `/tmp/portable-drive-vm-backup-links-native-verified/report.json`.
+The destination-fidelity case now verifies both aliases: FAT32/exFAT keep
+independent complete files and per-path link omissions with an actual errno;
+NTFS retains the shared inode. A separate native source case preserves an NTFS
+group, changes only an attribute between alias collections with preserved mtime,
+and verifies failure leaves the old manifest, current reference, bytes and
+attributes intact. FAT32/exFAT explicitly refuse source hard-link creation;
+those branches do not claim source alias support.
+
+The retained-descriptor guest case additionally creates a new alias after
+the original name is replaced, proving it links the held regular/symlink inode
+and leaves replacement/referent canaries unchanged. Both metadata guest cases
+pass: `/tmp/portable-drive-vm-backup-links-descriptor-final/report.json`.
+Both real Btrfs cases pass in the authorized backup-testing directory, including
+new version groups, independent old bytes and later source unlink/recreation:
+`/tmp/portable-drive-backup-links-btrfs-final.log`.
+
+Selected backend/Files/daemon all-target clippy and affected-crate formatting
+pass (`/tmp/portable-drive-backup-links-clippy-final.log` and
+`/tmp/portable-drive-backup-links-fmt-final.log`). No rendered UI acceptance was
+added. Group consolidation currently stages complete independent copies first;
+temporary space/write amplification is disclosed and eliminating it remains
+open, alongside selectable quiescence and broader acceptance matrices.
+
+The collection owner now coordinates its payload, obsolete-path, relationship,
+directory, fidelity and flush phases. Successful entry/retry facts retain one
+transactional writer. Common named-object validation and guest backup setup
+remove new accidental duplication. Backup entrypoint CCN decreases from 41 to
+32 and population from 18 to 13. No new hard-link hotspot or clone group remains;
+4300 clones versus baseline 4289, duplication 7.11% versus 7.30%, average CCN
+3.48 versus 3.44, maximum 274 and reported cycles 144 versus 143. Selected fields
+are in `.fitness/portable-drives-backup-links-architecture.json`. The feature-wide
+REGRESSION gate remains open; item 4.3 stays Partial.
 
 ## Backup metadata and fidelity reports
 

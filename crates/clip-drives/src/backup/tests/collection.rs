@@ -14,7 +14,7 @@ impl FileFixture {
         (result, attempts)
     }
 
-    fn assert_only_current(&self, expected: &Backup) {
+    pub(super) fn assert_only_current(&self, expected: &Backup) {
         let versions = self.db.list::<Backup>("backup", 0, 10).unwrap();
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].id, expected.id);

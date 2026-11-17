@@ -23,7 +23,25 @@ pub(super) struct Collection<'a> {
 }
 
 impl Collection<'_> {
-    pub fn populate(
+    pub fn run(&self, progress: &mut impl FnMut(u64, u64)) -> Result<(u64, crate::BackupFidelity)> {
+        let mut metadata = metadata::Report::new(self.db, self.source)?;
+        let written = self.populate(&mut metadata, progress)?;
+        // A fresh subvolume has no obsolete entries. A snapshot uses this same
+        // sweep to remove paths absent from the complete source inventory.
+        if self.incremental {
+            remove_obsolete(self.db, self.id, self.target, self.cancel)?;
+        }
+        metadata.finish_links(self.target, self.id, self.cancel)?;
+        self.source.validate()?;
+        self.target.validate()?;
+        metadata.finish_directories(self.source, self.target, self.id, self.cancel)?;
+        metadata.summarize(self.cancel)?;
+        self.target.flush()?;
+        self.db.put("collection", "completed_at", &now())?;
+        Ok((written, metadata.summary))
+    }
+
+    fn populate(
         &self,
         metadata: &mut metadata::Report<'_>,
         progress: &mut impl FnMut(u64, u64),
@@ -46,27 +64,41 @@ impl Collection<'_> {
             }
             let (collected, bytes, attempts, snapshot) =
                 self.collect(&entry, &mut || progress(count, written))?;
-            let transaction = self.db.0.unchecked_transaction()?;
-            scan::put(self.db, self.id, &collected)?;
-            metadata.record(&collected, snapshot)?;
-            if attempts > 1 {
-                retried += 1;
-                self.db.put(
-                    "collection-retry",
-                    &count.to_string(),
-                    &Retry {
-                        path: collected.path,
-                        attempts,
-                    },
-                )?;
-            }
-            transaction.commit()?;
+            retried +=
+                u64::from(self.record_collected(metadata, &collected, snapshot, attempts, count)?);
             written += bytes;
             count += 1;
             progress(count, written);
         }
         self.db.put("collection", "retried_entries", &retried)?;
         Ok(written)
+    }
+
+    /// A successful revision and its fidelity/retry facts commit together.
+    fn record_collected(
+        &self,
+        metadata: &mut metadata::Report<'_>,
+        entry: &Entry,
+        snapshot: metadata::Snapshot,
+        attempts: u8,
+        ordinal: u64,
+    ) -> Result<bool> {
+        let transaction = self.db.0.unchecked_transaction()?;
+        scan::put(self.db, self.id, entry)?;
+        metadata.record(entry, snapshot)?;
+        let retried = attempts > 1;
+        if retried {
+            self.db.put(
+                "collection-retry",
+                &ordinal.to_string(),
+                &Retry {
+                    path: entry.path.clone(),
+                    attempts,
+                },
+            )?;
+        }
+        transaction.commit()?;
+        Ok(retried)
     }
 
     fn observe(&self, expected: &Entry, hashes: bool) -> Result<Entry> {

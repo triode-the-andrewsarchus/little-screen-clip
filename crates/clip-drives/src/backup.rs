@@ -156,8 +156,7 @@ pub(crate) fn files(
     if !coverage.complete {
         return Err(format!("Incomplete source: {}", coverage.message).into());
     }
-    let mut metadata = metadata::Report::new(&manifest.db, source)?;
-    let written = collection::Collection {
+    let (written, fidelity) = collection::Collection {
         db: &manifest.db,
         id: &scan_id,
         source,
@@ -165,16 +164,7 @@ pub(crate) fn files(
         cancel,
         incremental,
     }
-    .populate(&mut metadata, &mut progress)?;
-    // Remove only entries absent from the complete source manifest in this private version.
-    if prior.is_some() && incremental {
-        remove_obsolete(&manifest.db, &scan_id, &target, cancel)?;
-    }
-    source.validate()?;
-    target.validate()?;
-    metadata.finish_directories(source, &target, &scan_id, cancel)?;
-    target.flush()?;
-    manifest.db.put("collection", "completed_at", &now())?;
+    .run(&mut progress)?;
     if incremental {
         // Property arguments follow the path, unlike subvolume commands.
         let (request, fd) = CommandRequest::new("btrfs")
@@ -192,7 +182,7 @@ pub(crate) fn files(
         }
     }
     let backup = Backup {
-        fidelity: Some(metadata.summary),
+        fidelity: Some(fidelity),
         manifest: None,
         manifest_sha256: None,
         sha256: None,
@@ -591,7 +581,7 @@ mod tests {
     use super::*;
     mod collection;
     mod metadata;
-    fn drive(mount: Option<PathBuf>) -> Drive {
+    pub(super) fn drive(mount: Option<PathBuf>) -> Drive {
         Drive {
             id: "part:test".into(),
             label: "Test".into(),
@@ -953,6 +943,18 @@ mod btrfs_tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
     struct Fixture(tempfile::TempDir);
+    impl Fixture {
+        fn new() -> Self {
+            let base = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_BACKUP_DIR")
+                .expect("set LITTLE_CLIP_DRIVE_TEST_BACKUP_DIR");
+            Self(
+                tempfile::Builder::new()
+                    .prefix("little-clip-btrfs-test-")
+                    .tempdir_in(base)
+                    .unwrap(),
+            )
+        }
+    }
     impl Drop for Fixture {
         fn drop(&mut self) {
             if let Ok(entries) = fs::read_dir(self.0.path().join("backups/test")) {
@@ -977,14 +979,7 @@ mod btrfs_tests {
     #[test]
     #[ignore = "requires an explicitly selected writable Btrfs fixture directory"]
     fn btrfs_small_file_and_image_edits_preserve_old_versions_and_share_extents() {
-        let base = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_BACKUP_DIR")
-            .expect("set LITTLE_CLIP_DRIVE_TEST_BACKUP_DIR");
-        let fixture = Fixture(
-            tempfile::Builder::new()
-                .prefix("little-clip-btrfs-test-")
-                .tempdir_in(base)
-                .unwrap(),
-        );
+        let fixture = Fixture::new();
         let data = fixture.0.path().join("source");
         fs::create_dir(&data).unwrap();
         let mut bytes = (0..8 * 1024 * 1024)
@@ -1108,6 +1103,50 @@ mod btrfs_tests {
             .unwrap();
         assert!(output.status.success());
         eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly selected writable Btrfs fixture directory"]
+    fn btrfs_versions_preserve_link_groups_and_split_removed_relationships_independently() {
+        let fixture = Fixture::new();
+        let source = Root::create(&fixture.0.path().join("source")).unwrap();
+        let destination = Root::create(&fixture.0.path().join("backups")).unwrap();
+        let db = Store::open(&fixture.0.path().join("db")).unwrap();
+        let drive = super::tests::drive(Some(source.path.clone()));
+        let cancel = AtomicBool::new(false);
+        let file = source.path.join("file");
+        let alias = source.path.join("alias");
+        fs::write(&file, b"original").unwrap();
+        fs::hard_link(&file, &alias).unwrap();
+        let make = || files(&db, &drive, &source, &destination, &cancel, |_, _| {}).unwrap();
+        let first = make();
+        fs::write(&file, b"new bytes").unwrap();
+        let second = make();
+        for version in [&first, &second] {
+            assert!(version.incremental);
+            let file = fs::metadata(version.path.join("file")).unwrap();
+            assert_eq!(
+                file.ino(),
+                fs::metadata(version.path.join("alias")).unwrap().ino()
+            );
+            assert_eq!(file.nlink(), 2);
+            assert_eq!(version.fidelity.as_ref().unwrap().omitted_fields, 0);
+            publication::check_manifest(version).unwrap();
+        }
+        fs::remove_file(&alias).unwrap();
+        fs::write(&alias, b"independent").unwrap();
+        let third = make();
+        assert_ne!(
+            fs::metadata(third.path.join("file")).unwrap().ino(),
+            fs::metadata(third.path.join("alias")).unwrap().ino()
+        );
+        assert_eq!(fs::metadata(third.path.join("file")).unwrap().nlink(), 1);
+        assert_eq!(fs::read(third.path.join("file")).unwrap(), b"new bytes");
+        assert_eq!(fs::read(third.path.join("alias")).unwrap(), b"independent");
+        assert_eq!(fs::read(first.path.join("alias")).unwrap(), b"original");
+        assert_eq!(fs::read(second.path.join("alias")).unwrap(), b"new bytes");
+        assert_eq!(fs::metadata(second.path.join("alias")).unwrap().nlink(), 2);
+        publication::check_manifest(&third).unwrap();
     }
 }
 

@@ -123,10 +123,20 @@ with 64 KiB name-list/value buffers. Incomplete observations are disclosed.
 Unobserved attribute names do not authorize deletion of destination attributes.
 Coarse or uncertain source timestamps require another attribute comparison
 during collection. Btrfs metadata-only versions share unchanged payload blocks
-and retain earlier versions' attributes. Hard-linked source paths currently
-become independent files, with an explicit relationship omission and original
-inode/link facts retained. Preserving those relationships and a selectable
-quiesced read-only collection mode remain unfinished.
+and retain earlier versions' attributes. Captured hard-linked regular files and
+symlinks share an inode in the completed backup when the destination supports
+it. The manifest's optional, losslessly encoded `hard_link_to` identifies the
+representative path. A changed revision between aliases stops publication and
+retains the previous version. Destination link failures retain complete
+independent payloads and disclose the lost relationship, including errno.
+Uncaptured aliases are disclosed without following names outside the selected
+tree. Alias groups share the first inventory observation of access time.
+
+Collection currently stages independent copies before consolidating matching
+aliases. Temporary space and bytes written can exceed the final linked payload
+size; Btrfs snapshots still share unchanged extents across versions. Avoiding
+redundant staging writes and a selectable quiesced read-only collection mode
+remain unfinished.
 
 The source Drive record in each new manifest includes observed partition-layout
 facts: partition number, start sector and checked byte offset, logical sector

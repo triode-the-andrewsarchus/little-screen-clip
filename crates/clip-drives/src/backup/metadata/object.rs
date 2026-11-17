@@ -15,6 +15,17 @@ pub(super) enum Object {
 }
 
 impl Object {
+    pub fn validate_name(&self, root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
+        cancelled(cancel)?;
+        root.validate()?;
+        let held = self.metadata()?;
+        if Entry::from_metadata(&entry.path, &held).kind != entry.kind
+            || !root.same_file(&entry.path, held.dev(), held.ino())?
+        {
+            return Err("Backup metadata target was replaced".into());
+        }
+        Ok(())
+    }
     pub fn open(root: &Root, entry: &Entry) -> Result<Self> {
         match entry.kind.as_str() {
             "file" => Ok(Self::File(root.input(&entry.path)?)),
@@ -138,6 +149,20 @@ impl Object {
             Self::Link { parent, .. } => File::open(anchor(parent))?.sync_all(),
         }
     }
+    pub fn link_to(&self, path: &Path) -> std::io::Result<()> {
+        let file = match self {
+            Self::File(file) | Self::Link { pin: file, .. } => file,
+        };
+        // Following only our retained descriptor magic link selects its inode,
+        // including a held symlink inode, without resolving its user referent.
+        Ok(rustix::fs::linkat(
+            rustix::fs::CWD,
+            anchor(file),
+            rustix::fs::CWD,
+            path,
+            AtFlags::SYMLINK_FOLLOW,
+        )?)
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +237,16 @@ mod tests {
             assert_eq!(&bytes[..count], b"updated original");
             let count = replacement.get(key, &mut bytes).unwrap();
             assert_eq!(&bytes[..count], b"replacement metadata");
+            let linked = path.with_extension("hard-link");
+            held.link_to(&linked).unwrap();
+            let linked_metadata = fs::symlink_metadata(&linked).unwrap();
+            assert_eq!(linked_metadata.ino(), held.metadata().unwrap().ino());
+            assert_eq!(linked_metadata.nlink(), 2);
+            if symlink {
+                assert_eq!(fs::read_link(&linked).unwrap(), foreign);
+            } else {
+                assert_eq!(fs::read(&linked).unwrap(), b"original");
+            }
             held.chown(1001, 1002).unwrap();
             held.times((1_500_000_000, 0), (1_600_000_000, 123_456_789))
                 .unwrap();

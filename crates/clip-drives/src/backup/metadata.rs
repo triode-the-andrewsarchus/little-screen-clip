@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 
 mod attributes;
+mod links;
 mod object;
 use object::Object;
 
@@ -20,19 +21,19 @@ enum Field {
     ExtendedAttributeList,
     HardLinks,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Omission {
     field: Field,
     attribute: Option<Vec<u8>>,
     errno: Option<i32>,
     reason: String,
 }
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Attribute {
     name: Vec<u8>,
     value: Option<Vec<u8>>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Facts {
     accessed: (i64, i64),
     created: Option<(i64, i64)>,
@@ -42,6 +43,8 @@ struct Facts {
     attribute_list_errno: Option<i32>,
     attributes: Vec<Attribute>,
     omissions: Vec<Omission>,
+    #[serde(default, with = "little_clip_core::path_serde::optional")]
+    hard_link_to: Option<PathBuf>,
 }
 impl Facts {
     fn new(observed: &fs::Metadata) -> Self {
@@ -54,6 +57,7 @@ impl Facts {
             attribute_list_errno: None,
             attributes: vec![],
             omissions: vec![],
+            hard_link_to: None,
         }
     }
     fn note(
@@ -99,6 +103,29 @@ impl Facts {
             Ok(()) => (),
         }
     }
+    fn restore_times(&mut self, output: &Object, entry: &Entry) -> Result<()> {
+        let result = output.times(self.accessed, (entry.modified, entry.nanos));
+        let observed = output.metadata()?;
+        let modified = (observed.mtime(), observed.mtime_nsec()) == (entry.modified, entry.nanos);
+        let accessed = (observed.atime(), observed.atime_nsec()) == self.accessed;
+        match result {
+            Err(error) => {
+                for (field, matches) in [
+                    (Field::ModificationTime, modified),
+                    (Field::AccessTime, accessed),
+                ] {
+                    if !matches {
+                        self.note(field, None, Some(&error), "Timestamp could not be restored");
+                    }
+                }
+            }
+            Ok(()) => {
+                self.verify(Field::ModificationTime, None, Ok(()), modified);
+                self.verify(Field::AccessTime, None, Ok(()), accessed);
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct Snapshot {
@@ -124,10 +151,6 @@ impl Snapshot {
             facts,
         };
         attributes::capture(&snapshot.object, &mut snapshot.facts, cancel)?;
-        if entry.kind != "directory" && snapshot.facts.links > 1 {
-            snapshot.facts.note(Field::HardLinks, None, None,
-                "Hard-linked paths were materialized independently; source device, inode and link count are retained");
-        }
         snapshot.check(source, entry, cancel)?;
         Ok(snapshot)
     }
@@ -175,13 +198,8 @@ impl Snapshot {
         verify_contents(&output, entry, cancel)?;
         self.restore_fields(&output, entry, cancel)?;
         verify_contents(&output, entry, cancel)?;
-        self.restore_times(&output, entry)?;
-        let held = output.metadata()?;
-        if Entry::from_metadata(&entry.path, &held).kind != entry.kind
-            || !target.same_file(&entry.path, held.dev(), held.ino())?
-        {
-            return Err("Backup metadata target was replaced".into());
-        }
+        self.facts.restore_times(&output, entry)?;
+        output.validate_name(target, entry, cancel)?;
         output.sync()?;
         target.validate()
     }
@@ -246,35 +264,6 @@ impl Snapshot {
         }
         Ok(())
     }
-    fn restore_times(&mut self, output: &Object, entry: &Entry) -> Result<()> {
-        let result = output.times(self.facts.accessed, (entry.modified, entry.nanos));
-        let observed = output.metadata()?;
-        let modified = (observed.mtime(), observed.mtime_nsec()) == (entry.modified, entry.nanos);
-        let accessed = (observed.atime(), observed.atime_nsec()) == self.facts.accessed;
-        match result {
-            Err(error) => {
-                for (field, matches) in [
-                    (Field::ModificationTime, modified),
-                    (Field::AccessTime, accessed),
-                ] {
-                    if !matches {
-                        self.facts.note(
-                            field,
-                            None,
-                            Some(&error),
-                            "Timestamp could not be restored",
-                        );
-                    }
-                }
-            }
-            Ok(()) => {
-                self.facts
-                    .verify(Field::ModificationTime, None, Ok(()), modified);
-                self.facts.verify(Field::AccessTime, None, Ok(()), accessed);
-            }
-        }
-        Ok(())
-    }
 }
 
 fn verify_contents(output: &Object, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
@@ -300,7 +289,9 @@ pub(super) struct Report<'a> {
 impl<'a> Report<'a> {
     pub fn new(db: &'a Store, source: &Root) -> Result<Self> {
         db.0.execute_batch(
-            "CREATE TABLE backup_metadata(path BLOB PRIMARY KEY,json TEXT NOT NULL)",
+            "CREATE TABLE backup_metadata(path BLOB PRIMARY KEY,json TEXT NOT NULL);
+             CREATE TABLE backup_links(identity TEXT NOT NULL,path BLOB PRIMARY KEY);
+             CREATE INDEX backup_link_identity ON backup_links(identity,path)",
         )?;
         db.put("collection", "metadata_policy", &"Restore and verify exposed ownership, modes, access/modification times and xattrs (including ACLs). Access times use initial inventory observations while the inode is unchanged. Preserve original change/creation times and inode/link facts in the manifest; they are not filesystem-recreated timestamps. Metadata failures are per-path omissions, not missing payloads.")?;
         let root = source.directory(Path::new(""), false)?;
@@ -318,18 +309,46 @@ impl<'a> Report<'a> {
     }
     pub fn record(&mut self, entry: &Entry, snapshot: Snapshot) -> Result<()> {
         let facts = snapshot.facts;
+        if entry.kind != "directory" && facts.links > 1 {
+            self.db.0.execute(
+                "INSERT INTO backup_links VALUES(?1,?2)",
+                rusqlite::params![
+                    format!("{}:{}", entry.device, entry.inode),
+                    entry.path.as_os_str().as_bytes()
+                ],
+            )?;
+        }
+        self.save_facts(entry, &facts)
+    }
+    fn save_facts(&self, entry: &Entry, facts: &Facts) -> Result<()> {
         self.db.0.execute("INSERT INTO backup_metadata VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET json=excluded.json",
             rusqlite::params![entry.path.as_os_str().as_bytes(), serde_json::to_string(&facts)?])?;
-        self.summary.entries += 1;
-        self.summary.entries_with_omissions += u64::from(!facts.omissions.is_empty());
-        let fields: std::collections::BTreeSet<_> = facts
-            .omissions
-            .iter()
-            .map(|omission| (omission.field, omission.attribute.as_deref()))
-            .collect();
-        self.summary.omitted_fields += fields.len() as u64;
-        self.summary.source_attributes_unavailable += u64::from(!facts.attributes_complete);
         Ok(())
+    }
+    pub fn finish_links(&self, target: &Root, scan_id: &str, cancel: &AtomicBool) -> Result<()> {
+        links::finish(self, target, scan_id, cancel)
+    }
+    pub fn summarize(&mut self, cancel: &AtomicBool) -> Result<()> {
+        self.summary = BackupFidelity::default();
+        let mut statement = self
+            .db
+            .0
+            .prepare("SELECT json FROM backup_metadata ORDER BY path")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for json in rows {
+            cancelled(cancel)?;
+            let facts: Facts = serde_json::from_str(&json?)?;
+            self.summary.entries += 1;
+            self.summary.entries_with_omissions += u64::from(!facts.omissions.is_empty());
+            let fields: std::collections::BTreeSet<_> = facts
+                .omissions
+                .iter()
+                .map(|omission| (omission.field, omission.attribute.as_deref()))
+                .collect();
+            self.summary.omitted_fields += fields.len() as u64;
+            self.summary.source_attributes_unavailable += u64::from(!facts.attributes_complete);
+        }
+        self.db.put("collection", "fidelity", &self.summary)
     }
     pub fn finish_directories(
         &mut self,
@@ -349,7 +368,6 @@ impl<'a> Report<'a> {
             .get::<Entry>("source", "root")?
             .ok_or("Missing captured source root")?;
         self.finish_directory(source, target, scan_id, &root, cancel)?;
-        self.db.put("collection", "fidelity", &self.summary)?;
         Ok(())
     }
     fn finish_directory(
