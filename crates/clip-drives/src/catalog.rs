@@ -40,18 +40,20 @@ pub(crate) fn capture(
     let id = uuid::Uuid::new_v4().to_string();
     let catalogs = state.directory(Path::new("catalogs"), true)?;
     let path = crate::root::anchor(&catalogs).join(format!("{id}.sqlite"));
-    let rules: Vec<DriveRule> = db.list("rule", 0, 1000)?;
-    if rules
-        .iter()
-        .any(|r| r.drive == drive.id && !r.catalog && r.relative.as_os_str().is_empty())
+    let mut exclusions = Vec::new();
     {
-        return Err("Cataloging is disabled for this drive".into());
+        let transaction = db.0.unchecked_transaction()?;
+        db.visit::<DriveRule>("rule", |rule| {
+            if rule.drive == drive.id && !rule.catalog {
+                if rule.relative.as_os_str().is_empty() {
+                    return Err("Cataloging is disabled for this drive".into());
+                }
+                exclusions.push(rule.relative);
+            }
+            Ok(())
+        })?;
+        transaction.commit()?;
     }
-    let exclusions = rules
-        .into_iter()
-        .filter(|r| r.drive == drive.id && !r.catalog)
-        .map(|r| r.relative)
-        .collect();
     let limits = Limits {
         hash_bytes: u64::MAX,
         entries: config.catalog_max_entries,

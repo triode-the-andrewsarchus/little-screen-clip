@@ -1000,6 +1000,7 @@ impl Owner {
         Ok("Catalog unmounted".into())
     }
     fn publish_policy(&self) -> Result<()> {
+        let transaction = self.db.0.unchecked_transaction()?;
         let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
             self.partition
@@ -1011,21 +1012,23 @@ impl Owner {
                 .as_ref()
                 .and_then(|job| job.destination.clone()),
         );
-        excluded.extend(
-            self.db
-                .list::<ram_setup::Allocation>("ram-allocation", 0, 1000)?
-                .into_iter()
-                .filter_map(|allocation| allocation.backing.map(|backing| backing.directory)),
-        );
+        self.db
+            .visit::<ram_setup::Allocation>("ram-allocation", |allocation| {
+                if let Some(backing) = allocation.backing {
+                    excluded.push(backing.directory);
+                }
+                Ok(())
+            })?;
         if let Some(path) = &self.config.backup_directory {
             excluded.push(path.clone());
         }
-        for session in self.db.list::<RamSession>("ram", 0, 1000)? {
+        self.db.visit::<RamSession>("ram", |session| {
             excluded.push(session.path);
             if let Some(backing) = session.backing {
                 excluded.push(backing.directory);
             }
-        }
+            Ok(())
+        })?;
         excluded.push(self.state.clone());
         let drives = self
             .shared
@@ -1033,7 +1036,7 @@ impl Owner {
             .map_err(|_| "Drive status unavailable")?
             .drives
             .clone();
-        for rule in self.db.list::<DriveRule>("rule", 0, 1000)? {
+        self.db.visit::<DriveRule>("rule", |rule| {
             if !rule.index {
                 for drive in &drives {
                     if drive.id == rule.drive
@@ -1043,7 +1046,11 @@ impl Owner {
                     }
                 }
             }
-        }
+            Ok(())
+        })?;
+        transaction.commit()?;
+        excluded.sort();
+        excluded.dedup();
         let json = serde_json::to_vec(&IndexPolicy { excluded })?;
         let root = kernel_interface::pin_content_directory(&self.state)?;
         let path = self.state.join("index-policy.json");
@@ -1052,7 +1059,9 @@ impl Owner {
                 .and_then(|mut file| {
                     use std::io::Read;
                     let mut old = Vec::new();
-                    file.by_ref().take(1024 * 1024 + 1).read_to_end(&mut old)?;
+                    file.by_ref()
+                        .take((json.len() as u64).saturating_add(1))
+                        .read_to_end(&mut old)?;
                     Ok(old == json)
                 })
                 .unwrap_or(false)
@@ -1138,6 +1147,7 @@ mod tests {
     mod backup_review;
     mod catalog_cleanup;
     mod native_images;
+    mod policy_coverage;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {

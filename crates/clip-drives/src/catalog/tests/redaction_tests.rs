@@ -364,6 +364,60 @@ fn exclusions_queue_all_historical_catalogs_beyond_one_database_page() {
 }
 
 #[test]
+fn catalog_capture_honors_old_subtree_and_root_rules_beyond_one_database_page() {
+    for relative in [Path::new("excluded"), Path::new("")] {
+        let fixture = fixture();
+        let transaction = fixture.db.0.unchecked_transaction().unwrap();
+        fixture
+            .db
+            .put(
+                "rule",
+                "exclude",
+                &DriveRule {
+                    id: "exclude".into(),
+                    drive: fixture.drive.id.clone(),
+                    relative: relative.into(),
+                    catalog: false,
+                    index: true,
+                },
+            )
+            .unwrap();
+        for index in 0..1025 {
+            let rule = DriveRule {
+                id: format!("other-{index}"),
+                drive: "other-drive".into(),
+                relative: PathBuf::new(),
+                catalog: true,
+                index: true,
+            };
+            fixture.db.put("rule", &rule.id, &rule).unwrap();
+        }
+        transaction.commit().unwrap();
+        let result = fixture.capture(&DriveConfig::default());
+        if relative.as_os_str().is_empty() {
+            assert!(result.unwrap_err().to_string().contains("disabled"));
+        } else {
+            let catalog = result.unwrap();
+            assert!(catalog.complete);
+            assert_eq!(catalog.entries, 2);
+            let saved = saved(&fixture, &catalog.id);
+            assert!(
+                scan::entry(&saved, "catalog", Path::new("excluded/hidden"))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                scan::entry(&saved, "catalog", relative)
+                    .unwrap()
+                    .unwrap()
+                    .kind,
+                "excluded"
+            );
+        }
+    }
+}
+
+#[test]
 fn redaction_compacts_large_metadata_trees_without_removing_source_files() {
     let fixture = fixture();
     let private = fixture.source.path.join("private");

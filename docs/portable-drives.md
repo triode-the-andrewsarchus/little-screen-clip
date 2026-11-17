@@ -146,6 +146,12 @@ file keeps its chosen provider and reports stale data if that provider changes.
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
+Catalog collection and published indexing policy load every saved rule through
+bounded SQLite pages from one retained snapshot. The page size does not limit the
+number of rules honored. Published paths are sorted and deduplicated. Background
+index clients retain their one-MiB registry read limit: an oversized, unreadable or
+malformed registry blocks background indexing rather than accepting a partial list.
+
 Files labels excluded catalog folders **Not catalogued**, while a captured empty
 folder remains empty. Opening an excluded folder reports that its contents were
 excluded from the saved catalog. Coverage labels do not change file identity or

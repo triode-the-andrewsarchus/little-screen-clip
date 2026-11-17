@@ -198,6 +198,38 @@ adds no clone group; separating the command compatibility stage removes the
 reported discovery complexity hotspot. Raw report:
 `.fitness/portable-drives-partition-layout-final-architecture.json`.
 
+## Complete exclusion-rule traversal checkpoint
+
+Catalog capture and index-policy publication now use the existing transactional
+keyset visitor for every saved rule. RAM-session/allocation exclusions also use
+that visitor, and managed backup paths are collected within the same retained
+snapshot. The old thousand-record cutoffs are removed. Publication sorts and
+deduplicates paths, and compares an existing registry against the bounded new
+snapshot length so an unchanged oversized policy is not rewritten repeatedly.
+Index clients still reject oversized/malformed/unreadable registries entirely.
+
+Both new regression tests failed before the fix: catalog capture entered an old
+excluded subtree (three records instead of two), and a separate core policy client
+missed the oldest non-UTF-8 exclusion. They now pass, including whole-drive catalog
+refusal, all 1026 policy entries, child-path admission, unrelated allowed paths,
+malformed/oversized fail-closed behavior and restored-policy recovery. The client
+probe runs after service shutdown to prevent periodic publication from racing its
+intentional registry faults. Logs:
+`/tmp/portable-drive-policy-pages-before.log`,
+`/tmp/portable-drive-policy-pages-after.log`, and
+`/tmp/portable-drive-policy-pages-client-final.log`.
+
+All 86 backend tests pass (28 explicit fixtures ignored), with backend all-target
+clippy/warnings denied and repository formatting passing. The architecture result
+remains REGRESSION, with no additional clone group (4301), 7.15% duplication,
+average CCN 3.48, maximum 274 and 144 reported cycles. The capture/publication
+functions retain necessary explicit snapshot and whole-root refusal branches;
+there is no second pagination mechanism. Report:
+`.fitness/portable-drives-policy-pages-architecture.json`.
+
+The policy editor still needs a direct lookup: status is intentionally paginated,
+so the first status page cannot prove that an older folder has no saved rule.
+
 ## Cross-cutting gates
 
 - Preserve a headless core/backend and independent file-manager lifecycle; no workbench application dependency.
