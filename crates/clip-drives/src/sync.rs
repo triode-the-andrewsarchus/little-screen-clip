@@ -116,6 +116,7 @@ fn save_baseline(db: &Store, pair: &str, path: &Path, hash: Option<&str>) -> Res
     Ok(())
 }
 mod conflicts;
+pub(crate) mod fingerprints;
 fn delete(root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
     match entry.kind.as_str() {
         "file" => root.delete_file(
@@ -258,7 +259,7 @@ pub(crate) fn changed(
     let mut remaining = max_bytes.saturating_mul(2);
     for path in relative {
         if path.as_os_str().is_empty() {
-            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, true);
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, false);
         }
         let mut observe = |root: &Root| -> Result<Option<Entry>> {
             let entry = scan::observe(root, &path, true, remaining.min(max_bytes), cancel)?;
@@ -273,11 +274,20 @@ pub(crate) fn changed(
             || a.as_ref().is_some_and(|e| e.kind == "directory")
             || b.as_ref().is_some_and(|e| e.kind == "directory")
         {
-            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, true);
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, false);
         }
         entries.push((path, a, b));
     }
     db.0.execute("DELETE FROM sync_blocked WHERE pair=?1", [&pair.id])?;
+    let cache_updates = fingerprints::existing(db, pair, portable).map(|provenance| {
+        (
+            provenance,
+            entries
+                .iter()
+                .map(|(path, a, _)| (path.clone(), a.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
     let mut reconcile = Reconcile {
         db,
         pair,
@@ -291,6 +301,9 @@ pub(crate) fn changed(
     }
     portable.validate()?;
     local.validate()?;
+    if let Some((provenance, entries)) = cache_updates {
+        fingerprints::refresh(db, pair, portable, &provenance, entries)?;
+    }
     Ok(reconcile.report)
 }
 #[cfg(test)]
@@ -318,9 +331,19 @@ pub(crate) fn synchronize_with(
     }
     let a = format!("{}:portable:next", pair.id);
     let b = format!("{}:local:next", pair.id);
+    let provenance = fingerprints::Provenance::capture(pair, portable).ok();
     let mut limits = comparison_limits(pair, local)?;
     for (root, id) in [(portable, &a), (local, &b)] {
-        limits.reuse_scan = reuse.then(|| id.strip_suffix(":next").unwrap_or(id).to_owned());
+        limits.reuse_scan = (reuse && root.reliable_revision_cache()?)
+            .then(|| id.strip_suffix(":next").unwrap_or(id).to_owned());
+        limits.reuse_generation = None;
+        limits.capture_generation = None;
+        if id == &a {
+            limits.capture_generation = provenance
+                .as_ref()
+                .map(fingerprints::Provenance::generation);
+            fingerprints::admit_reuse(db, pair, provenance.as_ref(), &mut limits);
+        }
         let coverage = scan::scan(db, root, id, &limits, cancel, &mut progress)?;
         if !coverage.complete {
             return Err(format!(
@@ -374,6 +397,9 @@ pub(crate) fn synchronize_with(
             "UPDATE entries SET scan=?1 WHERE scan=?2",
             params![previous, id],
         )?;
+        if id == &a {
+            fingerprints::publish(db, previous, pair, portable, provenance.as_ref())?;
+        }
         transaction.commit()?;
     }
     Ok(reconcile.report)

@@ -375,8 +375,28 @@ The backup manifest is checksummed and queried through one retained descriptor,
 within the catalog byte/time budgets. Corrupt, replaced, oversized or unsupported
 manifests leave the metadata catalog usable and roll back imported hashes.
 The additional collection-provenance field is optional; existing manifest and
-catalog versions are unchanged. Sync fingerprint reuse, searching older manifests
-for capture enrichment and the full uncertain-provider policy remain unfinished.
+catalog versions are unchanged. Searching older manifests for capture enrichment
+and the full uncertain-provider policy remain unfinished.
+
+Capture can also reuse an enrolled partition/subtree's portable sync scan under
+the same conservative queried-change policy. The local operational SQLite state
+stores a small versioned provenance record with the drive/evidence, raw subtree,
+source birth identity, boot, namespace, unique mount ID and scan generation.
+Eligible cached file rows carry that generation; publication commits rows and
+provenance together. These records and markers stay local and create no metadata
+files on the removable medium. They extend the existing sync scan cache rather
+than creating a second index.
+
+Catalog enrichment checks both generation and full file revision, maps subtree
+paths without losing raw names, and retains verified backup hashes in preference
+to sync candidates. Candidate/row decoding is bounded and uses one registry read
+snapshot. Invalid, unavailable or oversized optional data leaves ordinary metadata
+usable. Capture reads no source payloads to obtain these hashes. Fresh portable
+observations from named syncs refresh their cached rows; incoming copies await a
+new observation. Legacy or mismatched row generations must be rehashed before
+publication can attach new provenance. Directory-change fallbacks take fresh full
+comparisons, and coarse/unknown source filesystems cannot reuse a whole scan.
+FAT32, exFAT and NTFS retain metadata-only behavior for this enrichment.
 
 File-backup providers must retain their saved directory identity; replacing a
 backup directory does not authorize the replacement to supply catalog contents.

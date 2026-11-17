@@ -2,12 +2,6 @@ use super::*;
 use little_clip_core::file_source::FileSource;
 use std::{fs, fs::FileTimes, os::unix::fs::MetadataExt};
 
-fn reliable_fixture() -> Fixture {
-    let fixture = fixture_in(Some(Path::new("/dev/shm")));
-    assert!(fixture.source.reliable_revision_cache().unwrap());
-    fixture
-}
-
 fn rewrite_manifest(fixture: &Fixture, version: &mut Backup, edit: impl FnOnce(&Store)) {
     let path = version.manifest.as_ref().unwrap();
     let manifest = Store::existing(path, false).unwrap();
@@ -159,19 +153,7 @@ fn a_late_invalid_manifest_row_rolls_back_previously_imported_hashes() {
             )
             .unwrap();
     });
-    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
-    assert!(catalog.complete);
-    let view = filesystem(&fixture.state.path, catalog);
-    for name in ["file.txt", "z-broken"] {
-        assert!(
-            view.lookup_path(Path::new(name))
-                .unwrap()
-                .unwrap()
-                .1
-                .hash
-                .is_none()
-        );
-    }
+    fixture.assert_metadata_only(&["file.txt", "z-broken"]);
 }
 
 #[test]
@@ -267,88 +249,98 @@ fn hash_capture_probe() {
 #[ignore = "requires Linux 7+, strace and writable /dev/shm; traces only an owned child"]
 fn real_capture_reuses_hashes_without_source_payload_reads_and_the_trace_detects_a_control_read() {
     use little_clip_core::process::CommandRequest;
-    let fixture = reliable_fixture();
-    fixture.backup().unwrap();
-    for read_payload in [false, true] {
-        let input = fixture
-            .temp
-            .path()
-            .join(format!("probe-{read_payload}.json"));
-        let trace = fixture
-            .temp
-            .path()
-            .join(format!("trace-{read_payload}.txt"));
-        fs::write(
-            &input,
-            serde_json::to_vec(&Probe {
-                state: fixture.state.path.clone(),
-                source: fixture.source.path.clone(),
-                drive: fixture.drive.clone(),
-                read_payload,
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        let mut environment = OsString::from("LITTLE_CLIP_HASH_CAPTURE_PROBE=");
-        environment.push(&input);
-        let output = CommandRequest::new("strace")
-            .args([
-                "-f",
-                "-yy",
-                "-e",
-                "trace=read,pread64,readv,preadv,preadv2",
-                "-o",
-            ])
-            .arg(&trace)
-            .arg("/usr/bin/env")
-            .arg(environment)
-            .arg(std::env::current_exe().unwrap())
-            .args([
-                "catalog::tests::hash_tests::hash_capture_probe",
-                "--ignored",
-                "--exact",
-                "--nocapture",
-            ])
-            .timeout(Duration::from_secs(20))
-            .own_process_group()
-            .die_with_parent()
-            .run()
+    for source in ["backup", "sync"] {
+        let fixture = reliable_fixture();
+        match source {
+            "backup" => {
+                fixture.backup().unwrap();
+            }
+            "sync" => {
+                fixture.pair(Path::new(""));
+            }
+            _ => unreachable!(),
+        }
+        for read_payload in [false, true] {
+            let input = fixture
+                .temp
+                .path()
+                .join(format!("probe-{read_payload}.json"));
+            let trace = fixture
+                .temp
+                .path()
+                .join(format!("trace-{read_payload}.txt"));
+            fs::write(
+                &input,
+                serde_json::to_vec(&Probe {
+                    state: fixture.state.path.clone(),
+                    source: fixture.source.path.clone(),
+                    drive: fixture.drive.clone(),
+                    read_payload,
+                })
+                .unwrap(),
+            )
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let text = fs::read_to_string(&trace).unwrap();
-        let prefix = format!("{}/", fixture.source.path.display());
-        let reads: Vec<_> = text
-            .lines()
-            .filter(|line| {
-                // Look only at the syscall's FD label, not strings inside SQLite or
-                // the probe JSON read buffers, which also contain source paths.
-                let Some((_, argument)) = line.split_once('(') else {
-                    return false;
-                };
-                let Some((_, label)) = argument.split_once('<') else {
-                    return false;
-                };
-                label
-                    .split('>')
-                    .next()
-                    .is_some_and(|label| label.starts_with(&prefix))
-            })
-            .collect();
-        assert_eq!(
-            !reads.is_empty(),
-            read_payload,
-            "source payload reads: {reads:?}"
-        );
-        fs::copy(
-            &trace,
-            Path::new("/tmp").join(format!(
-                "portable-drive-catalog-hash-source-trace-{read_payload}.log"
-            )),
-        )
-        .unwrap();
+            let mut environment = OsString::from("LITTLE_CLIP_HASH_CAPTURE_PROBE=");
+            environment.push(&input);
+            let output = CommandRequest::new("strace")
+                .args([
+                    "-f",
+                    "-yy",
+                    "-e",
+                    "trace=read,pread64,readv,preadv,preadv2",
+                    "-o",
+                ])
+                .arg(&trace)
+                .arg("/usr/bin/env")
+                .arg(environment)
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "catalog::tests::hash_tests::hash_capture_probe",
+                    "--ignored",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .timeout(Duration::from_secs(20))
+                .own_process_group()
+                .die_with_parent()
+                .run()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = fs::read_to_string(&trace).unwrap();
+            let prefix = format!("{}/", fixture.source.path.display());
+            let reads: Vec<_> = text
+                .lines()
+                .filter(|line| {
+                    // Look only at the syscall's FD label, not strings inside SQLite or
+                    // the probe JSON read buffers, which also contain source paths.
+                    let Some((_, argument)) = line.split_once('(') else {
+                        return false;
+                    };
+                    let Some((_, label)) = argument.split_once('<') else {
+                        return false;
+                    };
+                    label
+                        .split('>')
+                        .next()
+                        .is_some_and(|label| label.starts_with(&prefix))
+                })
+                .collect();
+            assert_eq!(
+                !reads.is_empty(),
+                read_payload,
+                "source payload reads: {reads:?}"
+            );
+            fs::copy(
+                &trace,
+                Path::new("/tmp").join(format!(
+                    "portable-drive-catalog-hash-source-trace-{source}-{read_payload}.log"
+                )),
+            )
+            .unwrap();
+        }
     }
 }

@@ -55,13 +55,15 @@ pub(crate) fn capture(
         access_dates: false,
         exclusions,
         reuse_scan: None,
+        reuse_generation: None,
+        capture_generation: None,
     };
     let mut staged = staging::Capture::new(db, state, drive)?;
     let id = staged.id().to_owned();
     let result = (|| {
         let (cat_db, pages) = capture_details::database(&staged.path(), config.catalog_max_bytes)?;
         let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
-        hashes::from_backup(db, &cat_db, drive, root, config, cancel, started)?;
+        hashes::enrich(db, &cat_db, drive, root, config, cancel, started)?;
         cat_db.0.pragma_update(None, "max_page_count", pages)?;
         let details = capture_details::source(root, coverage.directory, coverage.stopped)?;
         let catalog = Catalog {
@@ -516,6 +518,7 @@ mod tests {
     mod lifecycle_tests;
     mod provider_tests;
     mod redaction_tests;
+    mod sync_hash_tests;
     use super::*;
     struct Fixture {
         db: Store,
@@ -525,6 +528,77 @@ mod tests {
         temp: tempfile::TempDir,
     }
     impl Fixture {
+        fn pair(&self, relative: &Path) -> crate::SyncPair {
+            let local = Root::create(&self.temp.path().join("paired")).unwrap();
+            let pair = crate::SyncPair {
+                id: "owned-sync".into(),
+                drive: self.drive.id.clone(),
+                evidence: self.drive.evidence.clone(),
+                relative: relative.to_owned(),
+                local_identity: Some(local.storage_identity().unwrap()),
+                local: local.path,
+                paused: false,
+                deletions: false,
+                ram: false,
+                last_success: None,
+                status: String::new(),
+            };
+            self.db.put("pair", &pair.id, &pair).unwrap();
+            self.synchronize(&pair, false).unwrap();
+            pair
+        }
+        fn synchronize(
+            &self,
+            pair: &crate::SyncPair,
+            reuse: bool,
+        ) -> Result<crate::sync::SyncReport> {
+            let pin = self.source.directory(&pair.relative, false)?;
+            crate::sync::synchronize_with(
+                &self.db,
+                pair,
+                (
+                    &Root::open(&crate::root::anchor(&pin))?,
+                    &Root::open(&pair.local)?,
+                ),
+                &AtomicBool::new(false),
+                |_, _| {},
+                reuse,
+            )
+        }
+        fn assert_metadata_only(&self, names: &[&str]) {
+            use std::os::unix::fs::MetadataExt;
+            let catalog = self.capture(&DriveConfig::default()).unwrap();
+            assert!(catalog.complete, "{}", catalog.coverage);
+            let view = filesystem(&self.state.path, catalog);
+            for name in names {
+                let entry = view.lookup_path(Path::new(name)).unwrap().unwrap().1;
+                let original = std::fs::metadata(self.source.path.join(name)).unwrap();
+                assert!(entry.hash.is_none(), "{name}");
+                assert_eq!(entry.kind, "file");
+                assert_eq!(entry.size, original.len());
+                assert_eq!(
+                    (entry.modified, entry.nanos),
+                    (original.mtime(), original.mtime_nsec())
+                );
+            }
+        }
+        fn poison_cached_hash(&self, pair: &crate::SyncPair, path: &Path) {
+            let id = format!("{}:portable", pair.id);
+            let mut cached = scan::entry(&self.db, &id, path).unwrap().unwrap();
+            let pin = self.source.directory(&pair.relative, false).unwrap();
+            let root = Root::open(&crate::root::anchor(&pin)).unwrap();
+            let current = scan::observe(&root, path, false, u64::MAX, &AtomicBool::new(false))
+                .unwrap()
+                .unwrap();
+            assert!(
+                cached.same_revision(&current),
+                "control must leave the source revision unchanged"
+            );
+            let poisoned = "0".repeat(64);
+            assert_ne!(cached.hash.as_deref(), Some(poisoned.as_str()));
+            cached.hash = Some(poisoned);
+            scan::put(&self.db, &id, &cached).unwrap();
+        }
         fn capture(&self, config: &DriveConfig) -> Result<Catalog> {
             capture(
                 &self.db,
@@ -546,6 +620,11 @@ mod tests {
                 |_, _| {},
             )
         }
+    }
+    fn reliable_fixture() -> Fixture {
+        let fixture = fixture_in(Some(Path::new("/dev/shm")));
+        assert!(fixture.source.reliable_revision_cache().unwrap());
+        fixture
     }
     fn fixture() -> Fixture {
         fixture_in(None)

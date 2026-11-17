@@ -1,9 +1,10 @@
 //! Optional reuse of completed, verified fingerprints; never hashes source payloads.
 use super::*;
 use crate::cancelled;
+mod sync;
 use std::{os::unix::fs::MetadataExt, time::Instant};
 
-pub(super) fn from_backup(
+pub(super) fn enrich(
     state: &Store,
     catalog: &Store,
     drive: &crate::Drive,
@@ -22,28 +23,8 @@ pub(super) fn from_backup(
     if !source.queried_change_tracking().unwrap_or(false) || reuse.remaining().is_zero() {
         return Ok(());
     }
-    let Ok(Some((version, path))) = current(state, drive) else {
-        return Ok(());
-    };
-    let transaction = catalog.0.unchecked_transaction()?;
-    let result = backup::read_manifest(
-        &version,
-        &path,
-        cancel,
-        config.catalog_max_bytes,
-        reuse.remaining(),
-        |manifest| reuse.merge(manifest, &format!("backup:{}", version.id)),
-    );
-    match result {
-        Ok(()) => transaction.commit()?,
-        Err(_) => {
-            // Optional enrichment is atomic: unavailable/corrupt/oversized input
-            // or database headroom failure cannot publish unverified fingerprints.
-            transaction.rollback()?;
-            cancelled(cancel)?;
-        }
-    }
-    Ok(())
+    reuse.backup(state, drive, config.catalog_max_bytes)?;
+    reuse.sync(state, drive)
 }
 
 fn current(state: &Store, drive: &crate::Drive) -> Result<Option<(Backup, PathBuf)>> {
@@ -72,6 +53,32 @@ struct Reuse<'a> {
     timeout: Duration,
 }
 impl Reuse<'_> {
+    fn backup(&self, state: &Store, drive: &crate::Drive, bytes: u64) -> Result<()> {
+        let Ok(Some((version, path))) = current(state, drive) else {
+            return Ok(());
+        };
+        let transaction = self.catalog.0.unchecked_transaction()?;
+        let result = backup::read_manifest(
+            &version,
+            &path,
+            self.cancel,
+            bytes,
+            self.remaining(),
+            |manifest| self.merge(manifest, &format!("backup:{}", version.id)),
+        );
+        self.finish(transaction, result)
+    }
+    fn finish(&self, transaction: rusqlite::Transaction<'_>, result: Result<()>) -> Result<()> {
+        match result {
+            Ok(()) => transaction.commit()?,
+            Err(_) => {
+                // Enrichment is optional and atomic, including quota failures.
+                transaction.rollback()?;
+                cancelled(self.cancel)?;
+            }
+        }
+        Ok(())
+    }
     fn remaining(&self) -> Duration {
         self.timeout.saturating_sub(self.started.elapsed())
     }
@@ -82,7 +89,7 @@ impl Reuse<'_> {
             if self.remaining().is_zero() {
                 break;
             }
-            self.import(manifest, scan, entry?)?;
+            self.import(manifest, scan, Path::new(""), None, entry?)?;
         }
         Ok(())
     }
@@ -106,25 +113,49 @@ impl Reuse<'_> {
         }
         Ok(())
     }
-    fn import(&self, manifest: &Store, scan: &str, mut entry: Entry) -> Result<()> {
-        if entry.kind != "file"
+    fn import(
+        &self,
+        manifest: &Store,
+        scan: &str,
+        prefix: &Path,
+        generation: Option<uuid::Uuid>,
+        mut entry: Entry,
+    ) -> Result<bool> {
+        if entry.hash.is_some()
+            || entry.kind != "file"
             || !entry
                 .changed
                 .is_some_and(|(_, nanos)| nanos > 0 && nanos < 1_000_000_000)
         {
-            return Ok(());
+            return Ok(false);
         }
-        let Some(saved) = scan::entry(manifest, scan, &entry.path)? else {
-            return Ok(());
+        let relative = entry
+            .path
+            .strip_prefix(prefix)
+            .map_err(|error| error.to_string())?;
+        // Bound optional row decoding even if the registry contains oversized data.
+        use rusqlite::OptionalExtension;
+        let row: Option<String> = manifest.0.query_row(
+            "SELECT json FROM entries WHERE scan=?1 AND path=?2 AND length(CAST(json AS BLOB))<=65536",
+            rusqlite::params![scan, relative.as_os_str().as_bytes()], |row| row.get(0),
+        ).optional()?;
+        let Some(saved) = row
+            .map(|json| serde_json::from_str::<Entry>(&json))
+            .transpose()?
+        else {
+            return Ok(false);
         };
-        if entry.same_revision(&saved)
+        if generation.is_none_or(|generation| saved.hash_generation == Some(generation))
+            && saved.path == relative
+            && entry.same_revision(&saved)
             && let Some(hash) = saved.hash.filter(|hash| {
                 hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
         {
             entry.hash = Some(hash.to_ascii_lowercase());
             scan::put(self.catalog, "catalog", &entry)?;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 }

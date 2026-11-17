@@ -14,7 +14,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
-| 2.3 | Partial | Watch overflow clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Full-scan fingerprint reuse additionally requires complete watch registration, while named paths retain fresh bounded comparisons. Native lost-event same-size/mtime conflicts and watcher-unavailable recovery pass. Further direct filesystem and reconnect matrices remain. |
+| 2.3 | Partial | Watch overflow clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Full-scan fingerprint reuse additionally requires complete watch registration, while named paths retain fresh bounded comparisons. Native lost-event same-size/mtime conflicts and watcher-unavailable recovery pass. Execution now also enforces per-root cache capabilities, and directory-change fallbacks use fresh scans instead of inheriting named-path coverage. Poisoned-cache controls verify both branches and native coarse-source refusal. Further reconnect matrices remain. |
 | 2.4 | Partial | Persistent collision-safe complete conflict variants tested; provenance and repeat behavior need a full matrix. |
 | 2.5 | Partial | Deletion and delete-versus-edit tests exist; event-loss and cancellation matrices remain. |
 | 2.6 | Partial | Native file/directory name tables verify exact directory entries and bytes, or explicit refusal with originals retained. NTFS3 alternate-stream paths and FAT32/exFAT trailing dots/spaces are refused before installation. Native FAT32 oversized-file refusal passes; link/metadata omissions, alternate mount options and ntfs-3g remain. |
@@ -44,7 +44,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
-| 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses current completed file-backup hashes only with verified manifest/root/full revision and queried-change provenance, without source payload reads. Native FAT32/exFAT/NTFS correctly decline metadata-only hash promotion. Sync hash reuse, older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
+| 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses verified current-backup and enrolled portable sync hashes without source payload reads. Sync reuse binds full revision, subtree, source birth identity, boot/namespace/unique mount lifetime and row generation; legacy/mismatched rows require fresh hashing. Named portable observations refresh proven rows; incoming copies await observation. Native FAT32/exFAT/NTFS decline unsupported promotion and full-scan reuse. Older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
@@ -53,6 +53,78 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Sync fingerprint enrichment checkpoint
+
+Portable full-scan caches now publish versioned source provenance atomically with
+their scan rows. It includes drive/evidence, lossless subtree, filesystem/inode/birth
+identity, boot, complete namespace, unique mount ID and a generated row cohort.
+Only queried-change-capable local sources with a known birth identity qualify.
+The existing scan writer tags freshly verified portable rows; it does not run a
+second tree pass to add markers. Named portable observations update their rows
+under the same proven context. An incoming copy does not inherit the destination's
+old fingerprint. A later fresh observation can make that file eligible.
+
+Catalog enrichment reads one registry snapshot, visits captured entries once and
+finds candidates through ancestor-prefix lookups and existing indexed scan/path
+queries. It checks full revision, canonical relative row path and matching row
+cohort, with at most 512 enrollment candidates, 16 KiB enrollment/provenance rows
+and 64 KiB fingerprint rows. Cancellation and the original catalog time/byte
+budgets remain in force. Optional failure rolls back sync enrichment while retaining
+ordinary metadata and any prior verified backup enrichment. Existing catalog,
+manifest and ordinary state versions stay unchanged; absent cache-row markers
+serialize exactly as before. Markers and provenance live only in operational state.
+
+Legacy/mismatched generations cannot be relabeled: poisoned-digest controls force
+fresh hashing before a new provenance record can be published. Faults in full-scan
+or named-row publication retain completed file effects, the old scan/provenance
+and common baselines; a clean retry performs no needless copy. Missing/future or
+changed provenance, raw subtree names, changed same-size/mtime revisions, oversized
+rows/registries, late malformed rows, backup digest priority and named incoming
+copies have targeted coverage.
+
+Review also found two existing reuse-admission gaps. Named directory/root events
+could fall back to full scans with reuse enabled despite unknown observation
+coverage. Direct full-scan calls could request reuse on coarse/unknown filesystems.
+Fallbacks now take fresh scans, and execution checks each root's cache capability.
+Owned poisoned-cache controls prove these checks rather than relying on timing.
+
+Shared boot/namespace/mount continuity is extracted from the image provider into
+one backend owner (`ebe4e8cb`). Image observations retain their exact flat JSON
+fields, verified by a legacy representation fixture and real image-provider tests.
+Boot identity remains a fixed, bounded, non-consuming procfs read with filesystem
+and no-follow/nonblocking checks.
+
+Final evidence: `/tmp/portable-drive-sync-hashes-backend-verified.log` passes 163
+ordinary backend cases (72 explicit fixtures ignored). The 21 host FUSE provider
+cases pass in `/tmp/portable-drive-sync-hashes-providers.log`. The explicit strace
+case passes for backup and sync capture, with negative/no-read and positive/read
+controls for both; traces are `/tmp/portable-drive-catalog-hash-source-trace-{backup,sync}-{false,true}.log`.
+All-target backend clippy with warnings denied and changed-source rustfmt/whitespace
+checks pass. The final guest report
+`/tmp/portable-drive-vm-sync-hash-providers-verified/report.json` passes all three
+native source profiles, each with coarse-source/generation refusal, union/conflicts,
+deletion policy, catalog exclusion versus full sync/backup inclusion, and real
+authorized imaging/read-only provider lifetime checks. The image parent requires
+its explicit unprivileged denial child marker as before. The known exFAT FUSE
+fractional-time limitation is unchanged.
+
+The earlier combined guest report is intentionally retained as unsuccessful:
+imaging changed the source mount path before later fixed-path fixtures ran, whose
+filesystem guard correctly refused the exposed tmpfs directory. The final command
+runs fixed-path cases first and imaging last. No host mount, attached medium or
+live desktop daemon was used.
+
+Architecture still reports REGRESSION against the original baseline: 4300 clone
+groups versus 4289, 144 cycles versus 143, average CCN 3.48 versus 3.44, max 274
+unchanged and duplication 7.05% versus 7.30%. Clone/cycle counts are unchanged
+from `3a4981b1`, with no new scope hotspot or clone after sharing metadata fallback
+assertions and separating candidate selection from snapshot orchestration. Existing
+scan/reconciliation functions gain the required generation/capability branches;
+those guards bind the new reuse behavior, not parallel algorithms. Report:
+`.fitness/portable-drives-sync-hashes-architecture.json`. Older manifest enrichment,
+uncertain provider revisions, cross-driver precision and the broader feature gates
+remain open; item 6.7 is still Partial.
 
 ## Configurable catalog worker checkpoint
 

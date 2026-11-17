@@ -37,6 +37,9 @@ pub(crate) struct Entry {
     pub special_device: Option<u64>,
     pub inode: u64,
     pub hash: Option<String>,
+    /// Optional operational scan binding; absent in catalogs and legacy rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_generation: Option<uuid::Uuid>,
     #[serde(default)]
     pub changed: Option<(i64, i64)>,
     #[serde(default)]
@@ -77,6 +80,7 @@ impl Entry {
             .then(|| metadata.rdev()),
             inode: metadata.ino(),
             hash: None,
+            hash_generation: None,
             changed: Some((metadata.ctime(), metadata.ctime_nsec())),
             warning: None,
             failure: None,
@@ -116,6 +120,8 @@ pub(crate) struct Limits {
     pub hash_bytes: u64,
     pub exclusions: Vec<PathBuf>,
     pub reuse_scan: Option<String>,
+    pub reuse_generation: Option<uuid::Uuid>,
+    pub capture_generation: Option<uuid::Uuid>,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -130,6 +136,8 @@ impl Default for Limits {
             hash_bytes: u64::MAX,
             exclusions: vec![],
             reuse_scan: None,
+            reuse_generation: None,
+            capture_generation: None,
         }
     }
 }
@@ -213,6 +221,7 @@ pub(super) fn unavailable(path: PathBuf, error: &crate::Error, detailed: bool) -
         special_device: None,
         inode: 0,
         hash: None,
+        hash_generation: None,
         changed: None,
         warning: Some(error.to_string()),
         failure: detailed.then(|| issue(CatalogScanStage::InspectEntry, error)),
@@ -250,7 +259,12 @@ fn collect_entry(
             .map(|id| self::entry(db, id, relative))
             .transpose()?
             .flatten();
-        if let Some(cached) = cached.filter(|old| old.same_revision(&entry)) {
+        if let Some(cached) = cached.filter(|old| {
+            old.same_revision(&entry)
+                && limits
+                    .reuse_generation
+                    .is_none_or(|generation| old.hash_generation == Some(generation))
+        }) {
             entry.hash = cached.hash;
         }
         if entry.hash.is_none() {
@@ -258,6 +272,9 @@ fn collect_entry(
                 crate::Error::SourceChanged("File disappeared during collection".into())
             })?;
         }
+    }
+    if entry.hash.is_some() {
+        entry.hash_generation = limits.capture_generation;
     }
     if excluded {
         entry.kind = "excluded".into();
