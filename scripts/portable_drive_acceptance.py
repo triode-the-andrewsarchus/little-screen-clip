@@ -185,6 +185,59 @@ def exercise_backup_review(session, root):
     assert not status(session.env)['catalogs']
 
 
+def exercise_ram_pending(session, root):
+    env = session.env
+    portable = root / 'portable'
+    ram = None
+    try:
+        drive_menu(session, 'ram-menu')
+        session.observe('ram-action', ['Copy to RAM'])
+        click_word(session, 'ram-action', 'RAM', tree=True)
+        wait_for(lambda: any(item['ready'] for item in status(env)['ram']), 'RAM readiness')
+        dismiss_completion_notice(session, 'ram-completion', 'Copy to RAM')
+        ram = status(env)['ram'][0]
+        ram_path = Path(ram['path'])
+        (ram_path / 'readme.txt').write_text('online RAM edit\n')
+        wait_for(lambda: (portable / 'readme.txt').read_text() == 'online RAM edit\n', 'online writeback')
+        wait_for(lambda: status(env)['ram'][0]['pending'] == {'paths': 0, 'full_check_required': False}, 'acknowledged online edits')
+        session.observe('ram-online', ['RAM:', 'pending changes observed'])
+        right_click(session, 'ram-online', 'RAM:', tree=True)
+        session.observe('ram-online-status', ['Last confirmed drive sync', 'Flush pending changes', 'Save RAM copy elsewhere'])
+        session.click(1050, 210)
+
+        portable.rename(root / 'removed-portable')
+        wait_for(lambda: not status(env)['ram'][0]['connected'], 'offline status')
+        (ram_path / 'readme.txt').write_text('offline RAM edit\n')
+        wait_for(lambda: status(env)['ram'][0]['pending']['paths'] >= 1, 'durable observed offline changes')
+        before = status(env)['ram'][0]
+        session.observe('ram-offline', ['offline', 'pending'])
+        right_click(session, 'ram-offline', 'RAM:', tree=True)
+        session.observe('ram-offline-status', ['Last confirmed drive sync', 'Flush pending changes', 'Save RAM copy elsewhere'])
+        session.click(1050, 210)
+        completed(env, request(env, {'SaveRam': {'session': ram['id'], 'destination': str(root / 'saved')}}))
+        after = status(env)['ram'][0]
+        assert after['last_flushed'] == before['last_flushed']
+        assert after['pending']['paths'] >= 1
+        assert (Path(after['last_saved']['path']) / 'readme.txt').read_text() == 'offline RAM edit\n'
+        dismiss_completion_notice(session, 'ram-export-completion', 'Save RAM copy')
+        session.observe('ram-exported-offline', ['offline', 'pending'])
+        right_click(session, 'ram-exported-offline', 'RAM:', tree=True)
+        session.observe('ram-exported-status', ['Last confirmed drive sync', 'Save RAM copy elsewhere'])
+        session.click(1050, 210)
+
+        (root / 'removed-portable').rename(portable)
+        wait_for(lambda: (portable / 'readme.txt').read_text() == 'offline RAM edit\n', 'reconnected writeback')
+        wait_for(lambda: status(env)['ram'][0]['pending'] == {'paths': 0, 'full_check_required': False}, 'reconnected acknowledgement')
+        assert status(env)['ram'][0]['last_flushed'] >= before['last_flushed']
+        session.observe('ram-reconnected', ['pending changes observed'])
+        right_click(session, 'ram-reconnected', 'RAM:', tree=True)
+        session.observe('ram-reconnected-status', ['Last confirmed drive sync', 'Flush pending changes'])
+        session.click(1050, 210)
+    finally:
+        if ram:
+            completed(env, request(env, {'DiscardRam': {'session': ram['id'], 'confirmed': True}}))
+
+
 def exercise(session, root):
     env = session.env
     session.ocr_regions = [('drive-confirm-ocr.png', (105, 270, 225, 325)), ('drive-dialog-buttons-ocr.png', (105, 230, 305, 380)), ('drive-catalog-menu-ocr.png', (305, 670, 475, 770))]
@@ -441,6 +494,7 @@ def main():
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
         scenarios.add_argument('--catalog-redaction-only', action='store_true')
         scenarios.add_argument('--policy-editor-only', action='store_true')
+        scenarios.add_argument('--ram-pending-only', action='store_true')
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
@@ -459,7 +513,9 @@ def main():
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
         if args.policy_editor_only:
             seed_old_policy_rules(env)
-    if args.policy_editor_only:
+    if args.ram_pending_only:
+        scenario, scope = exercise_ram_pending, 'RAM pending changes and confirmed drive sync across removal, export and reconnect'
+    elif args.policy_editor_only:
         scenario, scope = exercise_policy_editor, 'Whole-drive and folder policy lookup beyond status pagination without resetting saved flags'
     elif args.catalog_redaction_only:
         scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'

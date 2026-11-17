@@ -245,13 +245,10 @@ fn details(ui: &mut Ui, status: &DriveStatus, requests: &mut Vec<DriveRequest>) 
     egui::ScrollArea::vertical().max_height(450.0).show(ui, |ui| {
         for session in &status.ram {
             ui.group(|ui| {
-                ui.label(format!("RAM: {}", display_path(&session.path)));
-                ui.label(format!("Media writeback: {}", session.status));
+                ui.label(ram_description(session));
                 ui.label(session.save_status.as_deref().unwrap_or("No RAM copy saved elsewhere yet"));
                 if let Some(saved) = &session.last_saved {
-                    let date = chrono::DateTime::from_timestamp(saved.completed as i64, 0)
-                        .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| "unknown time".into());
+                    let date = recorded_time(saved.completed);
                     ui.small(format!("{}saved at {date}: {}", if saved.populated { "" } else { "Partial copy " }, display_path(&saved.path)));
                 }
                 ui.small("Saving elsewhere does not flush changes to the removable media.");

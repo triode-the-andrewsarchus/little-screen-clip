@@ -480,7 +480,8 @@ impl Owner {
             for envelope in std::mem::take(&mut self.deferred) {
                 self.operation(envelope);
             }
-            let changes = self.watch.as_mut().map(Watch::changes).unwrap_or_default();
+            let mut changes = self.watch.as_mut().map(Watch::changes).unwrap_or_default();
+            changes.full |= self.watch.is_none();
             let periodic = synchronized.elapsed()
                 >= Duration::from_secs(self.config.sync_interval_seconds.max(1));
             if changes.full {
@@ -489,10 +490,10 @@ impl Owner {
                 self.sync_epoch = self.sync_epoch.wrapping_add(1);
             }
             if periodic || changes.full {
-                self.automatic_changed(Some(&changes.paths), true);
+                self.automatic_changed(&changes, true);
                 synchronized = Instant::now();
             } else if !changes.paths.is_empty() {
-                self.automatic_changed(Some(&changes.paths), false);
+                self.automatic_changed(&changes, false);
             }
             self.reap_ram();
             let retired = self
@@ -879,20 +880,22 @@ impl Owner {
         }
     }
     fn automatic(&mut self) {
-        self.automatic_changed(None, true);
+        let mut changes = crate::watch::Changes::default();
+        changes.full = true;
+        self.automatic_changed(&changes, true);
     }
-    fn automatic_changed(
-        &mut self,
-        paths: Option<&std::collections::HashSet<PathBuf>>,
-        full: bool,
-    ) {
+    fn automatic_changed(&mut self, changes: &crate::watch::Changes, periodic: bool) {
         if self.closing.load(Ordering::Acquire) {
             return;
         }
-        let Ok(full) = self.track_ram_changes(paths, full) else {
+        let Ok(full) = self.track_ram_changes(Some(&changes.paths), changes.full) else {
             return;
         };
-        let paths = if full { None } else { paths };
+        let paths = if periodic || full {
+            None
+        } else {
+            Some(&changes.paths)
+        };
         let Ok(pairs) = self.db.list::<SyncPair>("pair", 0, 1000) else {
             return;
         };
@@ -1394,16 +1397,16 @@ mod tests {
     ) -> RamSession {
         let started = Instant::now();
         loop {
-            if let Some(session) = status(service)
-                .ram
-                .into_iter()
+            let sessions = status(service).ram;
+            if let Some(session) = sessions
+                .iter()
                 .find(|session| session.id == id && predicate(session))
             {
-                return session;
+                return session.clone();
             }
             assert!(
                 started.elapsed() < Duration::from_secs(15),
-                "RAM session {id} did not reach its expected state"
+                "RAM session {id} did not reach its expected state: {sessions:?}"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -2890,6 +2893,17 @@ mod tests {
                     .is_some_and(|pending| pending.paths == 0 && !pending.full_check_required)
         });
         assert!(flushed.last_flushed >= offline.last_flushed);
+        // Routine scans must not repeatedly advertise lost event coverage.
+        for _ in 0..30 {
+            assert!(
+                !status(&service).ram[0]
+                    .pending
+                    .as_ref()
+                    .unwrap()
+                    .full_check_required
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_eq!(
             fs::read(source.join("after-offline-restart")).unwrap(),
             b"still in RAM"

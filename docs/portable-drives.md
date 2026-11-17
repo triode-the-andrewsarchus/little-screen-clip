@@ -17,6 +17,18 @@ Keep `clip-drive-mount` beside `little-clipd`. Catalog mounts use FUSE and `fuse
 
 A completed copy appears as a separate **RAM** entry. Browse and edit that entry to commit locally first; the daemon reconciles those edits back to the connected partition. Ejecting or physically removing the partition leaves the RAM entry accessible. Reconnection compares both copies with the last common state before propagating edits.
 
+The RAM sidebar reports distinct observed paths awaiting reconciliation, including
+renames and removals. These are queued observations rather than an exact count of
+different file contents. Each session tracks at most 4096 names and 1 MiB of path
+bytes. Event loss, exhausted tracking limits or restart shows **Full check
+required** alongside any known pending count. Routine scans still reconcile the
+complete tree without declaring previously covered observations uncertain.
+Offline edits remain queued, including after daemon restart. The RAM entry's menu
+shows the last confirmed drive sync; that timestamp advances only after successful
+reconciliation and a filesystem flush. A sync acknowledges only observations it
+covered, retaining newer edits. Counts are advisory; eject and discard still use
+their independent validation and confirmation flows.
+
 Source inventory, quota admission, formatting and initial mounting run on one retained preparation worker. Independent partitions can continue reconciling during preparation. Quota reloads and further RAM admissions wait for that worker, so they cannot invalidate its reservation. Cancellation retains ownership until preparation actually exits; an already running formatter finishes under its existing process limit before empty setup can be retired. The daemon journals the metadata inventory and private allocation before formatting, then publishes the RAM session and sync enrollment together. Restart cleans only unpublished, identity-checked setup artifacts; published RAM data is retained. Every image is filesystem-checked before exposing its view, including recovery from a crash before the first ready record was committed.
 
 Each RAM view uses a fixed-size image on verified tmpfs, served by the separately packaged `fuse2fs` helper. This bounds allocated bytes and inodes even when an external editor writes to it. The image grows sparsely within its reservation; session admission reserves future growth across existing sessions. Default ceilings are 6 GB and two million inodes per session, 16 GB and four million inodes in total, and eight sessions. Small cards reserve less. Expanded contents and formatting overhead must fit as well. Memory admission additionally reserves each native helper’s 512 MiB address-space limit. Reload refuses quota reductions below retained session reservations.

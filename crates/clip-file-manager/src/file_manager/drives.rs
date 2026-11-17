@@ -49,6 +49,34 @@ fn catalog_description(catalog: &Catalog) -> String {
     text
 }
 
+fn ram_pending_label(session: &RamSession) -> String {
+    match &session.pending {
+        Some(pending) if pending.full_check_required && pending.paths == 0 => {
+            "Full check required".into()
+        }
+        Some(pending) if pending.full_check_required => {
+            format!("{}+ pending · full check", pending.paths)
+        }
+        Some(pending) => format!("{} pending changes observed", pending.paths),
+        None => "Pending changes unknown".into(),
+    }
+}
+
+fn ram_description(session: &RamSession) -> String {
+    let confirmation = session
+        .last_flushed
+        .map(|time| format!("Last confirmed drive sync: {}", recorded_time(time)))
+        .unwrap_or_else(|| "Drive sync not yet confirmed".into());
+    format!(
+        "Drive: {}\nRAM folder: {}\n{}\n{}\n{}",
+        session.drive,
+        display_path(&session.path),
+        ram_pending_label(session),
+        confirmation,
+        session.status
+    )
+}
+
 enum PathAction {
     Directory,
     Backup { drive: String, kind: BackupKind },
@@ -751,7 +779,7 @@ impl FileManager {
                 .drives
                 .iter()
                 .find(|d| d.id == session.drive)
-                .map_or("Portable drive", |d| d.label.as_str());
+                .map_or(session.drive.as_str(), |d| d.label.as_str());
             let response = ui.add(egui::SelectableLabel::new(
                 self.path().starts_with(&session.path),
                 format!(
@@ -762,8 +790,16 @@ impl FileManager {
             if response.clicked() && session.browsable() {
                 open = Some(session.path.clone());
             }
-            response.clone().on_hover_text(&session.status);
-            response.context_menu(|ui| {
+            ui.small(ram_pending_label(&session));
+            response.clone().on_hover_text(ram_description(&session));
+            let mut menu_response = response;
+            menu_response.id = ui.make_persistent_id(("ram-session-menu", &session.id));
+            menu_response.context_menu(|ui| {
+                ui.set_width((ui.ctx().screen_rect().width() - 32.0).clamp(0.0, 400.0));
+                ui.small(ram_description(&session));
+                if let Some(error) = &self.drives.status.ram_pending_error {
+                    ui.label(format!("Pending changes unavailable: {error}"));
+                }
                 if ui
                     .add_enabled(session.browsable(), egui::Button::new("Open"))
                     .clicked()

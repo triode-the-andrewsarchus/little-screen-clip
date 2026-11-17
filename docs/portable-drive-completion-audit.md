@@ -22,7 +22,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
 | 3.2 | Partial | Verified tmpfs path now falls back from the default /tmp to XDG_RUNTIME_DIR and /dev/shm. Explicit disk-backed override refusal is tested; fallback branch still needs an isolated non-tmpfs-/tmp acceptance environment. |
 | 3.3 | Partial | Streaming initial population and incomplete state exist; a second reconciliation after installing watches catches earlier edits. Deterministic mid-population change/failure injection remains. |
-| 3.4 | Partial | RAM sidebar and separate persisted RAM-save/media-flush state exist. Pending counts and final UI acceptance remain. |
+| 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
 | 3.5 | Partial | Removal/reconnect conflict fixture passes; interrupted media-write retention needs injected failure coverage. |
 | 3.6 | Partial | Eject/flush/save/discard exist; prove waiting and dirty-session lifetime behavior. |
 | 3.7 | Open | Fixed-size tmpfs images now enforce ongoing byte/inode growth, including external writers. Native ENOSPC for bytes/inodes, live-owner refusal, open-file graceful restart and daemon restart/removal tests pass. Forced exit after directory fsync and cancelled-initial-copy resume are tested. Unflushed-kill/underlying-tmpfs exhaustion/pressure matrix remains. |
@@ -50,9 +50,67 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE and Btrfs tests pass; authorized image-loop tests remain. |
-| 7.5 | Partial | Dark/light private acceptance passed; add pending-count/resource/coverage/recovery flows as completed. |
+| 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup and RAM byte/inode exhaustion tests pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, pressure and underlying-tmpfs exhaustion remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## RAM pending-status checkpoint
+
+Commit `200f1174` adds a bounded SQLite pending-path ledger, retained sync
+checkpoints and a filesystem flush before drive confirmation. Distinct raw path
+names, including removals and renames, retain at most 4096 entries/1 MiB per
+session. Unknown coverage has its own full-check marker. Updating a queued name
+assigns a new monotonic sequence; full and partial acknowledgements cannot consume
+newer edits, and replay after an empty ledger cannot clear newly inserted work.
+Restart preserves observed names and requires a complete comparison. Recovered
+offline RAM mounts receive watches even while their source is absent. Persistence
+errors make counts explicitly uncertain until a successful full-check admission.
+
+Files shows observed counts and the last confirmed drive reconciliation, with
+drive identity and RAM path in its menu/Jobs description. Saving elsewhere retains
+its separate export history. Routine scans still schedule complete reconciliation
+without repeatedly declaring coverage lost. Unavailable watches, registration/event
+loss and inventory changes retain conservative full-check behavior. The UI run
+exposed the earlier routine-scan warning problem; the native fixture now samples
+multiple periodic scans after reconnect and verifies that clean coverage stays clear.
+
+The real tmpfs/FUSE lifecycle test passes with offline edits, durable export,
+offline shutdown/restart, another observed RAM edit after recovery, reconnect and
+graceful shutdown with an open file. Export leaves both the media baseline and
+drive-confirmation timestamp unchanged. Reconciliation clears only its covered
+observations and confirms the drive after the filesystem flush. Raw-name, byte
+budget, count budget, partial/full acknowledgement and stale-checkpoint replay
+fixtures pass. Missing legacy fields imply neither a clean queue nor a confirmed
+drive flush.
+
+Private dark/light `--ram-pending-only` runs pass, with PNGs inspected. They
+exercise actual Copy to RAM controls, online writeback, offline counts/disabled
+flush, durable export retaining pending work, and clean reconnect. Reports:
+`/tmp/portable-drive-ram-pending-accepted-dark/report.json` and
+`/tmp/portable-drive-ram-pending-accepted-light/report.json`. Test OCR uses the
+existing `/tmp/little-clip-tessdata` through `TESSDATA_PREFIX`; the first run without
+it failed before exercising RAM controls. The harness closes context menus with an
+outside click, matching egui's context-menu behavior.
+
+Validation: backend 91 passed/28 explicit fixtures ignored, plus the selected native
+lifecycle fixture; Files 982 passed/six ignored; core 452 passed/three ignored;
+CLI eight, daemon 35, selected package integrations and twelve core doctests pass.
+Final targeted Files status/control tests, selected-package all-target clippy with
+warnings denied, application/helper builds, rendered core API documentation,
+Python compilation, repository formatting and whitespace checks pass. Logs:
+`/tmp/portable-drive-ram-pending-{packages,backend-scheduling,native-scheduling-final,ui-logic-accepted,clippy-final,docs,format-final}.log`.
+
+The feature-wide architecture gate remains REGRESSION against the original
+baseline: duplication 7.30% to 7.15%, average CCN 3.44 to 3.48, maximum 274,
+twelve net new clone groups and reported cycles 143 to 144. The RAM checkpoint
+adds no net clone group or reported hotspot after separating one-path budget
+admission from batch persistence and keeping tracking-error handling in its owner.
+The reported extra self-cycle remains the previously documented admission-fixture
+name collision. Broader architecture findings remain open. Raw report:
+`.fitness/portable-drives-ram-pending-accepted-architecture.json`.
+
+This completes item 3.4; it does not establish interrupted media-write safety,
+dirty-discard/eject waiting or memory-pressure behavior under items 3.5–3.7.
 
 ## Catalog exclusion boundary checkpoint
 

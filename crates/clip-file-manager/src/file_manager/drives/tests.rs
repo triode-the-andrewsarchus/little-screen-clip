@@ -1,6 +1,40 @@
 //! Read-only reply handoff tests never start IPC or open the fixture device paths.
 use super::*;
 
+#[test]
+fn ram_status_distinguishes_observed_changes_full_checks_and_export_history() {
+    let mut session: RamSession = serde_json::from_value(serde_json::json!({
+        "identity": {"device":1,"inode":2,"mount":3},
+        "id":"owned", "drive":"portable", "path":"/tmp/owned",
+        "ready":true, "connected":false, "status":"Retained offline"
+    }))
+    .unwrap();
+    assert_eq!(ram_pending_label(&session), "Pending changes unknown");
+    assert!(ram_description(&session).contains("Drive: portable\nRAM folder: /tmp/owned"));
+    assert!(ram_description(&session).contains("Drive sync not yet confirmed"));
+    session.last_saved = Some(RamSave {
+        path: "/tmp/export".into(),
+        completed: 123,
+        populated: true,
+    });
+    assert!(ram_description(&session).contains("Drive sync not yet confirmed"));
+    session.pending = Some(RamPending {
+        paths: 0,
+        full_check_required: true,
+    });
+    assert_eq!(ram_pending_label(&session), "Full check required");
+    session.pending.as_mut().unwrap().paths = 7;
+    assert_eq!(ram_pending_label(&session), "7+ pending · full check");
+    session.pending.as_mut().unwrap().full_check_required = false;
+    assert_eq!(ram_pending_label(&session), "7 pending changes observed");
+    session.pending.as_mut().unwrap().paths = 0;
+    session.last_flushed = Some(123);
+    assert_eq!(ram_pending_label(&session), "0 pending changes observed");
+    assert!(ram_description(&session).contains("Last confirmed drive sync:"));
+    session.last_flushed = Some(u64::MAX);
+    assert!(ram_description(&session).contains("unknown time"));
+}
+
 fn policy_request(relative: &str) -> DriveRequest {
     DriveRequest::GetRule {
         drive: "owned".into(),
