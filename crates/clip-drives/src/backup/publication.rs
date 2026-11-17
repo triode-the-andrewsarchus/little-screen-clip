@@ -124,6 +124,7 @@ fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
         || header.evidence != backup.evidence
         || header.sha256 != backup.sha256
         || header.source_size != backup.source_size
+        || header.fidelity != backup.fidelity
     {
         return Err("Manifest does not describe the prepared backup".into());
     }

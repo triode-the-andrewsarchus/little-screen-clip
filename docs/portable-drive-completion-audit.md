@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Partial | Per-file checks now recollect changed files within three attempts, update the manifest to the installed revision and preserve current on repeated changes, cancellation or type replacement. Same-size/preserved-mtime races pass on real FAT32/exFAT/NTFS guest mounts; real Btrfs extent sharing and old bytes remain intact. Review and completion text disclose live collection rather than an atomic source snapshot. Metadata fidelity/omission records and optional quiesced read-only collection remain. |
+| 4.3 | Partial | Bounded per-file retries and installed revisions pass native FAT32/exFAT/NTFS races. Ownership, modes, original access/modification dates and exposed xattrs/ACLs now have verified restoration and checksummed per-path fidelity records; native targets disclose unsupported/coerced values. Symlink descriptor/replacement and mount boundaries pass guest checks. Btrfs metadata-only versions write zero payload bytes and retain earlier attributes. Hard-link relationships are recorded but materialized independently with explicit omissions; relationship preservation and optional quiesced read-only collection remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -53,6 +53,71 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Backup metadata and fidelity reports
+
+File collection now retains source metadata objects while capturing exposed
+ownership, modes, access/modification dates and raw extended attributes, including
+POSIX ACLs. It checks both installed contents and actual destination metadata.
+Directory/root fields are restored after children, timestamps after verification
+reads, with a final filesystem flush before publication. Attribute-only changes
+on coarse/uncertain sources trigger the existing bounded collection retry.
+Bytes installed by an earlier attempt remain included in write accounting.
+Inherited/stale destination attributes are removed only after complete source
+name coverage. Existing destination hard links are broken before changing fields,
+so one restored path cannot silently change another path's metadata.
+
+Each manifest has a raw-path-keyed `backup_metadata` table containing JSON source
+facts and typed per-field omissions. The `DriveBackup.fidelity` summary is optional
+for compatibility with older versions and images. Counts distinguish restored
+paths with omissions, unique omitted fields/attribute names and incomplete source
+attribute observations. The manifest header and registry summary must agree.
+Attributes use bounded buffers and a per-entry budget (1024 attributes, up to
+1 MiB); unavailable/uncaptured facts remain explicit. Original ctime, creation,
+inode and link facts are recorded observations, not promises to reproduce those
+filesystem identities. Initial access observations are retained while the inode
+is unchanged. The manifest also records whether the source mount was read-only
+when metadata collection began; this does not implement selectable quiescence.
+
+Retained symlink descriptors use controlled descriptor-backed metadata views,
+without following the user's link target. Guest tests replace both regular and
+symlink names while descriptors remain held, then verify raw trusted attributes,
+ownership and timestamps affect only the held original. Replacement and referent
+canaries remain intact. A second guest test exceeds the per-entry attribute budget
+and verifies complete payload plus disclosed partial metadata. Both pass in
+`/tmp/portable-drive-vm-backup-metadata-descriptor-final/report.json`.
+
+The native module now passes thirteen cases on each real FAT32, exFAT and NTFS3
+guest mount (39 total):
+`/tmp/portable-drive-vm-backup-metadata-native-verified/report.json`. New cases
+check destination ownership/mode/date coercion and missing attributes, attribute-only
+source recollection where writable attributes exist, and rejection of a symlink
+inode bound from outside the selected hierarchy. FAT32/exFAT explicitly report
+unavailable writable user attributes; those branches do not claim a round trip.
+The first symlink-bind run correctly refused backup but failed fixture cleanup
+because unmount followed the dangling referent. The fixture now unmounts only
+its captured identity with `UMOUNT_NOFOLLOW`, and verifies the original portable
+file reappears unchanged. Evidence is confined to the disposable guest.
+
+The expanded real Btrfs case verifies an attribute-only third file version writes
+zero payload bytes, removes the obsolete attribute and retains earlier versions'
+values. Shared file/image extents and the 4 KiB image delta still pass:
+`/tmp/portable-drive-backup-metadata-btrfs-final.log`. Backend tests pass 101 cases
+with 43 explicit fixtures ignored. Core drive model compatibility tests pass four
+cases and Files drive-controller tests pass fourteen; these are not rendered UI
+acceptance runs. Logs: `/tmp/portable-drive-backup-metadata-backend-final.log`,
+`/tmp/portable-drive-backup-metadata-core.log` and
+`/tmp/portable-drive-backup-metadata-files-ui.log`. Selected all-target clippy and
+affected-crate formatting pass with the `backup-metadata-*-final.log` prefix.
+
+Shared manifest verification and refusal assertions remove new test duplication.
+The checkpoint introduces no metadata hotspot or additional clone group over the
+preceding committed checkpoint: 4300 clones versus baseline 4289, duplication
+7.12% versus 7.30%, average CCN 3.48 versus 3.44, maximum 274 unchanged and reported
+cycles 144 versus 143. Selected fields are in
+`.fitness/portable-drives-backup-metadata-architecture.json`. The feature-wide
+REGRESSION gate remains open. Item 4.3 stays Partial: hard-link preservation and
+selectable quiesced read-only collection are still required.
 
 ## Final-file mount boundaries
 

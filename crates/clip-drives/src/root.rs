@@ -18,6 +18,8 @@ pub(crate) struct CopySpec<'a> {
     pub source_hash: Option<&'a str>,
     pub destination_hash: Option<&'a str>,
     pub delta: bool,
+    /// Restore mode/mtime here; false when the caller owns richer restoration.
+    pub basic_metadata: bool,
 }
 
 pub(crate) struct Root {
@@ -284,6 +286,7 @@ impl Root {
             source_hash,
             destination_hash: expected,
             delta,
+            basic_metadata,
         } = spec;
         cancelled(cancel)?;
         from.validate()?;
@@ -337,12 +340,14 @@ impl Root {
         if let (Some(old), Some(source)) = (&old, &old_source) {
             source.check_file(old)?;
         }
-        temporary
-            .as_file()
-            .set_permissions(metadata.permissions())?;
-        temporary
-            .as_file()
-            .set_times(fs::FileTimes::new().set_modified(metadata.modified()?))?;
+        if basic_metadata {
+            temporary
+                .as_file()
+                .set_permissions(metadata.permissions())?;
+            temporary
+                .as_file()
+                .set_times(fs::FileTimes::new().set_modified(metadata.modified()?))?;
+        }
         temporary.as_file().sync_all()?;
         self.validate()?;
         from.validate()?;
@@ -584,6 +589,7 @@ mod tests {
                     source_hash: None,
                     destination_hash: None,
                     delta: false,
+                    basic_metadata: true,
                 },
                 &cancel,
             )
@@ -600,7 +606,8 @@ mod tests {
                         destination: name,
                         source_hash: None,
                         destination_hash: None,
-                        delta: false
+                        delta: false,
+                        basic_metadata: true,
                     },
                     &cancel
                 )
@@ -616,6 +623,7 @@ mod tests {
                     source_hash: None,
                     destination_hash: Some(&hash),
                     delta: true,
+                    basic_metadata: true,
                 },
                 &cancel,
             )

@@ -20,6 +20,7 @@ use std::{
 };
 
 mod collection;
+mod metadata;
 mod publication;
 pub(crate) use publication::recover as recover_publications;
 
@@ -146,6 +147,7 @@ pub(crate) fn files(
         &scan_id,
         &Limits {
             hashes: false,
+            access_dates: true,
             ..Default::default()
         },
         cancel,
@@ -154,6 +156,7 @@ pub(crate) fn files(
     if !coverage.complete {
         return Err(format!("Incomplete source: {}", coverage.message).into());
     }
+    let mut metadata = metadata::Report::new(&manifest.db, source)?;
     let written = collection::Collection {
         db: &manifest.db,
         id: &scan_id,
@@ -162,15 +165,15 @@ pub(crate) fn files(
         cancel,
         incremental,
     }
-    .populate(&mut progress)?;
+    .populate(&mut metadata, &mut progress)?;
     // Remove only entries absent from the complete source manifest in this private version.
     if prior.is_some() && incremental {
         remove_obsolete(&manifest.db, &scan_id, &target, cancel)?;
     }
     source.validate()?;
     target.validate()?;
-    finish_directories(&manifest.db, &scan_id, &target, cancel)?;
-    apply_directory_metadata(&target, &root_metadata)?;
+    metadata.finish_directories(source, &target, &scan_id, cancel)?;
+    target.flush()?;
     manifest.db.put("collection", "completed_at", &now())?;
     if incremental {
         // Property arguments follow the path, unlike subvolume commands.
@@ -189,6 +192,7 @@ pub(crate) fn files(
         }
     }
     let backup = Backup {
+        fidelity: Some(metadata.summary),
         manifest: None,
         manifest_sha256: None,
         sha256: None,
@@ -494,6 +498,7 @@ pub(crate) fn image_from(
     let name = format!("{}-{id}.img", now());
     let path = parent.path.join(&name);
     let backup = Backup {
+        fidelity: None,
         manifest: None,
         manifest_sha256: None,
         sha256: Some(digest),
@@ -585,6 +590,7 @@ fn copy_image(
 mod tests {
     use super::*;
     mod collection;
+    mod metadata;
     fn drive(mount: Option<PathBuf>) -> Drive {
         Drive {
             id: "part:test".into(),
@@ -1028,6 +1034,20 @@ mod btrfs_tests {
                 || Ok(()),
             )
         };
+        rustix::fs::setxattr(
+            data.join("large"),
+            "user.version",
+            b"first",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .unwrap();
+        rustix::fs::setxattr(
+            data.join("large"),
+            "user.removed",
+            b"old",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .unwrap();
         let first = make_files().unwrap();
         bytes[4096..8192].fill(42);
         fs::write(data.join("large"), &bytes).unwrap();
@@ -1036,6 +1056,37 @@ mod btrfs_tests {
         assert!(second.bytes_written <= 256 * 1024);
         assert_ne!(fs::read(first.path.join("large")).unwrap(), bytes);
         assert_eq!(fs::read(second.path.join("large")).unwrap(), bytes);
+        rustix::fs::setxattr(
+            data.join("large"),
+            "user.version",
+            b"metadata-only",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .unwrap();
+        rustix::fs::removexattr(data.join("large"), "user.removed").unwrap();
+        let third = make_files().unwrap();
+        assert_eq!(third.bytes_written, 0);
+        let mut attribute = [0; 64];
+        let count =
+            rustix::fs::getxattr(third.path.join("large"), "user.version", &mut attribute[..])
+                .unwrap();
+        assert_eq!(&attribute[..count], b"metadata-only");
+        assert_eq!(
+            rustix::fs::getxattr(third.path.join("large"), "user.removed", &mut attribute[..]),
+            Err(rustix::io::Errno::NODATA)
+        );
+        let count = rustix::fs::getxattr(
+            second.path.join("large"),
+            "user.version",
+            &mut attribute[..],
+        )
+        .unwrap();
+        assert_eq!(&attribute[..count], b"first");
+        let count =
+            rustix::fs::getxattr(first.path.join("large"), "user.removed", &mut attribute[..])
+                .unwrap();
+        assert_eq!(&attribute[..count], b"old");
+        assert_eq!(third.fidelity.as_ref().unwrap().omitted_fields, 0);
         let source = File::open(data.join("large")).unwrap();
         let image1 = make_image(&source).unwrap();
         bytes[1024 * 1024..1024 * 1024 + 4096].fill(19);
@@ -1050,6 +1101,7 @@ mod btrfs_tests {
             .args(["filesystem", "du", "--raw", "--summarize"])
             .arg(&first.path)
             .arg(&second.path)
+            .arg(&third.path)
             .arg(&image1.path)
             .arg(&image2.path)
             .run()

@@ -20,6 +20,8 @@ pub use service::Service;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
+    SourceChanged(String),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Sql(#[from] rusqlite::Error),

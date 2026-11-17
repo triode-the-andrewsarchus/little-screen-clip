@@ -61,6 +61,7 @@ pub(crate) fn capture(
         depth: config.catalog_max_depth,
         timeout: Duration::from_secs(config.catalog_timeout_seconds),
         hashes: false,
+        access_dates: false,
         exclusions,
         reuse_scan: None,
     };

@@ -2,6 +2,7 @@
 use super::*;
 use scan::Entry;
 use serde::{Deserialize, Serialize};
+use std::os::unix::fs::MetadataExt;
 
 const ATTEMPTS: u8 = 3;
 
@@ -22,7 +23,11 @@ pub(super) struct Collection<'a> {
 }
 
 impl Collection<'_> {
-    pub fn populate(&self, progress: &mut impl FnMut(u64, u64)) -> Result<u64> {
+    pub fn populate(
+        &self,
+        metadata: &mut metadata::Report<'_>,
+        progress: &mut impl FnMut(u64, u64),
+    ) -> Result<u64> {
         self.db
             .put("collection", "per_file_attempt_limit", &ATTEMPTS)?;
         let mut written = 0;
@@ -31,15 +36,19 @@ impl Collection<'_> {
         for entry in scan::Cursor::new(self.db, self.id) {
             let entry = entry?;
             cancelled(self.cancel)?;
-            let (collected, bytes, attempts) = if entry.kind == "directory" {
+            if entry.kind == "directory" {
                 let collected = self.observe(&entry, false)?;
                 prepare_entry(self.db, self.target, &collected, self.cancel)?;
                 self.target.ensure_directory(&collected.path)?;
-                (collected, 0, 1)
-            } else {
-                self.collect(&entry, &mut || progress(count, written))?
-            };
+                count += 1;
+                progress(count, written);
+                continue;
+            }
+            let (collected, bytes, attempts, snapshot) =
+                self.collect(&entry, &mut || progress(count, written))?;
+            let transaction = self.db.0.unchecked_transaction()?;
             scan::put(self.db, self.id, &collected)?;
+            metadata.record(&collected, snapshot)?;
             if attempts > 1 {
                 retried += 1;
                 self.db.put(
@@ -51,6 +60,7 @@ impl Collection<'_> {
                     },
                 )?;
             }
+            transaction.commit()?;
             written += bytes;
             count += 1;
             progress(count, written);
@@ -60,28 +70,38 @@ impl Collection<'_> {
     }
 
     fn observe(&self, expected: &Entry, hashes: bool) -> Result<Entry> {
-        let observed = scan::observe(self.source, &expected.path, hashes, u64::MAX, self.cancel)?
-            .ok_or("Source disappeared during backup collection")?;
+        let mut observed =
+            scan::observe(self.source, &expected.path, hashes, u64::MAX, self.cancel)?
+                .ok_or("Source disappeared during backup collection")?;
         if observed.kind != expected.kind {
             return Err("Source entry changed type; restart backup collection".into());
         }
+        observed.retain_accessed(expected);
         Ok(observed)
     }
 
-    fn collect(&self, expected: &Entry, progress: &mut impl FnMut()) -> Result<(Entry, u64, u8)> {
+    fn collect(
+        &self,
+        expected: &Entry,
+        progress: &mut impl FnMut(),
+    ) -> Result<(Entry, u64, u8, metadata::Snapshot)> {
         let mut attempt = 0;
+        let mut written = 0;
         loop {
             attempt += 1;
             cancelled(self.cancel)?;
             let mut entry = self.observe(expected, false)?;
-            let result = self.attempt(&mut entry, progress);
+            let result = self.attempt(&mut entry, progress, &mut written);
             match result {
-                Ok(bytes) => return Ok((entry, bytes, attempt)),
+                Ok(snapshot) => return Ok((entry, written, attempt, snapshot)),
                 Err(error) => {
                     cancelled(self.cancel)?;
                     self.source.validate()?;
                     self.target.validate()?;
-                    if attempt == ATTEMPTS || !self.source_changed(&entry)? {
+                    if attempt == ATTEMPTS
+                        || !(matches!(error, crate::Error::SourceChanged(_))
+                            || self.source_changed(&entry)?)
+                    {
                         return Err(format!(
                             "Could not collect {} after {attempt} attempt(s); previous backup retained: {error}",
                             expected.path.display()
@@ -92,17 +112,29 @@ impl Collection<'_> {
         }
     }
 
-    fn attempt(&self, entry: &mut Entry, progress: &mut impl FnMut()) -> Result<u64> {
+    fn attempt(
+        &self,
+        entry: &mut Entry,
+        progress: &mut impl FnMut(),
+        written: &mut u64,
+    ) -> Result<metadata::Snapshot> {
+        if entry.kind == "file" {
+            self.target.check_file_size(entry.size)?;
+        }
+        let mut snapshot = metadata::Snapshot::capture(self.source, entry, self.cancel)?;
         *entry = self.observe(entry, true)?;
+        snapshot.check(self.source, entry, self.cancel)?;
         progress();
         cancelled(self.cancel)?;
         prepare_entry(self.db, self.target, entry, self.cancel)?;
-        let written = self.install(entry)?;
+        *written += self.install(entry)?;
+        snapshot.restore(self.target, entry, self.cancel)?;
+        snapshot.check(self.source, entry, self.cancel)?;
         let after = self.observe(entry, false)?;
         if !entry.same_revision(&after) || entry.link != after.link {
             return Err("Source changed during backup collection".into());
         }
-        Ok(written)
+        Ok(snapshot)
     }
 
     fn source_changed(&self, entry: &Entry) -> Result<bool> {
@@ -133,10 +165,23 @@ impl Collection<'_> {
         };
         if entry.kind == "file"
             && old.as_ref().and_then(|old| old.hash.as_ref()) == entry.hash.as_ref()
+            && self.target.input(&entry.path)?.metadata()?.nlink() == 1
         {
-            let file = self.target.input(&entry.path)?;
-            apply_metadata(&file, entry)?;
             return Ok(0);
+        }
+        if entry.kind == "file" {
+            return self.target.copy(
+                self.source,
+                crate::root::CopySpec {
+                    source: &entry.path,
+                    destination: &entry.path,
+                    source_hash: entry.hash.as_deref(),
+                    destination_hash: old.as_ref().and_then(|entry| entry.hash.as_deref()),
+                    delta: self.incremental,
+                    basic_metadata: false,
+                },
+                self.cancel,
+            );
         }
         sync::install(
             self.source,

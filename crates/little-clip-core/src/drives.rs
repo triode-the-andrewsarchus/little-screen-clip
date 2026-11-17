@@ -509,6 +509,25 @@ pub fn valid_relative(path: &std::path::Path) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_backups_do_not_imply_verified_metadata_and_new_counts_round_trip() {
+        let mut backup: DriveBackup = serde_json::from_value(serde_json::json!({
+            "id":"saved", "drive":"part:portable", "evidence":"observed",
+            "kind":"Files", "path":"/backup/version", "created":123,
+            "incremental":false, "bytes_written":7, "source_size":128
+        }))
+        .unwrap();
+        assert_eq!(backup.fidelity, None);
+        backup.fidelity = Some(BackupFidelity {
+            entries: 4,
+            entries_with_omissions: 2,
+            omitted_fields: 3,
+            source_attributes_unavailable: 1,
+        });
+        let recovered: DriveBackup =
+            serde_json::from_slice(&serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert_eq!(recovered.fidelity, backup.fidelity);
+    }
+    #[test]
     fn legacy_catalog_records_have_no_implied_redaction_or_pending_work() {
         let catalog: Catalog = serde_json::from_value(serde_json::json!({
             "id":"saved", "drive":"portable", "evidence":"observed", "label":"Card",
@@ -675,6 +694,9 @@ pub enum RecoveryCause {
 /// A completed version; image mounts are explicit and read-only.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DriveBackup {
+    /// Observed file-copy fidelity; absent for images and older version records.
+    #[serde(default)]
+    pub fidelity: Option<BackupFidelity>,
     #[serde(default, with = "crate::path_serde::optional")]
     pub manifest: Option<PathBuf>,
     #[serde(default)]
@@ -699,6 +721,15 @@ pub struct DriveBackup {
     pub revision: Option<Vec<u8>>,
     #[serde(default)]
     pub identity: Option<StorageIdentity>,
+}
+
+/// Counts from the detailed, per-path metadata report in a file backup manifest.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupFidelity {
+    pub entries: u64,
+    pub entries_with_omissions: u64,
+    pub omitted_fields: u64,
+    pub source_attributes_unavailable: u64,
 }
 
 /// Persistent filesystem/object evidence, independent of transient kernel mount IDs.

@@ -203,6 +203,7 @@ fn backup_review(
         );
     } else {
         ui.label("Files are checked as they are copied. A writable source can change during the backup, so files may represent different moments. Files that keep changing stop the backup after three attempts.");
+        ui.small("Metadata the destination cannot preserve is recorded in the manifest and reported with the job result.");
     }
     ui.checkbox(
         remember_destination,

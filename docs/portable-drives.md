@@ -99,6 +99,35 @@ Each completed version has a checksummed SQLite manifest retaining captured path
 
 File backups copy ordinary files, hierarchy, available modes and timestamps. A writable source is collected with per-file fingerprints and revision checks rather than an atomic source-filesystem snapshot. Changed files get up to three collection attempts; a file that keeps changing stops publication and leaves the previous backup current. The manifest records the installed revisions, collection times and retried paths, including raw Unix names. Files can represent different moments, and paths added after enumeration may require another backup. A partition image captures the entire selected partition, including unused sectors. Imaging flushes enrolled changes and unmounts the partition before requesting exclusive read access. A busy partition or declined authentication leaves an actionable failed job.
 
+File backups also capture exposed ownership, modes, access/modification times and
+extended attributes, including POSIX ACLs. Restoration verifies the destination's
+actual values; unsupported fields, timestamp rounding and permission failures
+produce per-path omissions in the checksummed SQLite manifest. The job result
+reports affected paths, omitted fields and paths whose source attributes could
+not be completely observed. A completed payload backup can therefore carry
+metadata warnings. Older backups have unknown fidelity, rather than an implied
+clean report.
+
+The optional `backup_metadata` table keys JSON facts by raw relative Unix path
+bytes (an empty path represents the source root). It records raw attribute
+names/values, source link counts, observed creation times, original access times
+and typed omissions with errno when available. Source ownership, inode, device,
+mode and change/modification times remain in the inventory records. Change and
+creation times are historical observations; they are not recreated destination
+timestamps. Access times use the initial inventory observation while the source
+inode remains the same, before backup reads alter it. Symlink operations retain
+the link inode and never restore metadata through its user-provided target.
+
+Attribute collection is bounded to 1024 attributes and up to 1 MiB per path,
+with 64 KiB name-list/value buffers. Incomplete observations are disclosed.
+Unobserved attribute names do not authorize deletion of destination attributes.
+Coarse or uncertain source timestamps require another attribute comparison
+during collection. Btrfs metadata-only versions share unchanged payload blocks
+and retain earlier versions' attributes. Hard-linked source paths currently
+become independent files, with an explicit relationship omission and original
+inode/link facts retained. Preserving those relationships and a selectable
+quiesced read-only collection mode remain unfinished.
+
 The source Drive record in each new manifest includes observed partition-layout
 facts: partition number, start sector and checked byte offset, logical sector
 size, type, table label/flags, and the immediate containing table's type and

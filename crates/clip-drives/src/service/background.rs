@@ -199,15 +199,23 @@ impl Owner {
                             version
                         }
                     };
+                    let fidelity = version.fidelity.as_ref().map(|report| format!(
+                        "; metadata omissions: {} field(s) across {} entries; source attribute discovery unavailable/incomplete for {} entries; details: {}",
+                        report.omitted_fields,
+                        report.entries_with_omissions,
+                        report.source_attributes_unavailable,
+                        version.manifest.as_deref().unwrap_or(&version.path).display(),
+                    )).unwrap_or_default();
                     Ok(format!(
-                        "Backup completed: {} ({} bytes written){}",
+                        "Backup completed: {} ({} bytes written){}{}",
                         version.path.display(),
                         version.bytes_written,
                         if version.kind == BackupKind::Files {
                             "; per-file verified collection, not an atomic source snapshot"
                         } else {
                             ""
-                        }
+                        },
+                        fidelity
                     ))
                 }
                 DriveRequest::Catalog { .. } => {

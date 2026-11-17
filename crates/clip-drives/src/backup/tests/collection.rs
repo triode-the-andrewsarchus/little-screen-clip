@@ -3,7 +3,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 impl FileFixture {
     /// Edits after fingerprint capture, while the private version is still unpublished.
-    fn edit_before_copy(&self, mut edit: impl FnMut(u64)) -> (Result<Backup>, u64) {
+    pub(super) fn edit_before_copy(&self, mut edit: impl FnMut(u64)) -> (Result<Backup>, u64) {
         let mut attempts = 0;
         let result = self.backup(|count, _| {
             if count == 0 {

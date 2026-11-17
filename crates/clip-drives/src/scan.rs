@@ -23,6 +23,8 @@ pub(crate) struct Entry {
     pub modified: i64,
     pub nanos: i64,
     pub mode: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessed: Option<(i64, i64)>,
     #[serde(default)]
     pub uid: Option<u32>,
     #[serde(default)]
@@ -38,6 +40,34 @@ pub(crate) struct Entry {
     pub link: Option<PathBuf>,
 }
 impl Entry {
+    pub fn from_metadata(relative: &Path, metadata: &fs::Metadata) -> Self {
+        Self {
+            path: relative.into(),
+            kind: if metadata.is_dir() {
+                "directory"
+            } else if metadata.is_file() {
+                "file"
+            } else if metadata.file_type().is_symlink() {
+                "symlink"
+            } else {
+                "special"
+            }
+            .into(),
+            size: metadata.len(),
+            modified: metadata.mtime(),
+            nanos: metadata.mtime_nsec(),
+            mode: metadata.mode(),
+            accessed: Some((metadata.atime(), metadata.atime_nsec())),
+            uid: Some(metadata.uid()),
+            gid: Some(metadata.gid()),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            hash: None,
+            changed: Some((metadata.ctime(), metadata.ctime_nsec())),
+            warning: None,
+            link: None,
+        }
+    }
     pub fn same_revision(&self, other: &Self) -> bool {
         self.kind == other.kind
             && self.device == other.device
@@ -51,6 +81,12 @@ impl Entry {
             && self.uid == other.uid
             && self.gid == other.gid
     }
+    /// Retains the observation from before our inventory/hash reads changed atime.
+    pub fn retain_accessed(&mut self, previous: &Self) {
+        if self.device == previous.device && self.inode == previous.inode {
+            self.accessed = previous.accessed.or(self.accessed);
+        }
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Limits {
@@ -59,6 +95,7 @@ pub(crate) struct Limits {
     pub depth: usize,
     pub timeout: Duration,
     pub hashes: bool,
+    pub access_dates: bool,
     pub hash_bytes: u64,
     pub exclusions: Vec<PathBuf>,
     pub reuse_scan: Option<String>,
@@ -71,6 +108,7 @@ impl Default for Limits {
             depth: 256,
             timeout: Duration::MAX,
             hashes: true,
+            access_dates: false,
             hash_bytes: u64::MAX,
             exclusions: vec![],
             reuse_scan: None,
@@ -108,31 +146,7 @@ pub(crate) fn observe(
     let Some(metadata) = root.metadata(relative)? else {
         return Ok(None);
     };
-    let mut entry = Entry {
-        path: relative.into(),
-        kind: if metadata.is_dir() {
-            "directory"
-        } else if metadata.is_file() {
-            "file"
-        } else if metadata.file_type().is_symlink() {
-            "symlink"
-        } else {
-            "special"
-        }
-        .into(),
-        size: metadata.len(),
-        modified: metadata.mtime(),
-        nanos: metadata.mtime_nsec(),
-        mode: metadata.mode(),
-        uid: Some(metadata.uid()),
-        gid: Some(metadata.gid()),
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        hash: None,
-        changed: Some((metadata.ctime(), metadata.ctime_nsec())),
-        warning: None,
-        link: None,
-    };
+    let mut entry = Entry::from_metadata(relative, &metadata);
     if metadata.is_file() && hashes {
         entry.hash = Some(root.digest(relative, max_bytes, cancel)?);
         let after = root.metadata(relative)?.ok_or("Hashed file disappeared")?;
@@ -160,6 +174,7 @@ fn unavailable(path: PathBuf, error: String) -> Entry {
         modified: 0,
         nanos: 0,
         mode: 0,
+        accessed: None,
         uid: None,
         gid: None,
         device: 0,
@@ -213,6 +228,9 @@ fn collect_entry(
     }
     if entry.kind == "special" {
         entry.warning = Some("Special file was not read".into());
+    }
+    if !limits.access_dates {
+        entry.accessed = None;
     }
     Ok(entry)
 }

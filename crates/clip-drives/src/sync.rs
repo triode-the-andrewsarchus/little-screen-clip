@@ -57,6 +57,7 @@ pub(crate) fn install(
                 source_hash: entry.hash.as_deref(),
                 destination_hash: existing.and_then(|e| e.hash.as_deref()),
                 delta,
+                basic_metadata: true,
             },
             cancel,
         ),

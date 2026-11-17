@@ -4,7 +4,7 @@ use crate::{backup, catalog, scan};
 use little_clip_core::{kernel_interface, process::CommandRequest};
 use std::{
     fs::{File, FileTimes},
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
     time::{Duration, UNIX_EPOCH},
 };
@@ -83,19 +83,76 @@ pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
     (native, fixture, drive)
 }
 
+fn verified_file_manifest(version: &crate::DriveBackup, retried: u64) -> Store {
+    let held = kernel_interface::open_content(version.manifest.as_ref().unwrap(), false).unwrap();
+    let checksum = little_clip_core::file_source::FileSource::capture_file(&held)
+        .unwrap()
+        .sha256(&held, &AtomicBool::new(false), Duration::MAX)
+        .unwrap();
+    assert_eq!(version.manifest_sha256.as_ref(), Some(&checksum));
+    let manifest = Store::existing(&crate::root::anchor(&held), true).unwrap();
+    let header: crate::DriveBackup = manifest.get("backup", &version.id).unwrap().unwrap();
+    assert_eq!(header.fidelity, version.fidelity);
+    let records: u64 = manifest
+        .0
+        .query_row("SELECT count(*) FROM backup_metadata", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(records, version.fidelity.as_ref().unwrap().entries);
+    assert_eq!(
+        manifest
+            .get::<u64>("collection", "retried_entries")
+            .unwrap(),
+        Some(retried)
+    );
+    manifest
+}
+
 struct GuestFileBind {
     path: PathBuf,
     identity: kernel_interface::MountIdentity,
 }
+
+fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: &str) {
+    let source = Root::open(&fixture.a).unwrap();
+    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+    let error = backup::files(
+        &fixture.db,
+        drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains(reason), "{error}");
+    assert!(
+        fixture
+            .db
+            .list::<crate::DriveBackup>("backup", 0, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
 impl GuestFileBind {
     fn attach(source: &Path, destination: &Path) -> Self {
-        crate::require_disposable_guest();
-        let result = CommandRequest::new("mount")
-            .arg("--bind")
-            .arg(source)
-            .arg(destination)
-            .run()
+        Self::start(
+            CommandRequest::new("mount").arg("--bind").arg(source),
+            destination,
+        )
+    }
+    fn attach_link(source: &File, destination: &Path) -> Self {
+        let (request, descriptor) = CommandRequest::new("/usr/bin/mount")
+            .args(["--bind", "--no-canonicalize"])
+            .inherit_handle(source)
             .unwrap();
+        Self::start(
+            request.arg(format!("/proc/self/fd/{descriptor}")),
+            destination,
+        )
+    }
+    fn start(request: CommandRequest, destination: &Path) -> Self {
+        crate::require_disposable_guest();
+        let result = request.arg(destination).run().unwrap();
         assert!(result.status.success(), "{}", result.stderr_lossy());
         let file = kernel_interface::pin(destination, false).unwrap();
         Self {
@@ -104,12 +161,38 @@ impl GuestFileBind {
         }
     }
 }
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_bound_symlink_metadata_cannot_escape_its_admitted_hierarchy() {
+    let (_native, fixture, drive) = fixture();
+    let link = fixture._temp.path().join("outside-link");
+    std::os::unix::fs::symlink("outside referent", &link).unwrap();
+    let held = kernel_interface::pin(&link, false).unwrap();
+    let target = fixture.a.join("bound-link");
+    fs::write(&target, b"original portable bytes").unwrap();
+    let bind = GuestFileBind::attach_link(&held, &target);
+    assert!(
+        fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_backup_refused(&fixture, &drive, "symlink mount");
+    drop(bind);
+    assert_eq!(fs::read(&target).unwrap(), b"original portable bytes");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("outside referent"));
+}
 impl Drop for GuestFileBind {
     fn drop(&mut self) {
         let current = kernel_interface::pin(&self.path, false)
             .and_then(|file| kernel_interface::MountIdentity::pinned(&file));
         if current.ok() == Some(self.identity) {
-            let _ = CommandRequest::new("umount").arg(&self.path).run();
+            let path = std::ffi::CString::new(self.path.as_os_str().as_encoded_bytes()).unwrap();
+            // The owned mount may itself be a symlink inode. Never follow its
+            // referent when releasing this identity-checked guest fixture.
+            let result = unsafe { libc::umount2(path.as_ptr(), libc::UMOUNT_NOFOLLOW) };
+            assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
         }
     }
 }
@@ -130,7 +213,6 @@ fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
         let target = fixture.a.join("bound-file");
         fs::write(&target, b"original portable file").unwrap();
         let source = Root::open(&fixture.a).unwrap();
-        let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
         let bind = GuestFileBind::attach(&foreign, &target);
         assert_eq!(
             fs::metadata(&foreign).unwrap().dev() == fs::metadata(&fixture.a).unwrap().dev(),
@@ -140,23 +222,7 @@ fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
             .digest(Path::new("bound-file"), u64::MAX, &fixture.cancel)
             .unwrap_err();
         assert!(error.to_string().contains("Nested file mount"), "{error}");
-        let error = backup::files(
-            &fixture.db,
-            &drive,
-            &source,
-            &destination,
-            &fixture.cancel,
-            |_, _| {},
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("Nested file mount"), "{error}");
-        assert!(
-            fixture
-                .db
-                .list::<crate::DriveBackup>("backup", 0, 10)
-                .unwrap()
-                .is_empty()
-        );
+        assert_backup_refused(&fixture, &drive, "Nested file mount");
         drop(bind);
         assert_eq!(fs::read(&target).unwrap(), b"original portable file");
         assert_eq!(fs::read(&foreign).unwrap(), b"outside the admitted root");
@@ -241,7 +307,6 @@ fn native_deletion_policy_preserves_edits_and_requires_opt_in() {
 #[test]
 #[ignore = "requires the isolated removable-filesystem guest"]
 fn native_file_backups_keep_versions_and_observed_timestamps() {
-    use sha2::{Digest, Sha256};
     let (_native, fixture, drive) = fixture();
     let relative = Path::new("nested/Unicode Ω name.txt");
     fs::create_dir(fixture.a.join("nested")).unwrap();
@@ -284,12 +349,7 @@ fn native_file_backups_keep_versions_and_observed_timestamps() {
             .unwrap_or_else(|| format!("fs-{}", drive.filesystem_uuid.as_ref().unwrap()))
             .as_str()
     );
-    let manifest = first.manifest.as_ref().unwrap();
-    assert_eq!(
-        first.manifest_sha256.as_deref().unwrap(),
-        format!("{:x}", Sha256::digest(fs::read(manifest).unwrap()))
-    );
-    let database = Store::existing(manifest, true).unwrap();
+    let database = verified_file_manifest(&first, 0);
     let entry = scan::entry(&database, &format!("backup:{}", first.id), relative)
         .unwrap()
         .unwrap();
@@ -384,13 +444,7 @@ fn native_live_backup_retries_preserved_timestamp_edits_and_bounds_unstable_sour
                 fs::read(version.path.join("changing.txt")).unwrap(),
                 b"false-1"
             );
-            let manifest = Store::existing(version.manifest.as_ref().unwrap(), true).unwrap();
-            assert_eq!(
-                manifest
-                    .get::<u64>("collection", "retried_entries")
-                    .unwrap(),
-                Some(1)
-            );
+            let manifest = verified_file_manifest(&version, 1);
             let actual = source
                 .digest(Path::new("changing.txt"), u64::MAX, &fixture.cancel)
                 .unwrap();
@@ -411,6 +465,164 @@ fn native_live_backup_retries_preserved_timestamp_edits_and_bounds_unstable_sour
     assert_eq!(
         fs::read(current.path.join("changing.txt")).unwrap(),
         b"false-1"
+    );
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_attribute_only_source_changes_are_recollected_when_exposed() {
+    let (_native, fixture, drive) = fixture();
+    let path = fixture.a.join("stable.txt");
+    fs::write(&path, b"stable").unwrap();
+    match rustix::fs::setxattr(
+        &path,
+        "user.live",
+        b"before",
+        rustix::fs::XattrFlags::empty(),
+    ) {
+        Ok(()) => (),
+        Err(error) => {
+            assert!(
+                matches!(
+                    error,
+                    rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::PERM
+                ),
+                "{error}"
+            );
+            eprintln!(
+                "{} does not expose writable user attributes: {error}",
+                drive.filesystem
+            );
+            return;
+        }
+    }
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let source = Root::open(&fixture.a).unwrap();
+    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+    let mut attempts = 0;
+    let version = backup::files(
+        &fixture.db,
+        &drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |count, _| {
+            if count == 0 {
+                attempts += 1;
+                if attempts == 1 {
+                    rustix::fs::setxattr(
+                        &path,
+                        "user.live",
+                        b"after",
+                        rustix::fs::XattrFlags::empty(),
+                    )
+                    .unwrap();
+                    File::open(&path)
+                        .unwrap()
+                        .set_times(FileTimes::new().set_modified(modified))
+                        .unwrap();
+                }
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(version.bytes_written, 6);
+    let mut value = [0; 64];
+    let count =
+        rustix::fs::getxattr(version.path.join("stable.txt"), "user.live", &mut value[..]).unwrap();
+    assert_eq!(&value[..count], b"after");
+    assert_eq!(
+        fs::read(version.path.join("stable.txt")).unwrap(),
+        b"stable"
+    );
+    verified_file_manifest(&version, 1);
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_backup_destinations_disclose_coerced_modes_owner_times_and_missing_attributes() {
+    let (_native, fixture, mut drive) = fixture();
+    let destination = Root::open(&fixture.a).unwrap();
+    let source = Root::open(&fixture.b).unwrap();
+    let path = fixture.b.join("file");
+    fs::write(&path, b"complete file contents").unwrap();
+    std::os::unix::fs::chown(&path, Some(1001), Some(1002)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+    File::open(&path)
+        .unwrap()
+        .set_times(
+            FileTimes::new().set_modified(UNIX_EPOCH + Duration::new(1_600_000_000, 123_456_789)),
+        )
+        .unwrap();
+    rustix::fs::setxattr(
+        &path,
+        "user.source",
+        b"source attribute",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .unwrap();
+    let format = drive.filesystem.clone();
+    drive.mount = Some(fixture.b.clone());
+    drive.filesystem = "tmpfs".into();
+    drive.evidence = "owned guest tmpfs source for native destination checks".into();
+    let version = backup::files(
+        &fixture.db,
+        &drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    let target = version.path.join("file");
+    let actual = fs::metadata(&target).unwrap();
+    let expected = fs::metadata(&path).unwrap();
+    let manifest = verified_file_manifest(&version, 0);
+    let json: String = manifest
+        .0
+        .query_row(
+            "SELECT json FROM backup_metadata WHERE path=?1",
+            [b"file".as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let facts: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let omitted = |field: &str| {
+        facts["omissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["field"] == field)
+    };
+    if (actual.uid(), actual.gid()) != (1001, 1002) {
+        assert!(omitted("ownership"));
+    }
+    if actual.mode() & 0o7777 != 0o640 {
+        assert!(omitted("mode"));
+    }
+    if (actual.mtime(), actual.mtime_nsec()) != (expected.mtime(), expected.mtime_nsec()) {
+        assert!(omitted("modification_time"));
+    }
+    let mut bytes = [0; 64];
+    match rustix::fs::getxattr(&target, "user.source", &mut bytes[..]) {
+        Ok(count) if &bytes[..count] == b"source attribute" => (),
+        _ => assert!(omitted("extended_attribute")),
+    }
+    if format == "vfat" || format == "exfat" {
+        assert_ne!(actual.mode() & 0o7777, 0o640);
+        assert!(omitted("mode"));
+        assert!(omitted("extended_attribute"));
+        assert!(version.fidelity.as_ref().unwrap().omitted_fields > 0);
+    }
+    assert_eq!(fs::read(target).unwrap(), b"complete file contents");
+    assert_eq!(
+        facts["attributes"][0]["value"],
+        serde_json::json!(b"source attribute".as_slice())
+    );
+    eprintln!(
+        "{format} destination: {:?}; per-path report {}",
+        version.fidelity, facts["omissions"]
     );
 }
 
@@ -644,6 +856,7 @@ fn native_fat32_size_limit_is_refused_before_reading_sparse_payload() {
                 source_hash: None,
                 destination_hash: None,
                 delta: false,
+                basic_metadata: true,
             },
             &fixture.cancel,
         )
