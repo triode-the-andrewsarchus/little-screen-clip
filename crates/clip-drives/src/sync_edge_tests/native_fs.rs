@@ -134,7 +134,7 @@ fn verified_file_manifest(version: &crate::DriveBackup, retried: u64) -> Store {
     manifest
 }
 
-struct GuestMount {
+pub(crate) struct GuestMount {
     path: PathBuf,
     identity: kernel_interface::MountIdentity,
     cleanup: Option<MountCleanup>,
@@ -144,9 +144,9 @@ enum MountCleanup {
     Writable,
 }
 
-fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: &str) {
+fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: impl std::fmt::Display) {
     let error = fixture.file_backup(drive, |_, _| {}).unwrap_err();
-    assert!(error.to_string().contains(reason), "{error}");
+    assert!(error.to_string().contains(&reason.to_string()), "{error}");
     assert!(
         fixture
             .db
@@ -180,7 +180,7 @@ impl GuestMount {
         self.remount("remount,rw");
         self.cleanup = None;
     }
-    fn attach(source: &Path, destination: &Path) -> Self {
+    pub(crate) fn attach(source: &Path, destination: &Path) -> Self {
         Self::start(
             CommandRequest::new("mount").arg("--bind").arg(source),
             destination,
@@ -212,27 +212,6 @@ impl GuestMount {
     }
 }
 
-#[test]
-#[ignore = "requires the isolated removable-filesystem guest"]
-fn native_bound_symlink_metadata_cannot_escape_its_admitted_hierarchy() {
-    let (_native, fixture, drive) = fixture();
-    let link = fixture._temp.path().join("outside-link");
-    std::os::unix::fs::symlink("outside referent", &link).unwrap();
-    let held = kernel_interface::pin(&link, false).unwrap();
-    let target = fixture.a.join("bound-link");
-    fs::write(&target, b"original portable bytes").unwrap();
-    let bind = GuestMount::attach_link(&held, &target);
-    assert!(
-        fs::symlink_metadata(&target)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_backup_refused(&fixture, &drive, "symlink mount");
-    drop(bind);
-    assert_eq!(fs::read(&target).unwrap(), b"original portable bytes");
-    assert_eq!(fs::read_link(&link).unwrap(), Path::new("outside referent"));
-}
 impl Drop for GuestMount {
     fn drop(&mut self) {
         let Some(cleanup) = self.cleanup.take() else {
@@ -384,8 +363,8 @@ fn native_read_only_collection_requires_a_read_only_filesystem_and_refuses_polic
 
 #[test]
 #[ignore = "requires the isolated removable-filesystem guest"]
-fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
-    for same_filesystem in [false, true] {
+fn native_leaf_file_and_symlink_binds_cannot_supply_metadata_or_payloads() {
+    for (same_filesystem, symlink) in [(false, false), (true, false), (false, true)] {
         let (_native, fixture, drive) = fixture();
         let outside = tempfile::tempdir_in(if same_filesystem {
             Path::new("/work/media")
@@ -394,23 +373,48 @@ fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
         })
         .unwrap();
         let foreign = outside.path().join("foreign");
-        fs::write(&foreign, b"outside the admitted root").unwrap();
+        if symlink {
+            std::os::unix::fs::symlink("outside referent", &foreign).unwrap();
+        } else {
+            fs::write(&foreign, b"outside the admitted root").unwrap();
+        }
         let target = fixture.a.join("bound-file");
         fs::write(&target, b"original portable file").unwrap();
         let source = Root::open(&fixture.a).unwrap();
-        let bind = GuestMount::attach(&foreign, &target);
+        let bind = if symlink {
+            GuestMount::attach_link(&kernel_interface::pin(&foreign, false).unwrap(), &target)
+        } else {
+            GuestMount::attach(&foreign, &target)
+        };
         assert_eq!(
-            fs::metadata(&foreign).unwrap().dev() == fs::metadata(&fixture.a).unwrap().dev(),
+            fs::symlink_metadata(&foreign).unwrap().dev()
+                == fs::metadata(&fixture.a).unwrap().dev(),
             same_filesystem
+        );
+        assert_eq!(fs::symlink_metadata(&target).unwrap().is_symlink(), symlink);
+        assert_eq!(
+            crate::raw_errno(source.metadata(Path::new("bound-file")).unwrap_err()),
+            Some(libc::EXDEV)
         );
         let error = source
             .digest(Path::new("bound-file"), u64::MAX, &fixture.cancel)
             .unwrap_err();
-        assert!(error.to_string().contains("Nested file mount"), "{error}");
-        assert_backup_refused(&fixture, &drive, "Nested file mount");
+        assert_eq!(crate::raw_errno(error), Some(libc::EXDEV));
+        assert_backup_refused(
+            &fixture,
+            &drive,
+            std::io::Error::from_raw_os_error(libc::EXDEV),
+        );
         drop(bind);
         assert_eq!(fs::read(&target).unwrap(), b"original portable file");
-        assert_eq!(fs::read(&foreign).unwrap(), b"outside the admitted root");
+        if symlink {
+            assert_eq!(
+                fs::read_link(&foreign).unwrap(),
+                Path::new("outside referent")
+            );
+        } else {
+            assert_eq!(fs::read(&foreign).unwrap(), b"outside the admitted root");
+        }
     }
 }
 

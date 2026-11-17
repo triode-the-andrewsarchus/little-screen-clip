@@ -189,6 +189,15 @@ File and image backups validate their selected destination against managed stora
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
 
+Child lookups use Linux `openat2` (available since Linux 5.6), with
+`RESOLVE_NO_XDEV` to refuse nested mounts before entering their metadata or
+content handlers. The check covers same-filesystem bind mounts too, including
+catalog files bound back into backup providers. Guarded content readers reopen
+the retained child descriptor. Leaf symlinks remain inspectable metadata and
+cannot authorize file-content reads. The original kernel `EXDEV` error is kept
+in catalog coverage. See the [openat2 manual](https://man7.org/linux/man-pages/man2/openat2.2.html).
+Unsupported kernels return a traversal error; there is no unchecked fallback.
+
 Image admission retains a metadata-only pin to the selected device node before flushing or unmounting. Authorization must return that same block-device object and kernel disk sequence. Both image passes periodically recheck its lifetime, with a final check before publication. Device-path replacement fails the job and preserves the previous completed version. Disk sequences are transient observations, separate from persistent folder enrollment. Older `lsblk` versions can still supply browsing and sync inventory; imaging requires `DISK-SEQ` support and a kernel that supplies `BLKGETDISKSEQ`.
 
 On Btrfs, subsequent file versions start from a writable snapshot of the previous version and become read-only when completed. Reflink staging and changed-range writes also share unchanged blocks in large changed files and images. This shares data between versions; it does not promise global deduplication across unrelated backup trees. Other destination filesystems retain independent full versions.

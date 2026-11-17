@@ -156,6 +156,70 @@ fn replaced_backup_directory_cannot_supply_metadata_identical_contents() {
 }
 
 #[test]
+#[ignore = "requires the disposable guest, /dev/fuse and the selected current mount helper"]
+fn guest_nested_catalog_mounts_are_rejected_before_payload_open() {
+    use crate::sync_edge_tests::native_fs::GuestMount;
+    crate::require_disposable_guest();
+    let media = tempfile::tempdir_in("/work/media").unwrap();
+    fs::write(media.path().join("file.txt"), b"catalog payload").unwrap();
+    let mut fixture = fixture();
+    fixture.source = Root::open(media.path()).unwrap();
+    fixture.drive.mount = Some(media.path().into());
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    let server = CatalogProcess::start(&fixture, &catalog);
+    // Without a backup/original this independent server returns ENOMEDIUM for
+    // a payload open. The admitted root must reject the bind before that open.
+    for directory in [false, true] {
+        let target = fixture.source.path.join("bound");
+        let (foreign, relative) = if directory {
+            fs::create_dir(&target).unwrap();
+            (server.mount.clone(), Path::new("bound/file.txt"))
+        } else {
+            fs::write(&target, b"retained original").unwrap();
+            (server.mount.join("file.txt"), Path::new("bound"))
+        };
+        let bind = GuestMount::attach(&foreign, &target);
+        for error in [
+            fixture.source.input(relative).err().unwrap(),
+            fixture.source.metadata(relative).err().unwrap(),
+        ] {
+            assert_eq!(crate::raw_errno(error), Some(libc::EXDEV));
+        }
+        let partial = fixture.capture(&DriveConfig::default()).unwrap();
+        assert!(!partial.complete);
+        let captured = filesystem(&fixture.state.path, partial);
+        let (_, blocked) = captured.lookup_path(Path::new("bound")).unwrap().unwrap();
+        assert_eq!(blocked.failure.unwrap().errno, Some(libc::EXDEV));
+        drop(captured);
+        drop(bind);
+        if directory {
+            fs::remove_dir(&target).unwrap();
+        } else {
+            assert_eq!(fs::read(&target).unwrap(), b"retained original");
+            fs::remove_file(&target).unwrap();
+        }
+        assert!(fs::metadata(server.mount.join("file.txt")).is_ok());
+    }
+    // The same file bound into a real backup would make the single-threaded
+    // server recursively open itself without the lookup-time mount boundary.
+    let version = fixture.backup().unwrap();
+    let copied = version.path.join("file.txt");
+    let bind = GuestMount::attach(&server.mount.join("file.txt"), &copied);
+    let output = little_clip_core::process::CommandRequest::new("cat")
+        .arg(server.mount.join("file.txt"))
+        .timeout(Duration::from_secs(3))
+        .own_process_group()
+        .die_with_parent()
+        .run()
+        .expect("Recursive provider refusal must finish without a timeout");
+    assert!(!output.status.success());
+    assert!(output.stderr_lossy().contains("No medium found"));
+    assert!(fs::metadata(server.mount.join("file.txt")).is_ok());
+    drop(bind);
+    assert_eq!(fs::read(copied).unwrap(), b"catalog payload");
+}
+
+#[test]
 #[ignore = "requires /dev/fuse, fusermount3 and LITTLE_CLIP_DRIVE_MOUNT_HELPER"]
 fn real_fuse_reads_retain_one_provider_and_reject_replaced_payloads() {
     let fixture = fixture();

@@ -42,6 +42,13 @@ impl From<&str> for Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
+pub(crate) fn raw_errno(error: Error) -> Option<i32> {
+    match error {
+        Error::Io(error) => error.raw_os_error(),
+        error => panic!("Expected an I/O error, got {error}"),
+    }
+}
+#[cfg(test)]
 pub(crate) fn require_disposable_guest() {
     assert_eq!(std::env::var("LITTLE_CLIP_DRIVE_VM").unwrap(), "1");
     assert!(std::path::Path::new("/work/.owned-vm-fixture").is_file());

@@ -1,12 +1,6 @@
 use super::*;
+use crate::raw_errno;
 use std::os::unix::fs::MetadataExt;
-
-fn raw_errno(error: crate::Error) -> Option<i32> {
-    match error {
-        crate::Error::Io(error) => error.raw_os_error(),
-        error => panic!("Expected an I/O error, got {error}"),
-    }
-}
 
 #[test]
 fn invalid_catalog_timestamps_report_overflow_instead_of_substituting_dates() {

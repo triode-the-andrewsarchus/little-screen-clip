@@ -245,7 +245,7 @@ impl Root {
                     Err(e) => return Err(e.into()),
                 }
             }
-            let pin = kernel_interface::pin(&child, false)?;
+            let pin = self.pin_child(&held, component.as_os_str())?;
             let id = MountIdentity::pinned(&pin)?;
             if !pin.metadata()?.is_dir()
                 || kernel_interface::classify_handle(&pin)?.protected()
@@ -257,6 +257,18 @@ impl Root {
             held = pin;
         }
         Ok(held)
+    }
+    /// Refuse mount crossings during lookup, before foreign getattr/open hooks.
+    /// Keep the resulting pin through guarded reopen instead of resolving its name.
+    fn pin_child(&self, parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+        use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+        Ok(File::from(openat2(
+            parent,
+            name,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+        )?))
     }
     pub fn parent(&self, relative: &Path, create: bool) -> Result<(File, PathBuf)> {
         if !valid_relative(relative) || relative.as_os_str().is_empty() {
@@ -272,22 +284,31 @@ impl Root {
             self.validate()?;
             return Ok(Some(self.file.metadata()?));
         }
-        let (_parent, path) = match self.parent(relative, false) {
+        let (parent, _) = match self.parent(relative, false) {
             Ok(value) => value,
             Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(None);
             }
             Err(e) => return Err(e),
         };
-        match fs::symlink_metadata(path) {
+        match self
+            .pin_child(&parent, relative.file_name().ok_or("Missing filename")?)
+            .and_then(|file| file.metadata())
+        {
             Ok(m) => Ok(Some(m)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
     pub fn input(&self, relative: &Path) -> Result<File> {
-        let (_parent, path) = self.parent(relative, false)?;
-        let file = kernel_interface::open_content(&path, false)?;
+        let (parent, _) = self.parent(relative, false)?;
+        let pin = self.pin_child(&parent, relative.file_name().ok_or("Missing filename")?)?;
+        if !pin.metadata()?.is_file() {
+            return Err(
+                "Drive content inputs must be ordinary files, not links or special entries".into(),
+            );
+        }
+        let file = kernel_interface::open_content(&anchor(&pin), true)?;
         let identity = MountIdentity::pinned(&file)?;
         if identity.device != self.identity.device || identity.mount != self.identity.mount {
             return Err("Nested file mount in drive tree; refusing content access".into());
@@ -539,6 +560,36 @@ mod tests {
         ] {
             assert!(!queried_change_metadata(b"7.3.4", filesystem));
         }
+    }
+    #[test]
+    fn leaf_links_remain_metadata_without_authorizing_content_reads() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        fs::write(temp.path().join("payload"), b"ordinary bytes").unwrap();
+        for (name, target) in [
+            ("relative", PathBuf::from("payload")),
+            ("absolute", temp.path().join("payload")),
+            ("outside", PathBuf::from("/proc/self/status")),
+            ("missing", PathBuf::from("no-such-file")),
+        ] {
+            symlink(target, temp.path().join(name)).unwrap();
+            assert!(
+                root.metadata(Path::new(name))
+                    .unwrap()
+                    .unwrap()
+                    .is_symlink()
+            );
+            assert!(root.input(Path::new(name)).is_err());
+        }
+        let mut bytes = [0; 14];
+        use std::os::unix::fs::FileExt;
+        root.input(Path::new("payload"))
+            .unwrap()
+            .read_exact_at(&mut bytes, 0)
+            .unwrap();
+        assert_eq!(&bytes, b"ordinary bytes");
+        assert!(root.metadata(Path::new("absent")).unwrap().is_none());
     }
     #[test]
     fn read_only_collection_refuses_an_ordinary_writable_source() {

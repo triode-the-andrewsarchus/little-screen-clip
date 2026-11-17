@@ -11,7 +11,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is now fixed: retained input handles must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Remaining remount/event-loss and fault matrices still need evidence. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
@@ -45,7 +45,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
 | 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses current completed file-backup hashes only with verified manifest/root/full revision and queried-change provenance, without source payload reads. Native FAT32/exFAT/NTFS correctly decline metadata-only hash promotion. Sync hash reuse, older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
-| 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
+| 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Image-mount replacement, root aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
@@ -53,6 +53,49 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Lookup-time mount boundaries
+
+The regression fixture first reached a foreign catalog's payload-open handler
+and received ENOMEDIUM before Root rejected the mount. The pre-fix guest report
+is `/tmp/portable-drive-vm-no-xdev-negative/report.json` (expected failure on all
+three boot profiles). This established that a final-file mount check after
+open could recurse into a provider's own single-threaded catalog server.
+
+Root now shares one descriptor-relative O_PATH child lookup using openat2 with
+BENEATH, NO_SYMLINKS and NO_XDEV. Directory traversal, final metadata and content
+inputs all use it. Kernel EXDEV is preserved before foreign getattr/open hooks;
+guarded content reopening uses the retained pin, with the existing final
+mount/device check retained. Leaf symlink metadata remains available but content
+inputs explicitly require regular files. Linux 5.6+ openat2 support is required;
+unsupported calls fail without a weaker fallback. No persisted format changes.
+
+The guest test uses actual FAT32/exFAT/NTFS source roots and a separate catalog
+helper. It checks file and directory binds, partial catalog coverage retaining
+EXDEV, and a catalog file bound into its own real backup provider. The recursive
+read fails promptly with ENOMEDIUM while metadata stays usable, and removing the
+bind reveals the untouched backup bytes. Consolidated native cases retain
+same-device, cross-device and symlink-inode binds, original source bytes and
+backup refusal. Their shared errno assertion is reused from the existing catalog
+tests; the guest mount owner is reused without another cleanup implementation.
+
+Validation includes 133 ordinary backend tests (60 explicit fixtures ignored),
+21 selected host provider tests, both Btrfs fixtures, the source-read trace with
+its positive control, 15 native/catalog cases per source format and four
+authority/image cases per format. Accepted logs use `/tmp/portable-drive-no-xdev-`
+with `backend-accepted.log`, `providers-accepted.log`, `btrfs-final.log`,
+`capture-trace-final.log`, `clippy-final.log` and `fmt-final.log`. Guest reports:
+`/tmp/portable-drive-vm-no-xdev-native-coverage/report.json` and
+`/tmp/portable-drive-vm-no-xdev-authority-verified/report.json`.
+An earlier broad native filter selected authority-only tests without their
+services; `/tmp/portable-drive-vm-no-xdev-native-accepted` is rejected evidence.
+
+The original-baseline architecture comparison remains REGRESSION, with unchanged
+4300 clone groups, 144 cycles, average CCN 3.48, maximum 274 and duplication
+7.08%. Shared assertions and consolidated bind scenarios removed the two initial
+extra test clones. Report: `.fitness/portable-drives-no-xdev-architecture.json`.
+Items 1.6 and 6.8 remain Partial: source-root admission/replacement aliases,
+image-mount lifetimes and the remaining provider matrix are still unfinished.
 
 ## Verified backup fingerprints during catalog capture
 
