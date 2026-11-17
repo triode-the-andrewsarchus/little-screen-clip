@@ -21,6 +21,8 @@ pub(crate) struct Changes {
     pub full: bool,
     pub paths: HashSet<PathBuf>,
     path_bytes: usize,
+    #[cfg(test)]
+    kernel_overflow: bool,
 }
 struct Location {
     root: Arc<Root>,
@@ -31,6 +33,7 @@ pub(crate) struct Watch {
     paths: HashMap<PathBuf, i32>,
     locations: HashMap<i32, Location>,
     lost: bool,
+    rebuild_required: bool,
     tracked_bytes: usize,
     pending: VecDeque<(Arc<Root>, PathBuf)>,
     walking: Option<(Arc<Root>, crate::scan::Frame)>,
@@ -48,6 +51,7 @@ impl Watch {
             paths: HashMap::new(),
             locations: HashMap::new(),
             lost: false,
+            rebuild_required: false,
             tracked_bytes: 0,
             pending: VecDeque::new(),
             walking: None,
@@ -170,6 +174,10 @@ impl Watch {
                 let Some((root, relative)) = self.pending.pop_front() else {
                     break;
                 };
+                if !self.paths.contains_key(&root.path.join(&relative)) {
+                    self.add_tree(root, relative);
+                    continue;
+                }
                 match crate::scan::Frame::new(&root, relative) {
                     Ok(frame) => self.walking = Some((root, frame)),
                     Err(_) => {
@@ -200,6 +208,11 @@ impl Watch {
     fn event(&mut self, event: libc::inotify_event, name: &[u8], changes: &mut Changes) {
         if event.mask & libc::IN_Q_OVERFLOW != 0 {
             changes.full = true;
+            self.rebuild_required = true;
+            #[cfg(test)]
+            {
+                changes.kernel_overflow = true;
+            }
         }
         let Some(location) = self.locations.get(&event.wd) else {
             return;
@@ -298,7 +311,35 @@ impl Watch {
                 changes.full = true;
             }
         }
+        if self.rebuild_required {
+            changes.full = true;
+            if let Err(error) = self.rebuild() {
+                tracing::warn!("Could not rebuild drive watches after event loss: {error}");
+            }
+        }
         changes
+    }
+    fn rebuild(&mut self) -> Result<()> {
+        // Lost directory-creation events require rewalking every retained root.
+        // A fresh instance also prevents stale watch descriptors from being
+        // interpreted against a replacement registration. Keep roots waiting
+        // for registration if another overflow interrupts this rebuild.
+        let roots = self
+            .locations
+            .values()
+            .map(|location| &location.root)
+            .chain(self.pending.iter().map(|(root, _)| root))
+            .chain(self.walking.iter().map(|(root, _)| root))
+            .map(|root| (root.path.clone(), root.clone()))
+            .collect::<HashMap<_, _>>();
+        let old = std::mem::replace(self, Self::new()?);
+        drop(old); // Release old kernel watches before consuming their quota again.
+        self.pending = roots
+            .into_values()
+            .map(|root| (root, PathBuf::new()))
+            .collect();
+        // Registration and traversal stay on advance's bounded per-tick budget.
+        Ok(())
     }
 }
 fn watch_bytes(path: &std::path::Path, relative: &std::path::Path) -> usize {
@@ -309,6 +350,9 @@ fn watch_bytes(path: &std::path::Path, relative: &std::path::Path) -> usize {
         .saturating_mul(4)
         .saturating_add(256)
 }
+
+#[cfg(test)]
+mod overflow_tests;
 
 #[cfg(test)]
 mod tests {

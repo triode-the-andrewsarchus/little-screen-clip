@@ -13,12 +13,12 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
-| 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Remaining remount/event-loss and fault matrices still need evidence. |
+| 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
 | 2.4 | Partial | Persistent collision-safe complete conflict variants tested; provenance and repeat behavior need a full matrix. |
 | 2.5 | Partial | Deletion and delete-versus-edit tests exist; event-loss and cancellation matrices remain. |
 | 2.6 | Partial | Native file/directory name tables verify exact directory entries and bytes, or explicit refusal with originals retained. NTFS3 alternate-stream paths and FAT32/exFAT trailing dots/spaces are refused before installation. Native FAT32 oversized-file refusal passes; link/metadata omissions, alternate mount options and ntfs-3g remain. |
-| 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real overflow delivery matrices remain. |
+| 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real repeated kernel overflow on FAT32/exFAT/NTFS now rebuilds missed nested-directory watches within those budgets; a live daemon recovers union/conflicts and later nested edits with a one-hour scan interval. Registration-limit/retry and active-worker event-loss matrices remain. See the overflow-recovery checkpoint. |
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
 | 3.2 | Complete | Pinned filesystem and effective-user write/search/read-only checks select a usable tmpfs; RAM and backup admission share the directory check. A disposable guest covers /tmp with each native FAT32/exFAT/NTFS mount: all 36 selection cases pass, including XDG/shm fallback, read-only/unavailable candidates, explicit overrides and writable-tmpfs /tmp preference. Positive cases create 0700 private directories/0600 images on verified tmpfs, mount/write/read/discard successfully. Existing quota/restart/unmount tests pass. See the RAM-directory checkpoint. |
 | 3.3 | Complete | Bounded streaming runs on retained workers; initial and explicit-resume jobs use catch-up before successful ready publication. Per-file callback cases deterministically change a same-size/same-mtime source and add an unenumerated path after the first installation, with a one-pass negative control. Cancellation, missing source and changed source preserve accepted files, incomplete/paused state and pending work; verified retry enables browsing. Both cases pass on real FAT32/exFAT/NTFS sources and bounded RAM destinations. Live coordinator cancel/resume and 1 GB independent-session responsiveness pass. See the initial-population checkpoint. |
@@ -47,12 +47,72 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses current completed file-backup hashes only with verified manifest/root/full revision and queried-change provenance, without source payload reads. Native FAT32/exFAT/NTFS correctly decline metadata-only hash promotion. Sync hash reuse, older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
-| 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
+| 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE, Btrfs, authorized partition-image/loop-provider and temporary read-only file-collection tests pass. Provider concurrency, interrupted-device and capability-failure matrices remain. |
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
-| 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
+| 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Rebuilding directory watches after kernel queue overflow
+
+A lost directory-creation event previously left its subtree permanently unwatched,
+even after the full comparison repaired its data. A disposable-guest negative
+test reproduces missing later nested-file notifications on FAT32, exFAT and NTFS:
+`/tmp/portable-drive-vm-watch-overflow-negative/report.json` is expected failure
+evidence. A cfg(test) observation flag proves the actual event parser consumed
+IN_Q_OVERFLOW, including its unknown watch descriptor; the test also verifies
+that the directory-creation events themselves were dropped.
+
+The watcher now replaces its inotify instance after overflow and queues every
+retained root for incremental re-registration and traversal. Old watches retire
+before their kernel watch quota is reused. Existing five-millisecond/4096-step
+registration work and watch/path/depth budgets remain in force. Roots still
+waiting to register survive another rebuild, and scope retirement releases their
+pins. Rebuilding does no filesystem traversal synchronously. If new-instance
+creation fails, the old owner remains live, coverage stays incomplete and a
+later tick retries. The daemon's existing full-coverage loss path clears cached
+root observations and advances its epoch, preventing an older worker completion
+from re-establishing them.
+
+The [inotify manual](https://man7.org/linux/man-pages/man7/inotify.7.html)
+documents the per-instance queue limit, dropped events, overflow notification and
+the need to rebuild after lost coverage. Only the owned guest changes that limit;
+no host sysctl, attached media, desktop or live user daemon is touched.
+
+The accepted direct report is
+`/tmp/portable-drive-vm-watch-overflow-accepted/report.json`: success=true, no
+timeout, one successful guest marker and five passing watcher tests on each
+native source filesystem. Two real overflow cycles per format create missed
+subtrees beneath the root and an existing child. Once registration settles,
+later writes in both produce ordinary path notifications without a full scan.
+An ordinary host test additionally interrupts rebuilding before registration,
+rebuilds again, retires one queued scope and verifies the other still observes
+writes and releases its pins.
+
+A separate live-Service fixture holds the existing inventory callback while
+generating overflow, preserving file size/mtime during edits on both sides,
+deleting one portable file under the default restore policy and creating
+one-sided data plus an unseen nested directory. Inventory facts stay identical
+and the comparison interval is one hour. Both trees recover their union, the
+deleted file returns, and exactly one complete unresolved conflict preserves
+the portable/local variants while retaining both original edits. After another
+quiet owner-inventory interval, a new nested edit promptly reaches its peer.
+There is no GUI or explicit reconciliation request after enrollment. Accepted
+report: `/tmp/portable-drive-vm-watch-overflow-service-quiet/report.json`, with
+three passing one-test groups and successful, non-timeout completion. An earlier
+non-quiet fixture run is retained separately; the quiet run is authoritative.
+
+All 138 ordinary backend tests pass (66 explicit fixtures ignored), together
+with drive all-target clippy under denied warnings, targeted Rust formatting and
+whitespace checks. Logs use `/tmp/portable-drive-watch-overflow-` with
+`backend-final.log`, `final-build.log`, `host.log`, `service-quiet.log` and
+`clippy-final.log`. The original-baseline architecture result remains REGRESSION:
+4300 clone groups, 144 cycles, average CCN 3.48, maximum 274 and duplication
+7.07%, with no additional reported hotspot, clone group or dependency cycle.
+Report: `.fitness/portable-drives-watch-overflow-architecture.json`.
+Registration-limit/retry, event loss during an active mutation and mount-inventory
+loss remain unfinished; this checkpoint does not complete those broader rows.
 
 ## Common-baseline recovery after interrupted synchronization
 

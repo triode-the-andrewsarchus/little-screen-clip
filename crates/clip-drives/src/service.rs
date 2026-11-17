@@ -1212,6 +1212,7 @@ mod tests {
     mod admission;
     mod backup_review;
     mod catalog_cleanup;
+    mod event_loss;
     mod guest_ram;
     mod native_images;
     mod native_read_only;
