@@ -64,6 +64,7 @@ pub(crate) fn guest_drive() -> Drive {
                 .parse()
                 .unwrap(),
         ),
+        partition_layout: None,
         removable: true,
         read_only: false,
         evidence: format!("owned-guest:{uuid}"),

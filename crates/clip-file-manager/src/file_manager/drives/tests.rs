@@ -169,6 +169,7 @@ fn preview(name: &str) -> BackupPreview {
             capacity: 1_000_000,
             drive_capacity: 1_000_000,
             disk_sequence: Some(1),
+            partition_layout: None,
             removable: true,
             read_only: false,
             evidence: name.into(),

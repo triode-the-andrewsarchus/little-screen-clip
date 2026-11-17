@@ -34,7 +34,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
 | 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real guest UDisks/PolicyKit authorization, busy-source refusal and successful preflush/unmount/image/restoration now pass. Interactive password-agent and hotplug/replacement races remain. |
 | 5.2 | Partial | Isolated real UDisks/PolicyKit tests now prove authorized image reads, unprivileged denial and busy-device refusal on FAT32/exFAT/NTFS partitions. The desktop authentication-agent/password interaction remains a separate UI gate. |
-| 5.3 | Open | Partition byte streaming now retains SHA-256 and durable source/backup manifests; Full authorized-device hashes, exact partition image sizes and publication pass on real guest partitions; typed partition-layout facts remain. |
+| 5.3 | Complete | Exact authorized-device/image hashes, partition sizes, durable publication and checksummed source manifests pass on real FAT32/exFAT/NTFS GPT partitions. Manifests retain typed partition number/start/byte offset/logical sector size/type/label/flags and immediate containing-table type/identifier; unknown fields remain unknown. Native tests assert actual GPT layout and exact manifest retention. See the partition-layout checkpoint and its guest report. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs partition images now pass on FAT32/exFAT/NTFS with exact source SHA-256 and retained earlier images. Mount-option and interrupted-device matrices remain. |
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
@@ -131,7 +131,7 @@ transactional entity visiting removed duplicate pagination. The broader gate
 remains open. Raw report:
 `.fitness/portable-drives-catalog-redaction-ui-architecture.json`.
 
-## Cross-cutting gates
+## Catalog provider validation checkpoint
 
 Catalog provider validation checkpoint: provider revision and SHA-256 validation
 now operate on the retained content descriptor, using core FileSource checks
@@ -159,6 +159,46 @@ Sharing timestamp-preserving mutation setup removed both newly reported fixture
 clones; provider resolution CCN fell from 29 to 25. No broader gate is closed by
 these tests. Report:
 `.fitness/portable-drives-provider-validation-reviewed-architecture.json`.
+
+## Partition-layout checkpoint
+
+Drive observations now retain optional typed partition layout, and the existing
+manifest source record persists it without changing the SQLite schema or backup
+payload format. Facts include the partition number, fixed-512-sector start and
+checked byte offset, reported logical sector size, type/label/flags and immediate
+containing table type/identifier. Missing values and overflow stay unknown;
+whole-volume/crypt/optical observations do not inherit a guessed layout. Older
+records deserialize with no layout. Enrollment evidence remains unchanged.
+
+Bounded inventory compatibility is separated from mount reconciliation. Injected
+query responses cover missing optional columns, missing DISK-SEQ and both missing,
+with at most three attempts and no invented lifetime. Parser tests cover 4 KiB
+logical sectors, zero offsets, conversion overflow, immediate nested-table ownership
+and legacy JSON. The optional layout is boxed to keep the frequently passed Drive
+record compact rather than inflating the retained partition completion enum.
+
+`/tmp/portable-drive-vm-partition-layout-final/report.json` passes with three
+successful filesystem markers. Real guest FAT32/exFAT/NTFS tests each assert GPT
+partition number one, 2048 fixed sectors / 1 MiB offset, logical sector size,
+table UUID/type and partition type; the checksummed completed image manifest
+retains the exact observed layout. Existing authorized/denied access, busy-source,
+source/image hashes, read-only providers and restoration checks also pass.
+
+Final affected-package tests pass 84 backend cases (27 explicit fixtures ignored),
+979 Files (six ignored), 451 core (three ignored), six CLI, 35 daemon, selected
+integrations and twelve core doctests. Log:
+`/tmp/portable-drive-partition-layout-packages-final.log`. All-target clippy with
+warnings denied passes across those five packages. The normal helper build,
+core/backend documentation and repository formatting pass. Rendered PartitionLayout
+documentation was inspected for all nine fields and the partition-only contract.
+
+The original architecture result remains REGRESSION: 4301 clone groups, 7.16%
+duplication, average CCN 3.48, maximum 274 and 144 reported cycles. This change
+adds no clone group; separating the command compatibility stage removes the
+reported discovery complexity hotspot. Raw report:
+`.fitness/portable-drives-partition-layout-final-architecture.json`.
+
+## Cross-cutting gates
 
 - Preserve a headless core/backend and independent file-manager lifecycle; no workbench application dependency.
 - Preserve directory/source identities, lossless paths, accepted write ownership and completed mutations through failures/cancellation.

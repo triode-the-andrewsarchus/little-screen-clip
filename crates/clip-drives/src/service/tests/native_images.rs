@@ -78,6 +78,19 @@ fn native_image_authorization_is_denied_to_unprivileged_fixture() {
 #[ignore = "requires the isolated partition/authority guest"]
 fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
     let original = selected(&native_fs::guest_drive());
+    let layout = original.partition_layout.as_ref().unwrap();
+    assert_eq!(layout.number, Some(1));
+    assert_eq!(layout.start_512_sectors, Some(2048));
+    assert_eq!(layout.offset_bytes, Some(1_048_576));
+    assert_eq!(layout.logical_sector_bytes, Some(512));
+    assert_eq!(layout.table_type.as_deref(), Some("gpt"));
+    assert!(uuid::Uuid::parse_str(layout.table_uuid.as_deref().unwrap()).is_ok());
+    assert_eq!(
+        uuid::Uuid::parse_str(layout.partition_type.as_deref().unwrap())
+            .unwrap()
+            .to_string(),
+        "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
+    );
     replaced_node_is_refused(&original);
     let denied = little_clip_core::process::CommandRequest::new("env")
         .args(["LITTLE_CLIP_DRIVE_TEST_DENIAL=1", "setpriv", "--reuid=65534", "--regid=65534", "--clear-groups"])
@@ -178,6 +191,7 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
     let manifest = Store::existing(manifest_path, true).unwrap();
     let captured: Drive = manifest.get("source", "drive").unwrap().unwrap();
     assert_eq!(captured, drive);
+    assert_eq!(captured.partition_layout, original.partition_layout);
     let current: DriveBackup = serde_json::from_slice(
         &fs::read(first.path.parent().unwrap().join("current-image.json")).unwrap(),
     )

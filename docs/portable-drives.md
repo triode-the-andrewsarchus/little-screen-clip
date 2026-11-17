@@ -78,6 +78,16 @@ Each completed version has a checksummed SQLite manifest retaining captured path
 
 File backups copy ordinary files, hierarchy, available modes and timestamps. A writable source is collected with revision checks rather than an atomic source-filesystem snapshot. A partition image captures the entire selected partition, including unused sectors. Imaging flushes enrolled changes and unmounts the partition before requesting exclusive read access. A busy partition or declined authentication leaves an actionable failed job.
 
+The source Drive record in each new manifest includes observed partition-layout
+facts: partition number, start sector and checked byte offset, logical sector
+size, type, table label/flags, and the immediate containing table's type and
+identifier. Unknown values remain unknown, including older records and optional
+inventory columns unavailable in older util-linux versions. Whole-volume,
+encrypted-device and optical observations do not invent partition layouts. The
+image still omits the parent disk's partition table. `lsblk` reports START in
+fixed 512-byte sectors even with `--bytes`; this is separate from the reported
+logical sector size. See the [upstream lsblk column definitions](https://kernel.googlesource.com/pub/scm/utils/util-linux/util-linux/+/refs/tags/v2.41.1/misc-utils/lsblk.c).
+
 Eject and image preparation use a retained worker for folder flushes and unmount authorization. Other independent drives can continue synchronizing while authorization is pending. Completed flush status is durable before unmount begins. The coordinator releases conflicting watch/cache pins while retaining descriptor-free scheduling claims; unrelated observed subtrees remain watched. A busy external reader produces an error with the observed mount state. Cancelling remaining work waits for an already accepted unmount result: a completed eject is still reported as completed, and a cancelled image reports that the partition is unmounted without starting the copy. Unmount authority requests keep their actual reply lifetime, so shutdown may wait for the desktop authorization dialog to resolve.
 
 Partition jobs retain their selected drive, destination and typed preparation phase. Image progress distinguishes copying from full verification. After restart, an unfinished job reports its last durable checkpoint and any confirmed unmount/completed-image facts. An interrupted authority request may already have taken effect; its message asks you to inspect current state. Restart does not replay mount actions automatically.

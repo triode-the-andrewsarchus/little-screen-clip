@@ -62,11 +62,40 @@ pub struct Drive {
     /// Current kernel disk lifetime; deliberately excluded from enrollment evidence.
     #[serde(default)]
     pub disk_sequence: Option<u64>,
+    /// Observed partition layout for image manifests; absent in older records.
+    #[serde(default)]
+    pub partition_layout: Option<Box<PartitionLayout>>,
     pub removable: bool,
     pub read_only: bool,
     /// Hardware/partition evidence distinguishes cloned filesystem identifiers.
     pub evidence: String,
     pub ambiguous: bool,
+}
+
+/// Partition-table facts captured without reading partition payload bytes.
+///
+/// Unknown fields remain absent. These describe a partition image's placement on
+/// its parent device; the image itself contains only the selected partition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartitionLayout {
+    /// Partition number reported by the partition table.
+    pub number: Option<u64>,
+    /// Start offset in fixed 512-byte sectors, independently of logical sectors.
+    pub start_512_sectors: Option<u64>,
+    /// Checked byte conversion of `start_512_sectors`; absent on overflow.
+    pub offset_bytes: Option<u64>,
+    /// Reported logical sector size in bytes, without assuming a default.
+    pub logical_sector_bytes: Option<u64>,
+    /// Partition type code or UUID, kept in its reported representation.
+    pub partition_type: Option<String>,
+    /// Partition-table label, independently of the filesystem label.
+    pub label: Option<String>,
+    /// Reported flags, without assigning table-independent flag meanings.
+    pub flags: Option<String>,
+    /// Table type reported for the immediate containing device.
+    pub table_type: Option<String>,
+    /// Containing table identifier, which is separate from PARTUUID.
+    pub table_uuid: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

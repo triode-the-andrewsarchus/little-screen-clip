@@ -1,31 +1,20 @@
 //! Bounded read-only block inventory, including partition and hardware evidence.
 use crate::{Drive, Result};
-use little_clip_core::process::CommandRequest;
+use little_clip_core::process::{CommandOutput, CommandRequest};
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 
 pub fn discover() -> Result<Vec<Drive>> {
-    let columns =
-        "NAME,PATH,TYPE,SIZE,RM,HOTPLUG,RO,FSTYPE,UUID,PARTUUID,LABEL,MOUNTPOINTS,SERIAL,WWN,START";
-    let query = |columns: &str| {
+    let value = inventory(|columns| {
         CommandRequest::new("lsblk")
             .args(["--bytes", "--json", "--paths", "--output", columns])
             .timeout(Duration::from_secs(5))
             .max_output_bytes(2 * 1024 * 1024)
             .own_process_group()
             .run()
-            .map_err(|e| e.to_string())
-    };
-    let mut output = query(&format!("{columns},DISK-SEQ"))?;
-    // Older lsblk can still provide browsing/sync inventory. Imaging refuses
-    // admission when this observation is absent rather than weakening its guard.
-    if !output.status.success() && String::from_utf8_lossy(&output.stderr).contains("DISK-SEQ") {
-        output = query(columns)?;
-    }
-    if !output.status.success() || output.stdout_truncated {
-        return Err("Block inventory failed or exceeded its limit".into());
-    }
-    let mut drives = parse(&serde_json::from_slice::<Value>(&output.stdout)?)?;
+            .map_err(|e| crate::Error::from(e.to_string()))
+    })?;
+    let mut drives = parse(&value)?;
     let mounts = crate::mounts::inventory()?;
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     for drive in &mut drives {
@@ -64,14 +53,38 @@ pub fn discover() -> Result<Vec<Drive>> {
     }
     Ok(drives)
 }
+fn inventory(mut query: impl FnMut(&str) -> Result<CommandOutput>) -> Result<Value> {
+    let columns =
+        "NAME,PATH,TYPE,SIZE,RM,HOTPLUG,RO,FSTYPE,UUID,PARTUUID,LABEL,MOUNTPOINTS,SERIAL,WWN,START";
+    let layout_columns = "PARTN,PARTTYPE,PARTLABEL,PARTFLAGS,PTTYPE,PTUUID,LOG-SEC";
+    let mut output = query(&format!("{columns},{layout_columns},DISK-SEQ"))?;
+    if !output.status.success()
+        && layout_columns
+            .split(',')
+            .any(|column| String::from_utf8_lossy(&output.stderr).contains(column))
+    {
+        // Optional layout columns vary with util-linux. Retain the existing
+        // numeric/start observations instead of disabling all drive services.
+        output = query(&format!("{columns},DISK-SEQ"))?;
+    }
+    // Older lsblk can still provide browsing/sync inventory. Imaging refuses
+    // admission when this observation is absent rather than weakening its guard.
+    if !output.status.success() && String::from_utf8_lossy(&output.stderr).contains("DISK-SEQ") {
+        output = query(columns)?;
+    }
+    if !output.status.success() || output.stdout_truncated {
+        return Err("Block inventory failed or exceeded its limit".into());
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 fn number(v: &Value, key: &str) -> u64 {
-    v[key]
-        .as_u64()
-        .or_else(|| v[key].as_str()?.parse().ok())
-        .unwrap_or(0)
+    optional_number(v, key).unwrap_or(0)
+}
+fn optional_number(v: &Value, key: &str) -> Option<u64> {
+    v[key].as_u64().or_else(|| v[key].as_str()?.parse().ok())
 }
 fn flag(v: &Value, key: &str) -> bool {
     v[key].as_bool().unwrap_or_else(|| number(v, key) != 0)
@@ -82,7 +95,7 @@ fn parse(value: &Value) -> Result<Vec<Drive>> {
         .ok_or("Invalid block inventory")?;
     let mut drives = Vec::new();
     for parent in devices {
-        append(parent, parent, &mut drives);
+        append(parent, parent, parent, &mut drives);
     }
     let mut counts = HashMap::new();
     for drive in &drives {
@@ -93,7 +106,31 @@ fn parse(value: &Value) -> Result<Vec<Drive>> {
     }
     Ok(drives)
 }
-fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
+fn partition_layout(v: &Value, table: &Value) -> Option<Box<crate::PartitionLayout>> {
+    if text(v, "type") != "part" {
+        return None;
+    }
+    let optional_text = |v: &Value, key| {
+        let value = text(v, key);
+        (!value.is_empty()).then(|| value.to_owned())
+    };
+    let start = optional_number(v, "start");
+    Some(Box::new(crate::PartitionLayout {
+        number: optional_number(v, "partn"),
+        start_512_sectors: start,
+        // lsblk START is always in 512-byte sectors, including with --bytes.
+        offset_bytes: start.and_then(|start| start.checked_mul(512)),
+        logical_sector_bytes: optional_number(v, "log-sec")
+            .or_else(|| optional_number(table, "log-sec"))
+            .filter(|size| *size != 0),
+        partition_type: optional_text(v, "parttype"),
+        label: optional_text(v, "partlabel"),
+        flags: optional_text(v, "partflags"),
+        table_type: optional_text(table, "pttype"),
+        table_uuid: optional_text(table, "ptuuid"),
+    }))
+}
+fn append(v: &Value, parent: &Value, table: &Value, drives: &mut Vec<Drive>) {
     let children = v["children"].as_array();
     let kind = text(v, "type");
     if matches!(kind, "part" | "crypt" | "rom") || (kind == "disk" && children.is_none()) {
@@ -135,6 +172,7 @@ fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
             capacity: number(v, "size"),
             drive_capacity: number(parent, "size"),
             disk_sequence: Some(number(v, "disk-seq")).filter(|value| *value != 0),
+            partition_layout: partition_layout(v, table),
             removable: flag(parent, "rm") || flag(parent, "hotplug"),
             read_only: flag(v, "ro"),
             evidence,
@@ -143,7 +181,7 @@ fn append(v: &Value, parent: &Value, drives: &mut Vec<Drive>) {
     }
     if let Some(children) = children {
         for child in children {
-            append(child, parent, drives);
+            append(child, parent, v, drives);
         }
     }
 }
@@ -169,6 +207,81 @@ pub(crate) fn select(drives: Vec<Drive>, id: &str) -> Result<Drive> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn older_lsblk_columns_fall_back_without_inventing_disk_lifetime_or_layout() {
+        use std::os::unix::process::ExitStatusExt;
+        for (unsupported, attempts) in [
+            (Vec::new(), 1),
+            (vec!["PARTN"], 2),
+            (vec!["DISK-SEQ"], 2),
+            (vec!["PARTN", "DISK-SEQ"], 3),
+        ] {
+            let mut requested = Vec::new();
+            let value = inventory(|columns| {
+                requested.push(columns.to_owned());
+                let missing = columns.split(',').find(|column| unsupported.contains(column));
+                Ok(CommandOutput {
+                    status: std::process::ExitStatus::from_raw(if missing.is_some() { 256 } else { 0 }),
+                    stdout: br#"{"blockdevices":[{"type":"part","path":"/dev/example1","start":2048,"size":1000}]}"#.to_vec(),
+                    stderr: missing.map(|column| format!("unknown column: {column}").into_bytes()).unwrap_or_default(),
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                })
+            }).unwrap();
+            assert_eq!(requested.len(), attempts, "{unsupported:?}");
+            let drives = parse(&value).unwrap();
+            assert_eq!(drives[0].disk_sequence, None);
+            let layout = drives[0].partition_layout.as_ref().unwrap();
+            assert_eq!(layout.offset_bytes, Some(1_048_576));
+            assert_eq!(layout.number, None);
+            assert_eq!(layout.table_uuid, None);
+        }
+    }
+    #[test]
+    fn partition_layout_retains_units_unknown_fields_and_immediate_table_owner() {
+        let tree = serde_json::json!({"blockdevices":[{
+            "type":"disk", "size":5000000000_u64, "pttype":"gpt", "ptuuid":"outer", "log-sec":4096,
+            "children":[{
+                "type":"part", "path":"/dev/example1", "start":"2048", "partn":1,
+                "parttype":"type-id", "partlabel":"Embedded", "partflags":"0x80", "size":1000000,
+                "pttype":"dos", "ptuuid":"inner", "children":[{
+                    "type":"part", "path":"/dev/nested1", "start":18446744073709551615_u64,
+                    "size":1000
+                }]
+            },{"type":"part", "path":"/dev/example2", "start":0,"size":1000},
+            {"type":"crypt", "path":"/dev/mapper/example", "size":1000}]
+        }]});
+        let drives = parse(&tree).unwrap();
+        let layout = drives[0].partition_layout.as_ref().unwrap();
+        assert_eq!(layout.number, Some(1));
+        assert_eq!(layout.start_512_sectors, Some(2048));
+        assert_eq!(layout.offset_bytes, Some(1_048_576));
+        assert_eq!(layout.logical_sector_bytes, Some(4096));
+        assert_eq!(layout.table_type.as_deref(), Some("gpt"));
+        assert_eq!(layout.table_uuid.as_deref(), Some("outer"));
+        assert_eq!(layout.partition_type.as_deref(), Some("type-id"));
+        assert_eq!(layout.label.as_deref(), Some("Embedded"));
+        assert_eq!(layout.flags.as_deref(), Some("0x80"));
+        let nested = drives[1].partition_layout.as_ref().unwrap();
+        assert_eq!(nested.table_type.as_deref(), Some("dos"));
+        assert_eq!(nested.table_uuid.as_deref(), Some("inner"));
+        assert_eq!(nested.start_512_sectors, Some(u64::MAX));
+        assert_eq!(nested.offset_bytes, None);
+        assert_eq!(nested.number, None);
+        assert_eq!(nested.logical_sector_bytes, None);
+        let zero = drives[2].partition_layout.as_ref().unwrap();
+        assert_eq!(zero.offset_bytes, Some(0));
+        assert_eq!(zero.partition_type, None);
+        assert!(drives[3].partition_layout.is_none());
+        let mut legacy = serde_json::to_value(&drives[0]).unwrap();
+        legacy.as_object_mut().unwrap().remove("partition_layout");
+        assert!(
+            serde_json::from_value::<Drive>(legacy)
+                .unwrap()
+                .partition_layout
+                .is_none()
+        );
+    }
     #[test]
     fn inventories_numeric_capacity_and_refuses_duplicate_partition_ids() {
         let tree = serde_json::json!({"blockdevices":[{"type":"disk","size":3000000000_u64,"rm":true,"serial":"first","children":[{"type":"part","path":"/dev/sdb1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same","disk-seq":17,"mountpoints":["/media/a"]}]},{"type":"disk","size":3000000000_u64,"rm":true,"serial":"second","children":[{"type":"part","path":"/dev/sdc1","size":2000000000,"fstype":"vfat","uuid":"fat","partuuid":"same","disk-seq":"18"}]}]});

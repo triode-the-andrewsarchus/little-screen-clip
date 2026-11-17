@@ -643,6 +643,7 @@ mod tests {
             capacity: 1024 * 1024,
             drive_capacity: 1024 * 1024,
             disk_sequence: Some(1),
+            partition_layout: None,
             removable: true,
             read_only: false,
             evidence: "fixture".into(),
