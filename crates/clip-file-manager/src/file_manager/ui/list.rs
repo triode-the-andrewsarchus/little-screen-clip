@@ -253,6 +253,7 @@ impl<'a> ListPreviews<'a> {
             self.files
                 .show_scene(ui, rect, entry, Some(self.columns), colors, palette);
         } else if entry.is_photo()
+            || entry.is_brush()
             || entry.is_material()
             || entry.is_blend()
             || (entry.regular_file && super::super::font_strip::known(&entry.path))

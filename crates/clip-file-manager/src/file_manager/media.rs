@@ -61,6 +61,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub document: Option<std::sync::Arc<super::text_strip::Document>>,
     pub materials:
         Option<std::sync::Arc<Vec<std::sync::Arc<little_clip_core::model3d::materials::Material>>>>,
+    pub brush: Option<std::sync::Arc<little_clip_core::brushes::BrushLibrary>>,
 }
 
 impl PreviewData {
@@ -99,6 +100,7 @@ impl PreviewData {
             photo: None,
             animated_frames: None,
             materials: None,
+            brush: None,
         }
     }
 }
