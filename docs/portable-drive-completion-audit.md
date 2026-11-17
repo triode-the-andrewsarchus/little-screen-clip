@@ -45,7 +45,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
 | 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity. Capture now reuses current completed file-backup hashes only with verified manifest/root/full revision and queried-change provenance, without source payload reads. Native FAT32/exFAT/NTFS correctly decline metadata-only hash promotion. Sync hash reuse, older capture-enrichment candidates, uncertain revisions and cross-driver precision handling remain. |
-| 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Image-mount replacement, root aliases and the broader concurrent-provider matrix remain. |
+| 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
@@ -53,6 +53,60 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Mounted-image provider lifetime
+
+Image providers previously used only their saved mount pathname. The new local
+`image-mount` entity captures the backup/image path, UDisks loop object, root
+device/inode/mount identity, known namespace, boot UUID and kernel unique mount
+ID after successful read-only mounting. Mount and backup records publish in one
+transaction. `STATX_MNT_ID_UNIQUE` (Linux 6.8+) prevents ordinary mount-ID reuse
+from authorizing a replacement; unsupported/unknown identity refuses admission.
+The [statx manual](https://man7.org/linux/man-pages/man2/statx.2.html) specifies
+that this ID is not reused during a running system. A checked libc statx call is
+needed because this workspace's rustix masks out that newer request bit.
+
+Catalog candidates now distinguish original, file-backup and image identities.
+Images require the matching runtime observation and validate the retained root
+before payload admission. Missing/malformed/legacy or mismatched observation
+records do not supply bytes. A held provider keeps its existing pinned-root and
+file-revision checks. This closes the demonstrated image-mount replacement case;
+it does not prove immutable payload bytes when metadata alone is uncertain (6.7).
+
+Failure cleanup shares normal image retirement using the actual in-memory owner,
+including a successful mount not yet published to SQLite. It attempts to persist
+that mounted owner for retry, attempts cleanup even if that journal fails, and
+includes journal/cleanup failures with the original error. Final loop retirement
+atomically removes the runtime observation and writes the final backup state.
+No public protocol/manifest schema changed and no removable-media files were added.
+
+The real authority/image guest passes four cases on each FAT32/exFAT/NTFS source
+profile. Its image case now injects an observation-publication failure after
+mounting and verifies both state and losetup show no remaining mapping. Successful
+admission is reloaded through another SQLite connection. Binding the same image
+root over its own pathname makes new and held catalog reads return ESTALE;
+removing the bind restores readable original bytes. Missing observations return
+ENOMEDIUM, and changed boot/namespace/unique-ID observations return ESTALE.
+Restoring the record permits reads; successful unmount removes the observation.
+Report: `/tmp/portable-drive-vm-image-mount-owner-final/report.json`, with exactly
+one successful guest marker, no timeout and all three four-test groups passing.
+
+All 135 ordinary backend tests pass (60 explicit fixtures ignored), including
+unique-mount/boot observation and writable-view refusal. All 21 selected host
+provider cases pass. Logs: `/tmp/portable-drive-image-mount-owner-backend.log` and
+`/tmp/portable-drive-image-mount-owner-providers-final.log`. Final helper/test builds,
+drive all-target clippy with warnings denied, targeted formatting and whitespace
+checks pass; logs use the same prefix with `helper-build.log`, `tests-build.log`,
+`clippy.log` and `fmt.log`. No host mounts, attached media or live daemon were used.
+
+The original-baseline architecture result remains REGRESSION: 4300 clone groups,
+144 cycles, average CCN 3.48, maximum 274 and duplication 7.08%. This step adds
+no clone group or dependency cycle. The existing mount_image hotspot grows from
+22 to 24 due to retained failure cleanup; resolve stays at 25. Observation helpers
+remain below the hotspot threshold. Report:
+`.fitness/portable-drives-image-mount-owner-architecture.json`.
+Item 6.8 remains Partial for source-root aliases, broader concurrent-provider and
+interrupted cleanup/recovery coverage. The full accepted plan remains unfinished.
 
 ## Lookup-time mount boundaries
 

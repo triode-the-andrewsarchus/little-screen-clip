@@ -20,6 +20,8 @@ use std::{
 };
 
 mod collection;
+mod image_mount;
+pub(crate) use image_mount::ImageMount;
 mod metadata;
 mod publication;
 pub(crate) use publication::recover as recover_publications;
@@ -1183,42 +1185,56 @@ pub(crate) fn mount_image(db: &Store, id: &str) -> Result<String> {
         .call("LoopSetup", &(zbus::zvariant::Fd::from(&file), options))
         .map_err(|e| e.to_string())?;
     backup.loop_object = Some(object.to_string());
-    db.put("backup", id, &backup)?;
-    let filesystem = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.UDisks2",
-        object.as_str(),
-        "org.freedesktop.UDisks2.Filesystem",
-    )
-    .map_err(|e| e.to_string())?;
-    let mut options = HashMap::new();
-    options.insert(
-        "options",
-        zbus::zvariant::Value::from("ro,nosuid,nodev,noexec"),
-    );
     let result = (|| -> Result<String> {
+        db.put("backup", id, &backup)?;
+        let filesystem = zbus::blocking::Proxy::new(
+            &connection,
+            "org.freedesktop.UDisks2",
+            object.as_str(),
+            "org.freedesktop.UDisks2.Filesystem",
+        )
+        .map_err(|e| e.to_string())?;
+        let mut options = HashMap::new();
+        options.insert(
+            "options",
+            zbus::zvariant::Value::from("ro,nosuid,nodev,noexec"),
+        );
         let mounted: String = filesystem
             .call("Mount", &(options,))
             .map_err(|e| e.to_string())?;
-        let pin = kernel_interface::pin_content_directory(Path::new(&mounted))?;
-        if !rustix::fs::fstatvfs(&pin)?
-            .f_flag
-            .contains(rustix::fs::StatVfsMountFlags::RDONLY)
-        {
-            return Err("Image mount did not become read-only".into());
-        }
-        source.check_file(&file)?;
+        // Retain the actual successful mount even if later validation/publication
+        // fails. Cleanup must use this owner, not reload an older partial record.
         backup.mount = Some(mounted.clone().into());
+        let root = Root::open(Path::new(&mounted))?;
+        let observation = ImageMount::capture(&backup, &root)?;
+        source.check_file(&file)?;
+        let transaction = db.0.unchecked_transaction()?;
+        db.put("image-mount", id, &observation)?;
         db.put("backup", id, &backup)?;
+        transaction.commit()?;
         Ok(format!("Image mounted read-only at {mounted}"))
     })();
-    if result.is_err() {
-        let _ = unmount_image(db, id);
-    }
-    result
+    result.or_else(|error| {
+        // A failed admission may already own a mounted filesystem. Preserve
+        // that fact for retry when cleanup is busy, but still attempt cleanup
+        // using the retained owner if the journal itself is unavailable.
+        let owner_error = db.put("backup", id, &backup).err();
+        retire_image(db, backup).map_err(|cleanup| {
+            let journal = owner_error
+                .map(|error| format!("; mounted-image recovery record also failed: {error}"))
+                .unwrap_or_default();
+            crate::Error::from(format!(
+                "{error}; image cleanup also failed: {cleanup}{journal}"
+            ))
+        })?;
+        Err(error)
+    })
 }
 pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
-    let mut backup: Backup = db.get("backup", id)?.ok_or("Unknown backup version")?;
+    retire_image(db, db.get("backup", id)?.ok_or("Unknown backup version")?)
+}
+fn retire_image(db: &Store, mut backup: Backup) -> Result<String> {
+    let id = backup.id.clone();
     let object = backup
         .loop_object
         .clone()
@@ -1237,7 +1253,7 @@ pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
             .call::<_, _, ()>("Unmount", &(options,))
             .map_err(|e| e.to_string())?;
         backup.mount = None;
-        db.put("backup", id, &backup)?;
+        db.put("backup", &id, &backup)?;
     }
     let proxy = zbus::blocking::Proxy::new(
         &connection,
@@ -1251,7 +1267,10 @@ pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
         .call::<_, _, ()>("Delete", &(options,))
         .map_err(|e| e.to_string())?;
     backup.loop_object = None;
-    db.put("backup", id, &backup)?;
+    let transaction = db.0.unchecked_transaction()?;
+    db.remove("image-mount", &id)?;
+    db.put("backup", &id, &backup)?;
+    transaction.commit()?;
     Ok("Read-only backup image unmounted".into())
 }
 pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -> Result<String> {

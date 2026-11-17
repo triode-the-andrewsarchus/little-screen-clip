@@ -120,6 +120,21 @@ impl OpenFile {
         Ok(Self { file, source, root })
     }
 }
+enum ProviderIdentity {
+    Original,
+    Files(crate::StorageIdentity),
+    Image(backup::ImageMount),
+}
+impl ProviderIdentity {
+    fn validate(&self, root: &Root) -> Result<()> {
+        match self {
+            Self::Original => root.validate(),
+            Self::Files(identity) if root.storage_identity()? == *identity => Ok(()),
+            Self::Files(_) => Err("Backup directory identity changed".into()),
+            Self::Image(mount) => mount.validate(root),
+        }
+    }
+}
 struct CatalogFs {
     db: Store,
     state: PathBuf,
@@ -326,7 +341,7 @@ impl CatalogFs {
                 && !drive.ambiguous
                 && let Some(mount) = drive.mount
             {
-                providers.push((mount, None));
+                providers.push((mount, ProviderIdentity::Original));
             }
         }
         let mut offset = 0;
@@ -339,11 +354,14 @@ impl CatalogFs {
                 if version.drive == self.catalog.drive && version.evidence == self.catalog.evidence
                 {
                     if version.kind == crate::BackupKind::Files {
-                        if version.identity.is_some() {
-                            providers.push((version.path, version.identity));
+                        if let Some(identity) = version.identity {
+                            providers.push((version.path, ProviderIdentity::Files(identity)));
                         }
-                    } else if let Some(mount) = version.mount {
-                        providers.push((mount, None));
+                    } else if let Some(mount) = version.mount.clone()
+                        && let Some(observed) =
+                            backup::ImageMount::load(&state_db, &version).ok().flatten()
+                    {
+                        providers.push((mount, ProviderIdentity::Image(observed)));
                     }
                 }
             }
@@ -380,9 +398,7 @@ impl CatalogFs {
             if recursive(&root.path) {
                 continue;
             }
-            if let Some(identity) = identity
-                && root.storage_identity().ok().as_ref() != Some(&identity)
-            {
+            if identity.validate(&root).is_err() {
                 stale = true;
                 continue;
             }

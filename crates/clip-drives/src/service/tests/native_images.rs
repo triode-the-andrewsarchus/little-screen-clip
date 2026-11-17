@@ -219,19 +219,59 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         fs::read(&catalog_file).unwrap_err().raw_os_error(),
         Some(libc::ENOMEDIUM)
     );
+    let image_state = Store::existing(&temp.path().join("state/drives.sqlite"), false).unwrap();
+    image_state.0.execute_batch(
+        "CREATE TRIGGER image_mount_publication_fault BEFORE INSERT ON entities
+         WHEN NEW.kind='image-mount' BEGIN SELECT RAISE(FAIL,'image mount publication fault'); END;",
+    ).unwrap();
+    let failed_mount = completed(
+        &service,
+        DriveRequest::MountImage {
+            backup: first.id.clone(),
+        },
+    );
+    image_state
+        .0
+        .execute_batch("DROP TRIGGER image_mount_publication_fault")
+        .unwrap();
+    assert_eq!(failed_mount.state, "failed");
+    assert!(
+        failed_mount
+            .message
+            .contains("image mount publication fault"),
+        "{}",
+        failed_mount.message
+    );
+    let retired: DriveBackup = image_state.get("backup", &first.id).unwrap().unwrap();
+    assert!(retired.mount.is_none() && retired.loop_object.is_none());
+    assert!(
+        backup::ImageMount::load(&image_state, &retired)
+            .unwrap()
+            .is_none()
+    );
+    let loops = little_clip_core::process::CommandRequest::new("losetup")
+        .arg("-j")
+        .arg(&first.path)
+        .run()
+        .unwrap();
+    assert!(loops.status.success());
+    assert!(loops.stdout.is_empty(), "{}", loops.stdout_lossy());
     finish(
         &service,
         DriveRequest::MountImage {
             backup: first.id.clone(),
         },
     );
-    let mounted = status(&service)
+    let mounted_backup = status(&service)
         .backups
         .into_iter()
         .find(|b| b.id == first.id)
-        .unwrap()
-        .mount
         .unwrap();
+    let mounted = mounted_backup.mount.as_ref().unwrap();
+    let observed = backup::ImageMount::load(&image_state, &mounted_backup)
+        .unwrap()
+        .unwrap();
+    observed.validate(&Root::open(mounted).unwrap()).unwrap();
     assert_eq!(
         fs::read(mounted.join("image-source.txt")).unwrap(),
         b"first authorized partition backup"
@@ -273,6 +313,48 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         fs::read(catalog_mount.join("seconds.txt")).unwrap(),
         b"whole-second payload"
     );
+    let seconds = catalog_mount.join("seconds.txt");
+    let held = File::open(&seconds).unwrap();
+    let replacement = native_fs::GuestMount::attach(mounted, mounted);
+    assert!(observed.validate(&Root::open(mounted).unwrap()).is_err());
+    assert_eq!(
+        fs::read(&seconds).unwrap_err().raw_os_error(),
+        Some(libc::ESTALE)
+    );
+    use std::os::unix::fs::FileExt;
+    assert_eq!(
+        held.read_at(&mut [0; 1], 0).unwrap_err().raw_os_error(),
+        Some(libc::ESTALE)
+    );
+    drop(held);
+    drop(replacement);
+    assert_eq!(fs::read(&seconds).unwrap(), b"whole-second payload");
+    image_state.remove("image-mount", &first.id).unwrap();
+    assert_eq!(
+        fs::read(&seconds).unwrap_err().raw_os_error(),
+        Some(libc::ENOMEDIUM)
+    );
+    for field in ["boot", "namespace", "unique_mount"] {
+        let mut changed = serde_json::to_value(&observed).unwrap();
+        match field {
+            "boot" => changed[field] = serde_json::to_value(uuid::Uuid::new_v4()).unwrap(),
+            "namespace" => changed[field]["mount"] = serde_json::Value::Null,
+            "unique_mount" => {
+                changed[field] = serde_json::json!(changed[field].as_u64().unwrap() + 1)
+            }
+            _ => unreachable!(),
+        }
+        image_state.put("image-mount", &first.id, &changed).unwrap();
+        assert_eq!(
+            fs::read(&seconds).unwrap_err().raw_os_error(),
+            Some(libc::ESTALE),
+            "{field}"
+        );
+    }
+    image_state
+        .put("image-mount", &first.id, &observed)
+        .unwrap();
+    assert_eq!(fs::read(&seconds).unwrap(), b"whole-second payload");
     assert_eq!(
         fs::write(mounted.join("must-not-write"), b"x")
             .unwrap_err()
@@ -284,6 +366,12 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         DriveRequest::UnmountImage {
             backup: first.id.clone(),
         },
+    );
+    assert!(
+        image_state
+            .get::<serde_json::Value>("image-mount", &first.id)
+            .unwrap()
+            .is_none()
     );
     assert_eq!(
         fs::read(&catalog_file).unwrap_err().raw_os_error(),

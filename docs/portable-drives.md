@@ -206,6 +206,24 @@ No completed versions are automatically discarded by default. Configure `backup_
 
 Completed images can be mounted explicitly read-only from the backup submenu or CLI. These mounted images can supply contents to an offline catalog. Merely listing a catalog does not mount an image.
 
+Image-provider admission records the exact mounted view in the local drive-state
+SQLite database, alongside its backup record in one transaction. The observation
+binds the backup/image path and UDisks loop owner to the root identity, namespace,
+boot ID and kernel unique mount ID. A replaced mount or changed context cannot
+supply catalog contents through an old record. Kernel unique mount IDs are
+available since Linux 6.8 and are not reused during a boot; see
+[statx](https://man7.org/linux/man-pages/man2/statx.2.html).
+Missing older observations require explicitly unmounting/remounting the image
+before it can serve catalog reads. Offline listings still work. Mount admission
+fails and cleans up if the kernel cannot supply that identity.
+
+If image-mount validation/publication fails after mounting, cleanup uses the
+operation's actual mounted path and loop owner. It attempts to record those facts
+for retry, still attempts cleanup if that write fails, and reports any cleanup
+failure alongside the original error. Successful retirement clears the runtime
+mount observation with the final backup state. These facts stay local; backup
+manifest/public record formats and removable filesystems are unchanged.
+
 ## Folder synchronization
 
 Selected source subtrees must be actual directories within the selected partition.
