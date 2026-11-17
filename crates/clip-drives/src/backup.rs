@@ -25,14 +25,38 @@ pub(crate) use image_mount::ImageMount;
 mod metadata;
 mod publication;
 mod retention;
-pub(crate) use publication::recover as recover_publications;
-pub(crate) use publication::{current as current_version, files_manifest, read_manifest};
-pub(crate) use retention::provider_lease;
+pub(crate) fn recover_publications(db: &Store) -> Result<()> {
+    publication::recover(db)?;
+    retention::recover(db)
+}
+pub(crate) use publication::{completed_manifest, current as current_version, read_manifest};
+pub(crate) use retention::{provider_lease, prune};
 
 pub(crate) use crate::DriveBackup as Backup;
 fn btrfs(root: &Root) -> Result<bool> {
     let pin = root.directory(Path::new(""), false)?;
     Ok(rustix::fs::fstatfs(&pin)?.f_type as u32 == 0x9123683e)
+}
+fn subvolume_read_only(root: &Root, read_only: bool) -> Result<()> {
+    let pin = root.directory(Path::new(""), false)?;
+    let (request, fd) = CommandRequest::new("btrfs")
+        .args(["property", "set", "-ts"])
+        .timeout(Duration::from_secs(30))
+        .own_process_group()
+        .inherit_handle(&pin)?;
+    let output = request
+        .arg(PathBuf::from(format!("/proc/self/fd/{fd}")))
+        .args(["ro", if read_only { "true" } else { "false" }])
+        .run()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot change owned Btrfs subvolume read-only property: {}",
+            output.stderr_lossy()
+        )
+        .into());
+    }
+    root.validate()
 }
 fn command(args: &[&str], parent: &File, names: &[&std::ffi::OsStr]) -> Result<()> {
     let (mut request, fd) = CommandRequest::new("btrfs")
@@ -175,20 +199,7 @@ pub(crate) fn files(
     }
     .run(&mut progress)?;
     if incremental {
-        // Property arguments follow the path, unlike subvolume commands.
-        let (request, fd) = CommandRequest::new("btrfs")
-            .args(["property", "set", "-ts"])
-            .timeout(Duration::from_secs(30))
-            .own_process_group()
-            .inherit_handle(&pin)?;
-        let output = request
-            .arg(PathBuf::from(format!("/proc/self/fd/{fd}")).join(&temporary))
-            .args(["ro", "true"])
-            .run()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err("Could not seal the completed Btrfs backup read-only".into());
-        }
+        subvolume_read_only(&target, true)?;
     }
     source.validate()?;
     let backup = Backup {
@@ -610,16 +621,16 @@ mod tests {
             ambiguous: false,
         }
     }
-    struct FileFixture {
-        db: Store,
-        source: Root,
-        destination: Root,
-        drive: Drive,
-        cancel: AtomicBool,
-        temp: tempfile::TempDir,
+    pub(super) struct FileFixture {
+        pub(super) db: Store,
+        pub(super) source: Root,
+        pub(super) destination: Root,
+        pub(super) drive: Drive,
+        pub(super) cancel: AtomicBool,
+        pub(super) temp: tempfile::TempDir,
     }
     impl FileFixture {
-        fn backup(&self, progress: impl FnMut(u64, u64)) -> Result<Backup> {
+        pub(super) fn backup(&self, progress: impl FnMut(u64, u64)) -> Result<Backup> {
             files(
                 &self.db,
                 &self.drive,
@@ -629,7 +640,7 @@ mod tests {
                 progress,
             )
         }
-        fn new(contents: &[u8]) -> Self {
+        pub(super) fn new(contents: &[u8]) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let source = Root::create(&temp.path().join("source")).unwrap();
             let destination = Root::create(&temp.path().join("backups")).unwrap();
@@ -1274,93 +1285,6 @@ fn retire_image(db: &Store, mut backup: Backup) -> Result<String> {
     db.put("backup", &id, &backup)?;
     transaction.commit()?;
     Ok("Read-only backup image unmounted".into())
-}
-pub(crate) fn prune(db: &Store, drive: &str, keep: usize, cancel: &AtomicBool) -> Result<String> {
-    if keep == 0 {
-        return Err("Retain at least one completed backup version".into());
-    }
-    retention::check_readers(db, drive)?;
-    let mut versions = Vec::new();
-    let mut offset = 0;
-    loop {
-        let page: Vec<Backup> = db.list("backup", offset, 128)?;
-        if page.is_empty() {
-            break;
-        }
-        versions.extend(page.into_iter().filter(|v| v.drive == drive));
-        offset += 128;
-    }
-    versions.sort_by_key(|v| std::cmp::Reverse(v.created));
-    let current_files = publication::current(db, drive, BackupKind::Files)?.map(|b| b.id);
-    let current_image = publication::current(db, drive, BackupKind::Image)?.map(|b| b.id);
-    let mut files = 0;
-    let mut images = 0;
-    let mut removed = 0;
-    for version in versions {
-        let count = if version.kind == BackupKind::Files {
-            &mut files
-        } else {
-            &mut images
-        };
-        *count += 1;
-        if *count <= keep
-            || current_files.as_ref() == Some(&version.id)
-            || current_image.as_ref() == Some(&version.id)
-        {
-            continue;
-        }
-        cancelled(cancel)?;
-        if version.mount.is_some() || version.loop_object.is_some() {
-            continue;
-        }
-        let parent = Root::open(version.path.parent().ok_or("Missing backup parent")?)?;
-        let name = version.path.file_name().ok_or("Missing backup name")?;
-        if !name
-            .as_encoded_bytes()
-            .windows(version.id.len())
-            .any(|w| w == version.id.as_bytes())
-        {
-            return Err("Backup version path no longer matches its recorded identity".into());
-        }
-        publication::check_manifest(&version)?;
-        if version.kind == BackupKind::Image {
-            let file = kernel_interface::open_content(&version.path, false)?;
-            verify_image(&version, &file)?;
-            let (_pin, path) = parent.parent(Path::new(name), false)?;
-            fs::remove_file(path)?;
-        } else {
-            let root = Root::open(&version.path)?;
-            let _lease = provider_lease(&root, true)?;
-            if version.identity.as_ref() != Some(&root.storage_identity()?) {
-                return Err("Backup directory identity changed; refusing prune".into());
-            }
-            let coverage = scan::scan(
-                db,
-                &root,
-                "prune-check",
-                &Limits {
-                    hashes: false,
-                    ..Default::default()
-                },
-                cancel,
-                |_, _| {},
-            )?;
-            if !coverage.complete {
-                return Err("Cannot validate backup tree for pruning".into());
-            }
-            root.validate()?;
-            if btrfs(&root)? {
-                let pin = parent.directory(Path::new(""), false)?;
-                command(&["subvolume", "delete"], &pin, &[name])?;
-            } else {
-                fs::remove_dir_all(&root.path)?;
-            }
-        }
-        publication::remove_manifest(&parent, &version, cancel)?;
-        db.remove("backup", &version.id)?;
-        removed += 1;
-    }
-    Ok(format!("Pruned {removed} old completed backup versions"))
 }
 
 fn verify_image(backup: &Backup, file: &File) -> Result<()> {

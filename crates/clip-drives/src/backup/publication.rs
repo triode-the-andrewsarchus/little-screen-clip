@@ -63,7 +63,7 @@ struct Pending {
     #[serde(with = "little_clip_core::path_serde")]
     manifest_staged: PathBuf,
 }
-fn current_key(drive: &str, kind: BackupKind) -> String {
+pub(super) fn current_key(drive: &str, kind: BackupKind) -> String {
     format!("{drive}:{kind:?}")
 }
 pub(crate) fn current(db: &Store, drive: &str, kind: BackupKind) -> Result<Option<Backup>> {
@@ -120,11 +120,10 @@ fn validate_manifest(backup: &Backup, path: &Path) -> Result<()> {
     )
 }
 
-/// Validates the locally owned completed file-manifest location.
-pub(crate) fn files_manifest(backup: &Backup) -> Option<&Path> {
+/// Validates the locally owned completed manifest location.
+pub(crate) fn completed_manifest(backup: &Backup) -> Option<&Path> {
     let path = backup.manifest.as_deref()?;
-    (backup.kind == BackupKind::Files
-        && uuid::Uuid::parse_str(&backup.id).is_ok()
+    (uuid::Uuid::parse_str(&backup.id).is_ok()
         && path.parent() == backup.path.parent()
         && path.file_name()
             == Some(std::ffi::OsStr::new(&format!(

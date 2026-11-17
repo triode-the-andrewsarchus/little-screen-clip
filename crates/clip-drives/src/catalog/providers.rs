@@ -42,7 +42,7 @@ impl ProviderIdentity {
 
 impl CatalogFs {
     fn backup_entry(&self, version: &Backup, entry: &Entry) -> Result<Entry> {
-        let path = backup::files_manifest(version).ok_or("Backup manifest is unavailable")?;
+        let path = backup::completed_manifest(version).ok_or("Backup manifest is unavailable")?;
         let mut bytes = u64::MAX;
         backup::read_manifest(
             version,

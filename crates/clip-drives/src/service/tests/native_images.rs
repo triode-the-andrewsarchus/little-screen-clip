@@ -405,5 +405,21 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         fs::read(selected(&original).mount.unwrap().join("image-source.txt")).unwrap(),
         b"second version"
     );
+    let mut config = status(&service).config;
+    config.backup_keep_versions = Some(1);
+    finish(&service, DriveRequest::Configure { config });
+    finish(
+        &service,
+        DriveRequest::PruneBackups {
+            drive: original.id.clone(),
+        },
+    );
+    assert!(!first.path.exists());
+    assert!(!first.manifest.as_ref().unwrap().exists());
+    assert_eq!(
+        digest(File::open(&second.path).unwrap()),
+        *second.sha256.as_ref().unwrap()
+    );
+    assert_eq!(status(&service).backups.len(), 1);
     service.shutdown().unwrap();
 }

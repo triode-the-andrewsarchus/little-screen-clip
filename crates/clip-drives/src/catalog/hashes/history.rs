@@ -13,10 +13,13 @@ impl Reuse<'_> {
         if self.remaining().is_zero() || *bytes == 0 {
             return Ok(());
         }
-        if version.drive != drive.id || version.evidence != drive.evidence {
+        if version.kind != crate::BackupKind::Files
+            || version.drive != drive.id
+            || version.evidence != drive.evidence
+        {
             return Ok(());
         }
-        let Some(path) = backup::files_manifest(version) else {
+        let Some(path) = backup::completed_manifest(version) else {
             return Ok(());
         };
         let pending = match *missing {

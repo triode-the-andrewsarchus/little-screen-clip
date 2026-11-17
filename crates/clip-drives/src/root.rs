@@ -260,7 +260,7 @@ impl Root {
     }
     /// Refuse mount crossings during lookup, before foreign getattr/open hooks.
     /// Keep the resulting pin through guarded reopen instead of resolving its name.
-    fn pin_child(&self, parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+    pub(crate) fn pin_child(&self, parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
         use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
         Ok(File::from(openat2(
             parent,

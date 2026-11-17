@@ -31,7 +31,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 4.3 | Partial | Bounded retries, metadata fidelity and hard-link preservation/reuse pass native checks. Read-only source guards now reject writable backing filesystems and policy loss on real FAT32/exFAT/NTFS, retaining current; ordinary live collection is preserved. Selectable reviewed/CLI read-only collection now owns flush/unmount/verified mount/copy/reader retirement/restoration. Real UDisks guest busy refusal, cancellation and late-cancel completion pass on all three source formats. Desktop password-agent, broader fidelity/mount-option and interruption matrices remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
-| 4.6 | Partial | Explicit retention now protects open providers with cross-process directory leases and checks mounted catalogs beyond status pagination. Durable retirement, Btrfs capability fallback and interruption matrices remain. |
+| 4.6 | Partial | Explicit retention now protects open providers with cross-process directory leases and checks mounted catalogs beyond status pagination. Durable withdrawal/quarantine, paused recovery and unprivileged Btrfs fallback now pass targeted and native-image acceptance. Broader interruption and responsiveness matrices remain. |
 | 5.1 | Partial | Preflush and unmount run as retained stages. Real owned FUSE integration proves external-reader busy refusal, successful pin retirement, independent RAM writeback during a held unmount and retained completed eject after cancellation. Image cancellation after unmount prevents copy admission. Admission retains the device-node pin and checks its disk sequence across authorized image reads. Reviewed requests show exact capacity/destination/free bytes and bind the selected roots; non-Btrfs full-image space failure precedes unmount. Real guest UDisks/PolicyKit authorization, busy-source refusal and successful preflush/unmount/image/restoration now pass. Interactive password-agent and hotplug/replacement races remain. |
 | 5.2 | Partial | Isolated real UDisks/PolicyKit tests now prove authorized image reads, unprivileged denial and busy-device refusal on FAT32/exFAT/NTFS partitions. The desktop authentication-agent/password interaction remains a separate UI gate. |
 | 5.3 | Complete | Exact authorized-device/image hashes, partition sizes, durable publication and checksummed source manifests pass on real FAT32/exFAT/NTFS GPT partitions. Manifests retain typed partition number/start/byte offset/logical sector size/type/label/flags and immediate containing-table type/identifier; unknown fields remain unknown. Native tests assert actual GPT layout and exact manifest retention. See the partition-layout checkpoint and its guest report. |
@@ -53,6 +53,97 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Durable backup retirement checkpoint
+
+Pruning now withdraws a selected completed version and inserts its versioned local
+backup-prune intent atomically before any filesystem mutation. Selection preserves
+the existing per-kind keep count, current pointers and descending registration
+order when wall-clock dates tie. Parent write/search/read-only admission happens
+before withdrawal. Current/publishing/mounted versions and changed completed
+records are refused again inside the transaction. Raw current-pointer protection
+works even when a completed record is missing.
+
+Cleanup retains exclusive artifact ownership through the initial attempt. A
+no-overwrite rename moves the artifact to .pruning-{UUID} in its identity-checked
+parent. The version-1 JSON intent retains the Backup, parent StorageIdentity,
+quarantine observation and paused state. File/directory identities are required
+on every recovery lookup, and unknown versions/layouts are refused. Manifest
+checksum/header validation precedes payload deletion; metadata retirement uses
+the existing guarded checksummed deletion. Final parent fsync precedes atomic
+journal/recovery-record removal. Withdrawn versions cannot appear as complete
+backup providers or incremental bases.
+
+The existing publication recovery entrypoint also visits retiring versions in
+bounded key pages, with 128-byte identifier and 64-KiB JSON decode limits. Failed
+attempts retain DriveRecovery details. Cancellation persists paused=true and
+startup leaves it paused; another explicit prune request resumes it. Successful
+per-version removals remain counted if a later candidate fails. Retirement uses a
+bounded stack of the existing guarded scan frames rather than leaving a second
+full tree index in operational state. Traversal refuses foreign mounts before
+opening them and never follows a symlink payload. Owner directory permissions can
+be repaired only inside the withdrawn tree.
+
+Btrfs retirement first uses the ordinary subvolume deletion command. On this
+host's mount it returns EPERM without user_subvol_rm_allowed; the fallback clears
+the retired owned root's read-only property, then performs descriptor-relative
+VFS removal. The same retained-handle property setter seals new backups, replacing
+duplicated command construction. The current version stays sealed and untouched.
+No daemon elevation, mount-option change, privileged host mount or source-drive
+metadata file is introduced. Btrfs subvolume roots may have another st_dev without
+a mount crossing: admission retains the existing NO_XDEV child pin and requires
+the exact saved StorageIdentity instead of weakening ordinary recursive traversal.
+
+Six ordinary tests cover atomic withdrawal faults, parent permission refusal,
+raw current-pointer protection, cancellation/restart/explicit retry, six replaced
+or corrupt input cases, and six abrupt-exit subprocess boundaries. The child exits
+with the WAL connection and relevant pins/leases live, without Rust cleanup.
+Boundaries include withdrawal, a lost-quarantine-ack control, quarantine, partial
+deletion, absent artifact and absent manifest. A reopened store recovers twice
+without advertising partial data or damaging current bytes. The simulated
+filesystem boundaries do not replace the still-open live-device interruption and
+full daemon responsiveness matrix.
+
+Final ordinary backend results: 183 pass, 77 explicit fixtures ignored. The fresh
+helper passes all 30 host provider cases, including the missing-status open-reader
+guard. Backend all-target clippy with warnings denied, targeted formatting and
+whitespace checks pass. The six-child source-read trace still passes. Logs use
+`/tmp/portable-drive-retention-journal-` with backend/fuse/trace/clippy final logs.
+
+The real unprivileged Btrfs acceptance prunes two sealed older snapshots while
+preserving current bytes and an outside symlink target. It exercises raw-named
+nested files and directory permissions. Its write control returns EROFS before pruning.
+The syscall trace proves both deletion ioctls return EPERM, both retired roots are
+unsealed, and guarded rmdir removes only those roots. Evidence:
+`/tmp/portable-drive-retention-journal-btrfs-final.log` and its `.trace` companion.
+The owned Btrfs fixture is removed without elevation. A first test incorrectly
+equated statvfs mount flags with subvolume read-only state; the actual write control
+replaces that assumption. Stable equal-date selection was also corrected after a
+test caught reversed registration order in the new visitor-based plan.
+
+`/tmp/portable-drive-vm-retention-journal/report.json` records successful FAT32,
+exFAT and NTFS profiles, no timeout, QEMU exit 0 and one LITTLE_CLIP_VM_RESULT=0.
+Each profile runs six selected native cases. The authorized partition-image case
+now explicitly configures retention, prunes its older image through the service,
+verifies its manifest is gone and hashes the retained current image exactly.
+The other cases retain file-backup/catalog inclusion, provider, recursion and
+unsupported fingerprint-promotion checks. Known exFAT timestamp loss remains
+explicitly stale.
+
+Architecture: 4300 clone groups and 144 cycles, unchanged from the preceding
+reader checkpoint; duplication 7.03%, average CCN 3.49 and maximum 274. Initial
+clone reports were removed by sharing the subvolume property mechanism, bounded
+entity reader and overlapping crash fixtures. Cohesive admission, withdrawal,
+artifact cleanup and finalization phases eliminate the new CCN>15 reports.
+Structural analysis still flags artifact open, withdrawal and finalization as
+central resource/transaction boundaries; those required joins remain for the
+final branch review. Necessary journal/recovery work adds complexity, but no new
+clone or cycle is accepted by this checkpoint. The original-baseline branch result
+remains REGRESSION. Filtered report:
+`.fitness/portable-drives-retirement-journal-architecture.json`.
+
+Items 4.6/6.8 remain Partial for the wider provider/prune/device interruption and
+retention responsiveness gates. The complete goal remains active.
 
 ## Backup retention reader checkpoint
 

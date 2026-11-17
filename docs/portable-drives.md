@@ -430,6 +430,25 @@ processes. Pruning requires an exclusive lease, so a reader remains protected ev
 if its catalog status is missing. Mounted-catalog checks visit all saved records
 and include actual mount observations rather than relying on the status page.
 
+Pruning now withdraws each selected completed version and records its retirement
+in the same SQLite transaction before changing files. Its private
+`.pruning-{version UUID}` name stays in the recorded backup parent. Cleanup checks
+the retained artifact and parent identities, manifest checksum and current-version
+pointer; it never follows nested mounts or symlinks while removing a tree. A
+version undergoing cleanup cannot supply new catalog opens or incremental bases.
+The local version-1 `backup-prune` journal contains the saved backup record, parent
+identity, quarantine observation and paused flag. It contains no file payloads or
+new metadata on the source drive.
+
+Interrupted cleanup resumes through the existing backup recovery entrypoint.
+Cancellation pauses that version's cleanup across restart; repeat the explicit
+prune request to resume it. Failures retain an actionable recovery record and
+completed removals remain counted. On Btrfs, cleanup first attempts subvolume
+deletion. If local policy denies it, the withdrawn owned subvolume can be made
+writable and removed with guarded ordinary directory operations. Current versions
+remain sealed. Permission or identity failures retain the retirement record;
+cleanup does not elevate the daemon or change filesystem mount settings.
+
 The reloadable `drives.catalog_workers` setting allows one to four independent
 catalog captures at once, defaulting to one. Raising it admits queued independent
 captures; lowering it lets accepted work finish before admitting more. Captures
