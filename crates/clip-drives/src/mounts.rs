@@ -1,5 +1,7 @@
 //! Catalog/managed mount ownership uses core's shared lossless namespace inventory.
 use crate::Result;
+mod lifetime;
+pub(crate) use lifetime::Lifetime;
 pub(crate) use little_clip_core::mount_inventory::{Mount, inventory};
 use std::path::Path;
 

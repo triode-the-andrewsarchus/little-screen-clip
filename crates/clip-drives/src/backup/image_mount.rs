@@ -1,8 +1,7 @@
 //! Local runtime evidence for the exact mounted view created by image admission.
 use super::*;
-use little_clip_core::kernel_interface::{MountIdentity, Namespace};
+use crate::mounts::Lifetime;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ImageMount {
@@ -12,15 +11,12 @@ pub(crate) struct ImageMount {
     #[serde(with = "little_clip_core::path_serde")]
     path: PathBuf,
     object: String,
-    identity: MountIdentity,
-    unique_mount: u64,
-    namespace: Namespace,
-    boot: uuid::Uuid,
+    #[serde(flatten)]
+    lifetime: Lifetime,
 }
 impl ImageMount {
     pub(super) fn capture(backup: &Backup, root: &Root) -> Result<Self> {
-        let namespace = Namespace::current();
-        if !namespace.known() || backup.kind != BackupKind::Image {
+        if backup.kind != BackupKind::Image {
             return Err("Cannot establish image mount context".into());
         }
         let pin = root.directory(Path::new(""), false)?;
@@ -33,10 +29,7 @@ impl ImageMount {
                 .loop_object
                 .clone()
                 .ok_or("Missing image loop owner")?,
-            identity: MountIdentity::pinned(&pin)?,
-            unique_mount: unique_mount(&pin)?,
-            namespace,
-            boot: boot()?,
+            lifetime: Lifetime::capture(&pin)?,
         };
         root.validate()?;
         Ok(observation)
@@ -51,18 +44,11 @@ impl ImageMount {
         }))
     }
     pub(crate) fn validate(&self, root: &Root) -> Result<()> {
-        if !self.namespace.known()
-            || self.path != root.path
-            || Namespace::current() != self.namespace
-            || boot()? != self.boot
-        {
+        if self.path != root.path {
             return Err("Backup image mount context is stale".into());
         }
         let pin = root.directory(Path::new(""), false)?;
-        if MountIdentity::pinned(&pin)? != self.identity || unique_mount(&pin)? != self.unique_mount
-        {
-            return Err("Backup image mount was replaced".into());
-        }
+        self.lifetime.validate(&pin)?;
         read_only(&pin)?;
         root.validate()
     }
@@ -76,49 +62,41 @@ fn read_only(pin: &File) -> Result<()> {
     }
     Ok(())
 }
-fn boot() -> Result<uuid::Uuid> {
-    let mut value = String::new();
-    File::open("/proc/sys/kernel/random/boot_id")?
-        .take(64)
-        .read_to_string(&mut value)?;
-    Ok(uuid::Uuid::parse_str(value.trim()).map_err(|error| error.to_string())?)
-}
-fn unique_mount(pin: &File) -> Result<u64> {
-    let mut stats = std::mem::MaybeUninit::<libc::statx>::zeroed();
-    // SAFETY: statx borrows a live descriptor and writes its fixed-size output.
-    // Request only the known mount-ID field; rustix currently masks this bit out.
-    let result = unsafe {
-        libc::statx(
-            pin.as_raw_fd(),
-            c"".as_ptr(),
-            libc::AT_EMPTY_PATH,
-            libc::STATX_MNT_ID_UNIQUE,
-            stats.as_mut_ptr(),
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // SAFETY: the successful statx call initialized the entire output structure.
-    let stats = unsafe { stats.assume_init() };
-    if stats.stx_mask & libc::STATX_MNT_ID_UNIQUE == 0 || stats.stx_mnt_id == 0 {
-        return Err("Unique image mount identity requires Linux 6.8 or later".into());
-    }
-    Ok(stats.stx_mnt_id)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn unique_mount_observation_is_stable_and_boot_identity_is_parseable() {
+    fn shared_lifetime_preserves_the_legacy_flat_image_mount_representation() {
+        #[derive(Serialize, Deserialize)]
+        struct Legacy {
+            backup: String,
+            image: serde_json::Value,
+            path: serde_json::Value,
+            object: String,
+            identity: serde_json::Value,
+            unique_mount: u64,
+            namespace: serde_json::Value,
+            boot: uuid::Uuid,
+        }
         let temp = tempfile::tempdir().unwrap();
-        let pin = kernel_interface::pin_content_directory(temp.path()).unwrap();
-        let first = unique_mount(&pin).unwrap();
-        assert!(first > 0);
-        assert_eq!(first, unique_mount(&pin).unwrap());
-        assert_eq!(boot().unwrap(), boot().unwrap());
+        let root = Root::open(temp.path()).unwrap();
+        let observed = ImageMount {
+            backup: "owned".into(),
+            image: "owned.img".into(),
+            path: root.path.clone(),
+            object: "owned-loop".into(),
+            lifetime: Lifetime::capture(&root.directory(Path::new(""), false).unwrap()).unwrap(),
+        };
+        let json = serde_json::to_value(&observed).unwrap();
+        assert!(json.get("lifetime").is_none());
+        let old: Legacy = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(old).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<ImageMount>(json).unwrap(),
+            observed
+        );
     }
 
     #[test]
