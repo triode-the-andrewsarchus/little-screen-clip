@@ -15,6 +15,7 @@ pub(super) struct RollingSnapshot {
     pub sample_rate: u32,
     pub channels: u16,
     pub mono_samples: Vec<f32>,
+    pub dadaspec: Option<little_clip_core::ImageThumbnail>,
     pub peaks_lvl0: Vec<PeakBlock>,
     pub peaks_lvl1: Vec<PeakBlock>,
     pub peaks_lvl2: Vec<PeakBlock>,
@@ -35,13 +36,27 @@ pub(super) fn read_snapshot(path: &Path, cancel: &AtomicBool) -> Result<RollingS
     mono_samples
         .try_reserve_exact(frames)
         .map_err(|error| error.to_string())?;
+    let mut dadaspec =
+        little_clip_core::audio::dadaspec::DadaspecBuilder::new(frames, spec.sample_rate).ok();
+    let mut stereo_frame = [0.0; 2];
     let mut sum = 0.0;
     for (index, sample) in reader.samples::<i16>().enumerate() {
         if index.is_multiple_of(8192) && cancel.load(Ordering::Acquire) {
             return Err("Rolling snapshot cancelled".into());
         }
-        sum += sample.map_err(|error| error.to_string())? as f32 / 32768.0;
+        let value = sample.map_err(|error| error.to_string())? as f32 / 32768.0;
+        let channel = index % spec.channels as usize;
+        if channel < 2 {
+            stereo_frame[channel] = value;
+        }
+        sum += value;
         if (index + 1).is_multiple_of(spec.channels as usize) {
+            if spec.channels == 1 {
+                stereo_frame[1] = stereo_frame[0];
+            }
+            if let Some(builder) = &mut dadaspec {
+                builder.push_frame(stereo_frame);
+            }
             mono_samples.push(sum / spec.channels as f32);
             sum = 0.0;
         }
@@ -58,6 +73,12 @@ pub(super) fn read_snapshot(path: &Path, cancel: &AtomicBool) -> Result<RollingS
     if cancel.load(Ordering::Acquire) {
         return Err("Rolling snapshot cancelled".into());
     }
+    let dadaspec = dadaspec
+        .map(|builder| builder.finish(1000, 60, cancel))
+        .transpose()?;
+    if cancel.load(Ordering::Acquire) {
+        return Err("Rolling snapshot cancelled".into());
+    }
     Ok(RollingSnapshot {
         path: path.to_owned(),
         source,
@@ -65,6 +86,7 @@ pub(super) fn read_snapshot(path: &Path, cancel: &AtomicBool) -> Result<RollingS
         duration_sec: mono_samples.len() as f32 / spec.sample_rate as f32,
         sample_rate: spec.sample_rate,
         channels: spec.channels,
+        dadaspec,
         mono_samples,
         peaks_lvl0,
         peaks_lvl1,
@@ -216,6 +238,33 @@ mod tests {
                 .err()
                 .unwrap()
                 .contains("waveform limit")
+        );
+    }
+    #[test]
+    fn dadaspec_retains_stereo_when_mono_editing_samples_cancel() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("opposing.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 8000, 2);
+        let samples: Vec<i16> = (0..8000)
+            .flat_map(|i| {
+                let sample =
+                    ((i as f32 * std::f32::consts::TAU * 800.0 / 8000.0).sin() * 16000.0) as i16;
+                [sample, -sample]
+            })
+            .collect();
+        buffer.push_samples(&samples);
+        buffer.write_wav(&path).unwrap();
+        let snapshot = read_snapshot(&path, &AtomicBool::new(false)).unwrap();
+        assert!(snapshot.mono_samples.iter().all(|&sample| sample == 0.0));
+        let image = snapshot.dadaspec.unwrap();
+        assert_eq!((image.width, image.height), (1000, 60));
+        assert!(
+            image
+                .premultiplied_rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[..3].iter().any(|&v| v > 0))
         );
     }
 }

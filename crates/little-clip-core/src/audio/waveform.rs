@@ -429,6 +429,10 @@ pub fn compute_plain_waveform(
         u64::MAX
     };
 
+    let expected_frames = (target_duration_ms as f64 / 1000.0 * sample_rate as f64)
+        .round()
+        .max(1.0) as usize;
+    let mut dadaspec = super::dadaspec::DadaspecBuilder::new(expected_frames, sample_rate).ok();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     while let Ok(packet) = format.next_packet() {
@@ -454,6 +458,12 @@ pub fn compute_plain_waveform(
                 total_frames += frames as u64;
 
                 for f in 0..frames {
+                    if let Some(builder) = &mut dadaspec {
+                        builder.push_frame([
+                            samples[f * n_ch],
+                            samples[f * n_ch + usize::from(n_ch > 1)],
+                        ]);
+                    }
                     let s1 = samples[f * n_ch].abs();
                     if s1 > current_chunk1 {
                         current_chunk1 = s1;
@@ -503,6 +513,8 @@ pub fn compute_plain_waveform(
     };
 
     Some(AudioWaveform {
+        dadaspec: dadaspec
+            .and_then(|builder| builder.finish(300, 60, &AtomicBool::new(false)).ok()),
         channels,
         sample_rate,
         duration_ms: meta.duration_ms,
@@ -637,6 +649,7 @@ pub fn compute_full_waveform(path: &Path, num_bars: usize) -> Option<AudioWavefo
     };
 
     Some(AudioWaveform {
+        dadaspec: None,
         channels,
         sample_rate,
         duration_ms: meta.duration_ms,

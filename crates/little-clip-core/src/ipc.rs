@@ -230,6 +230,9 @@ pub struct SlotCard {
     /// Missing on older daemons, which clients may poll as a compatibility fallback.
     #[serde(default)]
     pub preview_phase: Option<PreviewPhase>,
+    /// Presence of the bounded native audio image; absent on older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_dadaspec_ready: Option<bool>,
 }
 
 /// Compact preview readiness marker used to refresh long-lived clients.
@@ -310,6 +313,14 @@ impl SlotCard {
             item_id: item.id,
             payload_kind: item.kind(),
             preview_phase: Some(preview_phase),
+            audio_dadaspec_ready: match &item.payload {
+                ClipPayload::AudioRef { waveform, .. } => Some(
+                    waveform
+                        .as_ref()
+                        .is_some_and(|waveform| waveform.dadaspec.is_some()),
+                ),
+                _ => None,
+            },
         }
     }
 }
@@ -545,6 +556,7 @@ mod tests {
         );
 
         let waveform = crate::audio::AudioWaveform {
+            dadaspec: None,
             channels: 1,
             sample_rate: 44100,
             duration_ms: 1000,
@@ -571,6 +583,29 @@ mod tests {
             Some(PreviewPhase::Enhanced)
         );
         assert_ne!(ready, enhanced);
+        let ClipPayload::AudioRef {
+            waveform: Some(mut waveform),
+            ..
+        } = manager.get(SlotId::LeftHand).unwrap().payload.clone()
+        else {
+            panic!("audio fixture")
+        };
+        waveform.dadaspec = Some(crate::ImageThumbnail {
+            width: 1,
+            height: 1,
+            premultiplied_rgba: vec![1, 2, 3, 255],
+        });
+        manager.update_audio_waveform(item_id, waveform);
+        let visual = SlotStateSummary::from_manager(&manager);
+        assert_ne!(visual, enhanced);
+        assert_eq!(
+            visual.card(SlotId::LeftHand).unwrap().audio_dadaspec_ready,
+            Some(true)
+        );
+        assert_eq!(
+            visual.card(SlotId::LeftHand).unwrap().preview_phase,
+            Some(PreviewPhase::Enhanced)
+        );
         assert!(
             !serde_json::to_string(&enhanced)
                 .unwrap()

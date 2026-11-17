@@ -230,6 +230,7 @@ impl WorkbenchApp {
                                         &render_state,
                                         text,
                                         renderer.palette.is_dark,
+                                        renderer.config.audio.dadaspec,
                                     )
                                 }),
                             )
@@ -378,6 +379,7 @@ mod tests {
                             },
                         )],
                         true,
+                        false,
                     )),
                 )),
                 false,

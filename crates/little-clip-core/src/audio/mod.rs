@@ -9,6 +9,7 @@ pub mod test_support;
 
 pub mod analysis;
 mod cover;
+pub mod dadaspec;
 pub use cover::read_audio_cover;
 pub mod decode;
 mod render;

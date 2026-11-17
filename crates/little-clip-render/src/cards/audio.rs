@@ -107,7 +107,53 @@ impl ScreenRenderer {
             .min(total_peaks);
         let bar_width = (content_w / num_bars as f32 * 0.72).clamp(1.5, 6.0);
 
-        if has_dual_channel {
+        let (r, g, b, _) = parse_hex_color(&self.palette.colors.surface_panel);
+        let tint = little_clip_core::audio::dadaspec::surface_tint([r, g, b]);
+        let image = wf
+            .dadaspec
+            .as_ref()
+            .filter(|_| self.config.audio.dadaspec)
+            .map(|image| {
+                let pixels = if tint == 255 {
+                    std::borrow::Cow::Borrowed(image.premultiplied_rgba.as_slice())
+                } else {
+                    std::borrow::Cow::Owned(
+                        image
+                            .premultiplied_rgba
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .flat_map(|p| {
+                                [
+                                    (u16::from(p[0]) * u16::from(tint) / 255) as u8,
+                                    (u16::from(p[1]) * u16::from(tint) / 255) as u8,
+                                    (u16::from(p[2]) * u16::from(tint) / 255) as u8,
+                                    p[3],
+                                ]
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                (pixels, image.width, image.height)
+            });
+        if self.config.audio.dadaspec
+            && let Some((pixels, width, height)) = &image
+            && let Some(source) = tiny_skia::PixmapRef::from_bytes(pixels, *width, *height)
+        {
+            let transform = Transform::from_scale(
+                content_w / *width as f32,
+                (content_h - 20.0) / *height as f32,
+            )
+            .post_translate(content_x, content_y);
+            pixmap.draw_pixmap(
+                0,
+                0,
+                source,
+                &tiny_skia::PixmapPaint::default(),
+                transform,
+                None,
+            );
+        } else if has_dual_channel {
             // Dual Channel Layout (Left Channel Top, Right Channel Bottom)
             let ch_h = (content_h - 28.0) / 2.0;
             let ch1_center = content_y + ch_h / 2.0;

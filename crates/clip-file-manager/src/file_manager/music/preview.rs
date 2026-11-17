@@ -7,6 +7,21 @@ use std::{path::Path, time::Duration};
 pub(in crate::file_manager) use super::super::media::MusicMetadata as Metadata;
 
 pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &AtomicBool) -> Data {
+    load_visualization(path, spectrum, None, cancelled)
+}
+pub(in crate::file_manager) fn load_dadaspec(
+    path: &Path,
+    width: u32,
+    cancelled: &AtomicBool,
+) -> Data {
+    load_visualization(path, false, Some(width), cancelled)
+}
+fn load_visualization(
+    path: &Path,
+    spectrum: bool,
+    dadaspec: Option<u32>,
+    cancelled: &AtomicBool,
+) -> Data {
     let mut data = Data::new(
         super::super::display_path(path),
         "Music".into(),
@@ -33,7 +48,21 @@ pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &Ato
                     });
                 (metadata(path, cancelled), cover)
             });
-            let result = if spectrum {
+            let result = if let Some(width) = dadaspec {
+                super::audio_file(path)
+                    .and_then(|file| {
+                        little_clip_core::audio::dadaspec::render_file(
+                            file,
+                            path,
+                            0.0,
+                            duration as f64,
+                            width,
+                            60,
+                            cancelled,
+                        )
+                    })
+                    .map(|image| (Vec::new(), Vec::new(), Some(image)))
+            } else if spectrum {
                 super::spectrum::render(path, duration, cancelled)
                     .map(|image| (Vec::new(), Vec::new(), Some(image)))
             } else {
@@ -420,5 +449,17 @@ mod tests {
         assert!((metadata.duration - 1.0).abs() < 0.02);
         assert!(metadata.source.unwrap().check().is_ok());
         assert!(data.image.is_none());
+    }
+    #[test]
+    fn dadaspec_uses_the_music_cache_texture_and_keeps_guarded_metadata() {
+        let (_directory, path) =
+            crate::audio_preview::test_support::generate_fixture_wav("dadaspec-preview", 0.4);
+        let data = load_dadaspec(&path, 1024, &AtomicBool::new(false));
+        let image = data.spectrum.as_ref().expect("native mel strip");
+        assert_eq!((image.width, image.height), (1024, 60));
+        assert!(data.waveform.is_empty());
+        assert!(data.music.as_ref().unwrap().source.is_some());
+        let cancelled = load_dadaspec(&path, 1024, &AtomicBool::new(true));
+        assert!(cancelled.spectrum.is_none());
     }
 }

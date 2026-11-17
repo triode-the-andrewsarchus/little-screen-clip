@@ -313,7 +313,7 @@ mod native_input_tests {
 
     #[test]
     fn native_and_reference_clicks_target_the_same_slots_at_both_layout_widths() {
-        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true);
+        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true, false);
         for width in [900.0, 1600.0] {
             for priors in [2, 3] {
                 for (slot, native) in slot_rects(priors) {
@@ -367,7 +367,7 @@ mod native_input_tests {
     }
     #[test]
     fn native_and_reference_drags_emit_the_same_swap() {
-        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true);
+        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true, false);
         for prepared in [None, Some(&data)] {
             let ctx = egui::Context::default();
             let mut dragging = None;

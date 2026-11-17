@@ -191,6 +191,7 @@ mod tests {
             mono_samples: Arc::new(vec![]),
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         sample.pitch_semitones = 12.0;
         sample.prepare_pitch().unwrap();

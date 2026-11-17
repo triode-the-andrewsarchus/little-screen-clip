@@ -1176,6 +1176,7 @@ fn space_plays_only_the_active_editor_layer_through_the_bus() {
             mono_samples: pcm,
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         state.pack_bank.slots[0].samples.push(layer);
     }

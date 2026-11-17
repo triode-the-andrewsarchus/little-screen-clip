@@ -1725,11 +1725,11 @@ fn switching_audio_strips_preserves_range_and_rejects_previous_mode_previews() {
         manager.music_previews.retire();
         manager.music_previews.set_audio_spectrum(!spectrum);
         let entry = &manager.directory.as_ref().unwrap().entries[0];
-        manager.music_previews.music(&ctx, entry);
+        manager.music_previews.music(&ctx, entry, 512);
         manager.music_previews.set_audio_spectrum(spectrum);
         let started = Instant::now();
         loop {
-            if let Some(ready) = manager.music_previews.music(&ctx, entry) {
+            if let Some(ready) = manager.music_previews.music(&ctx, entry, 512) {
                 assert_eq!(
                     ready.spectrum_texture.is_some(),
                     spectrum,

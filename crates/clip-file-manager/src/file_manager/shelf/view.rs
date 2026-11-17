@@ -574,7 +574,22 @@ fn paint_media(ui: &Ui, rect: Rect, ready: Option<&Ready>, colors: WorkbenchColo
             egui::Color32::WHITE,
         );
     } else if let Some(ready) = ready {
-        if !ready.data.waveform.is_empty() {
+        if ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+                .unwrap_or(false)
+        }) && let Some(texture) = &ready.spectrum_texture
+        {
+            painter.image(
+                texture.id(),
+                rect,
+                Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+                egui::Color32::from_gray(little_clip_core::audio::dadaspec::surface_tint([
+                    colors.recessed.r(),
+                    colors.recessed.g(),
+                    colors.recessed.b(),
+                ])),
+            );
+        } else if !ready.data.waveform.is_empty() {
             paint_waveform(
                 &painter,
                 rect,

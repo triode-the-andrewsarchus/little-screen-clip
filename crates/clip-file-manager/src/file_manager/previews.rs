@@ -28,6 +28,7 @@ pub(super) struct EntryPreviews {
     cache: Previews,
     pub(super) multisample: super::multisample::Preview,
     audio_spectrum: bool,
+    audio_dadaspec: bool,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     rasters: Previews,
@@ -60,6 +61,15 @@ impl EntryPreviews {
         let ready = self.cache.get(*id)?;
         super::image_strip::parse_dhash(&ready.data.photo.as_ref()?.perceptual)
     }
+    pub fn audio_dadaspec(&self) -> bool {
+        self.audio_dadaspec
+    }
+    pub fn set_audio_dadaspec(&mut self, enabled: bool) {
+        if self.audio_dadaspec != enabled {
+            self.retire();
+            self.audio_dadaspec = enabled;
+        }
+    }
     pub fn audio_spectrum(&self) -> bool {
         self.audio_spectrum
     }
@@ -74,9 +84,37 @@ impl EntryPreviews {
         &mut self,
         ctx: &egui::Context,
         entry: &Entry,
+        pixel_width: u32,
     ) -> Option<&super::shelf::preview::Ready> {
         self.cache.poll(ctx);
-        self.listing(entry)
+        if !self.audio_dadaspec {
+            return self.listing(entry);
+        }
+        let id = self.identity(entry);
+        // Grow in bounded buckets, retaining a ready strip while a larger one
+        // loads. Existing request admission and identity checks own the refresh.
+        let width = pixel_width.clamp(256, 4096).div_ceil(256) * 256;
+        let source = Source::Dadaspec {
+            path: entry.path.clone(),
+            width,
+        }
+        .checked(&entry.path, &self.context);
+        match self.cache.get(id) {
+            None => {
+                self.cache.request(id, source);
+            }
+            Some(ready)
+                if ready
+                    .data
+                    .spectrum
+                    .as_ref()
+                    .is_some_and(|image| image.width < width) =>
+            {
+                self.cache.refresh(id, source);
+            }
+            _ => {}
+        }
+        self.cache.get(id)
     }
 
     fn identity(&mut self, entry: &Entry) -> uuid::Uuid {
@@ -277,7 +315,14 @@ impl EntryPreviews {
                 } else if super::midi_strip::is_midi(&entry.path) {
                     Source::Midi(entry.path.clone())
                 } else if little_clip_core::audio::is_audio_path(&entry.path) {
-                    Source::Music(entry.path.clone(), self.audio_spectrum)
+                    if self.audio_dadaspec {
+                        Source::Dadaspec {
+                            path: entry.path.clone(),
+                            width: 1024,
+                        }
+                    } else {
+                        Source::Music(entry.path.clone(), self.audio_spectrum)
+                    }
                 } else if super::binary_strip::known(&entry.path) && entry.regular_file {
                     Source::Binary(entry.path.clone())
                 } else if little_clip_core::notebook::is_candidate_path(&entry.path) {
@@ -975,6 +1020,50 @@ mod tests {
             previews.listing(entry).is_some()
         });
         previews.listing(entry).unwrap()
+    }
+
+    #[test]
+    fn dadaspec_grows_to_physical_width_while_retaining_the_ready_strip_and_read_guard() {
+        let (directory, _) =
+            crate::audio_preview::test_support::generate_fixture_wav("resolution", 0.2);
+        let entry = single_entry(directory.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        previews.set_audio_dadaspec(true);
+        wait_for_preview(|| previews.music(&ctx, &entry, 512).is_some());
+        let ready = previews.music(&ctx, &entry, 512).unwrap();
+        let texture = ready.spectrum_texture.as_ref().unwrap().id();
+        assert_eq!(ready.data.spectrum.as_ref().unwrap().width, 512);
+        // Growing starts a refresh without discarding the displayed texture.
+        let ready = previews.music(&ctx, &entry, 1400).unwrap();
+        assert_eq!(ready.spectrum_texture.as_ref().unwrap().id(), texture);
+        wait_for_preview(|| {
+            previews
+                .music(&ctx, &entry, 1400)
+                .unwrap()
+                .data
+                .spectrum
+                .as_ref()
+                .unwrap()
+                .width
+                == 1536
+        });
+        assert_eq!(
+            previews
+                .music(&ctx, &entry, 300)
+                .unwrap()
+                .data
+                .spectrum
+                .as_ref()
+                .unwrap()
+                .width,
+            1536
+        );
+        previews.set_context(&super::super::search::PreviewContext::empty_results());
+        wait_for_preview(|| previews.music(&ctx, &entry, 1024).is_some());
+        let denied = previews.music(&ctx, &entry, 1024).unwrap();
+        assert!(denied.data.spectrum.is_none());
+        assert!(denied.data.detail.contains("outside the published search"));
     }
 
     #[test]

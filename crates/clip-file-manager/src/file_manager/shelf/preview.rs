@@ -41,6 +41,10 @@ pub(in crate::file_manager) enum Source {
         revision: u64,
     },
     Music(PathBuf, bool),
+    Dadaspec {
+        path: PathBuf,
+        width: u32,
+    },
     Text(PathBuf),
     Markdown {
         source: crate::file_source::FileSource,
@@ -123,7 +127,9 @@ impl Source {
             Self::Checked { source, .. } => source.execution(),
             Self::ArchiveMember(_) => (&super::super::container_preview::archive::JOBS, 2, 10),
             Self::System(_) => (super::super::system::jobs(), 2, 3),
-            Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
+            Self::Music(..) | Self::Dadaspec { .. } => {
+                (music_preview_jobs(), music_preview_workers(), 30)
+            }
             Self::Gallery { .. }
             | Self::Handwritten(_)
             | Self::PdfPage { .. }
@@ -196,6 +202,9 @@ impl Source {
             } => gallery_preview(&path, revision, edge, orientation, token),
             Source::Photo { path, revision } => {
                 super::super::image_strip::load(&path, revision, token)
+            }
+            Source::Dadaspec { path, width } => {
+                super::super::music::preview::load_dadaspec(&path, width, token)
             }
             Source::Music(path, spectrum) => {
                 super::super::music::preview::load(&path, spectrum, token)
@@ -638,6 +647,7 @@ fn item_preview(item: &ClipItem) -> Data {
         ClipPayload::AudioRef { waveform, .. } => {
             let mut data = Data::new(item.title.clone(), item.subtitle.clone(), Icon::Audio);
             if let Some(waveform) = waveform {
+                data.spectrum = waveform.dadaspec.clone();
                 let stride = waveform.ch1_peaks.len().div_ceil(96).max(1);
                 data.waveform = waveform
                     .ch1_peaks
@@ -803,6 +813,20 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
     } else if little_clip_core::audio::is_audio_path(path) {
         data.icon = Icon::Audio;
         (data.waveform, data.waveform_colors) = audio_excerpt(path);
+        if let Some(metadata) = little_clip_core::audio::read_audio_metadata(path)
+            && let Ok(file) = crate::file_source::open_regular_file(path, true)
+        {
+            data.spectrum = little_clip_core::audio::dadaspec::render_file(
+                file,
+                path,
+                0.0,
+                (metadata.duration_ms as f64 / 1000.0).min(15.0),
+                300,
+                60,
+                &AtomicBool::new(false),
+            )
+            .ok();
+        }
     } else if little_clip_core::is_video_path(path) {
         data.icon = Icon::Film;
         data.detail = "Video".into();

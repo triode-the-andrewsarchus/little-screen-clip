@@ -13,6 +13,15 @@ impl ConstellationState {
         let id = ui
             .id()
             .with(("pad_wave_view", &sample.file_path, duration.to_bits()));
+        let style_id = id.with("dadaspec");
+        let mut use_dadaspec = ui
+            .data(|data| data.get_temp::<bool>(style_id))
+            .unwrap_or_else(|| {
+                ui.ctx().data(|data| {
+                    data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+                        .unwrap_or(false)
+                })
+            });
         let full = AudioViewport {
             start_sec: 0.0,
             duration_sec: duration,
@@ -63,6 +72,11 @@ impl ConstellationState {
         let painter = ui.painter_at(outer);
         painter.rect_filled(outer, 4.0, ui.visuals().extreme_bg_color);
         paint_ruler(ui, &painter, outer, rect, view);
+        ui.put(
+            Rect::from_min_size(outer.min + Vec2::new(12.0, 18.0), Vec2::new(110.0, 20.0)),
+            egui::Checkbox::new(&mut use_dadaspec, "Dadaspec"),
+        );
+        ui.data_mut(|data| data.insert_temp(style_id, use_dadaspec));
         let retained = Rect::from_min_max(
             Pos2::new(start.clamp(rect.left(), rect.right()), rect.top()),
             Pos2::new(end.clamp(rect.left(), rect.right()), rect.bottom()),
@@ -77,14 +91,49 @@ impl ConstellationState {
                 12,
             ),
         );
-        paint_peaks(
-            &painter,
-            rect,
-            sample,
-            view,
-            ui.ctx().pixels_per_point(),
-            ui.visuals().weak_text_color(),
-        );
+        if use_dadaspec
+            && let Some(spec) = sample
+                .cached_audio
+                .as_ref()
+                .and_then(|audio| audio.dadaspec.as_ref())
+        {
+            let texture = spec.texture.get_or_init(|| {
+                ui.ctx().load_texture(
+                    "rack-dadaspec",
+                    egui::ColorImage::from_rgba_premultiplied(
+                        [spec.image.width as usize, spec.image.height as usize],
+                        &spec.image.premultiplied_rgba,
+                    ),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            let uv = Rect::from_min_max(
+                Pos2::new((view.start_sec / duration).clamp(0.0, 1.0), 0.0),
+                Pos2::new(
+                    ((view.start_sec + view.duration_sec) / duration).clamp(0.0, 1.0),
+                    1.0,
+                ),
+            );
+            painter.image(
+                texture.id(),
+                rect,
+                uv,
+                Color32::from_gray(little_clip_core::audio::dadaspec::surface_tint([
+                    ui.visuals().extreme_bg_color.r(),
+                    ui.visuals().extreme_bg_color.g(),
+                    ui.visuals().extreme_bg_color.b(),
+                ])),
+            );
+        } else {
+            paint_peaks(
+                &painter,
+                rect,
+                sample,
+                view,
+                ui.ctx().pixels_per_point(),
+                ui.visuals().weak_text_color(),
+            );
+        }
         if sample.pitch_pending() {
             let status = Rect::from_min_size(
                 outer.center() - Vec2::new(64.0, 10.0),

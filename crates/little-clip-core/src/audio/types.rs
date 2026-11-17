@@ -5,6 +5,9 @@ use std::sync::Arc;
 /// Downsampled audio waveform peaks and optional spectral frequency coloring for UI display.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AudioWaveform {
+    /// Native mirrored mel thumbnail, shared by screen and desktop mirrors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dadaspec: Option<crate::ImageThumbnail>,
     /// Number of audio channels (1 = mono, 2 = stereo).
     pub channels: u16,
     /// Sample rate in Hz.

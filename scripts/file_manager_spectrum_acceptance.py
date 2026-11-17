@@ -17,28 +17,42 @@ from file_manager_phase5_acceptance import audio_tail
 from file_manager_media_audio import start_private_audio
 
 
-def toggle_spectrum(session, name):
+def choose_audio_view(session, name, mode):
     session.observe(f"{name}-before", [])
-    click_word(session, f"{name}-before", "View", minimum_y=40, maximum_y=90)
-    # Keep the private pointer alive over the submenu while egui opens it.
-    hover = subprocess.Popen([str(session.pointer), "move", "1280", "800", "210", "115"], env=session.env, stdout=subprocess.DEVNULL)
+    view_x, view_y = session.word(f"{name}-before", "View", tree=True, minimum_y=40)
+    session.click(view_x, view_y)
+    parent = f"{name}-view-menu"
+    audio_position = None
+    def parent_visible():
+        nonlocal audio_position
+        session.capture_text(parent, session.output / f"{parent}.png", [])
+        audio_position = session.word(parent, "Audio", tree=True, minimum_y=90, required=False)
+        if audio_position is None:
+            session.click(view_x, view_y)
+        return audio_position
+    wait_for(parent_visible, "View audio submenu")
+    audio_x, audio_y = audio_position
+    hover = subprocess.Popen([str(session.pointer), "move", "1280", "800", str(audio_x), str(audio_y)], env=session.env, stdout=subprocess.DEVNULL)
     try:
         shot = f"{name}-audio"
+        position = None
         def menu_visible():
+            nonlocal position
             session.capture_text(shot, session.output / f"{shot}.png", [])
-            crop = session.output / f"{shot}-menu-ocr.png"
-            with Image.open(session.output / f"{shot}.png") as screen:
-                screen.crop((332, 95, 595, 140)).resize((1052, 180)).save(crop)
-            text = private.run_checked(["tesseract", str(crop), "stdout", "--psm", "7"], env=session.env)
-            return "usespectruminsteadofwaveform" in "".join(text.lower().split())
-        wait_for(menu_visible, "Audio menu toggle")
-        session.observations.append({"name": shot, "screenshot": str(session.output / f"{shot}.png"), "expected_visible_text": ["Use spectrum instead of waveform"]})
-        session.click(455, 115)
+            position = session.word(shot, mode, minimum_y=90, required=False)
+            return position if position and position[0] > 300 else None
+        wait_for(menu_visible, "Audio view choices")
+        session.observations.append({"name": shot, "screenshot": str(session.output / f"{shot}.png"), "expected_visible_text": ["Waveform", "Spectrum", "Dadaspec"]})
+        session.click(*position)
     finally:
         hover.terminate()
         hover.wait(timeout=3)
-    session.key("Escape")
-    session.key("Escape")
+
+
+def toggle_spectrum(session, name):
+    config = tomllib.loads((session.output / "scratch/config.toml").read_text())
+    current = config.get("file_manager", {}).get("audio_spectrum", False)
+    choose_audio_view(session, name, "Waveform" if current else "Spectrum")
 
 
 def exercise(session, root):

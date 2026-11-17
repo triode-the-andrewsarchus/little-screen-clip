@@ -523,6 +523,7 @@ mod tests {
                     mono_samples: pcm,
                     waveform_peaks: vec![],
                     waveform_colors: vec![],
+                    dadaspec: None,
                 }));
                 let (device, mut audio) =
                     rodio::mixer::mixer(2.try_into().unwrap(), RATE.try_into().unwrap());
@@ -612,6 +613,7 @@ mod tests {
                 mono_samples: pcm,
                 waveform_peaks: vec![],
                 waveform_colors: vec![],
+                dadaspec: None,
             }));
             let voice = if streaming {
                 bus.play_source(Box::new(rodio::buffer::SamplesBuffer::new(
@@ -640,6 +642,7 @@ mod tests {
             mono_samples: pcm.clone(),
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         for velocity in [1, 64, 127] {
             let (player, mut samples) = Player::new();

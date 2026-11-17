@@ -68,6 +68,8 @@ right_priors = 1
 trim_link_tracking = true
 
 [audio]
+# Mirrored RGB mel spectrogram on the little screen; default for rolling views.
+dadaspec = false
 # External editor escape hatch for audio (e.g. "audacity")
 editor = "audacity"
 
@@ -166,6 +168,7 @@ photo_recursive_depth = 64
 # Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
 photo_recursive_timeout_seconds = 0
 audio_spectrum = false
+audio_dadaspec = false
 
 [file_manager.search]
 roots = []

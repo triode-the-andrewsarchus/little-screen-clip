@@ -217,14 +217,29 @@ fn music_card<'a>(
             pos2(art.right() + 8.0, art.top()),
             pos2(rect.right() - 6.0, art.bottom()),
         );
-        ui.painter().rect_filled(wave, 0.0, colors.recessed);
+        let dadaspec = ui.ctx().data(|data| {
+            data.get_temp::<bool>(Id::new("audio_dadaspec"))
+                .unwrap_or(false)
+        });
+        if !dadaspec {
+            ui.painter().rect_filled(wave, 0.0, colors.recessed);
+        }
         if let Some(ready) = ready {
             if let Some(texture) = &ready.spectrum_texture {
+                let tint = if dadaspec {
+                    Color32::from_gray(little_clip_core::audio::dadaspec::surface_tint([
+                        colors.canvas.r(),
+                        colors.canvas.g(),
+                        colors.canvas.b(),
+                    ]))
+                } else {
+                    Color32::WHITE
+                };
                 ui.painter().image(
                     texture.id(),
                     wave,
                     Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
-                    Color32::WHITE,
+                    tint,
                 );
             } else {
                 if ready.data.waveform.is_empty() {

@@ -552,7 +552,28 @@ impl ConstellationState {
         );
 
         if let Some(ref prev) = cached_preview {
-            if !prev.waveform.is_empty() {
+            if ui.ctx().data(|data| {
+                data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+                    .unwrap_or(false)
+            }) && let Some(spec) = &prev.dadaspec
+            {
+                let texture = spec.texture.get_or_init(|| {
+                    ui.ctx().load_texture(
+                        "hover-dadaspec",
+                        egui::ColorImage::from_rgba_premultiplied(
+                            [spec.image.width as usize, spec.image.height as usize],
+                            &spec.image.premultiplied_rgba,
+                        ),
+                        egui::TextureOptions::LINEAR,
+                    )
+                });
+                painter.image(
+                    texture.id(),
+                    wave_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            } else if !prev.waveform.is_empty() {
                 let count = prev.waveform.len().max(1);
                 for (index, amplitude) in prev.waveform.iter().enumerate() {
                     let x =

@@ -36,6 +36,7 @@ impl NativeMirrorData {
         state: &SlotManager,
         mut text: Vec<(SlotId, PreparedTextPreview)>,
         is_dark: bool,
+        dadaspec: bool,
     ) -> Self {
         let cards = SlotId::all()
             .into_iter()
@@ -63,6 +64,7 @@ impl NativeMirrorData {
                         hex: hex.chars().take(256).collect(),
                         rgb: [*r, *g, *b],
                     },
+                    ClipPayload::AudioRef { .. } if dadaspec => NativeContent::Raster,
                     ClipPayload::AudioRef { waveform, .. } => match waveform {
                         Some(waveform)
                             if waveform.ch1_peaks.len() <= 8192
@@ -390,6 +392,7 @@ mod tests {
             &state,
             vec![(SlotId::LeftHand, PreparedTextPreview::default())],
             true,
+            false,
         );
         assert!(
             std::sync::Arc::get_mut(&mut state).is_some(),
@@ -410,6 +413,7 @@ mod tests {
                 },
             )],
             true,
+            false,
         );
         assert!(matches!(oversized.cards[0].1.body, NativeContent::Raster));
         drop(state);
@@ -434,6 +438,7 @@ mod tests {
             channels: 2,
             format: "WAV".into(),
             waveform: Some(little_clip_core::audio::AudioWaveform {
+                dadaspec: None,
                 channels: 2,
                 sample_rate: 48000,
                 duration_ms: 12000,
@@ -480,7 +485,7 @@ mod tests {
             .flat_map(|(_, text)| text.lines.iter().flatten())
             .map(|span| span.text.capacity())
             .sum();
-        let data = NativeMirrorData::prepare(&state, text, renderer.palette.is_dark);
+        let data = NativeMirrorData::prepare(&state, text, renderer.palette.is_dark, false);
         let palette = crate::ui_appearance::palette(Default::default());
         let mut results = Vec::new();
         for width in [900.0, 1800.0] {

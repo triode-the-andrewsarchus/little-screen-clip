@@ -137,6 +137,7 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
             mono_samples: std::sync::Arc::new(vec![]),
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         prepared.prepared_pitch = None;
         prepared.prepare_pitch()?;

@@ -113,7 +113,8 @@ impl<'a> ListPreviews<'a> {
             );
         } else if is_audio {
             self.music_paths.insert(entry.path.clone());
-            let ready = self.music.music(ui.ctx(), entry);
+            let pixel_width = (rect.width() * ui.ctx().pixels_per_point()).ceil() as u32;
+            let ready = self.music.music(ui.ctx(), entry, pixel_width);
             let (active, time) = music::preview_row(
                 ui,
                 rect,

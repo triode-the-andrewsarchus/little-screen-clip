@@ -189,6 +189,7 @@ mod tests {
         let pending = SlotStateSummary::from_manager(&manager);
 
         let waveform = little_clip_core::audio::AudioWaveform {
+            dadaspec: None,
             channels: 1,
             sample_rate: 44100,
             duration_ms: 1000,

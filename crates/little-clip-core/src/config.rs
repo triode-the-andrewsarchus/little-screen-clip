@@ -50,6 +50,8 @@ pub struct FileManagerConfig {
     pub small_container_items: u8,
     /// Render file-manager audio strips as spectra instead of waveforms.
     pub audio_spectrum: bool,
+    /// Prefer Dadaspec for audio strips; takes precedence over audio_spectrum.
+    pub audio_dadaspec: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
     pub video_timeline_decimation: u8,
     /// Enable embedded video subtitles on open; changed only by editing the config.
@@ -77,6 +79,7 @@ impl Default for FileManagerConfig {
             inline_container_previews: true,
             small_container_items: 8,
             audio_spectrum: false,
+            audio_dadaspec: false,
             video_timeline_decimation: 1,
             video_subtitles_enabled: false,
             constellation_pad_keys: ["zxcv", "asdf", "qwer", "1234"].map(str::to_owned),
@@ -591,6 +594,9 @@ pub enum AudioSamplePosition {
 /// Audio decoding, rolling capture, and waveform preview configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    /// Use mirrored RGB mel thumbnails on the screen and as the rolling default.
+    #[serde(default)]
+    pub dadaspec: bool,
     /// Threshold (in seconds) above which audio clips use a snippet preview instead of full waveform (default: 300 = 5 min).
     #[serde(default = "default_max_full_waveform_sec")]
     pub max_full_waveform_sec: u64,
@@ -637,6 +643,7 @@ fn default_audio_editor() -> String {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
+            dadaspec: false,
             max_full_waveform_sec: 300,
             snippet_duration_sec: 30,
             sample_position: AudioSamplePosition::Middle,
@@ -797,6 +804,17 @@ impl AppConfig {
         spectrum: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         save_setting_to_file("file_manager", "audio_spectrum", spectrum)
+    }
+
+    /// Save a Files audio view atomically, preserving unrelated settings.
+    pub fn save_file_manager_audio_view_to_file(
+        spectrum: bool,
+        dadaspec: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_settings_to_file(&[
+            ("file_manager", "audio_spectrum", spectrum.into()),
+            ("file_manager", "audio_dadaspec", dadaspec.into()),
+        ])
     }
 
     /// Saves the Files photo-gallery layout mode preference ("masonry" or "similarity").
@@ -1369,5 +1387,19 @@ lama_url = "https://ai.mirror/lama.onnx"
 "#;
         let both_cfg: AppConfig = toml::from_str(both_toml).unwrap();
         assert_eq!(both_cfg.lama_model_url(), "https://ai.mirror/lama.onnx");
+    }
+    #[test]
+    fn dadaspec_defaults_and_saved_preferences_preserve_legacy_spectrum_choice() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert!(!defaults.audio.dadaspec);
+        assert!(!defaults.file_manager.audio_dadaspec);
+        let old = "[file_manager]\naudio_spectrum = true\n[workbench]\neditor = 'keep-me'\n";
+        let text = update_setting_in_text(old, "file_manager", "audio_dadaspec", true).unwrap();
+        let config: AppConfig = toml::from_str(&text).unwrap();
+        assert!(config.file_manager.audio_dadaspec);
+        assert!(config.file_manager.audio_spectrum);
+        assert!(text.contains("editor = 'keep-me'"));
+        let text = update_setting_in_text(&text, "audio", "dadaspec", true).unwrap();
+        assert!(toml::from_str::<AppConfig>(&text).unwrap().audio.dadaspec);
     }
 }

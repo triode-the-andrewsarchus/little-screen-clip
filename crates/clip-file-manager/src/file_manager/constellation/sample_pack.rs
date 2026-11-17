@@ -30,6 +30,21 @@ pub struct CachedAudio {
     pub mono_samples: Arc<Vec<f32>>,
     pub waveform_peaks: Vec<(f32, f32)>,
     pub waveform_colors: Vec<[u8; 3]>,
+    pub(super) dadaspec: Option<Arc<RackDadaspec>>,
+}
+
+pub(super) struct RackDadaspec {
+    pub image: little_clip_core::ImageThumbnail,
+    pub texture: std::sync::OnceLock<egui::TextureHandle>,
+}
+
+impl std::fmt::Debug for RackDadaspec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RackDadaspec")
+            .field("width", &self.image.width)
+            .field("height", &self.image.height)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for CachedAudio {
@@ -49,6 +64,10 @@ impl CachedAudio {
         (self.samples.len() + self.mono_samples.len()) * std::mem::size_of::<f32>()
             + self.waveform_peaks.len() * std::mem::size_of::<(f32, f32)>()
             + self.waveform_colors.len() * 3
+            + self
+                .dadaspec
+                .as_ref()
+                .map_or(0, |view| view.image.premultiplied_rgba.len())
     }
 
     /// Decodes one ordinary source, rejecting a source replaced during the read.
@@ -108,6 +127,21 @@ impl CachedAudio {
                 peaks
             })
             .collect();
+        let mut builder =
+            little_clip_core::audio::dadaspec::DadaspecBuilder::new(mono.len(), sample_rate)
+                .ok()?;
+        for frame in samples.chunks_exact(width) {
+            builder.push_frame([frame[0], frame[usize::from(width > 1)]]);
+        }
+        let dadaspec = builder
+            .finish(512, 60, &std::sync::atomic::AtomicBool::new(false))
+            .ok()
+            .map(|image| {
+                Arc::new(RackDadaspec {
+                    image,
+                    texture: Default::default(),
+                })
+            });
         source.check().ok()?;
         Some(Self {
             channels,
@@ -116,6 +150,7 @@ impl CachedAudio {
             mono_samples: Arc::new(mono),
             waveform_peaks,
             waveform_colors,
+            dadaspec,
         })
     }
 }
@@ -792,6 +827,7 @@ mod tests {
             mono_samples: Arc::new(vec![]),
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         sample.start_sec = 0.25;
         sample.end_sec = 0.75;
@@ -950,6 +986,7 @@ mod tests {
             mono_samples: Arc::new(vec![0.5, 2.5, 4.5, 6.5]),
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         });
         sample.cached_audio = Some(audio.clone());
         sample.start_sec = 0.25;

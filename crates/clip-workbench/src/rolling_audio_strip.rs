@@ -37,6 +37,8 @@ pub struct RollingAudioStripState {
     pub sample_rate: u32,
     pub channels: u16,
     pub mono_samples: Vec<f32>,
+    dadaspec_texture: Option<egui::TextureHandle>,
+    use_dadaspec: bool,
     pub peaks_lvl0: Vec<PeakBlock>,
     pub peaks_lvl1: Vec<PeakBlock>,
     pub peaks_lvl2: Vec<PeakBlock>,
@@ -119,6 +121,8 @@ impl RollingAudioStripState {
             sample_rate: 48000,
             channels: 2,
             mono_samples: Vec::new(),
+            dadaspec_texture: None,
+            use_dadaspec: little_clip_core::AppConfig::load().audio.dadaspec,
             peaks_lvl0: Vec::new(),
             peaks_lvl1: Vec::new(),
             peaks_lvl2: Vec::new(),
@@ -218,6 +222,16 @@ impl RollingAudioStripState {
                 self.path = Some(snapshot.path);
                 self.source = Some(snapshot.source);
                 self.snapshot_lease = Some(snapshot.lease);
+                self.dadaspec_texture = snapshot.dadaspec.map(|image| {
+                    ctx.load_texture(
+                        "rolling-dadaspec",
+                        egui::ColorImage::from_rgba_premultiplied(
+                            [image.width as usize, image.height as usize],
+                            &image.premultiplied_rgba,
+                        ),
+                        egui::TextureOptions::LINEAR,
+                    )
+                });
                 self.mono_samples = snapshot.mono_samples;
                 self.peaks_lvl0 = snapshot.peaks_lvl0;
                 self.peaks_lvl1 = snapshot.peaks_lvl1;
@@ -353,6 +367,9 @@ impl RollingAudioStripState {
                         .color(hex_to_c32(&palette.colors.text_secondary))
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
+
+                ui.checkbox(&mut self.use_dadaspec, "Dadaspec")
+                    .on_hover_text("Mirrored stereo mel spectrogram");
 
                 // Refresh Snapshot button
                 let refresh_label = if self.snapshot_job.is_some() {
@@ -498,36 +515,14 @@ impl RollingAudioStripState {
                 Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.text_muted, 30)),
             );
 
-            // Time Tick Marks (-30s, -20s, -10s, NOW)
-            let tick_step_sec = if total_dur > 20.0 { 10.0 } else { 5.0 };
-            let mut t_tick = 0.0;
-            while t_tick <= total_dur {
-                let rel_x = (t_tick / total_dur) * rect.width();
-                let tick_x = rect.min.x + rel_x;
-                let rel_sec = t_tick - total_dur;
-                let tick_label = if rel_sec.abs() < 0.1 {
-                    "NOW".to_string()
-                } else {
-                    format!("{:.0}s", rel_sec)
-                };
-
-                painter.line_segment(
-                    [Pos2::new(tick_x, rect.min.y), Pos2::new(tick_x, rect.min.y + 4.0)],
-                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.text_secondary, 60)),
+            // Draw the frozen stereo mel image with the same selection/transport geometry.
+            if self.use_dadaspec && let Some(texture) = &self.dadaspec_texture {
+                let background = hex_to_c32(&palette.colors.surface_recessed);
+                let tint = little_clip_core::audio::dadaspec::surface_tint(
+                    [background.r(), background.g(), background.b()],
                 );
-                painter.text(
-                    Pos2::new(tick_x + 2.0, rect.min.y + 3.0),
-                    egui::Align2::LEFT_TOP,
-                    tick_label,
-                    egui::FontId::proportional(9.0),
-                    hex_to_c32(&palette.colors.text_secondary),
-                );
-
-                t_tick += tick_step_sec;
-            }
-
-            // Draw colored waveform bars
-            if !self.peaks_lvl0.is_empty() {
+                painter.image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0,1.0)), Color32::from_gray(tint));
+            } else if !self.peaks_lvl0.is_empty() {
                 if self.is_silent() {
                     painter.text(
                         Pos2::new(rect.center().x, center_y),
@@ -615,6 +610,34 @@ impl RollingAudioStripState {
                     egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     hex_to_c32(&palette.colors.text_muted),
                 );
+            }
+
+            // Time Tick Marks (-30s, -20s, -10s, NOW)
+            let tick_step_sec = if total_dur > 20.0 { 10.0 } else { 5.0 };
+            let mut t_tick = 0.0;
+            while t_tick <= total_dur {
+                let rel_x = (t_tick / total_dur) * rect.width();
+                let tick_x = rect.min.x + rel_x;
+                let rel_sec = t_tick - total_dur;
+                let tick_label = if rel_sec.abs() < 0.1 {
+                    "NOW".to_string()
+                } else {
+                    format!("{:.0}s", rel_sec)
+                };
+
+                painter.line_segment(
+                    [Pos2::new(tick_x, rect.min.y), Pos2::new(tick_x, rect.min.y + 4.0)],
+                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.text_secondary, 60)),
+                );
+                painter.text(
+                    Pos2::new(tick_x + 2.0, rect.min.y + 3.0),
+                    egui::Align2::LEFT_TOP,
+                    tick_label,
+                    egui::FontId::proportional(9.0),
+                    hex_to_c32(&palette.colors.text_secondary),
+                );
+
+                t_tick += tick_step_sec;
             }
 
             // Draw Selection Highlight Overlay
@@ -952,10 +975,9 @@ mod tests {
         let ctx = egui::Context::default();
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let pointer = Pos2::new(450.0, 75.0);
         let mut action = None;
         let mut frame = |time: f64, events: Vec<egui::Event>| {
-            let _ = ctx.run(
+            let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 160.0))),
                     time: Some(time),
@@ -968,9 +990,27 @@ mod tests {
                     });
                 },
             );
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if (rect.rect.height() - 44.0).abs() < 0.1 && rect.rect.width() > 500.0 =>
+                    {
+                        assert!(
+                            shape.clip_rect.contains_rect(rect.rect),
+                            "rolling canvas must remain fully visible"
+                        );
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("rolling canvas")
         };
 
-        frame(1.0, Vec::new());
+        // The toolbar wraps according to the available width; target the
+        // observed waveform rather than a fixed coordinate in its header.
+        let pointer = frame(1.0, Vec::new()).center();
         frame(1.1, vec![egui::Event::PointerMoved(pointer)]);
         frame(
             1.2,
@@ -1120,6 +1160,7 @@ mod tests {
         complete_snapshot(
             &mut strip,
             Ok(RollingSnapshot {
+                dadaspec: None,
                 path: path.clone(),
                 source: source.clone(),
                 lease: Arc::new(File::open(&path).unwrap()),

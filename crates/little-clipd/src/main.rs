@@ -960,6 +960,25 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     r.set_config(new_config);
                 }
                 drop(config);
+                if new_audio_config.dadaspec {
+                    let items: std::collections::BTreeMap<_, _> = {
+                        let manager = ctx.manager.read().await;
+                        little_clip_core::SlotId::all()
+                            .into_iter()
+                            .filter_map(|slot| manager.get(slot))
+                            .filter(|item| {
+                                matches!(
+                                    &item.payload,
+                                    little_clip_core::ClipPayload::AudioRef { .. }
+                                )
+                            })
+                            .map(|item| (item.id, item.clone()))
+                            .collect()
+                    };
+                    for item in items.into_values() {
+                        schedule_audio_waveform_generation(&item, Arc::clone(&ctx));
+                    }
+                }
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: "Configuration reloaded and applied".to_string(),
@@ -1175,7 +1194,9 @@ fn schedule_audio_waveform_generation(item: &ClipItem, ctx: Arc<DaemonContext>) 
         ref waveform,
         ..
     } = item.payload
-        && waveform.is_none()
+        && waveform
+            .as_ref()
+            .is_none_or(|waveform| !waveform.ch1_peaks.is_empty() && waveform.dadaspec.is_none())
     {
         let item_id = item.id;
         let path_clone = path.clone();
@@ -1224,6 +1245,7 @@ fn schedule_audio_waveform_generation(item: &ClipItem, ctx: Arc<DaemonContext>) 
             } else {
                 tracing::warn!("Failed to decode audio waveform for {:?}", path_clone);
                 let empty_wf = little_clip_core::AudioWaveform {
+                    dadaspec: None,
                     channels: 2,
                     sample_rate: 44100,
                     duration_ms,

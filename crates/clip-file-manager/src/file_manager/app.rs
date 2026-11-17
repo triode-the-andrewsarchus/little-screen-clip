@@ -94,6 +94,12 @@ impl FileManagerApp {
                     .ok()
             });
         let config = AppConfig::load();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("audio_dadaspec"),
+                config.file_manager.audio_dadaspec,
+            )
+        });
         let palette = ui_appearance::palette(config.workbench.appearance);
         ui_ext::configure_workbench_style(ctx);
         ui_appearance::apply_visuals(ctx, &palette);
@@ -117,6 +123,9 @@ impl FileManagerApp {
         browser
             .music_previews
             .set_audio_spectrum(config.file_manager.audio_spectrum);
+        browser
+            .music_previews
+            .set_audio_dadaspec(config.file_manager.audio_dadaspec);
         browser.video_previews.subtitles_enabled = config.file_manager.video_subtitles_enabled;
         browser.video_timeline_decimation = match config.file_manager.video_timeline_decimation {
             value @ (1 | 2 | 4 | 8 | 16) => value,
@@ -347,6 +356,46 @@ impl FileManagerApp {
             }
         }
     }
+    fn audio_menu(&mut self, ui: &mut egui::Ui) {
+        ui.style_mut().wrap = Some(false);
+        let spectrum = self.browser.music_previews.audio_spectrum();
+        let dadaspec = self.browser.music_previews.audio_dadaspec();
+        for (label, next_spectrum, next_dadaspec) in [
+            ("Waveform", false, false),
+            ("Spectrum", true, false),
+            ("Dadaspec", false, true),
+        ] {
+            let selected = if next_dadaspec {
+                dadaspec
+            } else {
+                !dadaspec && spectrum == next_spectrum
+            };
+            if ui.selectable_label(selected, label).clicked() && !selected {
+                match AppConfig::save_file_manager_audio_view_to_file(next_spectrum, next_dadaspec)
+                {
+                    Ok(()) => {
+                        self.browser
+                            .music_previews
+                            .set_audio_spectrum(next_spectrum);
+                        self.browser
+                            .music_previews
+                            .set_audio_dadaspec(next_dadaspec);
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(egui::Id::new("audio_dadaspec"), next_dadaspec)
+                        });
+                        ui.close_menu();
+                    }
+                    Err(error) => {
+                        self.browser.edits.report = Some(super::edits::EditReport {
+                            text: format!("Cannot save audio view preference: {error}"),
+                            failed: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     fn menu_bar(&mut self, ctx: &egui::Context) {
         if !self.viewers.video_fullscreen() {
             egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
@@ -404,32 +453,7 @@ impl FileManagerApp {
                                         self.browser.refresh();
                                     }
                                 });
-                                ui.menu_button("Audio", |ui| {
-                                ui.style_mut().wrap = Some(false);
-                                let mut spectrum = self.browser.music_previews.audio_spectrum();
-                                if ui
-                                    .selectable_label(spectrum, "Use spectrum instead of waveform")
-                                    .clicked()
-                                {
-                                    spectrum = !spectrum;
-                                    match AppConfig::save_file_manager_audio_spectrum_to_file(
-                                        spectrum,
-                                    ) {
-                                        Ok(()) => {
-                                            self.browser.music_previews.set_audio_spectrum(spectrum)
-                                        }
-                                        Err(error) => {
-                                            self.browser.edits.report =
-                                                Some(super::edits::EditReport {
-                                                    text: format!(
-                                                        "Cannot save audio view preference: {error}"
-                                                    ),
-                                                    failed: true,
-                                                });
-                                        }
-                                    }
-                                }
-                            });
+                                ui.menu_button("Audio", |ui| self.audio_menu(ui));
                             } else if title == "Edit" {
                                 self.edit_menu(ui);
                                 if !self.viewers.active() && ui.button("Search settings…").clicked()

@@ -83,6 +83,7 @@ pub struct ConstellationHoverPreview {
     pub file_path: PathBuf,
     pub waveform: Vec<f32>,
     pub waveform_colors: Vec<[u8; 3]>,
+    dadaspec: Option<Arc<sample_pack::RackDadaspec>>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
     pub bit_depth: Option<u16>,
@@ -518,6 +519,27 @@ impl ConstellationState {
                         )
                         .unwrap_or_default();
 
+                        let dadaspec = crate::file_source::open_regular_file(path, true)
+                            .ok()
+                            .and_then(|file| {
+                                little_clip_core::audio::dadaspec::render_file(
+                                    file,
+                                    path,
+                                    0.0,
+                                    f64::from(latest.duration.min(15.0)),
+                                    300,
+                                    60,
+                                    &latest.cancelled,
+                                )
+                                .ok()
+                            })
+                            .map(|image| {
+                                Arc::new(sample_pack::RackDadaspec {
+                                    image,
+                                    texture: Default::default(),
+                                })
+                            });
+
                         if latest.cancelled.load(Ordering::Relaxed) {
                             continue;
                         }
@@ -534,6 +556,7 @@ impl ConstellationState {
                             file_path: latest.file_path,
                             waveform,
                             waveform_colors: colors,
+                            dadaspec,
                             sample_rate,
                             channels,
                             bit_depth,
@@ -877,6 +900,7 @@ mod tests {
             mono_samples: pcm,
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         state.pack_bank.slots[0].samples.push(sample);
         let full = 0.5 * 10.0_f32.powf(-2.0 / 20.0);

@@ -177,6 +177,7 @@ mod tests {
             mono_samples: pcm,
             waveform_peaks: vec![],
             waveform_colors: vec![],
+            dadaspec: None,
         }));
         bank.slots[0].samples.push(sample);
         rack.sync(&bank);

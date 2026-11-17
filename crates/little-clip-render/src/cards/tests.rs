@@ -267,6 +267,7 @@ fn prepared_audio_raster_uses_summary_readiness_without_following_its_source_pat
         raster
     };
     let waveform = little_clip_core::AudioWaveform {
+        dadaspec: None,
         channels: 1,
         sample_rate: 48000,
         duration_ms: 1000,
@@ -420,5 +421,88 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         ("plantuml", "PlantUML"),
     ] {
         assert_eq!(find_syntax(language).name, expected);
+    }
+}
+
+#[test]
+fn dadaspec_display_choice_renders_prepared_stereo_without_source_io() {
+    let left: Vec<_> = (0..32000)
+        .map(|i| (std::f32::consts::TAU * 80.0 * i as f32 / 32000.0).sin() * 0.5)
+        .collect();
+    let right: Vec<_> = (0..32000)
+        .map(|i| (std::f32::consts::TAU * 5000.0 * i as f32 / 32000.0).sin() * 0.5)
+        .collect();
+    let image = little_clip_core::audio::dadaspec::render_planar(
+        &left,
+        Some(&right),
+        32000,
+        300,
+        60,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let waveform = little_clip_core::AudioWaveform {
+        dadaspec: Some(image),
+        channels: 2,
+        sample_rate: 32000,
+        duration_ms: 1000,
+        ch1_peaks: vec![0.5; 200],
+        ch2_peaks: Some(vec![0.5; 200]),
+        spectral_colors: None,
+        is_snippet: false,
+        snippet_start_ms: 0,
+        snippet_duration_ms: 1000,
+    };
+    let draw = |enabled, appearance| {
+        let mut config = AppConfig::default();
+        config.audio.dadaspec = enabled;
+        config.workbench.appearance = appearance;
+        let renderer = ScreenRenderer::fallback(config);
+        let mut raster = Pixmap::new(600, 400).unwrap();
+        raster.fill(renderer.color_from_hex(&renderer.palette.colors.surface_panel));
+        renderer.draw_audio_waveform(
+            &mut raster,
+            1000,
+            32000,
+            2,
+            "WAV",
+            Some(&waveform),
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+            true,
+        );
+        raster
+    };
+    for appearance in [
+        little_clip_core::config::WorkbenchAppearance::Dark,
+        little_clip_core::config::WorkbenchAppearance::Light,
+    ] {
+        let spectrogram = draw(true, appearance);
+        assert_ne!(spectrogram.data(), draw(false, appearance).data());
+        let red = spectrogram
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 50 && f32::from(p[0]) > f32::from(p[2]) * 1.6)
+            .count();
+        let blue = spectrogram
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[2] > 50 && f32::from(p[2]) > f32::from(p[0]) * 1.6)
+            .count();
+        assert!(
+            red > 500 && blue > 500,
+            "stereo image must retain bass and high-frequency halves"
+        );
+        if let Some(path) = std::env::var_os("LITTLE_CLIP_DADASPEC_SCREENSHOT") {
+            spectrogram
+                .save_png(std::path::Path::new(&path).with_extension(format!("{appearance:?}.png")))
+                .unwrap();
+        }
     }
 }
