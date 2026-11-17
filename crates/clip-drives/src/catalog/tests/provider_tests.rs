@@ -1,6 +1,7 @@
 use super::*;
 use std::fs::{self, FileTimes};
 use std::time::SystemTime;
+mod inodes;
 mod metadata;
 mod types;
 

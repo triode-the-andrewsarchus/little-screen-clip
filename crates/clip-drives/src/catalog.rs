@@ -228,12 +228,19 @@ impl CatalogFs {
             .map_or(self.catalog.complete, |coverage| coverage.listing_complete))
     }
     fn row(&self, ino: u64) -> Result<Option<Entry>> {
+        let Some(id) = i64::try_from(ino)
+            .ok()
+            .and_then(|ino| ino.checked_sub(2))
+            .filter(|id| *id > 0)
+        else {
+            return Ok(None);
+        };
         let json: Option<String> = self
             .db
             .0
             .query_row(
                 "SELECT json FROM entries WHERE scan='catalog' AND rowid=?1",
-                [(ino as i64) - 2],
+                [id],
                 |r| r.get(0),
             )
             .optional()?;
@@ -249,10 +256,13 @@ impl CatalogFs {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        row.map(|(id, json)| Ok((id as u64 + 2, serde_json::from_str(&json)?)))
+        row.map(|(id, json)| Ok((catalog_inode(id)?, serde_json::from_str(&json)?)))
             .transpose()
     }
     fn directory_page(&self, ino: u64, offset: i64) -> Result<Vec<(u64, OsString, Entry)>> {
+        if offset < 0 {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL).into());
+        }
         let path = self.parent_path(ino)?;
         let mut statement = self.db.0.prepare("SELECT rowid,name,json FROM entries WHERE scan='catalog' AND parent=?1 AND rowid>?2 ORDER BY rowid LIMIT 512")?;
         let rows = statement.query_map(
@@ -269,7 +279,7 @@ impl CatalogFs {
             .map(|row| {
                 let (id, name, json) = row?;
                 Ok((
-                    id as u64 + 2,
+                    catalog_inode(id)?,
                     OsString::from_vec(name),
                     serde_json::from_str(&json)?,
                 ))
@@ -295,6 +305,15 @@ impl CatalogFs {
                 return Err("Not a catalog directory".into());
             }
             Ok(entry.path)
+        }
+    }
+    fn directory_inode(&self, path: &Path) -> Result<u64> {
+        if path.as_os_str().is_empty() {
+            return Ok(1);
+        }
+        match self.lookup_path(path)? {
+            Some((ino, entry)) if entry.kind == "directory" => Ok(ino),
+            _ => Err(std::io::Error::from_raw_os_error(libc::EIO).into()),
         }
     }
     fn resolve(&self, entry: &Entry) -> Result<OpenFile> {
@@ -421,6 +440,15 @@ impl CatalogFs {
             flags: 0,
         })
     }
+}
+fn catalog_inode(rowid: i64) -> Result<u64> {
+    // 1 is the virtual root and 2 is the directory-cookie prefix. Real entry
+    // IDs must also fit Linux's signed seek offsets so every page can resume.
+    let inode = rowid
+        .checked_add(2)
+        .filter(|inode| *inode > 2)
+        .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+    Ok(inode as u64)
 }
 fn file_type(kind: &str) -> FileType {
     match kind {

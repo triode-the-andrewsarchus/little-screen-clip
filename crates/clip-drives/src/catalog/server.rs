@@ -203,11 +203,18 @@ impl Filesystem for Server {
     ) {
         let result = (|| -> Result<()> {
             let fs = self.lock()?;
-            fs.parent_path(ino.0)?;
+            let path = fs.parent_path(ino.0)?;
             if offset < 1 && reply.add(ino, 1, FileType::Directory, ".") {
                 return Ok(());
             }
-            if offset < 2 && reply.add(INodeNo(1), 2, FileType::Directory, "..") {
+            if offset < 2
+                && reply.add(
+                    INodeNo(fs.directory_inode(path.parent().unwrap_or(Path::new("")))?),
+                    2,
+                    FileType::Directory,
+                    "..",
+                )
+            {
                 return Ok(());
             }
             let offset = i64::try_from(offset)

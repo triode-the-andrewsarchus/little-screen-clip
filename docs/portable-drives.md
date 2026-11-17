@@ -276,6 +276,13 @@ follow the kernel's [special-inode behavior](https://raw.githubusercontent.com/t
 [FIFO open behavior](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/pipe.c)
 and [xattr namespace checks](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/xattr.c).
 
+Catalog directory entries retain their stored positive row ID plus two as a
+stable inode and resume cookie. Nested `..` entries identify the captured parent;
+the virtual root identifies itself. Invalid or overflowing stored IDs return an
+overflow error, and negative directory offsets are rejected. Valid cookies extend
+through the largest signed Linux seek offset, with normal end-of-directory
+behavior after that entry.
+
 New catalog databases use version 2 so older helpers reject their partial-listing
 semantics. Updated helpers also read version-1 catalogs, whose missing precision
 and directory details remain unknown. Ordinary drive state and backup manifests

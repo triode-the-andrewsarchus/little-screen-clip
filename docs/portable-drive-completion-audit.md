@@ -43,7 +43,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
-| 6.6 | Partial | Indexed 512-entry pages preserve raw names, stable inodes and offsets without directory-wide sorts. Real FUSE verifies partial-listing EOF/missing-path EIO, completed-parent ENOENT, typed details, source/provider retention, signed fractional dates, invalid-date EOVERFLOW and multi-megabyte reads. Original modes/types, raw link targets and available device numbers are exposed as bounded saved metadata; FIFO/socket/device entries stay inert and skip previews. Safe root-relative links work, escaping links remain metadata-only, and cycles return ELOOP. Twenty-two ordinary write/namespace/metadata calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. Nested parent-inode reporting and invalid inode/offset guards remain open. See the catalog type and timestamp checkpoints. |
+| 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
 | 6.7 | Partial | Provider metadata/digests now validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups also require their captured directory identity. Reuse of available sync/backup hashes and uncertain revision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Image-mount replacement, aliases and the broader concurrent-provider matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
@@ -53,6 +53,67 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Catalog inode and directory-cookie correctness
+
+Regression tests reproduced three defects before the fix: negative SQLite IDs
+were accepted as virtual inodes, an out-of-range inode panicked during signed
+subtraction, and actual kernel directory entries reported the root inode as the
+parent of `a/b` instead of the captured inode of `a`. All three failures are in
+`/tmp/portable-drive-catalog-inodes-negative.log`. The retained pre-fix helper is
+`/tmp/little-clip-catalog-parent-inode-helper`, SHA-256
+`12f4107cc06a3cc4ce690dcb13b6eb249a2b41f9991b57a022705fcbeb184610`.
+
+One checked row-to-inode conversion now serves lookup and directory pages. It
+keeps the existing positive-rowid-plus-two representation, reserves the root and
+directory-cookie prefix, and refuses values outside Linux's signed seek range.
+Unknown/reserved/out-of-range incoming inode IDs have no row and cannot wrap into
+negative SQLite IDs or poison the owner mutex. Negative page offsets return
+EINVAL. The metadata owner resolves directory paths to captured directory inodes;
+a missing, excluded or non-directory parent returns EIO rather than inventing a
+root association. The protocol adapter uses that owner for the `..` entry.
+No persisted format or valid existing inode mapping changes.
+
+The kernel boundary is verified directly, rather than inferred from a cast:
+an entry with the largest valid signed cookie appears exactly once, stat and
+directory enumeration agree on its inode, and enumeration resumes to EOF.
+An overflowing row produces EOVERFLOW for lookup and listing while another valid
+entry remains accessible. Root, one-level and deeper `.`/`..` entries match their
+actual captured directory/parent inodes. Pure cases also cover all reserved IDs,
+signed extremes, missing/non-directory parents and the negative-offset error.
+
+Validation:
+
+- 126 ordinary backend cases pass, with 58 explicit fixtures ignored:
+  `/tmp/portable-drive-catalog-inodes-backend-final.log`.
+- Twenty-one selected provider/catalog cases pass, including all five new inode
+  cases, in `/tmp/portable-drive-catalog-inodes-provider-final.log`. These retain
+  the previous signed-time, type/link, read-only, partial-listing and held-provider
+  checks. The guest-only device-node case is excluded from the host selection.
+- Current in-process metadata-only and legacy-reader/redaction checks pass in
+  `/tmp/portable-drive-catalog-inodes-inventory-final.log` and
+  `/tmp/portable-drive-catalog-inodes-redaction-final.log`. Inventory still opens
+  zero file payloads.
+- Backend/helper builds, all-target drive clippy with warnings denied, targeted
+  formatting and diff checks pass. Logs use `/tmp/portable-drive-catalog-inodes-`
+  with `accepted-build.log`, `accepted-helper.log`, `clippy-final.log` and
+  `fmt-final.log`. The tested helper SHA-256 is
+  `3ef5c041b026af194415e4fa99f504bad8a89d19f72b95b160a63699ed6ae77f`.
+
+Architecture remains REGRESSION against the original full-feature baseline, with
+4300 versus 4289 clone groups and 144 versus 143 cycles, unchanged from the prior
+checkpoint. Duplication is 7.09% versus 7.30%, average CCN 3.48 versus 3.44, maximum
+274 unchanged. Directory-parent resolution belongs to the existing metadata owner
+and is tested independently; the protocol callback stays at CCN 14, its inverse
+directory lookup at 5, and the checked mapping at 3. Page enumeration remains at
+15. Valknut additionally flags the necessary readdir entity, without a new
+excessive-CCN function or clone group. Selected results are retained in
+`.fitness/portable-drives-catalog-inodes-architecture.json`.
+
+Combined with the preceding real-mount type/time/read-only and rendered checks,
+this completes the FUSE implementation requirement in item 6.6. Matching-provider
+uncertainty, the broader provider replacement/concurrency matrix, other plan items
+and the full goal remain unfinished.
 
 ## Catalog types and inert special-file metadata
 
@@ -137,9 +198,9 @@ validation callback has CCN 13; Valknut newly flags that necessary path-validati
 entity after the root-link case was added. Selected findings and local clone
 report paths are retained in `.fitness/portable-drives-catalog-types-architecture.json`.
 
-Item 6.6 remains partial while nested parent inode reporting and invalid
-inode/offset handling are still under review. Provider uncertainty/concurrency,
-the final architecture gate and the full goal remain open.
+The inode checkpoint above completes item 6.6's parent/offset handling.
+Provider uncertainty/concurrency, the final architecture gate and the full goal
+remain open.
 
 ## FUSE timestamp projection and bounded protocol upgrade
 
@@ -305,8 +366,9 @@ CCN 30 is replaced by cohesive traversal, commit and report methods at or below
 15. Existing provider resolution remains unchanged. Selected fields are retained
 in `.fitness/portable-drives-catalog-coverage-architecture.json`.
 
-Item 6.1 is complete. Items 6.5–6.8 and the final architecture/workspace gates
-remain open; this checkpoint does not establish full catalog type/time fidelity,
+Item 6.1 is complete, and the inode checkpoint completes item 6.6. Items 6.5,
+6.7–6.8 and the final architecture/workspace gates remain open. This coverage
+checkpoint alone does not establish full catalog type/time fidelity,
 cross-driver provider equivalence or the complete interrupted-device matrix.
 
 ## Selectable read-only file collection
