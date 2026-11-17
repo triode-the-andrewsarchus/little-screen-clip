@@ -194,8 +194,10 @@ through its retained source directory, including when there are no pairs. That
 directory pin is released before unmount admission. A failed flush stops the
 operation before unmount. This requests filesystem writeback for ordinary
 applications too; it cannot compensate for a filesystem or device failing to
-preserve accepted writes. An exFAT durability case remains under investigation
-in the disposable-guest acceptance matrix; see the completion audit.
+preserve accepted writes. A standalone guest probe isolates an exFAT durability
+regression after directory bind mounts on `7.3.4-1-cachyos`; the identical probe
+passes on `6.18.60-2-cachyos-lts`. This remains a current-kernel compatibility
+limitation; see the completion audit and `scripts/drive_tools/VM_TESTING.md`.
 
 Partition jobs retain their selected drive, destination and typed preparation phase. Image progress distinguishes copying from full verification. After restart, an unfinished job reports its last durable checkpoint and any confirmed unmount/completed-image facts. An interrupted authority request may already have taken effect; its message asks you to inspect current state. Restart does not replay mount actions automatically.
 

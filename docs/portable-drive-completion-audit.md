@@ -95,7 +95,7 @@ Item 6.7 remains Partial. Unobservable same-inode changes without a trusted
 fingerprint, source remount/revision ambiguity and cross-driver precision still
 need work; this checkpoint does not claim exact byte identity from metadata.
 
-## Whole-filesystem pre-unmount flush and open exFAT failure
+## Whole-filesystem pre-unmount flush and isolated exFAT kernel regression
 
 Partition preparation now retains its admitted ordinary source root through the
 existing Flush worker and calls guarded Root::flush after enrolled pairs finish.
@@ -108,7 +108,29 @@ busy refusal, successful pin retirement, independent RAM writeback during a held
 unmount and retained completed cancellation
 (`/tmp/portable-drive-pre-unmount-flush-live.log`).
 
-**Negative evidence remains open.** After source-file creation/deletion and
+The durability failure has now been reduced outside little-clip. The standalone
+`scripts/drive_tools/bind_durability.sh` uses no application executable, FUSE
+helper or system bus. A plain directory bind/unmount/removal followed by a new
+write, timestamp update, syncfs, native unmount and native read-only remount
+reproduces zeros on `7.3.4-1-cachyos` exFAT. Explicit file fsync does not prevent
+it. File binds and ordinary create/remove controls pass. All three filesystem
+formats pass the identical directory-bind probe with `6.18.60-2-cachyos-lts`.
+Fresh-volume application durability controls also pass on 7.3.4. This establishes
+a guest-kernel/filesystem regression with a directory-bind trigger, rather than
+an image-copy or missing file-fsync explanation. No host kernel was changed.
+
+Evidence: `/tmp/portable-drive-vm-fresh-durability/report.json`,
+`/tmp/portable-drive-vm-fsync-durability/report.json`,
+`/tmp/portable-drive-vm-durability-prefix-nested/report.json`,
+`/tmp/portable-drive-vm-bind-durability-directory/report.json`,
+`/tmp/portable-drive-vm-standalone-bind-final-current/report.json`,
+`/tmp/portable-drive-vm-standalone-bind-final-current-fsync/report.json`, and
+`/tmp/portable-drive-vm-standalone-bind-final-lts/report.json`. The standalone
+script's shell syntax and early host refusal pass. The initial standalone run
+with an unsupported touch date syntax failed setup and supplies no durability
+evidence; the final probe uses the verified POSIX timestamp form.
+
+**Current-kernel negative evidence remains open.** After source-file creation/deletion and
 catalog/provider operations, the guest's exFAT source can lose a newly written
 file's bytes across syncfs and unmount. The cached file reads the expected
 payload immediately before preparation; a kernel remount reads the same length
@@ -130,11 +152,26 @@ control; evidence is `/tmp/portable-drive-vm-pre-unmount-flush/report.json`.
 Both reports correctly say failure. Do not replace these with the earlier green
 fresh-volume image results or count the exFAT format as passing this sequence.
 
-Next investigation must distinguish the filesystem/formatter/kernel fixture
-behavior from missing per-file durability barriers, including an explicit
-file-fsync control and direct remounts before any image read. Items 4.3, 5.1,
+The standalone probe and cross-kernel comparison now isolate the kernel-specific
+trigger. Keep the affected 7.3.4 evidence as an explicit compatibility limitation
+and use the separate LTS matrix to assess application behavior. Items 4.3, 5.1,
 5.6, 7.3 and the wider interruption/durability gates remain Partial. No host
 block device, privileged mount or live desktop service was used.
+
+The complete nine-case bundle per filesystem now passes on the LTS kernel:
+four maintenance cases, original revisions, file-backup tampering, nested catalog
+mount refusal, direct flush/remount durability and the authorized image lifecycle
+(27 selected cases; `/tmp/portable-drive-vm-lts-drive-acceptance-final/report.json`).
+The initial LTS bundle failed a timing assumption in the startup-maintenance
+fixture: enrollment consumed the remaining cleanup interval. The fixture now
+enrolls the independent pair before restart, preserving its strict live-work
+checks during Configure, sync, shutdown and restart. All four maintenance cases
+also pass on the host in 25.61 seconds
+(`/tmp/portable-drive-maintenance-preenrolled-host.log`). This test correction
+does not change the maintenance implementation or weaken its assertions.
+The original-baseline architecture comparison remains REGRESSION with 4,300
+clone groups, 144 cycles, average CCN 3.49, maximum 274 and duplication 7.02%;
+this follow-up adds no clone group or cycle.
 
 ## Retained maintenance checkpoint
 

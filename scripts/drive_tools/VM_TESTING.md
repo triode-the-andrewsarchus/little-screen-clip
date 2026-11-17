@@ -72,6 +72,40 @@ Verified on this host:
 These establish a usable isolated test environment. The application-level removable
 filesystem matrix remains a separate acceptance gate.
 
+## Directory-bind durability regression control
+
+`bind_durability.sh` needs no application binary, FUSE helper, D-Bus or PolicyKit.
+It uses only ordinary guest utilities: bind a tmpfs directory over an empty media
+directory, unmount/remove that directory, write and timestamp a new file, flush
+its filesystem, unmount it, and compare its contents after a read-only native
+kernel remount. It rejects host execution before creating paths. A mismatch
+returns failure and prints the observed bytes; it is never treated as an
+expected successful result by the VM runner.
+
+Use the runner arguments above with:
+
+```text
+--guest-script scripts/drive_tools/vm_filesystems.sh
+--output-dir /tmp/new-bind-durability-run
+-- /bin/sh scripts/drive_tools/bind_durability.sh
+```
+
+Append `--file-fsync` to the final command for an additional file-fsync barrier
+before the filesystem-wide flush. Keep each output directory new.
+
+On this host's `7.3.4-1-cachyos` guest, FAT32 and NTFS3 pass but exFAT reads zeros
+after remount, including with explicit file fsync. The same standalone probe
+passes all three formats with `6.18.60-2-cachyos-lts`. This reduces the observed
+failure outside the application and its backup copy. Plain file binds and
+ordinary create/delete controls do not trigger it. Evidence:
+`/tmp/portable-drive-vm-standalone-bind-final-current/report.json`,
+`/tmp/portable-drive-vm-standalone-bind-final-current-fsync/report.json`, and
+`/tmp/portable-drive-vm-standalone-bind-final-lts/report.json`.
+
+The application acceptance matrix retains the failing current-kernel evidence
+and separately exercises the LTS kernel; switching kernels is not a reason to
+claim this current-kernel regression is fixed.
+
 To verify RAM-directory selection without changing any host mount, use:
 
 ```text
