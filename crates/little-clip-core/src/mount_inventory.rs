@@ -14,6 +14,9 @@ pub struct Mount {
     pub filesystem: String,
     pub root: PathBuf,
     pub read_only: bool,
+    /// Whether the backing filesystem advertises a read-only superblock.
+    /// A read-only bind mount alone does not establish this property.
+    pub super_read_only: bool,
 }
 /// Reads a bounded mount inventory for the current process namespace.
 ///
@@ -85,6 +88,9 @@ fn parse(bytes: &[u8]) -> io::Result<Vec<Mount>> {
             filesystem: String::from_utf8_lossy(fields[separator + 1]).into(),
             root: path(fields[3]),
             read_only: fields[5].split(|b| *b == b',').any(|v| v == b"ro"),
+            super_read_only: fields[separator + 3]
+                .split(|b| *b == b',')
+                .any(|v| v == b"ro"),
         });
     }
     Ok(result)
@@ -92,6 +98,14 @@ fn parse(bytes: &[u8]) -> io::Result<Vec<Mount>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn read_only_view_and_backing_filesystem_are_distinct_observations() {
+        let mounts = parse(b"11 1 8:1 / /bind ro - vfat /dev/fixture rw\n12 1 8:2 / /exclusive ro - exfat /dev/fixture2 ro\n").unwrap();
+        assert!(mounts[0].read_only);
+        assert!(!mounts[0].super_read_only);
+        assert!(mounts[1].read_only);
+        assert!(mounts[1].super_read_only);
+    }
     #[test]
     fn octal_and_non_unicode_mount_names_remain_lossless() {
         let data=b"45 1 8:1 / /media/a\\040b_\xff rw - vfat /dev/sdb1 rw\n46 1 0:3 / /tmp/catalog ro - fuse little-clip-catalog:fixture rw\n";

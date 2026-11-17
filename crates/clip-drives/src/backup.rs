@@ -138,7 +138,11 @@ pub(crate) fn files(
     manifest.db.put(
         "collection",
         "consistency",
-        &"Per-file revision checks; live tree, not an atomic source snapshot",
+        &if source.read_only_required() {
+            "Read-only filesystem collection; source mount and superblock checked through publication"
+        } else {
+            "Per-file revision checks; live tree, not an atomic source snapshot"
+        },
     )?;
     let scan_id = format!("backup:{id}");
     let coverage = scan::scan(
@@ -181,6 +185,7 @@ pub(crate) fn files(
             return Err("Could not seal the completed Btrfs backup read-only".into());
         }
     }
+    source.validate()?;
     let backup = Backup {
         fidelity: Some(fidelity),
         manifest: None,

@@ -28,6 +28,7 @@ pub(crate) struct Root {
     identity: MountIdentity,
     namespace: Namespace,
     physical: Option<PathBuf>,
+    read_only_required: bool,
 }
 /// Scheduling evidence only: this never authorizes content access or keeps a mount busy.
 #[derive(Clone)]
@@ -61,6 +62,9 @@ pub(crate) fn anchor(file: &File) -> PathBuf {
 }
 impl Root {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_read_only(path, false)
+    }
+    pub fn open_with_read_only(path: &Path, read_only_required: bool) -> Result<Self> {
         let file = kernel_interface::pin_content_directory(path)?;
         let path = fs::read_link(anchor(&file))?;
         let identity = MountIdentity::pinned(&file)?;
@@ -74,13 +78,21 @@ impl Root {
                 .find(|mount| mount.id == identity.mount)
                 .and_then(|mount| project_path(&path, &mount))
         });
-        Ok(Self {
+        let root = Self {
             path,
             file,
             identity,
             namespace,
             physical,
-        })
+            read_only_required,
+        };
+        if read_only_required {
+            root.validate()?;
+        }
+        Ok(root)
+    }
+    pub fn read_only_required(&self) -> bool {
+        self.read_only_required
     }
     pub fn create(path: &Path) -> Result<Self> {
         let file = kernel_interface::create_content_directory(path)?;
@@ -124,6 +136,22 @@ impl Root {
             || MountIdentity::directory(&self.path)? != self.identity
         {
             return Err("Directory or mount was replaced or removed".into());
+        }
+        if self.read_only_required {
+            self.validate_read_only()?;
+        }
+        Ok(())
+    }
+    fn validate_read_only(&self) -> Result<()> {
+        let mounted_read_only = rustix::fs::fstatvfs(&self.file)?
+            .f_flag
+            .contains(rustix::fs::StatVfsMountFlags::RDONLY);
+        let mount = crate::mounts::inventory()?
+            .into_iter()
+            .find(|mount| mount.id == self.identity.mount)
+            .ok_or("Read-only collection mount is no longer present")?;
+        if !mounted_read_only || !mount.super_read_only {
+            return Err("Read-only collection requires the source filesystem to remain read-only; its current mount or backing filesystem is writable".into());
         }
         Ok(())
     }
@@ -457,6 +485,18 @@ fn reliable_change_metadata(filesystem: u64) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn read_only_collection_refuses_an_ordinary_writable_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = Root::open_with_read_only(temp.path(), true)
+            .err()
+            .expect("writable source refused");
+        assert!(
+            error.to_string().contains("Read-only collection requires"),
+            "{error}"
+        );
+        Root::open(temp.path()).unwrap().validate().unwrap();
+    }
+    #[test]
     fn ordinary_unix_colon_names_remain_data_paths() {
         let temp = tempfile::tempdir().unwrap();
         let root = Root::open(temp.path()).unwrap();
@@ -491,6 +531,7 @@ mod tests {
             source: "/dev/fixture".into(),
             filesystem: "ext4".into(),
             read_only: false,
+            super_read_only: false,
         };
         assert_eq!(
             project_path(Path::new("/alias/nested"), &mount),

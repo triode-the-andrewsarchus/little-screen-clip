@@ -137,7 +137,11 @@ in this backup. The daemon verifies its bytes and captured source facts before
 installing the link, avoiding another payload write. Destinations that refuse
 links receive complete independent copies with fidelity warnings. Btrfs
 snapshots also share unchanged extents across versions. A selectable quiesced
-read-only collection mode remains unfinished.
+read-only collection mode remains unfinished. Its backend source guard now
+requires both a read-only mounted view and a read-only backing filesystem, and
+rechecks the condition through collection and before publication. Ordinary live
+collection remains available through a read-only view over writable storage.
+The daemon mount lifecycle and selectable review controls still need integration.
 
 The source Drive record in each new manifest includes observed partition-layout
 facts: partition number, start sector and checked byte offset, logical sector

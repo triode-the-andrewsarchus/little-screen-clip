@@ -46,7 +46,7 @@ pub fn discover() -> Result<Vec<Drive>> {
             });
         if let Some(mount) = selected {
             drive.mount = Some(mount.target.clone());
-            drive.read_only |= mount.read_only;
+            drive.read_only |= mount.read_only || mount.super_read_only;
         } else {
             drive.mount = None;
         }

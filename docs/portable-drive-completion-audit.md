@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Partial | Bounded per-file retries, available metadata and fidelity records pass native tests. Regular-file/symlink hard-link groups are preserved on supporting destinations, with raw references and explicit omissions. Matching completed aliases are reused before payload writes; ordinary/Btrfs/native checks prove one payload write, while unsupported destinations keep full copies. Divergent revisions and corrupt candidates refuse publication and retain current. Optional quiesced read-only collection and broader fidelity/consistency matrices remain. |
+| 4.3 | Partial | Bounded retries, metadata fidelity and hard-link preservation/reuse pass native checks. Read-only source guards now reject writable backing filesystems and policy loss on real FAT32/exFAT/NTFS, retaining current; ordinary live collection is preserved. The daemon's read-only mount/restore lifecycle, selectable mode, authorization/cancellation acceptance and broader fidelity/consistency matrices remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -53,6 +53,54 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Read-only source guard
+
+Core mount inventory now retains separate per-mount and backing-superblock
+read-only observations. Discovery incorporates either fact into drive access
+status. These are additive live observations; persisted path, storage and
+namespace identities are unchanged. The guarded source constructor can require
+read-only collection. It validates the retained mount identity/namespace,
+descriptor filesystem flags and the matching mount's read-only superblock.
+Existing root validation repeats this condition throughout inventories and
+payload/metadata collection. A final source check precedes publication, including
+after Btrfs sealing. The manifest records the enforced consistency policy.
+Ordinary roots keep their prior live-collection behavior.
+
+A read-only bind view over a writable superblock cannot establish this stronger
+precondition. The native guest creates that exact case, verifies the view's
+read-only descriptor flag and refuses the stronger guard, while separately
+proving ordinary file backup still succeeds through the view. It then makes
+the filesystem read-only, completes a guarded backup and verifies its manifest
+policy/header checksum. A second collection deliberately restores write access
+after fingerprint capture; validation fails, source bytes remain intact and
+only the previous completed version/current reference remains registered.
+
+All fifteen cases pass on each native FAT32, exFAT and NTFS3 mount (45 total):
+`/tmp/portable-drive-vm-read-only-source-native-final/report.json`. The first run
+exposed fixture remount dispatch to the exFAT FUSE helper and failed rather than
+counting it as acceptance. The shared owned guest mount fixture now requests
+internal kernel remounts, preserving its captured mount identity; no host mount
+or attached device is changed. It also retains existing symlink/file-bind cleanup.
+
+Backend tests pass 106 cases with 46 explicit fixtures ignored:
+`/tmp/portable-drive-read-only-source-backend-final.log`. Two core mount-parser
+cases pass, including distinct view/superblock flags and existing raw names:
+`/tmp/portable-drive-read-only-source-core.log`. Both real Btrfs cases remain
+green: `/tmp/portable-drive-read-only-source-btrfs-final.log`. Selected all-target
+clippy and affected-crate formatting pass with the
+`/tmp/portable-drive-read-only-source-` prefix (`clippy-final.log`, `fmt-final.log`).
+
+Architecture remains REGRESSION for the full feature: 4300 clone groups versus
+baseline 4289, duplication 7.11% versus 7.30%, average CCN 3.48 versus 3.44,
+maximum 274 and reported cycles 144 versus 143. There is no additional clone or
+new source-guard hotspot. The existing backup entrypoint adds two complexity
+points (32 to 34) for the consistency policy and pre-publication source check.
+Selected fields are retained in `.fitness/portable-drives-read-only-source-architecture.json`.
+This is backend preparation for item 4.3, which remains Partial. Selecting the
+mode and owning flush/unmount/read-only mount/collection/restoration through the
+daemon, review/CLI controls and their authorization/cancellation/recovery
+acceptance remain required; no new rendered UI acceptance is claimed.
 
 ## Reusing completed aliases during collection
 

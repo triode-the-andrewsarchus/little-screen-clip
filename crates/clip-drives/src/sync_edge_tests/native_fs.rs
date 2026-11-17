@@ -126,9 +126,14 @@ fn verified_file_manifest(version: &crate::DriveBackup, retried: u64) -> Store {
     manifest
 }
 
-struct GuestFileBind {
+struct GuestMount {
     path: PathBuf,
     identity: kernel_interface::MountIdentity,
+    cleanup: Option<MountCleanup>,
+}
+enum MountCleanup {
+    Unmount,
+    Writable,
 }
 
 fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: &str) {
@@ -142,7 +147,31 @@ fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: &str) {
             .is_empty()
     );
 }
-impl GuestFileBind {
+impl GuestMount {
+    fn read_only_filesystem() -> Self {
+        crate::require_disposable_guest();
+        let mount = Self::capture(Path::new("/work/media"), MountCleanup::Writable);
+        mount.remount("remount,ro");
+        mount
+    }
+    fn remount(&self, options: &str) {
+        crate::require_disposable_guest();
+        assert_eq!(
+            kernel_interface::MountIdentity::directory(&self.path).unwrap(),
+            self.identity
+        );
+        let result = CommandRequest::new("/usr/bin/mount")
+            .arg("--internal-only")
+            .args(["-o", options])
+            .arg(&self.path)
+            .run()
+            .unwrap();
+        assert!(result.status.success(), "{}", result.stderr_lossy());
+    }
+    fn writable(&mut self) {
+        self.remount("remount,rw");
+        self.cleanup = None;
+    }
     fn attach(source: &Path, destination: &Path) -> Self {
         Self::start(
             CommandRequest::new("mount").arg("--bind").arg(source),
@@ -163,10 +192,14 @@ impl GuestFileBind {
         crate::require_disposable_guest();
         let result = request.arg(destination).run().unwrap();
         assert!(result.status.success(), "{}", result.stderr_lossy());
+        Self::capture(destination, MountCleanup::Unmount)
+    }
+    fn capture(destination: &Path, cleanup: MountCleanup) -> Self {
         let file = kernel_interface::pin(destination, false).unwrap();
         Self {
             path: destination.into(),
             identity: kernel_interface::MountIdentity::pinned(&file).unwrap(),
+            cleanup: Some(cleanup),
         }
     }
 }
@@ -180,7 +213,7 @@ fn native_bound_symlink_metadata_cannot_escape_its_admitted_hierarchy() {
     let held = kernel_interface::pin(&link, false).unwrap();
     let target = fixture.a.join("bound-link");
     fs::write(&target, b"original portable bytes").unwrap();
-    let bind = GuestFileBind::attach_link(&held, &target);
+    let bind = GuestMount::attach_link(&held, &target);
     assert!(
         fs::symlink_metadata(&target)
             .unwrap()
@@ -192,11 +225,18 @@ fn native_bound_symlink_metadata_cannot_escape_its_admitted_hierarchy() {
     assert_eq!(fs::read(&target).unwrap(), b"original portable bytes");
     assert_eq!(fs::read_link(&link).unwrap(), Path::new("outside referent"));
 }
-impl Drop for GuestFileBind {
+impl Drop for GuestMount {
     fn drop(&mut self) {
+        let Some(cleanup) = self.cleanup.take() else {
+            return;
+        };
         let current = kernel_interface::pin(&self.path, false)
             .and_then(|file| kernel_interface::MountIdentity::pinned(&file));
         if current.ok() == Some(self.identity) {
+            if matches!(cleanup, MountCleanup::Writable) {
+                self.remount("remount,rw");
+                return;
+            }
             let path = std::ffi::CString::new(self.path.as_os_str().as_encoded_bytes()).unwrap();
             // The owned mount may itself be a symlink inode. Never follow its
             // referent when releasing this identity-checked guest fixture.
@@ -204,6 +244,134 @@ impl Drop for GuestFileBind {
             assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
         }
     }
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_read_only_collection_requires_a_read_only_filesystem_and_refuses_policy_loss() {
+    let (_native, fixture, mut drive) = fixture();
+    fs::write(fixture.a.join("payload"), b"stable source bytes").unwrap();
+    let view = fixture._temp.path().join("read-only-view");
+    fs::create_dir(&view).unwrap();
+    let bind = GuestMount::attach(&fixture.a, &view);
+    bind.remount("remount,bind,ro");
+    let view_root = Root::open(&view).unwrap();
+    let directory = view_root.directory(Path::new(""), false).unwrap();
+    assert!(
+        rustix::fs::fstatvfs(&directory)
+            .unwrap()
+            .f_flag
+            .contains(rustix::fs::StatVfsMountFlags::RDONLY)
+    );
+    let error = Root::open_with_read_only(&view, true)
+        .err()
+        .expect("writable backing filesystem refused");
+    assert!(
+        error.to_string().contains("backing filesystem is writable"),
+        "{error}"
+    );
+    // Ordinary collection is available through this view. The explicit stronger
+    // policy alone requires a read-only backing filesystem.
+    let ordinary_db = Store::open(&fixture._temp.path().join("ordinary.sqlite")).unwrap();
+    let ordinary_destination =
+        Root::create(&fixture._temp.path().join("ordinary-backups")).unwrap();
+    let ordinary = backup::files(
+        &ordinary_db,
+        &drive,
+        &view_root,
+        &ordinary_destination,
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(ordinary.path.join("payload")).unwrap(),
+        b"stable source bytes"
+    );
+    let ordinary_manifest = verified_file_manifest(&ordinary, 0);
+    assert!(
+        ordinary_manifest
+            .get::<String>("collection", "consistency")
+            .unwrap()
+            .unwrap()
+            .starts_with("Per-file revision checks")
+    );
+    drop(directory);
+    drop(view_root);
+    drop(bind);
+
+    let mut mode = GuestMount::read_only_filesystem();
+    drive.read_only = true;
+    let source = Root::open_with_read_only(&fixture.a, true).unwrap();
+    let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+    let first = backup::files(
+        &fixture.db,
+        &drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(first.path.join("payload")).unwrap(),
+        b"stable source bytes"
+    );
+    let manifest = verified_file_manifest(&first, 0);
+    assert_eq!(
+        manifest
+            .get::<String>("collection", "consistency")
+            .unwrap()
+            .as_deref(),
+        Some(
+            "Read-only filesystem collection; source mount and superblock checked through publication"
+        )
+    );
+    assert_eq!(
+        manifest
+            .get::<bool>("collection", "source_mount_read_only_at_start")
+            .unwrap(),
+        Some(true)
+    );
+    let mut changed = false;
+    let error = backup::files(
+        &fixture.db,
+        &drive,
+        &source,
+        &destination,
+        &fixture.cancel,
+        |count, _| {
+            if count == 0 && !changed {
+                mode.writable();
+                changed = true;
+            }
+        },
+    )
+    .unwrap_err();
+    assert!(changed);
+    assert!(
+        error.to_string().contains("Read-only collection requires"),
+        "{error}"
+    );
+    assert!(source.validate().is_err());
+    let current: crate::DriveBackup = serde_json::from_slice(
+        &fs::read(first.path.parent().unwrap().join("current-files.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current.id, first.id);
+    assert_eq!(
+        fixture
+            .db
+            .list::<crate::DriveBackup>("backup", 0, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    verified_file_manifest(&first, 0);
+    assert_eq!(
+        fs::read(fixture.a.join("payload")).unwrap(),
+        b"stable source bytes"
+    );
 }
 
 #[test]
@@ -222,7 +390,7 @@ fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
         let target = fixture.a.join("bound-file");
         fs::write(&target, b"original portable file").unwrap();
         let source = Root::open(&fixture.a).unwrap();
-        let bind = GuestFileBind::attach(&foreign, &target);
+        let bind = GuestMount::attach(&foreign, &target);
         assert_eq!(
             fs::metadata(&foreign).unwrap().dev() == fs::metadata(&fixture.a).unwrap().dev(),
             same_filesystem
