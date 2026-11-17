@@ -241,7 +241,12 @@ impl Root {
     }
     pub fn input(&self, relative: &Path) -> Result<File> {
         let (_parent, path) = self.parent(relative, false)?;
-        Ok(kernel_interface::open_content(&path, false)?)
+        let file = kernel_interface::open_content(&path, false)?;
+        let identity = MountIdentity::pinned(&file)?;
+        if identity.device != self.identity.device || identity.mount != self.identity.mount {
+            return Err("Nested file mount in drive tree; refusing content access".into());
+        }
+        Ok(file)
     }
     pub fn digest(&self, relative: &Path, max_bytes: u64, cancel: &AtomicBool) -> Result<String> {
         let file = self.input(relative)?;

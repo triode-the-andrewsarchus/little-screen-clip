@@ -11,7 +11,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes now retain that observation after pins are retired; they cannot authorize payload access. Watch/cache retirement covers overlapping observed filesystem regions, including bind aliases, while retaining unrelated watches. Pure overlap/projection tests and a real normal FUSE unmount with a retained scope pass; a restarted native fixture also proves startup-configured file backups refuse private RAM backing. Real bind/case-fold aliases, remaining managed-root coverage, image destinations and the full authorized-device lifetime checks still need the complete matrix. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is now fixed: retained input handles must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Partial | Persistent subtree pairs and baselines exist; strengthen fault-injection evidence for committing both sides. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Remaining remount/event-loss and fault matrices still need evidence. |
 | 2.3 | Partial | Watch overflow now clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Direct filesystem and loss/reconnect matrices remain. |
@@ -53,6 +53,44 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Final-file mount boundaries
+
+Reviewing live collection exposed a gap in the shared `Root::input` contract.
+Parent-directory traversal rejected nested mounts, but the final regular file only
+received core's ordinary-content classification. A file bind-mounted from outside
+the admitted root could therefore supply payload bytes for hashing/copying. The
+negative guest run confirms this on all three native source formats, returning
+the owned foreign file's successful SHA-256 instead of refusing access:
+`/tmp/portable-drive-vm-final-file-mount-negative/report.json` and its guest log.
+
+`Root::input` now compares the opened descriptor's device and mount ID with its
+retained root before returning it to any content consumer. The check uses the
+existing pinned mount identity, without another pathname lookup or routing policy.
+The guest test independently binds a file from another filesystem and from the
+same source filesystem outside the root; the latter proves a device-only check
+would be insufficient. Both hashing and file-backup collection must refuse, no
+backup may publish, and unmounting the fixture must reveal the intact original
+portable file while the foreign canary remains unchanged. A small RAII fixture
+unmounts only its captured mount identity; all bind operations require the existing
+disposable-guest boot identity/marker and touch owned fixture paths only.
+
+Final native evidence is
+`/tmp/portable-drive-vm-final-file-mount-accepted/report.json`: all ten cases pass
+on each of FAT32, exFAT and NTFS3 (30 total), including both bind variants. Existing
+RAM crash/namespace/pressure cases also pass through this shared input check:
+`/tmp/portable-drive-vm-final-file-mount-ram/report.json` (five guest tests). The real
+Btrfs version/delta fixture still passes with old bytes and shared extents retained
+(`/tmp/portable-drive-final-file-mount-btrfs.log`). Backend tests pass 95 cases with
+38 explicit fixtures ignored; selected backend/Files/daemon all-target clippy and
+affected-crate formatting pass. Logs use the
+`/tmp/portable-drive-final-file-mount-` prefix (`backend.log`, `clippy.log`).
+
+Architecture remains REGRESSION with no new finding from this fix and unchanged
+4300 clone groups, 7.13% duplication, average CCN 3.48, maximum 274 and reported
+cycles 144 versus 143. Selected fields:
+`.fitness/portable-drives-final-file-mount-architecture.json`. This closes the
+specific final-file payload escape; item 1.6 and the feature-wide gate remain Partial.
 
 ## Bounded live-file backup collection
 

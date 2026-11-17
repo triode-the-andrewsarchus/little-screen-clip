@@ -1,6 +1,7 @@
 //! Guest-only application checks on actual FAT32, exFAT and NTFS mounts.
 use super::*;
 use crate::{backup, catalog, scan};
+use little_clip_core::{kernel_interface, process::CommandRequest};
 use std::{
     fs::{File, FileTimes},
     os::unix::fs::MetadataExt,
@@ -80,6 +81,86 @@ pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {
         .unwrap()
         .into();
     (native, fixture, drive)
+}
+
+struct GuestFileBind {
+    path: PathBuf,
+    identity: kernel_interface::MountIdentity,
+}
+impl GuestFileBind {
+    fn attach(source: &Path, destination: &Path) -> Self {
+        crate::require_disposable_guest();
+        let result = CommandRequest::new("mount")
+            .arg("--bind")
+            .arg(source)
+            .arg(destination)
+            .run()
+            .unwrap();
+        assert!(result.status.success(), "{}", result.stderr_lossy());
+        let file = kernel_interface::pin(destination, false).unwrap();
+        Self {
+            path: destination.into(),
+            identity: kernel_interface::MountIdentity::pinned(&file).unwrap(),
+        }
+    }
+}
+impl Drop for GuestFileBind {
+    fn drop(&mut self) {
+        let current = kernel_interface::pin(&self.path, false)
+            .and_then(|file| kernel_interface::MountIdentity::pinned(&file));
+        if current.ok() == Some(self.identity) {
+            let _ = CommandRequest::new("umount").arg(&self.path).run();
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated removable-filesystem guest"]
+fn native_final_file_bind_mounts_cannot_supply_backup_or_hash_payloads() {
+    for same_filesystem in [false, true] {
+        let (_native, fixture, drive) = fixture();
+        let outside = tempfile::tempdir_in(if same_filesystem {
+            Path::new("/work/media")
+        } else {
+            fixture._temp.path()
+        })
+        .unwrap();
+        let foreign = outside.path().join("foreign");
+        fs::write(&foreign, b"outside the admitted root").unwrap();
+        let target = fixture.a.join("bound-file");
+        fs::write(&target, b"original portable file").unwrap();
+        let source = Root::open(&fixture.a).unwrap();
+        let destination = Root::create(&fixture._temp.path().join("backups")).unwrap();
+        let bind = GuestFileBind::attach(&foreign, &target);
+        assert_eq!(
+            fs::metadata(&foreign).unwrap().dev() == fs::metadata(&fixture.a).unwrap().dev(),
+            same_filesystem
+        );
+        let error = source
+            .digest(Path::new("bound-file"), u64::MAX, &fixture.cancel)
+            .unwrap_err();
+        assert!(error.to_string().contains("Nested file mount"), "{error}");
+        let error = backup::files(
+            &fixture.db,
+            &drive,
+            &source,
+            &destination,
+            &fixture.cancel,
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Nested file mount"), "{error}");
+        assert!(
+            fixture
+                .db
+                .list::<crate::DriveBackup>("backup", 0, 10)
+                .unwrap()
+                .is_empty()
+        );
+        drop(bind);
+        assert_eq!(fs::read(&target).unwrap(), b"original portable file");
+        assert_eq!(fs::read(&foreign).unwrap(), b"outside the admitted root");
+    }
 }
 
 #[test]
