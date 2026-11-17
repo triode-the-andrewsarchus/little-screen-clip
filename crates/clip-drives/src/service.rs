@@ -1470,12 +1470,12 @@ mod tests {
         assert!(!destination.exists());
         service.shutdown().unwrap();
     }
-    struct TestDrives {
+    pub(super) struct TestDrives {
         temp: tempfile::TempDir,
         drives: Arc<Mutex<Vec<Drive>>>,
     }
     impl TestDrives {
-        fn native_source(
+        pub(super) fn native_source(
             &self,
             relative: &str,
         ) -> (RamBacking, String, crate::ram::Mounted, PathBuf) {
@@ -1506,7 +1506,7 @@ mod tests {
             self.drives.lock().unwrap()[1].mount = Some(source.clone());
             (backing, id, native, source)
         }
-        fn new(bytes: u64) -> Self {
+        pub(super) fn new(bytes: u64) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let small = temp.path().join("small");
             let large = temp.path().join("large");

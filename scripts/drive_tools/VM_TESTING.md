@@ -90,6 +90,20 @@ Successful cases format a private 128 MiB sparse image on the selected tmpfs,
 mount/write/read it and discard it. No shared process environment is changed.
 These check filesystem selection/allocation; resource-pressure admission is separate.
 
+For deterministic initial-population interleavings, select
+`service::reconciliation::population_tests:: --ignored --test-threads=1 --nocapture`
+with the same filesystem guest and current backend binary. Two parent tests run
+on each native source format against real bounded RAM mounts. The existing
+per-file progress callback injects edits/failures immediately after the first
+durable installation, before the next file, without sleeps or another I/O gate.
+A one-pass control misses the injected edit/addition; initialization catches them.
+Cancellation, source disappearance and preserved-timestamp source changes retain
+the first file and incomplete state, then converge on an explicit verified retry.
+These worker/result-publication cases complement the live coordinator's
+`service::tests::cancelled_initial_ram_copy_retains_live_backing_and_resumes` and
+`service::tests::large_ram_population_keeps_an_existing_ram_session_promptly_writable`
+fixtures, which run on the host's owned tmpfs/FUSE storage.
+
 For bounded RAM pressure, use `vm_ram.sh` with 4096 MiB guest memory and a current
 backend test binary:
 

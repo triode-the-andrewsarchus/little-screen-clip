@@ -21,7 +21,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 2.7 | Partial | Changed-file reconciliation, overflow invalidation and independent-drive scheduling tests pass. Coalesced path batches are shared and capped at 4096 paths/1 MiB; registration is incremental with 8192-watch/16 MiB/depth-256 budgets. Real overflow delivery matrices remain. |
 | 3.1 | Partial | Capacity, MemAvailable and expanded contents are checked before admission; configurable per-session/aggregate byte, inode and session reservations now exist. Native quota and aggregate refusal tests pass; full pressure matrix remains. |
 | 3.2 | Complete | Pinned filesystem and effective-user write/search/read-only checks select a usable tmpfs; RAM and backup admission share the directory check. A disposable guest covers /tmp with each native FAT32/exFAT/NTFS mount: all 36 selection cases pass, including XDG/shm fallback, read-only/unavailable candidates, explicit overrides and writable-tmpfs /tmp preference. Positive cases create 0700 private directories/0600 images on verified tmpfs, mount/write/read/discard successfully. Existing quota/restart/unmount tests pass. See the RAM-directory checkpoint. |
-| 3.3 | Partial | Streaming initial population and incomplete state exist; a second reconciliation after installing watches catches earlier edits. Deterministic mid-population change/failure injection remains. |
+| 3.3 | Complete | Bounded streaming runs on retained workers; initial and explicit-resume jobs use catch-up before successful ready publication. Per-file callback cases deterministically change a same-size/same-mtime source and add an unenumerated path after the first installation, with a one-pass negative control. Cancellation, missing source and changed source preserve accepted files, incomplete/paused state and pending work; verified retry enables browsing. Both cases pass on real FAT32/exFAT/NTFS sources and bounded RAM destinations. Live coordinator cancel/resume and 1 GB independent-session responsiveness pass. See the initial-population checkpoint. |
 | 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
 | 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Physical USB/device-transport and native FAT/exFAT/NTFS interrupted-I/O matrices remain. |
 | 3.6 | Partial | Eject includes paused ready RAM mirrors and refuses incomplete population/failed preflush. Native tests also queue eject and unconfirmed discard behind a held write, preserve ownership through cancellation, keep unrelated controls responsive and retain terminal results after reconnect. Broader read-only, dirty-session and eject/discard cancellation matrices remain. |
@@ -53,6 +53,59 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Initial RAM population interleavings and recovery
+
+Plan item 3.3 is now Complete. Inspection confirms preparation publishes an
+incomplete session, initial/resume requests set the initialization flag, roots
+are watched before worker submission, and the retained worker performs initial
+and catch-up comparisons before its result is published. The successful-result
+transaction is the only path enabling the new session's ready state. Directory
+inventory stays in bounded SQLite batches and file data uses fixed-size streaming
+buffers, independently from the coordinator and GUI.
+
+New tests use the actual worker's per-file progress callback, the shared existing
+bounded RAM fixture and real FUSE mounts. After `a` has been installed and before
+`b`, a source edit preserves both size and modification time and a new `c` is
+added outside the original inventory. A one-pass control deliberately misses both
+changes; initialization's catch-up converges all bytes before ready publication.
+The persisted session remains non-browsable until that successful result is
+published. This is live collection, not an atomic filesystem snapshot; ongoing
+later edits retain their normal pending/watch semantics under 3.4.
+
+Three deterministic failure cases cancel, remove `b`, or change its bytes while
+preserving size/mtime after the initial inventory. They assert the specific
+cancellation/ENOENT/digest-mismatch result, complete `a` retention, no installed
+staging or `b`, initialized/live backing, paused incomplete state, retained full
+check and no drive confirmation. An explicit fresh comparison then preserves
+all source bytes, enables browsing, unpauses the pair and acknowledges only the
+successful work. The fixture reuses TestDrives within cfg(test); no production
+hooks, helper protocol, runtime behavior or persisted schema changed.
+
+The two parent tests pass both on owned host storage and against each real
+FAT32/exFAT/NTFS source in the disposable guest. The final guest report is
+`/tmp/portable-drive-vm-ram-population-accepted/report.json`, with success=true,
+no timeout, one successful guest marker and three two-test passing groups.
+Host log: `/tmp/portable-drive-ram-population-host-accepted.log`.
+The live coordinator's existing cancellation/resume test passes in
+`/tmp/portable-drive-ram-population-owner-cancel.log`, retaining accepted `a`,
+refusing eject while incomplete and completing/resuming the larger file before
+enabling browsing. The separate 1 GB population fixture keeps another actual RAM
+session promptly writable: `/tmp/portable-drive-ram-population-owner-responsive.log`.
+
+All 135 ordinary backend tests pass (64 explicit fixtures ignored), as do the
+drive all-target clippy gate with warnings denied, targeted Rust formatting and
+whitespace checks. Logs use `/tmp/portable-drive-ram-population-` with
+`backend.log`, `tests-accepted-build.log`, `clippy.log` and `fmt.log`.
+No host mount privileges, attached media, live daemon or desktop were used.
+
+The original-baseline architecture result remains REGRESSION: 4300 clone groups,
+144 cycles, average CCN 3.48, maximum 274 and duplication 7.07%. Shared barrier,
+convergence and publication assertions remove the two initial fixture clones.
+There is no additional reported hotspot, clone group or dependency cycle.
+Report: `.fitness/portable-drives-ram-population-architecture.json`.
+Memory-pressure, event-loss and removal/device-transport matrices remain under
+their existing separate rows; this does not complete the whole accepted plan.
 
 ## RAM directory fallback and private backing
 

@@ -2,6 +2,8 @@
 use super::*;
 use little_clip_core::jobs::task::Task;
 use std::collections::HashSet;
+#[cfg(test)]
+mod population_tests;
 
 #[derive(Clone)]
 pub(super) struct Plan {

@@ -54,6 +54,15 @@ explicit confirmation, including when the portable partition is already offline.
 
 Saving elsewhere runs on a retained reconciliation worker and creates a new private output folder. Completed files remain there if cancelled or interrupted. A saved copy does not advance the removable media's common baseline or count as a media flush. Details reports the last successful export separately from media writeback, including whether the initial RAM population was complete. Unavailable and incomplete RAM views cannot be opened from the sidebar.
 
+Initial population and an explicit resume perform a second full comparison before
+publishing the ready state. This catches earlier files changed during copying,
+including equal-size edits preserving modification times, and paths added after
+the first inventory. Failure or cancellation preserves already installed files,
+the initialized backing and pending work while keeping the initial copy incomplete.
+After resolving the source error, **Synchronize** resumes and verifies it before
+enabling browsing. Later edits continue through ordinary watch/catch-up processing;
+the copy is not an atomic frozen snapshot of a continuously changing drive.
+
 Unsynchronized contents remain temporary: rebooting or losing tmpfs loses RAM-only data. Tmpfs can use swap. Legacy directory sessions remain recoverable, but must be saved/discarded before admitting another bounded session.
 
 ## Backups
