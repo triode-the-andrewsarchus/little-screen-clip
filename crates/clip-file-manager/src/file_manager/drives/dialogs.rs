@@ -6,7 +6,7 @@ impl Dialog {
             Self::Path { title, .. } => title,
             Self::Discard(_) => "Discard RAM copy",
             Self::Deletions { .. } => "Deletion propagation",
-            Self::Policy { .. } => "Catalog and indexing policy",
+            Self::Policy { .. } | Self::PolicyLoading { .. } => "Catalog and indexing policy",
             Self::Details => "Drive operations and conflicts",
             Self::BackupLoading { .. } => "Checking backup destination",
             Self::BackupReview { .. } => "Review partition backup",
@@ -20,6 +20,11 @@ impl Dialog {
         requests: &mut Vec<DriveRequest>,
     ) -> bool {
         match self {
+            Self::PolicyLoading { .. } => {
+                ui.spinner();
+                ui.label("Reading saved catalog and indexing settings…");
+                true
+            }
             Self::BackupLoading { .. } => {
                 ui.spinner();
                 ui.label("Checking the selected partition, destination and available space…");

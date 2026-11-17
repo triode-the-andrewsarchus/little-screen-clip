@@ -39,7 +39,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Partial | Bounded raw-name catalogs exist; per-directory typed coverage/precision details remain incomplete. |
-| 6.2 | Partial | Independent catalog/search rules exist, full backup/sync inclusion preserved; operational-baseline accounting remains. |
+| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Operational-baseline accounting and rule-address alias/selector handling remain. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Partial | Hard bytes/entry/depth/time limits and million-file fixture pass; explicit larger-run UI and worker policy need evidence. |
@@ -227,8 +227,58 @@ functions retain necessary explicit snapshot and whole-root refusal branches;
 there is no second pagination mechanism. Report:
 `.fitness/portable-drives-policy-pages-architecture.json`.
 
-The policy editor still needs a direct lookup: status is intentionally paginated,
-so the first status page cannot prove that an older folder has no saved rule.
+At this checkpoint the editor still needed a direct lookup. The following
+checkpoint closes that gap without removing status pagination.
+
+## Exact policy-editor lookup checkpoint
+
+GetRule is a read-only request with a lossless relative path. It uses the existing
+stable rule key and a read-only SQLite connection, rejects mismatched stored
+addresses and creates no operation. The wire envelope stays a direct Drives read.
+Files reuses its bounded request queue and dialog generations to wait for the
+exact reply; cancelled/stale replies are ignored, and failures or wrong-address
+replies cannot open a default editor. Whole-drive settings now load saved flags
+instead of unconditionally starting enabled. Default flags are displayed only
+after a confirmed absent override; inherited exclusions still apply.
+
+The CLI exposes `get-policy` and fixes omitted whole-partition subtrees in both
+read/write policy and pairing commands. Policy writes require both booleans,
+avoiding implicit resets when a flag is omitted. Rule execution publishes the
+current index-policy file before reporting successful completion rather than
+waiting for the five-second discovery cycle.
+
+Backend tests cover exact root/raw-byte rules older than the status page, missing
+rules, invalid paths, corrupt key/address pairs and zero operations from reads.
+Core IPC tests roundtrip the raw path and typed reply while verifying direct-read
+classification. Files tests cover deferred editing, stale/cancelled replies,
+lookup failures and mismatched/unexpected responses. CLI tests cover root/folder
+reads, omitted root subtrees and rejection of incomplete policy writes.
+
+Dark and light private desktop runs pass `--policy-editor-only`. They seed two
+independent flag combinations before 105 newer rules, verify both are absent
+from the first status page, reopen the actual root/folder editors, save without
+changing a checkbox, wait for completed UI mutations and query the resulting
+stored flags. Both original combinations are retained. Screenshots were inspected
+for checkbox state and complete layout. Reports:
+`/tmp/portable-drive-policy-editor-dark-final/report.json` and
+`/tmp/portable-drive-policy-editor-light-final/report.json`.
+
+Affected-package tests pass 88 backend cases (28 explicit fixtures ignored), 981
+Files (six ignored), 452 core (three ignored), eight CLI and 35 daemon tests, plus
+selected integrations and twelve core doctests. Full package log:
+`/tmp/portable-drive-rule-lookup-packages-final.log`; final backend fixture review
+and CLI checks also pass in the corresponding `backend-final`/`cli-final` logs.
+Selected-package all-target clippy/warnings denied, normal binaries, the owned
+fixture helper, core/backend API docs and repository formatting pass. Rendered
+GetRule/Rule documentation was inspected. The initial wrapped-menu OCR failure
+was corrected by targeting its visible second line; product rendering was intact.
+
+The original architecture gate remains REGRESSION, with no additional clone group
+(4301), duplication 7.15%, average CCN 3.48, maximum 274 and 144 reported cycles.
+Tests reuse the existing TestDrives owner and share the published-policy reader
+with backup tests; both new fixture clones were removed. The product reuses the
+existing IPC/SQLite/request-generation mechanisms. Raw report:
+`.fitness/portable-drives-rule-lookup-verified-architecture.json`.
 
 ## Cross-cutting gates
 

@@ -231,7 +231,7 @@ impl Service {
             }),
         })
     }
-    /// Admits an operation or returns a bounded status page without waiting for writes.
+    /// Admits an operation or reads status, policy and backup-review metadata.
     ///
     /// # Errors
     /// Returns queue, database or validation failures. Accepted writes retain ownership.
@@ -255,6 +255,20 @@ impl Service {
         }
         if let DriveRequest::Status { offset } = request {
             return self.status(offset).map(|s| DriveReply::Status(Box::new(s)));
+        }
+        if let DriveRequest::GetRule { drive, relative } = request {
+            if !valid_relative(&relative) {
+                return Err("Invalid rule subtree".into());
+            }
+            let db = Store::existing(&self.state.join("drives.sqlite"), true)?;
+            let rule: Option<DriveRule> = db.get("rule", &rule_id(&drive, &relative))?;
+            if rule
+                .as_ref()
+                .is_some_and(|rule| rule.drive != drive || rule.relative != relative)
+            {
+                return Err("Saved rule address does not match its key".into());
+            }
+            return Ok(DriveReply::Rule(rule));
         }
         if let DriveRequest::Cancel { operation } = request {
             let tokens = self
@@ -787,11 +801,7 @@ impl Owner {
                 if !valid_relative(&relative) {
                     return Err("Invalid rule subtree".into());
                 }
-                let id = format!(
-                    "{}:{}",
-                    drive,
-                    little_clip_core::path_address::display_path(&relative)
-                );
+                let id = rule_id(&drive, &relative);
                 let rule = DriveRule {
                     id: id.clone(),
                     drive,
@@ -800,6 +810,7 @@ impl Owner {
                     index,
                 };
                 catalog::redaction::set_rule(&self.db, &rule)?;
+                self.publish_policy()?;
                 Ok(if catalog {
                     "Catalog and indexing policy updated; saved catalogs retain their capture date"
                 } else {
@@ -838,9 +849,9 @@ impl Owner {
                 self.db.put("conflict", &conflict.id, &conflict)?;
                 Ok("Conflict acknowledged; preserved variants remain available".into())
             }
-            DriveRequest::Status { .. } | DriveRequest::Cancel { .. } => {
-                Err("Request must use coordinator admission".into())
-            }
+            DriveRequest::Status { .. }
+            | DriveRequest::Cancel { .. }
+            | DriveRequest::GetRule { .. } => Err("Request must use coordinator admission".into()),
         }
     }
     fn automatic(&mut self) {
@@ -1076,6 +1087,13 @@ impl Owner {
         Ok(())
     }
 }
+fn rule_id(drive: &str, relative: &Path) -> String {
+    format!(
+        "{drive}:{}",
+        little_clip_core::path_address::display_path(relative)
+    )
+}
+
 fn write_task<T: Send + 'static>(
     pool: &little_clip_core::jobs::BackgroundJobs,
     work: impl FnOnce() -> Result<T> + Send + 'static,
@@ -1286,6 +1304,9 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(5));
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+    fn published_policy(service: &Service) -> IndexPolicy {
+        serde_json::from_slice(&fs::read(service.state.join("index-policy.json")).unwrap()).unwrap()
     }
     fn status(service: &Service) -> DriveStatus {
         match service.request(DriveRequest::Status { offset: 0 }).unwrap() {

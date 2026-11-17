@@ -1,15 +1,40 @@
 use super::*;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
+fn policy_fixture() -> (TestDrives, Drive, Store) {
+    let fixture = TestDrives::new(0);
+    let state = fixture.temp.path().join("state");
+    fs::create_dir(&state).unwrap();
+    let db = Store::open(&state.join("drives.sqlite")).unwrap();
+    let drive = fixture.drives.lock().unwrap()[0].clone();
+    (fixture, drive, db)
+}
+
+#[test]
+fn a_saved_rule_is_published_before_its_completion_is_reported() {
+    let (fixture, drive, _) = policy_fixture();
+    let source = drive.mount.clone().unwrap();
+    let selected = drive.id.clone();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    finish(
+        &service,
+        DriveRequest::Rule {
+            drive: selected,
+            relative: "private".into(),
+            catalog: true,
+            index: false,
+        },
+    );
+    let policy = published_policy(&service);
+    assert!(policy.excluded.contains(&source.join("private")));
+    service.shutdown().unwrap();
+}
+
 #[test]
 fn published_policy_includes_rules_beyond_one_database_page() {
-    let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("portable");
-    let state = temp.path().join("state");
-    fs::create_dir(&source).unwrap();
-    fs::create_dir(&state).unwrap();
-    let drive = fixture_drive(&source, "policy-pages");
-    let db = Store::open(&state.join("drives.sqlite")).unwrap();
+    let (fixture, drive, db) = policy_fixture();
+    let state = fixture.temp.path().join("state");
+    let source = drive.mount.as_ref().unwrap();
     let mut expected = IndexPolicy::default();
     let transaction = db.0.unchecked_transaction().unwrap();
     for index in 0..1026 {
@@ -34,12 +59,7 @@ fn published_policy_includes_rules_beyond_one_database_page() {
         serde_json::to_vec(&expected).unwrap(),
     )
     .unwrap();
-    let service = Service::start_with_inventory(
-        DriveConfig::default(),
-        state.clone(),
-        Arc::new(move || Ok(vec![drive.clone()])),
-    )
-    .unwrap();
+    let service = fixture.start_authority(None, fixture.image_authority());
     service.shutdown().unwrap();
     let mut location = OsString::from("LITTLE_CLIP_DRIVE_STATE_DIR=");
     location.push(&state);
@@ -69,6 +89,99 @@ fn published_policy_includes_rules_beyond_one_database_page() {
             .count(),
         1
     );
+}
+
+#[test]
+fn exact_rule_reads_preserve_raw_addresses_and_do_not_create_operations() {
+    let (fixture, drive, db) = policy_fixture();
+    let selected = drive.id.clone();
+    let original = [
+        DriveRule {
+            id: rule_id(&selected, Path::new("")),
+            drive: selected.clone(),
+            relative: PathBuf::new(),
+            catalog: false,
+            index: true,
+        },
+        DriveRule {
+            id: rule_id(
+                &selected,
+                &PathBuf::from(OsString::from_vec(b"private_\xff".to_vec())),
+            ),
+            drive: selected.clone(),
+            relative: OsString::from_vec(b"private_\xff".to_vec()).into(),
+            catalog: true,
+            index: false,
+        },
+    ];
+    let transaction = db.0.unchecked_transaction().unwrap();
+    for rule in &original {
+        db.put("rule", &rule.id, rule).unwrap();
+    }
+    for index in 0..1025 {
+        let rule = DriveRule {
+            id: format!("other-{index}"),
+            drive: "other-drive".into(),
+            relative: PathBuf::new(),
+            catalog: true,
+            index: true,
+        };
+        db.put("rule", &rule.id, &rule).unwrap();
+    }
+    transaction.commit().unwrap();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    assert!(
+        status(&service)
+            .rules
+            .iter()
+            .all(|rule| rule.drive != selected)
+    );
+    for expected in &original {
+        let reply = service
+            .request(DriveRequest::GetRule {
+                drive: selected.clone(),
+                relative: expected.relative.clone(),
+            })
+            .unwrap();
+        let DriveReply::Rule(Some(actual)) = reply else {
+            panic!("missing exact rule");
+        };
+        assert_eq!(actual.relative, expected.relative);
+        assert_eq!(
+            (actual.catalog, actual.index),
+            (expected.catalog, expected.index)
+        );
+    }
+    assert!(matches!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: selected.clone(),
+                relative: "no-override".into()
+            })
+            .unwrap(),
+        DriveReply::Rule(None)
+    ));
+    assert!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: selected.clone(),
+                relative: "../escape".into()
+            })
+            .is_err()
+    );
+    let mut invalid = original[0].clone();
+    invalid.relative = "wrong-address".into();
+    db.put("rule", &invalid.id, &invalid).unwrap();
+    assert!(
+        service
+            .request(DriveRequest::GetRule {
+                drive: selected,
+                relative: PathBuf::new()
+            })
+            .is_err()
+    );
+    assert!(status(&service).operations.is_empty());
+    service.shutdown().unwrap();
 }
 
 #[test]

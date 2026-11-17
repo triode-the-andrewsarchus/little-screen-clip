@@ -1,6 +1,86 @@
 //! Read-only reply handoff tests never start IPC or open the fixture device paths.
 use super::*;
 
+fn policy_request(relative: &str) -> DriveRequest {
+    DriveRequest::GetRule {
+        drive: "owned".into(),
+        relative: relative.into(),
+    }
+}
+fn policy_reply(relative: &str) -> DriveReply {
+    DriveReply::Rule(Some(DriveRule {
+        id: "saved".into(),
+        drive: "owned".into(),
+        relative: relative.into(),
+        catalog: false,
+        index: true,
+    }))
+}
+
+#[test]
+fn a_policy_editor_waits_for_exact_settings_and_ignores_stale_lookup_replies() {
+    let mut drives = Drives::default();
+    drives.status.next_offset = Some(100);
+    assert!(drives.status.rules.is_empty());
+    drives.send(policy_request("old"));
+    let old = drives.dialog_generation;
+    drives.send(policy_request("current"));
+    let current = drives.dialog_generation;
+    drives.accept_reply(old, policy_request("old"), Err("late old failure".into()));
+    drives.accept_reply(old, policy_request("old"), Ok(policy_reply("old")));
+    assert!(drives.notice.is_none());
+    assert!(
+        matches!(drives.dialog, Some(Dialog::PolicyLoading { generation }) if generation == current)
+    );
+    drives.accept_reply(
+        current,
+        policy_request("current"),
+        Ok(policy_reply("current")),
+    );
+    assert!(
+        matches!(drives.dialog, Some(Dialog::Policy { ref relative, catalog: false, index: true, .. }) if relative == std::path::Path::new("current"))
+    );
+    drives.send(policy_request("no-override"));
+    drives.accept_reply(
+        drives.dialog_generation,
+        policy_request("no-override"),
+        Ok(DriveReply::Rule(None)),
+    );
+    assert!(matches!(
+        drives.dialog,
+        Some(Dialog::Policy {
+            catalog: true,
+            index: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn failed_cancelled_or_mismatched_policy_reads_cannot_open_a_default_editor() {
+    for result in [
+        Err("lookup failed".into()),
+        Ok(DriveReply::Done("unexpected response".into())),
+        Ok(policy_reply("different-folder")),
+    ] {
+        let mut drives = Drives::default();
+        drives.send(policy_request("selected"));
+        drives.accept_reply(drives.dialog_generation, policy_request("selected"), result);
+        assert!(drives.dialog.is_none());
+        assert!(drives.notice.as_ref().unwrap().1);
+    }
+    let mut drives = Drives::default();
+    drives.send(policy_request("cancelled"));
+    drives.dialog = None;
+    drives.accept_reply(
+        drives.dialog_generation,
+        policy_request("cancelled"),
+        Ok(DriveReply::Rule(None)),
+    );
+    assert!(drives.dialog.is_none());
+    assert!(drives.notice.is_none());
+}
+
 fn saved_catalog() -> Catalog {
     Catalog {
         id: "saved".into(),
@@ -197,11 +277,11 @@ fn an_old_preview_and_its_failure_cannot_replace_a_newer_drive_selection() {
     let mut drives = Drives::default();
     let old = request("old");
     drives.send(old.clone());
-    let old_generation = drives.preview_generation;
+    let old_generation = drives.dialog_generation;
     drives.dialog = None;
     let current = request("current");
     drives.send(current.clone());
-    let generation = drives.preview_generation;
+    let generation = drives.dialog_generation;
     drives.accept_reply(old_generation, old.clone(), Err("late old failure".into()));
     assert!(drives.notice.is_none());
     assert!(
@@ -236,7 +316,7 @@ fn cancelling_while_a_preview_is_pending_retires_its_late_reply_without_a_notice
     let mut drives = Drives::default();
     let request = request("cancelled");
     drives.send(request.clone());
-    let generation = drives.preview_generation;
+    let generation = drives.dialog_generation;
     drives.dialog = None;
     drives.accept_reply(
         generation,
@@ -267,7 +347,7 @@ fn a_current_preview_failure_closes_only_its_loading_dialog_and_reports_the_erro
     let request = request("current");
     drives.send(request.clone());
     drives.accept_reply(
-        drives.preview_generation,
+        drives.dialog_generation,
         request,
         Err("destination unavailable".into()),
     );

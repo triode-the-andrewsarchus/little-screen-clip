@@ -73,6 +73,9 @@ enum Dialog {
         catalog: bool,
         index: bool,
     },
+    PolicyLoading {
+        generation: u64,
+    },
     Details,
     BackupLoading {
         generation: u64,
@@ -100,7 +103,7 @@ pub(super) struct Drives {
     policy_changed: bool,
     request: Option<PendingRequest>,
     queue: VecDeque<(u64, DriveRequest)>,
-    preview_generation: u64,
+    dialog_generation: u64,
     last_poll: Instant,
     dialog: Option<Dialog>,
     seen: HashSet<String>,
@@ -119,7 +122,7 @@ impl Default for Drives {
             policy_changed: false,
             request: None,
             queue: VecDeque::new(),
-            preview_generation: 0,
+            dialog_generation: 0,
             last_poll: Instant::now() - Duration::from_secs(5),
             dialog: None,
             seen: HashSet::new(),
@@ -167,13 +170,17 @@ fn ipc_with(
 impl Drives {
     fn send(&mut self, request: DriveRequest) {
         if self.queue.len() < 16 {
-            if matches!(request, DriveRequest::PreviewBackup { .. }) {
-                self.preview_generation = self.preview_generation.wrapping_add(1);
-                self.dialog = Some(Dialog::BackupLoading {
-                    generation: self.preview_generation,
-                });
+            let generation = self.dialog_generation.wrapping_add(1);
+            let loading = match &request {
+                DriveRequest::PreviewBackup { .. } => Some(Dialog::BackupLoading { generation }),
+                DriveRequest::GetRule { .. } => Some(Dialog::PolicyLoading { generation }),
+                _ => None,
+            };
+            if let Some(loading) = loading {
+                self.dialog_generation = generation;
+                self.dialog = Some(loading);
             }
-            self.queue.push_back((self.preview_generation, request));
+            self.queue.push_back((self.dialog_generation, request));
         } else {
             self.notice = Some(("Drive request queue is full".into(), true));
         }
@@ -248,6 +255,10 @@ impl Drives {
         request: DriveRequest,
         result: Result<DriveReply, String>,
     ) {
+        if let DriveRequest::GetRule { drive, relative } = request {
+            self.accept_rule_reply(generation, drive, relative, result);
+            return;
+        }
         let preview_active = matches!(self.dialog, Some(Dialog::BackupLoading { generation: current }) if current == generation);
         if matches!(request, DriveRequest::PreviewBackup { .. }) && result.is_err() {
             if !preview_active {
@@ -277,6 +288,43 @@ impl Drives {
             Err(error) => self.notice = Some((error, true)),
             _ => (),
         }
+    }
+    fn accept_rule_reply(
+        &mut self,
+        generation: u64,
+        drive: String,
+        relative: PathBuf,
+        result: Result<DriveReply, String>,
+    ) {
+        if !matches!(self.dialog, Some(Dialog::PolicyLoading { generation: current }) if current == generation)
+        {
+            return;
+        }
+        self.dialog = None;
+        let rule = match result {
+            Ok(DriveReply::Rule(rule)) => rule,
+            Ok(_) => {
+                self.notice = Some(("Drive service did not return the saved policy".into(), true));
+                return;
+            }
+            Err(error) => {
+                self.notice = Some((error, true));
+                return;
+            }
+        };
+        if rule
+            .as_ref()
+            .is_some_and(|rule| rule.drive != drive || rule.relative != relative)
+        {
+            self.notice = Some(("Saved policy reply belongs to another folder".into(), true));
+            return;
+        }
+        self.dialog = Some(Dialog::Policy {
+            drive,
+            relative,
+            catalog: rule.as_ref().is_none_or(|rule| rule.catalog),
+            index: rule.as_ref().is_none_or(|rule| rule.index),
+        });
     }
     fn accept_status(&mut self, status: DriveStatus) {
         self.error = None;
@@ -515,11 +563,9 @@ impl Drives {
             }
         }
         if ui.button("Catalog and indexing settings…").clicked() {
-            self.dialog = Some(Dialog::Policy {
+            self.send(DriveRequest::GetRule {
                 drive: drive.id.clone(),
                 relative: PathBuf::new(),
-                catalog: true,
-                index: true,
             });
             ui.close_menu();
         }
@@ -846,17 +892,9 @@ impl FileManager {
                 .strip_prefix(mount)
                 .unwrap_or(std::path::Path::new(""))
                 .to_owned();
-            let rule = self
-                .drives
-                .status
-                .rules
-                .iter()
-                .find(|r| r.drive == drive.id && r.relative == relative);
-            self.drives.dialog = Some(Dialog::Policy {
+            self.drives.send(DriveRequest::GetRule {
                 drive: drive.id,
                 relative,
-                catalog: rule.is_none_or(|r| r.catalog),
-                index: rule.is_none_or(|r| r.index),
             });
         }
     }

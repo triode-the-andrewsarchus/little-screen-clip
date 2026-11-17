@@ -329,6 +329,51 @@ def catalog_context_menu(session, name, expected):
     wait_for(opened, 'catalog context menu after sidebar movement')
 
 
+def seed_old_policy_rules(env):
+    drive = status(env)['drives'][0]['id']
+    for relative, catalog, index in [('', False, True), ('many', True, False)]:
+        completed(env, request(env, {'Rule': {'drive': drive, 'relative': relative, 'catalog': catalog, 'index': index}}))
+    for number in range(105):
+        completed(env, request(env, {'Rule': {'drive': drive, 'relative': f'old-policy-{number}', 'catalog': True, 'index': True}}))
+    assert all(rule['relative'] not in ['', 'many'] for rule in status(env)['rules'])
+
+
+def save_policy_unchanged(session, name, relative, expected):
+    env = session.env
+    before = {operation['id'] for operation in status(env)['operations']}
+    click_word(session, name, 'Save')
+    def saved():
+        finished = [operation for operation in status(env)['operations'] if operation['id'] not in before and operation['finished'] is not None]
+        if not finished:
+            return False
+        assert all(operation['state'] == 'complete' for operation in finished), finished
+        return True
+    wait_for(saved, 'unchanged policy save from the actual editor')
+    drive = status(env)['drives'][0]['id']
+    rule = request(env, {'GetRule': {'drive': drive, 'relative': relative}})['Rule']
+    assert (rule['catalog'], rule['index']) == expected, rule
+    session.observe(name + '-notice', ['Drive settings'])
+    dismiss_completion_notice(session, name + '-notice', 'Drive settings')
+
+
+def exercise_policy_editor(session, root):
+    """Open saved policies older than the first status page and preserve both flags."""
+    session.address(root / 'portable')
+    session.observe('policy-editor-source', ['many', 'readme.txt'])
+    drive_menu(session, 'policy-drive-menu')
+    click_word(session, 'policy-drive-menu', 'Contents', tree=True)
+    session.observe('policy-catalog-menu', ['indexing settings'])
+    click_word(session, 'policy-catalog-menu', 'settings')
+    session.observe('policy-old-root', ['Catalog and indexing policy', 'Include metadata', 'Allow explicitly configured'])
+    save_policy_unchanged(session, 'policy-old-root', '', (False, True))
+    session.observe('policy-folder-source', ['many', 'readme.txt'])
+    right_click(session, 'policy-folder-source', 'many')
+    session.observe('policy-folder-actions', ['Catalog / indexing'])
+    click_word(session, 'policy-folder-actions', 'Catalog')
+    session.observe('policy-old-folder', ['Catalog and indexing policy', 'Include metadata', 'Allow explicitly configured'])
+    save_policy_unchanged(session, 'policy-old-folder', 'many', (True, False))
+
+
 def exercise_catalog_redaction(session, root):
     """Keep a real FUSE snapshot open while excluding and compacting its metadata."""
     # Exclude the popup border and surrounding list from paragraph OCR.
@@ -395,6 +440,7 @@ def main():
         scenarios.add_argument('--backup-review-only', action='store_true')
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
         scenarios.add_argument('--catalog-redaction-only', action='store_true')
+        scenarios.add_argument('--policy-editor-only', action='store_true')
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager', configure=configure)
     output, root = media_fixture_directory(args)
     for name in ['portable', 'local', 'backups']:
@@ -411,7 +457,11 @@ def main():
         env['LITTLE_CLIP_DRIVE_MOUNT_HELPER'] = str(repository / 'target/debug/clip-drive-mount')
         children.start('drive-fixture', [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')], env=env, cwd=output, log_path=output / 'drive-fixture.log')
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
-    if args.catalog_redaction_only:
+        if args.policy_editor_only:
+            seed_old_policy_rules(env)
+    if args.policy_editor_only:
+        scenario, scope = exercise_policy_editor, 'Whole-drive and folder policy lookup beyond status pagination without resetting saved flags'
+    elif args.catalog_redaction_only:
         scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'
     elif args.catalog_boundary_only:
         scenario, scope = exercise_catalog_boundary, 'Offline catalog exclusion labels, empty folders and navigation errors'

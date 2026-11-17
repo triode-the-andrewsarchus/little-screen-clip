@@ -52,8 +52,8 @@ pub(super) enum DriveCommand {
     Pair {
         drive: String,
         local: PathBuf,
-        #[arg(long, default_value = "")]
-        subtree: PathBuf,
+        #[arg(long)]
+        subtree: Option<PathBuf>,
     },
     /// Reconcile a sync pair now
     Sync { pair: String },
@@ -75,14 +75,18 @@ pub(super) enum DriveCommand {
     MountCatalog { catalog: String },
     /// Unmount a saved catalog
     UnmountCatalog { catalog: String },
+    /// Read the exact saved policy for a drive or subtree
+    GetPolicy {
+        drive: String,
+        relative: Option<PathBuf>,
+    },
     /// Configure metadata catalog and search indexing admission for a subtree
     Policy {
         drive: String,
-        #[arg(default_value = "")]
-        relative: PathBuf,
-        #[arg(long,action=clap::ArgAction::Set)]
+        relative: Option<PathBuf>,
+        #[arg(long,action=clap::ArgAction::Set, required=true)]
         catalog: bool,
-        #[arg(long,action=clap::ArgAction::Set)]
+        #[arg(long,action=clap::ArgAction::Set, required=true)]
         index: bool,
     },
     /// Flush a RAM copy through the normal conflict-preserving reconciliation
@@ -155,7 +159,7 @@ impl DriveCommand {
                 subtree,
             } => DriveRequest::Pair {
                 drive,
-                relative: subtree,
+                relative: subtree.unwrap_or_default(),
                 local,
             },
             Self::Sync { pair } => DriveRequest::Sync { pair },
@@ -167,6 +171,10 @@ impl DriveCommand {
             Self::Catalog { drive } => DriveRequest::Catalog { drive },
             Self::MountCatalog { catalog } => DriveRequest::MountCatalog { catalog },
             Self::UnmountCatalog { catalog } => DriveRequest::UnmountCatalog { catalog },
+            Self::GetPolicy { drive, relative } => DriveRequest::GetRule {
+                drive,
+                relative: relative.unwrap_or_default(),
+            },
             Self::Policy {
                 drive,
                 relative,
@@ -174,7 +182,7 @@ impl DriveCommand {
                 index,
             } => DriveRequest::Rule {
                 drive,
-                relative,
+                relative: relative.unwrap_or_default(),
                 catalog,
                 index,
             },

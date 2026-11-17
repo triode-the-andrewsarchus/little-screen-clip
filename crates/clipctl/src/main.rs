@@ -479,6 +479,77 @@ mod tests {
     use super::*;
 
     #[test]
+    fn get_policy_reads_an_exact_folder_without_submitting_a_mutation() {
+        for (args, expected) in [
+            (vec!["clipctl", "drives", "get-policy", "part:owned"], ""),
+            (
+                vec!["clipctl", "drives", "get-policy", "part:owned", "folder"],
+                "folder",
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Commands::Drives { action, .. } = cli.command else {
+                panic!("expected drives");
+            };
+            let envelope = IpcRequest::drive(action.request(), uuid::Uuid::new_v4());
+            assert!(
+                matches!(envelope, IpcRequest::Drives(little_clip_core::drives::DriveRequest::GetRule { relative, .. }) if relative == std::path::Path::new(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn whole_partition_pair_and_policy_commands_accept_omitted_subtrees() {
+        for args in [
+            vec!["clipctl", "drives", "pair", "part:owned", "/owned/local"],
+            vec![
+                "clipctl",
+                "drives",
+                "policy",
+                "part:owned",
+                "--catalog",
+                "false",
+                "--index",
+                "true",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Commands::Drives { action, .. } = cli.command else {
+                panic!("expected drives");
+            };
+            match action.request() {
+                little_clip_core::drives::DriveRequest::Pair { relative, .. }
+                | little_clip_core::drives::DriveRequest::Rule { relative, .. } => {
+                    assert!(relative.as_os_str().is_empty())
+                }
+                _ => panic!("expected pair or policy"),
+            }
+        }
+        assert!(
+            Cli::try_parse_from([
+                "clipctl",
+                "drives",
+                "policy",
+                "part:owned",
+                "--index",
+                "false"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "clipctl",
+                "drives",
+                "policy",
+                "part:owned",
+                "--catalog",
+                "true"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn drive_request_identity_can_be_reused_before_or_after_the_operation_subcommand() {
         let id = uuid::Uuid::new_v4();
         let text = id.to_string();

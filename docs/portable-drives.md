@@ -146,11 +146,28 @@ file keeps its chosen provider and reports stale data if that provider changes.
 
 Folder **Catalog / indexing policy…** settings distinguish metadata catalog admission from search/content indexing. Excluding a subtree stops traversal before enumerating its children. These exclusions do not omit files from a full backup or an enrolled folder synchronization. Sync still needs its own minimal comparison baseline.
 
+Whole-drive and folder editors read the exact saved rule before displaying editable
+settings, independently of the recent status page. A failed or cancelled lookup
+cannot open an editor with default flags. A missing exact rule means there is no
+explicit override for that subtree; parent exclusions still apply. Saving a rule
+publishes the indexing exclusions before its job reports success.
+
+`clipctl drives get-policy DRIVE_ID [RELATIVE_FOLDER]` reads the same exact rule
+without creating a job. Omit the folder for the whole partition. The `policy`
+write command requires both `--catalog true|false` and `--index true|false`, so an
+omitted flag cannot reset the other setting. Whole-partition `pair` commands also
+accept an omitted `--subtree`.
+
 Catalog collection and published indexing policy load every saved rule through
 bounded SQLite pages from one retained snapshot. The page size does not limit the
 number of rules honored. Published paths are sorted and deduplicated. Background
 index clients retain their one-MiB registry read limit: an oversized, unreadable or
 malformed registry blocks background indexing rather than accepting a partial list.
+
+The focused private desktop acceptance scenario uses `--policy-editor-only` with
+`scripts/portable_drive_acceptance.py` in either appearance. It seeds rules older
+than the first status page, reopens both editors and verifies that saving unchanged
+settings retains both stored flags.
 
 Files labels excluded catalog folders **Not catalogued**, while a captured empty
 folder remains empty. Opening an excluded folder reports that its contents were

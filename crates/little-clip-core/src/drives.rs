@@ -198,6 +198,12 @@ pub enum DriveRequest {
     UnmountCatalog {
         catalog: String,
     },
+    /// Reads an exact saved subtree rule, independently of status pagination.
+    GetRule {
+        drive: String,
+        #[serde(with = "crate::path_serde")]
+        relative: PathBuf,
+    },
     Rule {
         drive: String,
         #[serde(with = "crate::path_serde")]
@@ -231,6 +237,7 @@ impl DriveRequest {
         !matches!(
             self,
             Self::Status { .. }
+                | Self::GetRule { .. }
                 | Self::PreviewBackup { .. }
                 | Self::DiscardBackupReview { .. }
                 | Self::Cancel { .. }
@@ -242,6 +249,8 @@ impl DriveRequest {
 pub enum DriveReply {
     Status(Box<DriveStatus>),
     BackupPreview(Box<BackupPreview>),
+    /// Exact saved rule; `None` means this subtree has no explicit override.
+    Rule(Option<DriveRule>),
     Accepted(String),
     Done(String),
 }

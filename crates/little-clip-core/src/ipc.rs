@@ -343,6 +343,38 @@ impl SlotCard {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn exact_drive_policy_queries_roundtrip_raw_paths_without_submission() {
+        use super::*;
+        use crate::drives::{DriveReply, DriveRequest, DriveRule};
+        use std::os::unix::ffi::OsStringExt;
+        let relative =
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"private_\xff".to_vec()));
+        let request = IpcRequest::drive(
+            DriveRequest::GetRule {
+                drive: "owned".into(),
+                relative: relative.clone(),
+            },
+            uuid::Uuid::new_v4(),
+        );
+        let restored: IpcRequest =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert!(
+            matches!(restored, IpcRequest::Drives(DriveRequest::GetRule { relative: actual, .. }) if actual == relative)
+        );
+        let reply = DriveReply::Rule(Some(DriveRule {
+            id: "owned".into(),
+            drive: "owned".into(),
+            relative: relative.clone(),
+            catalog: false,
+            index: true,
+        }));
+        let restored: DriveReply =
+            serde_json::from_slice(&serde_json::to_vec(&reply).unwrap()).unwrap();
+        assert!(
+            matches!(restored, DriveReply::Rule(Some(rule)) if rule.relative == relative && !rule.catalog && rule.index)
+        );
+    }
+    #[test]
     fn identified_drive_operations_roundtrip_lossless_paths_and_keep_legacy_controls() {
         use super::*;
         use crate::drives::DriveRequest;

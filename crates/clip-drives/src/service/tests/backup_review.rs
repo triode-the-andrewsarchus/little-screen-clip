@@ -99,10 +99,7 @@ fn reviewed_destination_survives_preference_changes_and_is_used_once_without_cha
         Arc::new(move || Ok(drives.lock().unwrap().clone())),
     )
     .unwrap();
-    let policy: IndexPolicy = serde_json::from_slice(
-        &fs::read(fixture.temp.path().join("state/index-policy.json")).unwrap(),
-    )
-    .unwrap();
+    let policy = published_policy(&restarted);
     assert!(policy.excluded.contains(&path));
     let operation = accept(
         &restarted,
@@ -331,9 +328,7 @@ fn a_failed_one_shot_publication_retains_its_destination_exclusion() {
     let operation = completed(&service, start(&review, false));
     assert_eq!(operation.state, "failed");
     assert!(status(&service).backups.is_empty());
-    let policy: IndexPolicy =
-        serde_json::from_slice(&fs::read(service.state.join("index-policy.json")).unwrap())
-            .unwrap();
+    let policy = published_policy(&service);
     assert!(policy.excluded.contains(&path));
     let db = Store::existing(&service.state.join("drives.sqlite"), true).unwrap();
     assert!(
