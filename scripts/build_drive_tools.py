@@ -90,7 +90,7 @@ def publish(output, tree, archive, patches, fingerprint):
         (stage / 'README.md').write_text(
             ('# TEST ONLY: gated RAM filesystem helper\n\n' if fingerprint['test_io_gate_sha256'] else '# RAM filesystem helper\n\n') +
             'This standalone GPL-2.0 e2fsprogs helper reads and writes bounded ext4 images. '
-            'It is not linked into the application. The source archive, local atomic-NOREPLACE/directory-fsync '
+            'It is not linked into the application. The source archive, local atomic-NOREPLACE/directory-fsync/cached-I/O-error '
             'patch and rebuild instructions are included under source/. Native libfuse3, libblkid '
             'and libuuid dependencies must be available on the host.\n\n'
             'Rebuild: cd source && sh rebuild.sh\n')

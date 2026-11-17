@@ -20,6 +20,13 @@ namespace metadata; the original skips flushing on handles opened read-only. A n
 fault test creates a directory, fsyncs its parent, kills the server and checks the
 recovered hierarchy. The unmodified fsync loses that directory; the patch preserves it.
 
+The patch also propagates backing-I/O errors when the libext2fs write cache must
+evict a dirty block. Upstream 1.47.4 stores that failure in a local variable but
+returns the still-successful outer result. With a full backing tmpfs this can
+acknowledge writes whose bytes never reach the image. The guest exhaustion test
+fails against the old helper and passes with the error-propagation fix. This
+fix does not turn unflushed helper-cache bytes into crash-durable writes.
+
 Every generated `drive-tools/` directory includes the executable, original source
 archive, patch, upstream license notice, source hashes and a rebuild script. The
 server is a separate process and is not linked into the Rust application.

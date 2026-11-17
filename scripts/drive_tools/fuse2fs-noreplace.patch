@@ -37,3 +37,17 @@
  		err = ext2fs_flush2(fs, 0);
  		if (err)
  			ret = translate_error(fs, fh->ino, err);
+--- a/lib/ext2fs/unix_io.c
++++ b/lib/ext2fs/unix_io.c
+@@ -1347,8 +1347,10 @@
+ 
+ 			cache = reuse;
+ 			err = reuse_cache(channel, data, cache, block);
+-			if (err)
++			if (err) {
++				retval = err;
+ 				goto call_write_handler;
++			}
+ 		}
+ 		if (cache->buf != cp)
+ 			memcpy(cache->buf, cp, channel->block_size);

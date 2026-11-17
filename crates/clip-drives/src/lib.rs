@@ -39,6 +39,17 @@ impl From<&str> for Error {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+#[cfg(test)]
+pub(crate) fn require_disposable_guest() {
+    assert_eq!(std::env::var("LITTLE_CLIP_DRIVE_VM").unwrap(), "1");
+    assert!(std::path::Path::new("/work/.owned-vm-fixture").is_file());
+    assert_ne!(
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .unwrap()
+            .trim(),
+        std::env::var("LITTLE_CLIP_HOST_BOOT_ID").unwrap()
+    );
+}
 pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

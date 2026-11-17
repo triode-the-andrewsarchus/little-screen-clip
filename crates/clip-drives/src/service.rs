@@ -1208,6 +1208,7 @@ mod tests {
     mod admission;
     mod backup_review;
     mod catalog_cleanup;
+    mod guest_ram;
     mod native_images;
     mod policy_coverage;
     mod ram_writeback;
@@ -1589,14 +1590,26 @@ mod tests {
             observed: Option<Arc<dyn Fn() + Send + Sync>>,
             authority: partition::Authority,
         ) -> Service {
-            let drives = self.drives.clone();
-            Service::start_with_authority(
+            self.start_configured(
                 DriveConfig {
                     ram_min_available: 0,
                     sync_interval_seconds: 3600,
                     backup_directory: Some(self.temp.path().join("backup")),
                     ..Default::default()
                 },
+                observed,
+                authority,
+            )
+        }
+        fn start_configured(
+            &self,
+            config: DriveConfig,
+            observed: Option<Arc<dyn Fn() + Send + Sync>>,
+            authority: partition::Authority,
+        ) -> Service {
+            let drives = self.drives.clone();
+            Service::start_with_authority(
+                config,
                 self.temp.path().join("state"),
                 Arc::new(move || {
                     if let Some(observe) = &observed {

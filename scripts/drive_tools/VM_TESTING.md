@@ -72,6 +72,37 @@ Verified on this host:
 These establish a usable isolated test environment. The application-level removable
 filesystem matrix remains a separate acceptance gate.
 
+For bounded RAM pressure, use `vm_ram.sh` with 4096 MiB guest memory and a current
+backend test binary:
+
+```text
+--guest-script scripts/drive_tools/vm_ram.sh --memory-mib 4096 \
+  -- /absolute/backend-test-binary service::tests::guest_ram:: --ignored --test-threads=1 --nocapture
+```
+
+This is a guest-script/argument selection for the runner above, alongside its
+required QEMU/kernel/BusyBox inputs. Build the normal debug helper first with
+`python3 scripts/build_drive_tools.py --profile debug`. The script and Rust fixture
+both check the guest marker and distinct boot identity before pressure operations.
+Two separate 512 MiB tmpfs mounts bound the image store and memory-pressure file;
+the tests do not fill the host's `/tmp` or intentionally provoke the guest OOM killer.
+
+The first case raises the fixture's configured minimum around observed
+`MemAvailable`, writes a 256 MiB pressure file and checks refused admission while
+an existing dirty RAM view remains writable. After releasing the pressure file it
+explicitly restores the fixture's normal minimum and admits another copy.
+`MemAvailable` is an estimate with a changing baseline; the test does not assume
+freeing a file immediately restores its cold-start value or relax production limits.
+
+The second case fills the backing mount while the RAM image still has over 64 MiB
+logical headroom. Writes must report ENOSPC/EIO rather than falsely acknowledge
+lost data. After space is released, daemon restart must retain the same image,
+acknowledged edits and pending recovery state, then permit successful writeback.
+`/tmp/portable-drive-vm-ram-pressure-io-negative/report.json` records the expected
+failure against the old helper; `/tmp/portable-drive-vm-ram-pressure-patched/report.json`
+records both passing cases with the cache-error propagation fix. These do not
+establish unflushed-process-kill or physical power-loss guarantees.
+
 The metadata handoff and tmpfs working-directory follow-up passed all three command
 invocations in `/tmp/portable-drive-vm-native-bootstrap/report.json`. The updated
 failure-continuation probe, `/tmp/portable-drive-vm-native-refusal-all/report.json`,

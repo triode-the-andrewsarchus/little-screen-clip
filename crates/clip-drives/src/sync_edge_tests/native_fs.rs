@@ -9,14 +9,7 @@ use std::{
 };
 
 pub(crate) fn guest_drive() -> Drive {
-    assert_eq!(std::env::var("LITTLE_CLIP_DRIVE_VM").unwrap(), "1");
-    assert!(Path::new("/work/.owned-vm-fixture").is_file());
-    assert_ne!(
-        fs::read_to_string("/proc/sys/kernel/random/boot_id")
-            .unwrap()
-            .trim(),
-        std::env::var("LITTLE_CLIP_HOST_BOOT_ID").unwrap()
-    );
+    crate::require_disposable_guest();
     let source = PathBuf::from(std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").unwrap());
     let device = PathBuf::from(std::env::var_os("LITTLE_CLIP_DRIVE_TEST_DEVICE").unwrap());
     assert_eq!(source, Path::new("/work/media"));
