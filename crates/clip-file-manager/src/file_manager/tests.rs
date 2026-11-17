@@ -45,7 +45,10 @@ pub(super) fn write_drive_policy(excluded: Vec<PathBuf>) {
     let temporary = directory.join("policy.new");
     std::fs::write(
         &temporary,
-        serde_json::to_vec(&little_clip_core::drives::IndexPolicy { excluded }).unwrap(),
+        serde_json::to_vec(
+            &little_clip_core::drives::IndexPolicy::observed(excluded, None).unwrap(),
+        )
+        .unwrap(),
     )
     .unwrap();
     std::fs::rename(temporary, directory.join("index-policy.json")).unwrap();

@@ -11,7 +11,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
-| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Directory/policy bind aliases, case-fold aliases, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
+| 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
 | 2.3 | Partial | Watch overflow clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Full-scan fingerprint reuse additionally requires complete watch registration, while named paths retain fresh bounded comparisons. Native lost-event same-size/mtime conflicts and watcher-unavailable recovery pass. Execution now also enforces per-root cache capabilities, and directory-change fallbacks use fresh scans instead of inheriting named-path coverage. Poisoned-cache controls verify both branches and native coarse-source refusal. Further reconnect matrices remain. |
@@ -39,8 +39,8 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
 | 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Complete | Version-2 paginated SQLite catalogs preserve raw names, numeric sizes/types, original modification/ctime fields, captured Drive and pinned source mount/namespace, explicit known/unknown driver precision, per-directory coverage and typed stage/reason/errno. Host permission/replacement/raw-name tests, indexed multi-page reads, real FUSE details/errors and native FAT32/exFAT/NTFS precision/metadata checks pass. See the typed catalog coverage checkpoint. |
-| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Device selectors bind to persistent IDs before acceptance; lexical spelling aliases migrate transactionally with exclusions preserved. Queue-time device reuse, replay, clone refusal, offline editing, 1,100-rule migration rollback and dark/light CLI/editor checks pass. Filesystem case-fold/bind aliases and legacy device-only policy review remain. |
-| 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Broader search/answer/image-order caches, bind/case-fold/relocation aliases and the remaining consumer inventory still need verification. |
+| 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Device selectors bind to persistent IDs before acceptance; lexical spelling aliases migrate transactionally with exclusions preserved. Queue-time device reuse, replay, clone refusal, offline editing, 1,100-rule migration rollback and dark/light CLI/editor checks pass. Observed bind aliases now use descriptor-free filesystem coordinates and mount-lifetime checks, including retained offline owners and first-time partial views. Filesystem case-fold/relocation aliases and legacy device-only policy review remain. |
+| 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Shared policy matching now covers observed symlink/directory/file bind aliases, new mount events, renamed mount targets and retained offline observations; real FAT32/exFAT/NTFS gates pass. Broader search/answer/image-order caches, case-fold/relocation aliases and the remaining consumer inventory still need verification. |
 | 6.4 | Partial | Future scans honor subtree rules. Saved descendant records now have durable cleanup intents, mounted-reader retention, compaction, restart recovery and separate capture/redaction dates. Real FUSE and dark/light Files acceptance cover pending cleanup, busy readers and reopened Not catalogued boundaries. Broader alias/case-fold and concurrent-provider matrices remain with 6.3/6.8. |
 | 6.5 | Complete | Configurable entry/database-byte/depth/time budgets, explicit larger-run review and saved effective limits pass host/native checks and dark/light acceptance. The million-file fixture respects exclusions and caps. Reloadable catalog_workers defaults to one and admits 1..4 independent captures on the retained bulk pool; live increase/decrease, four simultaneous captures, overlapping-source serialization, queued backup exclusivity and concurrent shutdown/restart pass on host and FAT32/exFAT/NTFS. Journaled cancellation/restart cleanup and sealed publication pass all ten lifecycle cases on each format. See the catalog worker and capture lifecycle checkpoints. |
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
@@ -53,6 +53,96 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Observed no-index alias checkpoint
+
+Commit `c0ea5aad` moves the existing four-field mount lifetime into core, preserving
+its serialized representation for image views and sync fingerprint provenance.
+Core also owns mount-table parsing/projection and event-driven observations.
+The fixed mountinfo/boot interfaces are pinned and verified as procfs files before
+opening them for bounded metadata reads; a replaced leaf cannot invoke an
+ordinary device open callback. No generic decoder or payload reader is added.
+
+The policy file now carries source filesystem coordinates, named exclusion owners
+and boot/namespace/non-reused mount observations. Client matching uses temporary
+O_PATH metadata pins, kernel mount IDs and observed mount roots. It does not retain
+media descriptors or rescan mountinfo for each file. An event invalidates the old
+observation; new publication refreshes even a renamed mountpoint parent. Metadata
+failure, missing provenance and stale snapshots fail closed. Equivalent verified
+publications retain the immutable Arc shared with existing cache retirement.
+
+Offline owners retain their known filesystem exclusion while an alias remains
+mounted in the same boot/namespace. Old literal paths are not applied to unrelated
+replacement media. Removing a rule releases its retained observations, and
+returning the original path refreshes its lifetime. FAT/exFAT/NTFS rules are routed
+through the current partition views, including a first-time rule on a subtree-only
+view. Generic drive routing refuses that subtree as a whole-partition root.
+Routing and publication must share a mount signature. Mounted catalog/image paths
+are fetched from their indexed mount registries in bounded key pages; a test skips
+2,200 invalid historical headers and preserves all 261 mounted paths, including
+raw names. The local policy file is included in explicit storage accounting.
+
+The origin-removal regression failed on FAT32 and NTFS before retention was added
+(`/tmp/portable-drive-vm-alias-origin-control/report.json`). Its exFAT sequence
+stopped at an external FUSE mount-helper restore failure and is not evidence for
+that product assertion. Restoration now explicitly uses the native kernel path.
+Bare loop volumes remain outside removable inventory; their real mount routing
+is tested through the same selector used by production discovery. Earlier attempts
+to rename a mounted directory itself failed setup with EBUSY; the final test moves
+its ordinary parent instead.
+
+Final disposable LTS acceptance passes **six cases**: two per native FAT32, exFAT
+and NTFS3 source. Cases cover whole-directory/subtree/file binds, symlink aliases,
+new-mount invalidation, stale and republished renamed-parent views, ordinary-file
+allowance, origin unmount/republication, first-time partial-view policy and
+subtree-root refusal. Source unmount succeeds with clients retaining their
+observations, proving no media descriptor is held. Evidence:
+`/tmp/portable-drive-vm-routed-alias-final/report.json` and `guest.log`.
+
+A real Btrfs subvolume control failed before correcting per-object device-number
+assumptions (`/tmp/portable-drive-alias-btrfs-before.log`). Kernel Btrfs getattr uses
+per-subvolume device numbers, so same-mount continuity now uses the non-reused
+mount ID while projection uses the backing mount record. Exact object validation
+is unchanged. The owned writable fixture passes private/public admission and
+subvolume-boundary checks (`/tmp/portable-drive-alias-btrfs-verified.log`) with VFS
+cleanup. The host's unprivileged delete ioctl refusal is not an elevation request;
+ordinary removal works and leaves no fixture. See the primary
+[Btrfs getattr source](https://raw.githubusercontent.com/torvalds/linux/master/fs/btrfs/inode.c)
+and [mount poll source](https://raw.githubusercontent.com/torvalds/linux/master/fs/proc_namespace.c)
+for the kernel behavior used by these observations.
+
+Ordinary checks pass **204 backend tests** (84 opt-in ignored) and **466 core tests**
+(four opt-in ignored), recorded in `/tmp/portable-drive-alias-routed-verified.log`.
+Files policy tests pass 19 cases (`/tmp/portable-drive-alias-files-policy-tests.log`).
+The policy doctest and rendered core API documentation pass; generated pages for
+IndexPolicy, MountLifetime and Watcher were inspected. Final four-package
+all-target Clippy passes with warnings denied
+(`/tmp/portable-drive-alias-final-clippy.log`). Private dark storage acceptance
+and light policy-editor acceptance pass; the final report/editor screenshots
+were inspected (`/tmp/portable-drive-alias-storage_dark/report.json` and
+`/tmp/portable-drive-alias-policy_light/report.json`). The former includes the
+policy snapshot in apparent registry storage, and the latter preserves the
+independent saved flags beyond status pagination.
+The final core doctest suite passes all 14 cases and current core API generation
+passes (`/tmp/portable-drive-alias-final-doc-tests.log` and
+`/tmp/portable-drive-alias-final-rustdoc.log`). Targeted Rust formatting and
+`git diff --check` pass.
+
+The final architecture comparison retains 4,300 clone groups and 144 cycles,
+average CCN 3.49, maximum 274 and 7.01% duplication. No new hotspot in this alias
+implementation is reported. Whole-branch classification remains REGRESSION
+against the original baseline (+11 clone groups and +1 cycle); that wider review
+remains open. Mount observation/projection and lifetime validation are reused
+from core rather than duplicated in policy clients. Policy owners and view
+routing are necessary to retain exclusions when their original mount disappears;
+they do not introduce another filesystem payload reader or content cache.
+
+Items 1.6, 6.2 and 6.3 remain Partial. Case-fold matching, wider relocation and
+consumer coverage, unknown/unsupported-driver behavior and the full interruption
+and responsiveness matrices are not proved by these six cases. In particular,
+policy metadata observation still participates in the owner's publication path;
+unavailable/hung metadata needs its responsiveness gate. The known 7.3.4 exFAT
+durability limitation remains separately open; these alias cases use the LTS guest.
 
 ## Persistent policy address checkpoint
 

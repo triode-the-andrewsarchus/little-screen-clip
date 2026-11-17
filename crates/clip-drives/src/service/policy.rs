@@ -184,3 +184,73 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
     }
     Ok(())
 }
+
+/// Reads only headers referenced by the existing mounted-view registries.
+pub(super) fn mounted_views(db: &Store) -> Result<Vec<PathBuf>> {
+    #[derive(serde::Deserialize)]
+    struct Location {
+        #[serde(default, with = "little_clip_core::path_serde::optional")]
+        mount: Option<PathBuf>,
+    }
+    let mut paths = Vec::new();
+    for (registry, kind) in [("catalog-mount", "catalog"), ("image-mount", "backup")] {
+        let mut after = String::new();
+        loop {
+            let ids = db.ids(registry, &after, 128)?;
+            let Some(last) = ids.last() else {
+                break;
+            };
+            after = last.clone();
+            for id in ids {
+                if let Some(location) = db.get::<Location>(kind, &id)? {
+                    paths.extend(location.mount);
+                }
+            }
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg(test)]
+mod mounted_tests {
+    use super::*;
+    #[test]
+    fn mounted_view_lookup_pages_only_registered_headers_and_preserves_raw_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let transaction = db.0.unchecked_transaction().unwrap();
+        // Invalid historical header payloads must not enter this bounded lookup.
+        for number in 0..1100 {
+            db.put("catalog", &format!("history-{number}"), &())
+                .unwrap();
+            db.put("backup", &format!("history-{number}"), &()).unwrap();
+        }
+        let mut expected = Vec::new();
+        for (registry, kind) in [("catalog-mount", "catalog"), ("image-mount", "backup")] {
+            for number in 0..130 {
+                let id = uuid::Uuid::new_v4().to_string();
+                let path = temp.path().join(format!("{kind}-{number}"));
+                db.put(registry, &id, &1_u64).unwrap();
+                db.put(kind, &id, &serde_json::json!({ "mount": path }))
+                    .unwrap();
+                expected.push(path);
+            }
+        }
+        use std::os::unix::ffi::OsStringExt;
+        let raw = PathBuf::from(std::ffi::OsString::from_vec(b"/owned/raw_\xff".to_vec()));
+        let id = uuid::Uuid::new_v4().to_string();
+        db.put("catalog-mount", &id, &1_u64).unwrap();
+        db.put(
+            "catalog",
+            &id,
+            &serde_json::json!({ "mount": raw.as_os_str().as_encoded_bytes() }),
+        )
+        .unwrap();
+        expected.push(raw);
+        transaction.commit().unwrap();
+        let mut observed = mounted_views(&db).unwrap();
+        observed.sort();
+        expected.sort();
+        assert_eq!(observed, expected);
+    }
+}

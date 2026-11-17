@@ -514,7 +514,7 @@ successful report.
 Logical row bytes count stored text and raw path bytes without materializing
 every JSON record. They are components of registry storage, with page/index
 overhead excluded. The registry file observation includes `drives.sqlite`, its
-WAL and shared-memory file. Saved catalog file sizes are separate; missing saved
+WAL/shared-memory files and the local `index-policy.json` snapshot. Saved catalog file sizes are separate; missing saved
 files are explicitly counted as unavailable. File lengths may change during
 measurement. The report's scope is local drive-service metadata and registered
 catalogs; backup payloads and the search service's own databases have separate
@@ -546,7 +546,37 @@ or indexing keeps that exclusion until an explicit replacement is saved. The
 migration is paginated and rolls back completely on failure. An inconsistent
 saved key is refused instead of overwriting another policy. Parent escapes and
 NUL bytes are invalid. This normalization does not claim filesystem case-fold or
-bind-mount alias coverage.
+bind-mount alias coverage by itself. The observed alias handling below is separate.
+
+The daemon's local `index-policy.json` also records filesystem coordinates and
+boot/namespace/mount observations. Background clients use temporary O_PATH metadata
+pins to resolve symlink and observed bind aliases. Those pins are released after
+each check; policy observations do not keep media mounted. Mount-table polling
+refreshes a bounded cached inventory after namespace events instead of reading
+mountinfo for every file. A moved mountpoint, missing origin or changed observation
+cannot reuse an older allowed result. New publications also refresh renamed mount
+targets, which need not produce a mount event.
+
+A rule whose source is offline retains its prior same-boot filesystem observation
+while aliases remain mounted. Its old literal pathname is not applied to unrelated
+replacement media. Removing the policy releases that observation; returning the
+source refreshes its lifetime. For FAT/exFAT/NTFS, partition-relative exclusions
+are projected through currently visible whole-volume and subtree views. A
+subtree-only bind remains unavailable as a generic whole-partition root for copy,
+backup or sync. Mounted catalog and image views have explicit exclusions; their
+paths come from bounded pages of their mount registries without decoding all
+historical backup/catalog headers.
+
+These observations use Linux 6.8+ non-reused mount IDs. Older nonempty literal-only
+policy files and unavailable/uncertain mount context pause background indexing
+until the daemon publishes a verified observation. A failed policy observation
+installs a fail-closed publication and reports the failed job. Explicit file
+opening, full backups and enrolled sync retain their independent admission rules.
+Btrfs per-subvolume object device numbers do not select mount boundaries: mount
+continuity uses the non-reused mount ID, and filesystem projection uses mount-table
+coordinates. Exact pinned-object identity checks keep their original fields.
+Filesystem case-fold and broader relocation/consumer matrices remain separate
+acceptance work; lexical normalization alone is not their proof.
 
 Legacy development records naming only a device node have no persistent identity
 evidence. They remain retained without being attached to a potentially reused

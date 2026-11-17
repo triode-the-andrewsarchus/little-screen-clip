@@ -56,6 +56,17 @@ impl Mount {
     pub fn project(&self, path: &Path) -> Option<PathBuf> {
         Some(self.root.join(path.strip_prefix(&self.target).ok()?))
     }
+
+    /// Projects a filesystem exclusion into this view without authorizing access.
+    ///
+    /// A view rooted inside the exclusion is excluded in its entirety.
+    pub fn exclusion(&self, physical: &Path) -> Option<PathBuf> {
+        if let Ok(relative) = physical.strip_prefix(&self.root) {
+            Some(self.target.join(relative))
+        } else {
+            self.root.starts_with(physical).then(|| self.target.clone())
+        }
+    }
 }
 
 /// A bounded mount-table observation from one known namespace.
@@ -256,6 +267,23 @@ fn parse(bytes: &[u8]) -> io::Result<Vec<Mount>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exclusion_projection_covers_descendants_ancestors_and_component_boundaries() {
+        let mounts = parse(b"11 1 8:1 /tree /view rw - exfat /dev/fixture rw\n").unwrap();
+        let mount = &mounts[0];
+        assert_eq!(
+            mount.project(Path::new("/view/leaf")),
+            Some("/tree/leaf".into())
+        );
+        assert_eq!(
+            mount.exclusion(Path::new("/tree/leaf")),
+            Some("/view/leaf".into())
+        );
+        assert_eq!(mount.exclusion(Path::new("/")), Some("/view".into()));
+        assert_eq!(mount.exclusion(Path::new("/tree")), Some("/view".into()));
+        assert!(mount.exclusion(Path::new("/tree-suffix")).is_none());
+        assert!(mount.project(Path::new("/view-suffix")).is_none());
+    }
     #[test]
     fn read_only_view_and_backing_filesystem_are_distinct_observations() {
         let mounts = parse(b"11 1 8:1 / /bind ro - vfat /dev/fixture rw\n12 1 8:2 / /exclusive ro - exfat /dev/fixture2 ro\n").unwrap();

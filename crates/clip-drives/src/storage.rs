@@ -81,7 +81,7 @@ fn snapshot(db: &Store, state: &Root, cancel: &AtomicBool, deadline: Instant) ->
     transaction.commit()?;
     let state_bytes = state_file_bytes(state, cancel, deadline)?;
     Ok(format!(
-        "Local drive metadata\nSync baselines: {} paths · {} logical bytes\nSync/RAM inventories: {} entries · {} logical bytes\nPending paths and sync bookkeeping: {} records · {} logical bytes\nDrive registry (settings, jobs and headers): {} records · {} logical bytes\nSaved catalogs (optional): {} snapshots · {} available file bytes · {} unavailable\nRegistry database and working files: {state_bytes} apparent bytes\nLogical row payloads are contained in registry storage and exclude page/index overhead. Saved catalog files are separate. File sizes can change during measurement.",
+        "Local drive metadata\nSync baselines: {} paths · {} logical bytes\nSync/RAM inventories: {} entries · {} logical bytes\nPending paths and sync bookkeeping: {} records · {} logical bytes\nDrive registry (settings, jobs and headers): {} records · {} logical bytes\nSaved catalogs (optional): {} snapshots · {} available file bytes · {} unavailable\nRegistry database, policy snapshot and working files: {state_bytes} apparent bytes\nLogical row payloads are contained in registry storage and exclude page/index overhead. Saved catalog files are separate. File sizes can change during measurement.",
         baseline.records,
         baseline.bytes,
         inventory.records,
@@ -98,7 +98,12 @@ fn snapshot(db: &Store, state: &Root, cancel: &AtomicBool, deadline: Instant) ->
 
 fn state_file_bytes(state: &Root, cancel: &AtomicBool, deadline: Instant) -> Result<u64> {
     let mut bytes = 0_u64;
-    for name in ["drives.sqlite", "drives.sqlite-wal", "drives.sqlite-shm"] {
+    for name in [
+        "drives.sqlite",
+        "drives.sqlite-wal",
+        "drives.sqlite-shm",
+        "index-policy.json",
+    ] {
         check(cancel, deadline)?;
         if let Some(metadata) = state.metadata(Path::new(name))? {
             if !metadata.is_file() {

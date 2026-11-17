@@ -1060,6 +1060,7 @@ impl Owner {
         Ok("Catalog unmounted".into())
     }
     fn publish_policy(&self) -> Result<()> {
+        let routed = little_clip_core::mount_inventory::Snapshot::capture()?;
         let transaction = self.db.0.unchecked_transaction()?;
         let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
@@ -1089,6 +1090,7 @@ impl Owner {
             }
             Ok(())
         })?;
+        excluded.extend(policy::mounted_views(&self.db)?);
         excluded.push(self.state.clone());
         let drives = self
             .shared
@@ -1096,22 +1098,56 @@ impl Owner {
             .map_err(|_| "Drive status unavailable")?
             .drives
             .clone();
+        let sources = rules::IndexSources::observed(&drives, &routed.mounts);
+        let mut requested = Vec::new();
         self.db.visit::<DriveRule>("rule", |rule| {
-            if !rule.index {
-                for drive in &drives {
-                    if drive.id == rule.drive
-                        && let Some(mount) = &drive.mount
-                    {
-                        excluded.push(mount.join(&rule.relative));
-                    }
-                }
-            }
+            requested.extend(sources.requests(&rule));
             Ok(())
         })?;
         transaction.commit()?;
+        requested.extend(excluded.iter().map(|path| {
+            (
+                format!(
+                    "path:{}",
+                    little_clip_core::path_address::display_path(path)
+                ),
+                Some(path.clone()),
+            )
+        }));
         excluded.sort();
         excluded.dedup();
-        let json = serde_json::to_vec(&IndexPolicy { excluded })?;
+        let previous = kernel_interface::read_content_bounded(
+            &self.state.join("index-policy.json"),
+            1024 * 1024,
+        )
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<IndexPolicy>(&bytes).ok());
+        let (policy, failure) = match IndexPolicy::observed_rules(requested, previous.as_ref())
+            .and_then(|policy| {
+                if policy
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| context.signature == routed.signature)
+                {
+                    Ok(policy)
+                } else {
+                    Err(std::io::Error::other(
+                        "Mount routing changed during policy publication",
+                    ))
+                }
+            }) {
+            Ok(policy) => (policy, None),
+            Err(error) => (
+                IndexPolicy {
+                    excluded: vec![PathBuf::from("/")],
+                    ..Default::default()
+                },
+                Some(format!(
+                    "Background indexing paused: could not establish drive-policy mount context: {error}"
+                )),
+            ),
+        };
+        let json = serde_json::to_vec(&policy)?;
         let root = kernel_interface::pin_content_directory(&self.state)?;
         let path = self.state.join("index-policy.json");
         if path.exists() {
@@ -1126,14 +1162,14 @@ impl Owner {
                 })
                 .unwrap_or(false)
             {
-                return Ok(());
+                return failure.map_or(Ok(()), |error| Err(error.into()));
             }
             little_clip_core::file_source::FileSource::capture(&path)?
                 .write_in(&path, &json, &root)?;
         } else {
             little_clip_core::file_source::create_file_in(&path, &json, &root)?;
         }
-        Ok(())
+        failure.map_or(Ok(()), |error| Err(error.into()))
     }
 }
 fn rule_id(drive: &str, relative: &Path) -> String {
@@ -1221,6 +1257,7 @@ mod tests {
     mod maintenance;
     mod native_images;
     mod native_read_only;
+    mod policy_aliases;
     mod policy_coverage;
     mod ram_writeback;
     mod read_only;

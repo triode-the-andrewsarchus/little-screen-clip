@@ -96,3 +96,79 @@ fn migrate_rule(db: &Store, old: DriveRule) -> Result<()> {
     }
     Ok(())
 }
+
+// Ephemeral routing only; persisted ownership remains in the shared policy file.
+#[derive(Default)]
+pub(super) struct IndexSources {
+    views: HashMap<String, Vec<crate::mounts::Mount>>,
+    roots: HashMap<String, Vec<PathBuf>>,
+}
+impl IndexSources {
+    pub(super) fn observed(drives: &[Drive], mounts: &[crate::mounts::Mount]) -> Self {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let mut result = Self::default();
+        for drive in drives {
+            let views = if matches!(
+                drive.filesystem.as_str(),
+                "vfat" | "exfat" | "ntfs" | "ntfs3"
+            ) {
+                std::fs::metadata(&drive.device)
+                    .ok()
+                    .filter(|m| m.file_type().is_block_device())
+                    .map(|m| {
+                        discovery::device_mounts(mounts, m.rdev())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if views.is_empty() {
+                result
+                    .roots
+                    .entry(drive.id.clone())
+                    .or_default()
+                    .extend(drive.mount.clone());
+            } else {
+                result
+                    .views
+                    .entry(drive.id.clone())
+                    .or_default()
+                    .extend(views);
+            }
+        }
+        result
+    }
+    pub(super) fn requests(&self, rule: &DriveRule) -> Vec<(String, Option<PathBuf>)> {
+        if rule.index {
+            return Vec::new();
+        }
+        let owner = format!("rule:{}", rule.id);
+        let physical = Path::new("/").join(&rule.relative);
+        let mut paths = self
+            .views
+            .get(&rule.drive)
+            .into_iter()
+            .flatten()
+            .filter_map(|mount| mount.exclusion(&physical))
+            .collect::<Vec<_>>();
+        paths.extend(
+            self.roots
+                .get(&rule.drive)
+                .into_iter()
+                .flatten()
+                .map(|root| root.join(&rule.relative)),
+        );
+        paths.sort();
+        paths.dedup();
+        if paths.is_empty() {
+            vec![(owner, None)]
+        } else {
+            paths
+                .into_iter()
+                .map(|path| (owner.clone(), Some(path)))
+                .collect()
+        }
+    }
+}

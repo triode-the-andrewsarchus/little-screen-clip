@@ -198,6 +198,8 @@ fn index_policy_client_probe() {
     let expected: IndexPolicy =
         serde_json::from_slice(&fs::read(state.join("expected-policy.json")).unwrap()).unwrap();
     let allowed = state.parent().unwrap().join("ordinary-data/file.txt");
+    fs::create_dir_all(allowed.parent().unwrap()).unwrap();
+    fs::write(&allowed, b"ordinary fixture data").unwrap();
     let policy = little_clip_core::drives::index_policy().unwrap();
     for path in &expected.excluded {
         assert!(
@@ -620,5 +622,36 @@ fn policy_addresses_refuse_nul_and_parent_escapes_without_saving_rules() {
     }
     assert!(db.list::<DriveRule>("rule", 0, 100).unwrap().is_empty());
     assert!(status(&service).operations.is_empty());
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn failed_policy_observation_installs_a_fail_closed_publication_and_can_recover() {
+    let (fixture, drive, _) = policy_fixture();
+    let source = drive.mount.as_ref().unwrap();
+    std::os::unix::fs::symlink("loop", source.join("loop")).unwrap();
+    let service = fixture.start_authority(None, fixture.image_authority());
+    let request = DriveRequest::Rule {
+        drive: drive.id,
+        relative: "loop".into(),
+        catalog: true,
+        index: false,
+    };
+    let failed = completed(&service, request.clone());
+    assert_eq!(failed.state, "failed", "{}", failed.message);
+    assert!(
+        failed.message.contains("Background indexing paused"),
+        "{}",
+        failed.message
+    );
+    let policy = published_policy(&service);
+    assert_eq!(policy.excluded, [PathBuf::from("/")]);
+    assert!(policy.context.is_none());
+    fs::remove_file(source.join("loop")).unwrap();
+    let recovered = completed(&service, request);
+    assert_eq!(recovered.state, "complete", "{}", recovered.message);
+    let policy = published_policy(&service);
+    assert!(policy.context.is_some());
+    assert!(policy.excluded.contains(&source.join("loop")));
     service.shutdown().unwrap();
 }

@@ -110,7 +110,12 @@ fn measurement_does_not_switch_to_a_replaced_state_directory() {
 
 #[test]
 fn database_and_working_file_aliases_are_refused_before_sqlite_opens_them() {
-    for name in ["drives.sqlite", "drives.sqlite-wal", "drives.sqlite-shm"] {
+    for name in [
+        "drives.sqlite",
+        "drives.sqlite-wal",
+        "drives.sqlite-shm",
+        "index-policy.json",
+    ] {
         let (_temp, state, db) = fixture();
         drop(db);
         let file = state.path.join(name);

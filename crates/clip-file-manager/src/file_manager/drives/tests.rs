@@ -432,6 +432,7 @@ fn drive_index_policy_snapshots_track_replacement_failure_and_removal() {
         write_drive_policy(vec![]);
         assert!(Arc::ptr_eq(&absent, &index_policy().unwrap()));
         let excluded = root.join("excluded");
+        std::fs::write(root.join("allowed"), b"ordinary policy fixture").unwrap();
         write_drive_policy(vec![excluded.clone()]);
         let policy = index_policy().unwrap();
         assert!(!Arc::ptr_eq(&absent, &policy));
@@ -480,6 +481,7 @@ fn a_policy_poll_is_accepted_even_when_drive_status_ipc_fails() {
     };
     let policy = Arc::new(IndexPolicy {
         excluded: vec!["/owned/excluded".into()],
+        ..Default::default()
     });
     let returned = policy.clone();
     drives.poll = Some(Task::start(&IO, Duration::from_secs(2), move |_| {
@@ -528,6 +530,7 @@ fn an_observed_policy_change_retires_background_views_without_dropping_shelf_ite
     });
     manager.drives.accept_policy(Some(Arc::new(IndexPolicy {
         excluded: vec![root.path().into()],
+        ..Default::default()
     })));
     manager.tick_drives();
     assert!(manager.similarity_canvas.hashes.is_empty());

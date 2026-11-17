@@ -16,34 +16,13 @@ pub fn discover() -> Result<Vec<Drive>> {
     })?;
     let mut drives = parse(&value)?;
     let mounts = crate::mounts::inventory()?;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::os::unix::fs::MetadataExt;
     for drive in &mut drives {
         if drive.mount.is_none() {
             continue;
         }
         let device = std::fs::metadata(&drive.device)?.rdev();
-        let candidates = mounts
-            .iter()
-            .filter(|mount| {
-                mount.source.starts_with("/dev")
-                    && std::fs::metadata(&mount.source)
-                        .is_ok_and(|m| m.file_type().is_block_device() && m.rdev() == device)
-            })
-            .collect::<Vec<_>>();
-        let selected = candidates
-            .iter()
-            .find(|mount| Some(&mount.target) == drive.mount.as_ref())
-            .copied()
-            .or_else(|| {
-                if candidates.len() == 1 {
-                    Some(candidates[0])
-                } else {
-                    candidates
-                        .iter()
-                        .find(|mount| mount.root == std::path::Path::new("/"))
-                        .copied()
-                }
-            });
+        let selected = select_mount(drive, &mounts, device);
         if let Some(mount) = selected {
             drive.mount = Some(mount.target.clone());
             drive.read_only |= mount.read_only || mount.super_read_only;
@@ -53,6 +32,49 @@ pub fn discover() -> Result<Vec<Drive>> {
     }
     Ok(drives)
 }
+/// Selects a logical partition view without admitting a subtree bind as its root.
+pub(crate) fn select_mount<'a>(
+    drive: &Drive,
+    mounts: &'a [crate::mounts::Mount],
+    device: u64,
+) -> Option<&'a crate::mounts::Mount> {
+    let candidates = device_mounts(mounts, device)
+        .filter(|mount| {
+            // A subtree bind cannot serve as the logical root of a flat partition.
+            !matches!(
+                drive.filesystem.as_str(),
+                "vfat" | "exfat" | "ntfs" | "ntfs3"
+            ) || mount.root == std::path::Path::new("/")
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .find(|mount| Some(&mount.target) == drive.mount.as_ref())
+        .copied()
+        .or_else(|| {
+            if candidates.len() == 1 {
+                Some(candidates[0])
+            } else {
+                candidates
+                    .iter()
+                    .find(|mount| mount.root == std::path::Path::new("/"))
+                    .copied()
+            }
+        })
+}
+
+pub(crate) fn device_mounts(
+    mounts: &[crate::mounts::Mount],
+    device: u64,
+) -> impl Iterator<Item = &crate::mounts::Mount> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    mounts.iter().filter(move |mount| {
+        mount.source.starts_with("/dev")
+            && std::fs::metadata(&mount.source)
+                .is_ok_and(|m| m.file_type().is_block_device() && m.rdev() == device)
+    })
+}
+
 fn inventory(mut query: impl FnMut(&str) -> Result<CommandOutput>) -> Result<Value> {
     let columns =
         "NAME,PATH,TYPE,SIZE,RM,HOTPLUG,RO,FSTYPE,UUID,PARTUUID,LABEL,MOUNTPOINTS,SERIAL,WWN,START";
