@@ -488,6 +488,7 @@ impl Owner {
             DriveRequest::CopyToRam { drive }
             | DriveRequest::Pair { drive, .. }
             | DriveRequest::Backup { drive, .. }
+            | DriveRequest::ReadOnlyBackup { drive }
             | DriveRequest::Catalog { drive }
             | DriveRequest::Eject { drive }
             | DriveRequest::PruneBackups { drive } => {

@@ -28,7 +28,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
 | 4.2 | Partial | Durable checksummed SQLite manifests and filesystem/registry current-version references survive reference-installation faults; pruning removes matching manifests and protects current across clock changes. Admission/execution check working headroom; independent images require their full size estimate before unmount, while Btrfs permits shared allocation with explicit uncertainty. Detailed file-allocation estimation remains. |
-| 4.3 | Partial | Bounded retries, metadata fidelity and hard-link preservation/reuse pass native checks. Read-only source guards now reject writable backing filesystems and policy loss on real FAT32/exFAT/NTFS, retaining current; ordinary live collection is preserved. The daemon's read-only mount/restore lifecycle, selectable mode, authorization/cancellation acceptance and broader fidelity/consistency matrices remain. |
+| 4.3 | Partial | Bounded retries, metadata fidelity and hard-link preservation/reuse pass native checks. Read-only source guards now reject writable backing filesystems and policy loss on real FAT32/exFAT/NTFS, retaining current; ordinary live collection is preserved. Selectable reviewed/CLI read-only collection now owns flush/unmount/verified mount/copy/reader retirement/restoration. Real UDisks guest busy refusal, cancellation and late-cancel completion pass on all three source formats. Desktop password-agent, broader fidelity/mount-option and interruption matrices remain. |
 | 4.4 | Partial | Real read-only Btrfs version snapshots and extent sharing passed; capability failure/admission matrix remains. |
 | 4.5 | Partial | Real 4 KiB edits allocate 256 KiB, old bytes intact; strengthen final target verification evidence. |
 | 4.6 | Partial | Explicit retention and mounted-provider refusal exist; open-provider/prune interruption matrix remains. |
@@ -49,10 +49,120 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass; mount-event loss and interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. Tests use whole-volume loop files with filesystem-UUID fallback; partitioned-device, read-only/full-media and mount-option matrices remain. |
-| 7.4 | Partial | Real FUSE and Btrfs tests pass; authorized image-loop tests remain. |
+| 7.4 | Partial | Real FUSE, Btrfs, authorized partition-image/loop-provider and temporary read-only file-collection tests pass. Provider concurrency, interrupted-device and capability-failure matrices remain. |
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Overflow delivery, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Selectable read-only file collection
+
+File-backup reviews now offer **Temporarily mount read-only for collection**;
+`clipctl drives backup DRIVE --read-only` and `start-backup TOKEN --read-only`
+select the same policy. Live file collection remains the default. The new
+`ReadOnlyBackup` / `StartReadOnlyBackup` wire commands fail on older daemons;
+adding an optional field to the old command would allow older serde consumers
+to ignore it. Existing live/image request bytes remain unchanged, including
+request-identity fingerprints. An image review is rejected without consuming its
+token. The file-tree and checksummed SQLite manifest format is unchanged.
+
+The existing retained partition worker now owns enrolled preflush, ordinary
+unmount, UDisks read-only mount and confirmation. Device lifetime, namespace and
+strong root guards are reused. A descriptor-free owned-mount observation retains
+only cleanup authority and scheduling scope. The bulk worker owns the admitted
+read-only source pin; both worker and coordinator release content pins before
+accepted cleanup can unmount it. Restoration preserves the original access mode,
+retains results through cancellation, refuses a replaced collection view and
+reports restoration errors separately from a completed backup. Live compensation
+still runs its identity checks when a checkpoint write fails; journal-open or write failure
+cannot erase completed bytes or suppress an otherwise owned restoration.
+
+Durable phases include read-only mount admission/confirmation, file collection
+and file publication. Recovery discloses the last observed mount and possible
+authority effects without replaying mount operations after restart. This policy
+does not preserve arbitrary original mount-option overrides. Full interruption,
+physical hotplug and desktop password-agent coverage remain required.
+
+Six host tests cover false read-only inventory, declined authority, cancellation
+during accepted unmount, request binding and image-review ownership, interrupted
+journals without authority replay, and retained live compensation after journal
+failure. Two guest tests use actual UDisks/PolicyKit mounts: busy readers refuse
+admission; normal and originally-read-only collection preserve bytes and access
+mode; cancellation after an accepted read-only mount restores access without
+copying; cancellation during final restoration retains the completed backup.
+An unrelated pair remains responsive during the held authority reply. These run
+beside the two existing image-authority cases on FAT32, exFAT and NTFS3: twelve
+harness cases pass in
+`/tmp/portable-drive-vm-read-only-command-authority-compensation-final/report.json`. The native
+fifteen-case filesystem matrix also passes on all three formats (45 cases):
+`/tmp/portable-drive-vm-read-only-command-native-final/report.json`.
+
+The initial combined guest rerun found a fixture assumption that UDisks remounts
+must retain `/work/media`. The fixture now separates captured partition facts
+from verification of the initial mount, then resolves the observed current
+mount. A later run failed image-provider mounting because the test executable's
+inferred helper path points into `target/debug/deps`; the runner now supplies
+`LITTLE_CLIP_DRIVE_MOUNT_HELPER` explicitly. Neither failure was counted as
+acceptance or resolved by relaxing production checks.
+
+Backend tests pass 112 cases with 48 explicit fixtures ignored; core protocol
+and compatibility tests pass five, CLI flags one, Files drive logic fourteen,
+and real Btrfs two. Selected all-target clippy passes with warnings denied.
+Logs use `/tmp/portable-drive-read-only-command-` with `backend-final.log`,
+`core-final.log`, `cli-final.log`, `files-final.log`, `btrfs-final.log` and
+`clippy-final.log`.
+
+The full-feature architecture gate remains REGRESSION: clone groups 4300 versus
+4289 and reported cycles 144 versus 143; duplication 7.10% versus 7.30%, average
+CCN 3.48 versus 3.44 and maximum 274 unchanged. This checkpoint adds no clone
+group relative to the previous commit. Reusing admitted-source validation reduces
+`start_background` CCN from 22 to 19; `partition_plan` remains 22. New worker and
+read-only lifecycle methods stay at or below 15. Selected fields are retained in
+`.fitness/portable-drives-read-only-mode-architecture.json`. Item 4.3 remains
+Partial for its broader fidelity/consistency and authority/recovery matrices.
+
+Validation at this checkpoint:
+
+- Backend: 112 passed, 48 explicitly ignored fixtures;
+  `/tmp/portable-drive-read-only-command-backend-final.log`.
+- Five core protocol/configuration tests, one CLI parsing test and fourteen
+  drive-UI logic tests pass (`core-final.log`, `cli-final.log`, `files-final.log`
+  with the same `/tmp/portable-drive-read-only-command-` prefix).
+- The private authority guest passes four cases on each of FAT32/exFAT/NTFS3
+  (twelve total, including six read-only collection cases):
+  `/tmp/portable-drive-vm-read-only-command-authority-compensation-final/report.json`.
+  Existing imaging, authorization denial and image/catalog providers are retained.
+- The native filesystem matrix passes fifteen cases per filesystem (45 total):
+  `/tmp/portable-drive-vm-read-only-command-native-final/report.json`.
+  Both real Btrfs delta/link-group cases pass in
+  `/tmp/portable-drive-read-only-command-btrfs-final.log`.
+- Dark and light private-compositor runs each pass twenty rendered observations
+  in `/tmp/portable-drive-read-only-command-review-{dark,light}-final/report.json`.
+  Both read-only dialogs were inspected for legibility and clipping. The flow
+  selects and cancels read-only review, then starts a fresh live file backup and
+  cancels image review. Host authorization is never invoked by that UI fixture;
+  actual read-only collection is exercised inside the authority guest.
+- Affected-package all-target clippy with warnings denied, formatting, helper/app
+  build and Python compilation pass; logs share the checkpoint prefix.
+
+The first draft exposed the old-daemon field-ignoring hazard before commit and
+was replaced with distinct commands. The test initially expected fake image
+authority to succeed after validating review retention; its assertion now checks
+the fixture's intended authorization denial. Earlier guest fixture/helper-path
+setup failures are retained under the preceding `read-only-mode` log prefix;
+only successful complete reports above count as native evidence.
+
+Architecture remains REGRESSION for the full feature: 4300 clone groups versus
+baseline 4289, duplication 7.10% versus 7.30%, average CCN 3.48 versus 3.44,
+maximum 274 and reported cycles 144 versus 143. This checkpoint adds no clone
+group or new hotspot over the preceding committed source guard. Shared source
+admission reduces `start_background` CCN from 22 to 19; `partition_plan` stays
+22. New collection/worker methods remain at or below 15. The bulk Worker owns
+its inputs instead of extending one large closure, and reuses the existing
+partition authority, cancellable delivery, source guards, manifests and backup
+publication. Selected fields are retained in
+`.fitness/portable-drives-read-only-mode-architecture.json`. Full-feature
+regression remediation and final workspace gates remain open. Item 4.3 stays
+Partial for the wider fidelity/mount/interruption acceptance matrix.
 
 ## Read-only source guard
 

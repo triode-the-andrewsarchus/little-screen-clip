@@ -29,6 +29,9 @@ pub(super) enum DriveCommand {
         /// Restore the mounted state only if this image job unmounted it
         #[arg(long, requires = "image")]
         restore_mounted: bool,
+        /// Temporarily mount the partition read-only while collecting files
+        #[arg(long, conflicts_with = "image")]
+        read_only: bool,
     },
     /// Review a partition/destination and return a five-minute backup token
     PreviewBackup {
@@ -45,6 +48,9 @@ pub(super) enum DriveCommand {
         restore_mounted: bool,
         #[arg(long)]
         remember_destination: bool,
+        /// Temporarily mount the reviewed partition read-only for file collection
+        #[arg(long, conflicts_with = "restore_mounted")]
+        read_only: bool,
     },
     /// Release a backup review without starting work or saving preferences
     DiscardBackupReview { token: String },
@@ -121,15 +127,22 @@ impl DriveCommand {
                 drive,
                 image,
                 restore_mounted,
-            } => DriveRequest::Backup {
-                drive,
-                restore_mounted,
-                kind: if image {
-                    BackupKind::Image
+                read_only,
+            } => {
+                if read_only {
+                    DriveRequest::ReadOnlyBackup { drive }
                 } else {
-                    BackupKind::Files
-                },
-            },
+                    DriveRequest::Backup {
+                        drive,
+                        restore_mounted,
+                        kind: if image {
+                            BackupKind::Image
+                        } else {
+                            BackupKind::Files
+                        },
+                    }
+                }
+            }
             Self::PreviewBackup {
                 drive,
                 image,
@@ -147,11 +160,21 @@ impl DriveCommand {
                 token,
                 restore_mounted,
                 remember_destination,
-            } => DriveRequest::StartBackup {
-                token,
-                restore_mounted,
-                remember_destination,
-            },
+                read_only,
+            } => {
+                if read_only {
+                    DriveRequest::StartReadOnlyBackup {
+                        token,
+                        remember_destination,
+                    }
+                } else {
+                    DriveRequest::StartBackup {
+                        token,
+                        restore_mounted,
+                        remember_destination,
+                    }
+                }
+            }
             Self::DiscardBackupReview { token } => DriveRequest::DiscardBackupReview { token },
             Self::Pair {
                 drive,
@@ -201,5 +224,58 @@ impl DriveCommand {
             Self::Cancel { operation } => DriveRequest::Cancel { operation },
             Self::Acknowledge { conflict } => DriveRequest::Resolve { conflict },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Command {
+        #[command(subcommand)]
+        drive: DriveCommand,
+    }
+    #[test]
+    fn read_only_flags_select_file_collection_and_cannot_be_combined_with_imaging() {
+        let direct =
+            Command::try_parse_from(["clipctl", "backup", "part:portable", "--read-only"]).unwrap();
+        assert!(matches!(
+            direct.drive.request(),
+            DriveRequest::ReadOnlyBackup { .. }
+        ));
+        let reviewed =
+            Command::try_parse_from(["clipctl", "start-backup", "selection", "--read-only"])
+                .unwrap();
+        assert!(matches!(
+            reviewed.drive.request(),
+            DriveRequest::StartReadOnlyBackup { .. }
+        ));
+        assert!(
+            Command::try_parse_from([
+                "clipctl",
+                "backup",
+                "part:portable",
+                "--image",
+                "--read-only"
+            ])
+            .is_err()
+        );
+        let image = Command::try_parse_from([
+            "clipctl",
+            "backup",
+            "part:portable",
+            "--image",
+            "--restore-mounted",
+        ])
+        .unwrap();
+        assert!(matches!(
+            image.drive.request(),
+            DriveRequest::Backup {
+                kind: BackupKind::Image,
+                restore_mounted: true,
+                ..
+            }
+        ));
     }
 }

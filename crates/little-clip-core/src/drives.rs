@@ -162,6 +162,12 @@ pub enum DriveRequest {
         restore_mounted: bool,
         remember_destination: bool,
     },
+    /// Starts a reviewed file backup with temporary read-only collection.
+    /// Older daemons reject this command instead of silently copying live files.
+    StartReadOnlyBackup {
+        token: String,
+        remember_destination: bool,
+    },
     DiscardBackupReview {
         token: String,
     },
@@ -170,6 +176,10 @@ pub enum DriveRequest {
         kind: BackupKind,
         #[serde(default)]
         restore_mounted: bool,
+    },
+    /// Collects files read-only, then restores the partition's original access mode.
+    ReadOnlyBackup {
+        drive: String,
     },
     Pair {
         drive: String,
@@ -229,6 +239,21 @@ pub enum DriveRequest {
     Resolve {
         conflict: String,
     },
+}
+
+/// Consistency policy for file collection; the on-disk backup format is unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileBackupMode {
+    /// Checks each captured revision while retaining the current mounted view.
+    #[default]
+    Live,
+    /// Temporarily mounts read-only and restores the original access mode.
+    ReadOnly,
+}
+impl FileBackupMode {
+    fn is_live(&self) -> bool {
+        *self == Self::Live
+    }
 }
 
 impl DriveRequest {
@@ -385,6 +410,12 @@ pub struct PartitionPreparation {
     pub restore_mounted: bool,
     pub completed_backup: Option<String>,
     pub restore_error: Option<String>,
+    /// Selected file-collection policy; absent in older operation journals.
+    #[serde(default, skip_serializing_if = "FileBackupMode::is_live")]
+    pub file_mode: FileBackupMode,
+    /// Last observed collection mount, retained for inspection after interruption.
+    #[serde(default, with = "crate::path_serde::optional")]
+    pub collection_mount: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -392,6 +423,10 @@ pub enum PartitionPhase {
     Flushing,
     Unmounting,
     Unmounted,
+    MountingReadOnly,
+    ReadOnlyMounted,
+    CopyingFiles,
+    FilesPublished,
     OpeningImage,
     CopyingImage,
     VerifyingImage,
@@ -408,6 +443,10 @@ impl PartitionPhase {
             Self::Flushing => "Flushing enrolled folders before unmount",
             Self::Unmounting => "Waiting for partition unmount / authorization",
             Self::Unmounted => "Partition confirmed unmounted",
+            Self::MountingReadOnly => "Mounting the partition read-only / authorization",
+            Self::ReadOnlyMounted => "Read-only filesystem confirmed",
+            Self::CopyingFiles => "Collecting files from the read-only filesystem",
+            Self::FilesPublished => "Completed file backup published",
             Self::OpeningImage => "Waiting for exclusive image read / authorization",
             Self::CopyingImage => "Copying partition bytes",
             Self::VerifyingImage => "Verifying every image byte",
@@ -438,8 +477,23 @@ impl PartitionPreparation {
             .as_ref()
             .map(|id| format!(" Completed backup: {id}."))
             .unwrap_or_default();
+        let collection = if self.file_mode == FileBackupMode::ReadOnly {
+            match &self.collection_mount {
+                Some(path) => format!(
+                    " Requested read-only collection; last observed mount: {}. Inspect its current access mode before retrying.",
+                    crate::path_address::display_path(path)
+                ),
+                None if self.phase == PartitionPhase::MountingReadOnly => {
+                    " A read-only mount request may have taken effect; inspect current mounts."
+                        .into()
+                }
+                None => String::new(),
+            }
+        } else {
+            String::new()
+        };
         format!(
-            "Daemon restarted during: {}. {effect}{image} Completed writes are retained. Check current drive state and completed/prepared backups before retrying; no mount action was replayed automatically.",
+            "Daemon restarted during: {}. {effect}{collection}{image} Completed writes are retained. Check current drive state and completed/prepared backups before retrying; no mount action was replayed automatically.",
             self.phase.description()
         )
     }
@@ -508,6 +562,46 @@ pub fn valid_relative(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backup_commands_preserve_legacy_fingerprints_and_read_only_fails_closed_on_older_daemons() {
+        #[derive(Serialize, Deserialize)]
+        enum LegacyRequest {
+            Backup {
+                drive: String,
+                kind: BackupKind,
+                restore_mounted: bool,
+            },
+            StartBackup {
+                token: String,
+                restore_mounted: bool,
+                remember_destination: bool,
+            },
+        }
+        for old in [
+            r#"{"Backup":{"drive":"part:portable","kind":"Files","restore_mounted":false}}"#,
+            r#"{"StartBackup":{"token":"selection","restore_mounted":false,"remember_destination":false}}"#,
+        ] {
+            let request: DriveRequest = serde_json::from_str(old).unwrap();
+            assert_eq!(serde_json::to_string(&request).unwrap(), old);
+            let legacy: LegacyRequest = serde_json::from_str(old).unwrap();
+            assert_eq!(serde_json::to_string(&legacy).unwrap(), old);
+        }
+        for request in [
+            DriveRequest::ReadOnlyBackup {
+                drive: "part:portable".into(),
+            },
+            DriveRequest::StartReadOnlyBackup {
+                token: "selection".into(),
+                remember_destination: false,
+            },
+        ] {
+            assert!(request.is_operation());
+            let encoded = serde_json::to_string(&request).unwrap();
+            assert!(serde_json::from_str::<LegacyRequest>(&encoded).is_err());
+            let decoded: DriveRequest = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), encoded);
+        }
+    }
     #[test]
     fn legacy_backups_do_not_imply_verified_metadata_and_new_counts_round_trip() {
         let mut backup: DriveBackup = serde_json::from_value(serde_json::json!({

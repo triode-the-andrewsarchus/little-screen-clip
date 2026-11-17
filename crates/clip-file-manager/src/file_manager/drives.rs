@@ -112,6 +112,7 @@ enum Dialog {
         preview: Box<BackupPreview>,
         restore_mounted: bool,
         remember_destination: bool,
+        read_only: bool,
     },
 }
 struct PendingRequest {
@@ -302,6 +303,7 @@ impl Drives {
             Ok(DriveReply::BackupPreview(preview)) => {
                 if preview_active {
                     self.dialog = Some(Dialog::BackupReview {
+                        read_only: false,
                         restore_mounted: self.restore_mounted && preview.drive.mount.is_some(),
                         remember_destination: self.status.backup_directory.as_ref()
                             != Some(&preview.destination),

@@ -136,12 +136,31 @@ During collection, a later alias can reuse a matching entry already completed
 in this backup. The daemon verifies its bytes and captured source facts before
 installing the link, avoiding another payload write. Destinations that refuse
 links receive complete independent copies with fidelity warnings. Btrfs
-snapshots also share unchanged extents across versions. A selectable quiesced
-read-only collection mode remains unfinished. Its backend source guard now
-requires both a read-only mounted view and a read-only backing filesystem, and
-rechecks the condition through collection and before publication. Ordinary live
-collection remains available through a read-only view over writable storage.
-The daemon mount lifecycle and selectable review controls still need integration.
+snapshots also share unchanged extents across versions.
+
+For stronger consistency, select **Temporarily mount read-only for collection**
+in a file-backup review. Close open files first. The daemon flushes enrolled
+changes, unmounts the partition, requests a read-only mount through UDisks2, and
+verifies both the mounted view and backing filesystem are read-only. It repeats
+that verification throughout collection and before publication. Desktop
+authentication may be required. A read-only bind view over writable storage
+cannot satisfy this mode; ordinary live collection remains available through
+such a view.
+
+After collection or cancellation, the daemon retires its source readers before
+restoring the original access mode. An originally read-only partition remains
+read-only. A restoration failure preserves the completed backup and reports the
+failure separately. After a daemon interruption, Jobs retains the last recorded
+phase and observed collection mount for inspection; restart never replays mount
+authority automatically. The mode requires an initially mounted partition and
+does not preserve arbitrary mount-option overrides.
+
+The CLI equivalents are `clipctl drives backup DRIVE --read-only` and
+`clipctl drives start-backup TOKEN --read-only` for a file-review token.
+`--read-only` cannot be combined with imaging or `--restore-mounted`.
+These use distinct daemon commands so older daemons reject unsupported requests
+instead of silently performing a live copy. The file-tree/SQLite backup format
+is the same for either collection mode; the manifest records the enforced policy.
 
 The source Drive record in each new manifest includes observed partition-layout
 facts: partition number, start sector and checked byte offset, logical sector

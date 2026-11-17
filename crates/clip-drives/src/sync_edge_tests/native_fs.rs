@@ -9,28 +9,12 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-pub(crate) fn guest_drive() -> Drive {
+pub(crate) fn guest_partition() -> Drive {
     crate::require_disposable_guest();
     let source = PathBuf::from(std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").unwrap());
     let device = PathBuf::from(std::env::var_os("LITTLE_CLIP_DRIVE_TEST_DEVICE").unwrap());
     assert_eq!(source, Path::new("/work/media"));
     let filesystem = std::env::var("LITTLE_CLIP_DRIVE_TEST_FILESYSTEM").unwrap();
-    let root = Root::open(&source).unwrap();
-    assert!(
-        !root.reliable_revision_cache().unwrap(),
-        "Removable filesystem comparisons must not reuse coarse or uncertain timestamps"
-    );
-    let identity = little_clip_core::kernel_interface::MountIdentity::pinned(
-        &root.directory(Path::new(""), false).unwrap(),
-    )
-    .unwrap();
-    let mount = crate::mounts::inventory()
-        .unwrap()
-        .into_iter()
-        .find(|mount| mount.id == identity.mount)
-        .unwrap();
-    assert_eq!(mount.filesystem, filesystem);
-    assert_eq!(mount.source, device);
     let uuid = std::env::var("LITTLE_CLIP_DRIVE_TEST_UUID").unwrap();
     let capacity = std::env::var("LITTLE_CLIP_DRIVE_TEST_CAPACITY")
         .unwrap()
@@ -64,6 +48,30 @@ pub(crate) fn guest_drive() -> Drive {
         evidence: format!("owned-guest:{uuid}"),
         ambiguous: false,
     }
+}
+
+pub(crate) fn guest_drive() -> Drive {
+    let drive = guest_partition();
+    let source = drive.mount.as_ref().unwrap();
+    let filesystem = &drive.filesystem;
+    let device = &drive.device;
+    let root = Root::open(source).unwrap();
+    assert!(
+        !root.reliable_revision_cache().unwrap(),
+        "Removable filesystem comparisons must not reuse coarse or uncertain timestamps"
+    );
+    let identity = little_clip_core::kernel_interface::MountIdentity::pinned(
+        &root.directory(Path::new(""), false).unwrap(),
+    )
+    .unwrap();
+    let mount = crate::mounts::inventory()
+        .unwrap()
+        .into_iter()
+        .find(|mount| mount.id == identity.mount)
+        .unwrap();
+    assert_eq!(&mount.filesystem, filesystem);
+    assert_eq!(&mount.source, device);
+    drive
 }
 
 pub(crate) fn fixture() -> (tempfile::TempDir, Fixture, Drive) {

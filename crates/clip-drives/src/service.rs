@@ -361,6 +361,7 @@ fn title(request: &DriveRequest) -> &'static str {
             kind: BackupKind::Files,
             ..
         } => "Back up files",
+        DriveRequest::ReadOnlyBackup { .. } => "Back up files read-only",
         DriveRequest::Backup { .. } => "Back up partition image",
         DriveRequest::Catalog { .. } => "Save contents catalog",
         DriveRequest::Pair { .. } => "Enroll folder sync",
@@ -472,7 +473,7 @@ impl Owner {
                     && !self
                         .partition
                         .as_ref()
-                        .is_some_and(partition::Pending::is_image),
+                        .is_some_and(partition::Pending::is_backup),
             );
             self.poll_partition();
             self.poll_ram_setup();
@@ -695,6 +696,7 @@ impl Owner {
                     kind: BackupKind::Image,
                     ..
                 }
+                | DriveRequest::ReadOnlyBackup { .. }
         ) {
             self.start_partition(envelope);
             return;
@@ -781,9 +783,11 @@ impl Owner {
                 Err("RAM setup must use retained reconciliation admission".into())
             }
             DriveRequest::Backup { .. }
+            | DriveRequest::ReadOnlyBackup { .. }
             | DriveRequest::Catalog { .. }
             | DriveRequest::PreviewBackup { .. }
             | DriveRequest::StartBackup { .. }
+            | DriveRequest::StartReadOnlyBackup { .. }
             | DriveRequest::DiscardBackupReview { .. } => {
                 Err("Backup and catalog work must use retained background admission".into())
             }
@@ -1210,8 +1214,10 @@ mod tests {
     mod catalog_cleanup;
     mod guest_ram;
     mod native_images;
+    mod native_read_only;
     mod policy_coverage;
     mod ram_writeback;
+    mod read_only;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
@@ -1521,23 +1527,10 @@ mod tests {
             &self,
             restore_mounted: bool,
         ) -> (Service, String, mpsc::Receiver<()>, mpsc::Sender<()>) {
-            let (entered, release, gate) = worker_gate();
-            let mut authority = self.image_authority();
-            let unmount = authority.unmount.clone();
-            authority.unmount = Arc::new(move |drive| {
-                gate();
-                unmount(drive)
-            });
+            let (mut authority, entered, release) = self.held_unmount_authority();
             authority.open_image = Arc::new(|_, _| panic!("held image unexpectedly opened input"));
             let service = self.start_authority(None, authority);
-            let id = accept(
-                &service,
-                DriveRequest::Backup {
-                    drive: "part:large".into(),
-                    kind: BackupKind::Image,
-                    restore_mounted,
-                },
-            );
+            let id = accept(&service, image_request(restore_mounted));
             (service, id, entered, release)
         }
         fn image_authority(&self) -> partition::Authority {
@@ -1559,6 +1552,18 @@ mod tests {
                 mount: action(true),
                 open_image: Arc::new(|_, _| Err("owned image authorization declined".into())),
             }
+        }
+        fn held_unmount_authority(
+            &self,
+        ) -> (partition::Authority, mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (entered, release, gate) = worker_gate();
+            let mut authority = self.image_authority();
+            let unmount = authority.unmount.clone();
+            authority.unmount = Arc::new(move |drive| {
+                gate();
+                unmount(drive)
+            });
+            (authority, entered, release)
         }
         fn pair(&self, service: &Service, drive: &str, relative: &str) -> PathBuf {
             let local = self.temp.path().join(format!("paired-{drive}"));
@@ -1772,6 +1777,8 @@ mod tests {
             started: now(),
             finished: None,
             partition: Some(PartitionPreparation {
+                file_mode: Default::default(),
+                collection_mount: None,
                 drive: original.clone(),
                 destination: Some(destination.path.clone()),
                 phase: PartitionPhase::ImagePublished,
@@ -1782,7 +1789,9 @@ mod tests {
             }),
         };
         db.put("operation", id, &operation).unwrap();
-        let context = partition::ImageContext {
+        let context = partition::BackupContext {
+            file_mode: Default::default(),
+            read_only_mount: None,
             source: Arc::new(crate::device::Source::capture(&original).unwrap()),
             original,
             claims: Vec::new(),
@@ -1794,7 +1803,7 @@ mod tests {
         let mut authority = fixture.image_authority();
         authority.mount = Arc::new(|_| Err("owned remount refused".into()));
         let result = context.finish(
-            &db,
+            Ok(&db),
             id,
             &inventory,
             &authority,
@@ -1862,14 +1871,7 @@ mod tests {
         });
         let service = fixture.start_authority(None, authority);
         let local = fixture.pair(&service, "small", "");
-        let id = accept(
-            &service,
-            DriveRequest::Backup {
-                drive: "part:large".into(),
-                kind: BackupKind::Image,
-                restore_mounted: true,
-            },
-        );
+        let id = accept(&service, image_request(true));
         entered.recv_timeout(Duration::from_secs(10)).unwrap();
         let operation = wait_operation(&service, &id, |op| {
             op.partition
@@ -1948,14 +1950,7 @@ mod tests {
                 Err("owned mount authorization declined".into())
             });
             let service = fixture.start_authority(None, authority);
-            let operation = completed(
-                &service,
-                DriveRequest::Backup {
-                    drive: "part:large".into(),
-                    kind: BackupKind::Image,
-                    restore_mounted: true,
-                },
-            );
+            let operation = completed(&service, image_request(true));
             assert_eq!(operation.state, "failed");
             assert!(operation.message.contains("owned image open failed"));
             let partition = operation.partition.unwrap();
@@ -1993,14 +1988,7 @@ mod tests {
             });
             authority.mount = Arc::new(|_| panic!("unnecessary mount request"));
             let service = fixture.start_authority(None, authority);
-            let operation = completed(
-                &service,
-                DriveRequest::Backup {
-                    drive: "part:large".into(),
-                    kind: BackupKind::Image,
-                    restore_mounted,
-                },
-            );
+            let operation = completed(&service, image_request(restore_mounted));
             assert_eq!(operation.state, "failed");
             let partition = operation.partition.unwrap();
             assert_eq!(partition.unmounted_by_job, initially_mounted);
@@ -2038,6 +2026,8 @@ mod tests {
         .enumerate()
         {
             let partition = PartitionPreparation {
+                file_mode: Default::default(),
+                collection_mount: None,
                 drive: fixture.drives.lock().unwrap()[1].clone(),
                 destination: Some(fixture.temp.path().join("backup")),
                 phase,
@@ -2388,14 +2378,7 @@ mod tests {
         );
         let local = fixture.pair(&service, "large", "");
         fs::write(local.join("edit"), b"flushed before unmount").unwrap();
-        let id = accept(
-            &service,
-            DriveRequest::Backup {
-                drive: "part:large".into(),
-                kind: BackupKind::Image,
-                restore_mounted: false,
-            },
-        );
+        let id = accept(&service, image_request(false));
         let operation = wait_operation(&service, &id, |op| op.finished.is_some());
         assert_eq!(operation.state, "failed");
         assert!(
@@ -2489,6 +2472,25 @@ mod tests {
         assert_unfinished(service, id);
         release.send(()).unwrap();
         wait_operation(service, id, |operation| operation.finished.is_some())
+    }
+    fn cancel_and_finish_released(
+        service: &Service,
+        id: &str,
+        release: mpsc::Sender<()>,
+    ) -> DriveOperation {
+        service
+            .request(DriveRequest::Cancel {
+                operation: id.into(),
+            })
+            .unwrap();
+        finish_released(service, id, release)
+    }
+    fn image_request(restore_mounted: bool) -> DriveRequest {
+        DriveRequest::Backup {
+            drive: "part:large".into(),
+            kind: BackupKind::Image,
+            restore_mounted,
+        }
     }
     fn accept(service: &Service, request: DriveRequest) -> String {
         match service.request(request).unwrap() {

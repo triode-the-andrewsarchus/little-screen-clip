@@ -104,7 +104,23 @@ def caption(session, shot, bounds):
 
 def cancel_backup_review(session, shot):
     # Verify the bordered button's interior instead of accepting its frame as text.
-    x, y = session.word(shot, 'Start', tree=True, required=False) or session.word(shot, 'Start')
+    point = session.word(shot, 'Start', tree=True, required=False) or session.word(shot, 'Start', required=False)
+    if point is None:
+        # Full-window OCR can omit small bordered buttons. The private fixture's
+        # settings region retains them; verify Cancel below before clicking.
+        bounds = (100, 145, 660, 690)
+        controls = session.output / (shot + '-backup-controls.png')
+        with Image.open(session.output / (shot + '.png')) as screen:
+            region = screen.crop(bounds)
+            region.resize((region.width * 3, region.height * 3)).save(controls)
+        data = private.run_checked(['tesseract', str(controls), 'stdout', '--psm', '6', '-c', 'tessedit_create_tsv=1', '-c', 'tessedit_create_txt=0'], env=session.env)
+        for item in csv.DictReader(io.StringIO(data), delimiter='\t', quoting=csv.QUOTE_NONE):
+            if item['text'].strip().strip('|[]').lower() == 'start':
+                point = (bounds[0] + int(item['left']) // 3, bounds[1] + (int(item['top']) + int(item['height']) // 2) // 3)
+                break
+    if point is None:
+        raise RuntimeError(f'{shot}: no verified Start backup button')
+    x, y = point
     assert caption(session, shot, (x - 3, y + 43, x + 54, y + 68)) == 'cancel'
     session.click(x + 20, y + 54)
     session.observe(shot + '-closed', ['Mounts'])
@@ -140,7 +156,9 @@ def backup_review(session, backups):
     session.observe('backup-review-cancel', ['Review partition backup', 'Available', 'Start backup'])
     assert status(env)['backup_directory'] is None
     assert not status(env)['backups']
-    cancel_backup_review(session, 'backup-review-cancel')
+    click_word(session, 'backup-review-cancel', 'Temporarily')
+    session.observe('backup-review-read-only', ['Close open files', 'original access mode is restored', 'Start backup'])
+    cancel_backup_review(session, 'backup-review-read-only')
     assert status(env)['backup_directory'] is None
     assert not status(env)['backups']
     drive_menu(session, 'backup-retry-menu')

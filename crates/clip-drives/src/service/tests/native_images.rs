@@ -4,7 +4,7 @@ use crate::sync_edge_tests::native_fs;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
-fn selected(fixture: &Drive) -> Drive {
+pub(super) fn selected(fixture: &Drive) -> Drive {
     assert_eq!(
         std::env::var("LITTLE_CLIP_DRIVE_TEST_AUTHORITY").unwrap(),
         "1"
@@ -21,7 +21,7 @@ fn selected(fixture: &Drive) -> Drive {
     actual
 }
 
-fn digest(mut file: File) -> String {
+pub(super) fn digest(mut file: File) -> String {
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -31,6 +31,16 @@ fn digest(mut file: File) -> String {
         }
         hash.update(&buffer[..count]);
     }
+}
+pub(super) fn assert_busy_refusal(service: &Service, request: DriveRequest) {
+    let refused = completed(service, request);
+    assert_eq!(refused.state, "failed", "{}", refused.message);
+    assert!(
+        refused.message.to_lowercase().contains("busy"),
+        "{}",
+        refused.message
+    );
+    assert!(status(service).backups.is_empty());
 }
 
 fn replaced_node_is_refused(drive: &Drive) {
@@ -150,14 +160,7 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         restore_mounted: false,
     };
     let busy = File::open(&source_path).unwrap();
-    let refused = completed(&service, request());
-    assert_eq!(refused.state, "failed", "{}", refused.message);
-    assert!(
-        refused.message.to_lowercase().contains("busy"),
-        "{}",
-        refused.message
-    );
-    assert!(status(&service).backups.is_empty());
+    assert_busy_refusal(&service, request());
     assert!(selected(&original).mount.is_some());
     drop(busy);
     finish(&service, request());

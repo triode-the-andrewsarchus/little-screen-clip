@@ -200,38 +200,74 @@ impl Service {
         &self,
         request: DriveRequest,
     ) -> Result<(DriveRequest, Option<Review>)> {
-        let DriveRequest::StartBackup {
-            token,
-            restore_mounted,
-            remember_destination,
-        } = request
-        else {
-            return Ok((request, None));
+        let (token, restore_mounted, remember_destination, read_only) = match request {
+            DriveRequest::StartBackup {
+                token,
+                restore_mounted,
+                remember_destination,
+            } => (token, restore_mounted, remember_destination, false),
+            DriveRequest::StartReadOnlyBackup {
+                token,
+                remember_destination,
+            } => (token, false, remember_destination, true),
+            _ => return Ok((request, None)),
         };
-        let mut review = self
+        let mut previews = self
             .previews
             .lock()
-            .map_err(|_| "Backup review storage unavailable")?
-            .remove(&token)
+            .map_err(|_| "Backup review storage unavailable")?;
+        let review = previews
+            .get(&token)
             .ok_or("Backup review is unavailable or already used; review again")?;
         if review.created.elapsed() >= LIFETIME {
+            previews.remove(&token);
             return Err("Backup review expired; review the partition and destination again".into());
         }
+        if read_only && review.info.kind != BackupKind::Files {
+            return Err("Read-only file collection requires a file backup review; partition imaging already uses exclusive unmounted access".into());
+        }
+        let mut review = previews
+            .remove(&token)
+            .expect("validated review under lock");
         review.remember = remember_destination;
-        Ok((
+        let request = if read_only {
+            DriveRequest::ReadOnlyBackup {
+                drive: review.info.drive.id.clone(),
+            }
+        } else {
             DriveRequest::Backup {
                 drive: review.info.drive.id.clone(),
                 kind: review.info.kind,
                 restore_mounted,
-            },
-            Some(review),
-        ))
+            }
+        };
+        Ok((request, Some(review)))
     }
 }
 
 impl Owner {
+    pub(super) fn admitted_source(
+        &self,
+        envelope: &Envelope,
+        drive: &Drive,
+    ) -> Result<Option<Arc<Root>>> {
+        match &envelope.review {
+            Some(review) => {
+                review.validate(drive)?;
+                Ok(review.source.clone())
+            }
+            None => drive
+                .mount
+                .as_ref()
+                .map(|path| Root::open(path).map(Arc::new))
+                .transpose(),
+        }
+    }
     pub(super) fn validate_backup_request(&self, envelope: &Envelope) -> Result<()> {
-        if !matches!(envelope.request, DriveRequest::Backup { .. }) {
+        if !matches!(
+            envelope.request,
+            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+        ) {
             return Ok(());
         }
         if let Some(review) = &envelope.review {

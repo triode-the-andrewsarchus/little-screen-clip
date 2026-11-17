@@ -1,12 +1,14 @@
 //! One retained bulk worker leaves prompt writeback on the storage coordinator.
 use super::*;
 use little_clip_core::jobs::task::Task;
+mod worker;
 
 pub(super) struct Pending {
     pub(super) drive: String,
     pub(super) roots: Vec<Arc<Root>>,
     pub(super) destination: Option<PathBuf>,
-    image: Option<partition::ImageContext>,
+    context: Option<partition::BackupContext>,
+    cleanup_pending: bool,
     id: String,
     pub(super) cancel: Arc<AtomicBool>,
     task: Task<Result<String>>,
@@ -14,7 +16,7 @@ pub(super) struct Pending {
 impl Pending {
     pub(super) fn scopes(&self) -> impl Iterator<Item = crate::root::Scope> + '_ {
         self.roots.iter().map(|root| root.scope()).chain(
-            self.image
+            self.context
                 .iter()
                 .flat_map(|image| image.claims.iter().cloned()),
         )
@@ -46,35 +48,28 @@ impl Owner {
             || self
                 .partition
                 .as_ref()
-                .is_some_and(partition::Pending::is_image)
+                .is_some_and(partition::Pending::is_backup)
         {
             self.defer_operation(envelope);
             return;
         }
         let resources = (|| -> Result<(Drive, Vec<Arc<Root>>)> {
             let selector = match &envelope.request {
-                DriveRequest::Backup { drive, .. } | DriveRequest::Catalog { drive } => drive,
+                DriveRequest::Backup { drive, .. }
+                | DriveRequest::ReadOnlyBackup { drive }
+                | DriveRequest::Catalog { drive } => drive,
                 _ => return Err("Missing bulk drive".into()),
             };
             let drive = self.drive(selector)?;
             let mut roots = Vec::new();
-            let path = drive
-                .mount
-                .as_ref()
+            let source = self
+                .admitted_source(&envelope, &drive)?
                 .ok_or("Mount the partition before saving a file backup or catalog")?;
-            let source = match envelope
-                .review
-                .as_ref()
-                .and_then(|review| review.source.as_ref())
-            {
-                Some(root) => {
-                    root.validate()?;
-                    root.clone()
-                }
-                None => Arc::new(Root::open(path)?),
-            };
             roots.push(source);
-            if matches!(envelope.request, DriveRequest::Backup { .. }) {
+            if matches!(
+                envelope.request,
+                DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+            ) {
                 let source = roots.first().map(Arc::as_ref);
                 let destination = self.reviewed_backup_destination(&envelope, source)?;
                 preflight::space(&destination, &drive, BackupKind::Files)?;
@@ -98,9 +93,12 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
-        let destination = matches!(envelope.request, DriveRequest::Backup { .. })
-            .then(|| roots.last().map(Arc::as_ref))
-            .flatten();
+        let destination = matches!(
+            envelope.request,
+            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+        )
+        .then(|| roots.last().map(Arc::as_ref))
+        .flatten();
         if let Err(error) = self.admit_backup_destination(&envelope, destination) {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
@@ -114,141 +112,41 @@ impl Owner {
         drive: Drive,
         config: DriveConfig,
         roots: Vec<Arc<Root>>,
-        image: Option<partition::ImageContext>,
+        context: Option<partition::BackupContext>,
     ) {
         if let Ok(Some(mut operation)) = self.db.get::<DriveOperation>("operation", &envelope.id) {
             operation.state = "running".into();
             let _ = self.db.put("operation", &envelope.id, &operation);
         }
-        let state = self.state.clone();
-        let id = envelope.id.clone();
-        let cancel = envelope.cancel.clone();
         let drive_id = drive.id.clone();
-        let destination = matches!(envelope.request, DriveRequest::Backup { .. })
-            .then(|| roots.last().map(|root| root.path.clone()))
-            .flatten();
-        let worker_roots = roots.clone();
-        let worker_image = image.clone();
-        let authority = self.authority.clone();
-        let inventory = self.inventory.clone();
-        let task = write_task(&self.backup_jobs, move || {
-            let validation = (|| -> Result<()> {
-                cancelled(&cancel)?;
-                for root in &worker_roots {
-                    root.validate()?;
-                }
-                Ok(())
-            })();
-            let validation = match validation {
-                Err(error) if worker_image.is_none() => return Err(error),
-                other => other,
-            };
-            let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut progress = job_progress(state.clone(), id.clone());
-            let result = validation.and_then(|()| match envelope.request {
-                DriveRequest::Backup { kind, .. } => {
-                    backup::recover_publications(&db)?;
-                    let destination = worker_roots
-                        .last()
-                        .ok_or("Missing admitted backup destination")?;
-                    preflight::space(destination, &drive, kind)?;
-                    let version = match kind {
-                        BackupKind::Files => backup::files(
-                            &db,
-                            &drive,
-                            worker_roots
-                                .first()
-                                .ok_or("Missing admitted partition root")?,
-                            destination,
-                            &cancel,
-                            &mut progress,
-                        )?,
-                        BackupKind::Image => {
-                            let context = worker_image
-                                .as_ref()
-                                .ok_or("Missing original device admission context")?;
-                            let source = &context.source;
-                            let mut previous = None;
-                            let version = backup::image(
-                                &db,
-                                &drive,
-                                source,
-                                destination,
-                                &cancel,
-                                &authority.open_image,
-                                |phase, bytes| {
-                                    if previous != Some(phase) {
-                                        partition::phase(&db, &id, phase, None)?;
-                                        previous = Some(phase);
-                                    }
-                                    progress(0, bytes);
-                                    Ok(())
-                                },
-                            )?;
-                            if let Err(error) = partition::phase(
-                                &db,
-                                &id,
-                                PartitionPhase::ImagePublished,
-                                Some(&version),
-                            ) {
-                                return Ok(format!(
-                                    "Backup completed: {}; completion journal update failed: {error}",
-                                    version.path.display()
-                                ));
-                            }
-                            version
-                        }
-                    };
-                    let fidelity = version.fidelity.as_ref().map(|report| format!(
-                        "; metadata omissions: {} field(s) across {} entries; source attribute discovery unavailable/incomplete for {} entries; details: {}",
-                        report.omitted_fields,
-                        report.entries_with_omissions,
-                        report.source_attributes_unavailable,
-                        version.manifest.as_deref().unwrap_or(&version.path).display(),
-                    )).unwrap_or_default();
-                    Ok(format!(
-                        "Backup completed: {} ({} bytes written){}{}",
-                        version.path.display(),
-                        version.bytes_written,
-                        if version.kind == BackupKind::Files {
-                            "; per-file verified collection, not an atomic source snapshot"
-                        } else {
-                            ""
-                        },
-                        fidelity
-                    ))
-                }
-                DriveRequest::Catalog { .. } => {
-                    let catalog = catalog::capture(
-                        &db,
-                        worker_roots
-                            .last()
-                            .ok_or("Missing admitted catalog state root")?,
-                        &drive,
-                        worker_roots
-                            .first()
-                            .ok_or("Missing admitted partition root")?,
-                        &config,
-                        &cancel,
-                        &mut progress,
-                    )?;
-                    Ok(format!(
-                        "Catalog saved: {} · {}",
-                        catalog.id, catalog.coverage
-                    ))
-                }
-                _ => Err("Invalid bulk operation".into()),
-            });
-            match &worker_image {
-                Some(context) => context.finish(&db, &id, &inventory, &authority, result),
-                None => result,
-            }
-        });
+        let destination = matches!(
+            envelope.request,
+            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+        )
+        .then(|| roots.last().map(|root| root.path.clone()))
+        .flatten();
+        let cleanup_pending = context
+            .as_ref()
+            .is_some_and(|context| context.file_mode == FileBackupMode::ReadOnly);
+        let worker = worker::Worker {
+            state: self.state.clone(),
+            id: envelope.id.clone(),
+            request: envelope.request,
+            drive,
+            config,
+            roots: roots.clone(),
+            context: context.clone(),
+            cancel: envelope.cancel.clone(),
+            authority: self.authority.clone(),
+            inventory: self.inventory.clone(),
+        };
+        let task = write_task(&self.backup_jobs, move || worker.run());
         self.background = Some(Pending {
             drive: drive_id,
             roots,
             destination,
-            image,
+            context,
+            cleanup_pending,
             id: envelope.id,
             cancel: envelope.cancel,
             task,
@@ -257,8 +155,33 @@ impl Owner {
     pub(super) fn poll_background(&mut self) {
         let result = self.background.as_ref().and_then(|job| job.task.poll());
         if let Some(result) = result {
-            let job = self.background.take().expect("polled retained job");
+            let mut job = self.background.take().expect("polled retained job");
             let result = write_result(result);
+            if job.cleanup_pending {
+                let context = job.context.clone().expect("read-only cleanup context");
+                // Delivery proves the worker closure returned. Release the
+                // coordinator's source pin before cleanup can unmount it.
+                job.roots.clear();
+                let state = self.state.clone();
+                let id = job.id.clone();
+                let inventory = self.inventory.clone();
+                let authority = self.authority.clone();
+                // This exclusively owned bulk queue retains room for cleanup;
+                // Pending prevents another bulk job from entering meanwhile.
+                job.task = write_task(&self.backup_jobs, move || {
+                    let db = Store::existing(&state.join("drives.sqlite"), false);
+                    context.finish(
+                        db.as_ref().map_err(|error| error.to_string().into()),
+                        &id,
+                        &inventory,
+                        &authority,
+                        result,
+                    )
+                });
+                job.cleanup_pending = false;
+                self.background = Some(job);
+                return;
+            }
             self.finish_operation(&job.id, &job.cancel, result);
             self.automatic();
         }

@@ -11,13 +11,7 @@ fn submitted(service: &Service, id: uuid::Uuid, request: DriveRequest) -> String
 #[test]
 fn concurrent_retries_of_a_consumed_review_share_the_pending_and_terminal_operation() {
     let fixture = TestDrives::new(0);
-    let (entered, release, gate) = worker_gate();
-    let mut authority = fixture.image_authority();
-    let unmount = authority.unmount.clone();
-    authority.unmount = Arc::new(move |drive| {
-        gate();
-        unmount(drive)
-    });
+    let (authority, entered, release) = fixture.held_unmount_authority();
     let service = fixture.start_authority(None, authority);
     let destination = backup_review::destination(&fixture);
     let review = backup_review::preview(&service, BackupKind::Image, &destination);

@@ -34,7 +34,15 @@ impl Dialog {
                 preview,
                 restore_mounted,
                 remember_destination,
-            } => backup_review(ui, preview, restore_mounted, remember_destination, requests),
+                read_only,
+            } => backup_review(
+                ui,
+                preview,
+                restore_mounted,
+                remember_destination,
+                read_only,
+                requests,
+            ),
             Self::Path {
                 text,
                 action,
@@ -162,6 +170,7 @@ fn backup_review(
     preview: &BackupPreview,
     restore_mounted: &mut bool,
     remember_destination: &mut bool,
+    read_only: &mut bool,
     requests: &mut Vec<DriveRequest>,
 ) -> bool {
     ui.label(format!(
@@ -202,7 +211,12 @@ fn backup_review(
             egui::Checkbox::new(restore_mounted, "Mount again after imaging"),
         );
     } else {
-        ui.label("Files are checked as they are copied. A writable source can change during the backup, so files may represent different moments. Files that keep changing stop the backup after three attempts.");
+        ui.checkbox(read_only, "Temporarily mount read-only for collection");
+        if *read_only {
+            ui.label("Enrolled edits will be flushed before unmounting. Close open files on this partition. Collection uses a verified read-only filesystem; the original access mode is restored afterwards. Desktop authentication may be required.");
+        } else {
+            ui.label("Files are checked as they are copied. A writable source can change during the backup, so files may represent different moments. Files that keep changing stop the backup after three attempts.");
+        }
         ui.small("Metadata the destination cannot preserve is recorded in the manifest and reported with the job result.");
     }
     ui.checkbox(
@@ -212,10 +226,17 @@ fn backup_review(
     ui.small("This review expires after five minutes. Changes to the selected partition or directory require a new review.");
     let confirmed = ui.button("Start backup").clicked();
     if confirmed {
-        requests.push(DriveRequest::StartBackup {
-            token: preview.token.clone(),
-            restore_mounted: preview.kind == BackupKind::Image && *restore_mounted,
-            remember_destination: *remember_destination,
+        requests.push(if preview.kind == BackupKind::Files && *read_only {
+            DriveRequest::StartReadOnlyBackup {
+                token: preview.token.clone(),
+                remember_destination: *remember_destination,
+            }
+        } else {
+            DriveRequest::StartBackup {
+                token: preview.token.clone(),
+                restore_mounted: preview.kind == BackupKind::Image && *restore_mounted,
+                remember_destination: *remember_destination,
+            }
         });
     }
     !confirmed
@@ -298,7 +319,14 @@ fn operation_details(ui: &mut Ui, operation: &DriveOperation, requests: &mut Vec
                 ui.small(format!("Backup destination: {}", display_path(destination)));
             }
             if partition.restore_mounted {
-                ui.small("Restore mounted state requested");
+                ui.small(if partition.file_mode == FileBackupMode::ReadOnly {
+                    "Restore original mount and access mode"
+                } else {
+                    "Restore mounted state requested"
+                });
+            }
+            if let Some(path) = &partition.collection_mount {
+                ui.small(format!("Collection mount: {}", display_path(path)));
             }
             if let Some(error) = &partition.restore_error {
                 ui.label(format!("Remount: {error}"));

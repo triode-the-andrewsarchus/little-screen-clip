@@ -26,7 +26,7 @@ pub(crate) struct Source {
 impl Source {
     pub fn capture(drive: &Drive) -> Result<Self> {
         let sequence = drive.disk_sequence.filter(|value| *value != 0)
-            .ok_or("Kernel disk sequence unavailable; image backup requires disk lifetime tracking (Linux and lsblk DISK-SEQ support)")?;
+            .ok_or("Kernel disk sequence unavailable; controlled partition backup requires disk lifetime tracking (Linux and lsblk DISK-SEQ support)")?;
         // O_PATH observes metadata only: it neither opens device I/O nor pins the
         // mounted content filesystem, so the accepted unmount can still finish.
         let pin = kernel_interface::pin(&drive.device, true)?;
@@ -62,14 +62,16 @@ impl Source {
     }
     pub fn validate(&self) -> Result<()> {
         if Namespace::current() != self.namespace {
-            return Err("Device namespace changed during image preparation".into());
+            return Err("Device namespace changed during partition preparation".into());
         }
         let current = kernel_interface::pin(&self.path, true)?;
         if MountIdentity::pinned(&current)? != self.mount
             || !self.same_node(&current.metadata()?)
             || !self.same_node(&self.pin.metadata()?)
         {
-            return Err("Partition device was removed or replaced during image preparation".into());
+            return Err(
+                "Partition device was removed or replaced during partition preparation".into(),
+            );
         }
         Ok(())
     }
