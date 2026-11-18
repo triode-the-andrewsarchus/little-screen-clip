@@ -49,6 +49,8 @@ pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 pub struct CommandRequest {
     program: OsString,
     args: Vec<OsString>,
+    current_dir: Option<PathBuf>,
+    envs: Vec<(OsString, OsString)>,
     content_inputs: Vec<std::sync::Arc<std::fs::File>>,
     stdin: Option<Vec<u8>>,
     timeout: Duration,
@@ -66,6 +68,8 @@ impl CommandRequest {
         Self {
             program: program.into(),
             args: Vec::new(),
+            current_dir: None,
+            envs: Vec::new(),
             content_inputs: Vec::new(),
             stdin: None,
             timeout: Duration::from_secs(30),
@@ -76,6 +80,18 @@ impl CommandRequest {
             die_with_parent: false,
             resource_limits: Vec::new(),
         }
+    }
+
+    /// Sets the working directory for the spawned child process.
+    pub fn current_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.current_dir = Some(dir.into());
+        self
+    }
+
+    /// Sets an environment variable override for the spawned child process.
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.envs.push((key.into(), value.into()));
+        self
     }
 
     /// Owns a read-only helper's process group, including its decoder children.
@@ -359,6 +375,12 @@ impl CommandRequest {
     pub fn build_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        if let Some(dir) = &self.current_dir {
+            command.current_dir(dir);
+        }
+        for (key, value) in &self.envs {
+            command.env(key, value);
+        }
         if self.own_process_group {
             command.process_group(0);
         }

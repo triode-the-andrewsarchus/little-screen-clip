@@ -8,9 +8,11 @@ use little_clip_core::{
     ImageThumbnail,
     palette::AppPalette,
     vcv::{
-        PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram,
-        clear_downloaded_panel_cache, inspect_bytes, render_rack_rails_rgba, render_strip_rgba,
-        resolve_panel,
+        PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram, ScreenshotBatchResult,
+        build_rack_rail_layout, clear_downloaded_panel_cache,
+        count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
+        generate_all_local_rack_screenshots, inspect_bytes, local_rack_available,
+        render_rack_rails_rgba, render_strip_rgba, resolve_panel,
     },
 };
 use std::{
@@ -553,15 +555,45 @@ fn texture_from_rgba(ctx: &egui::Context, name: &str, rgba: &image::RgbaImage) -
     ctx.load_texture(name, img, TextureOptions::LINEAR)
 }
 
+enum ScreenshotJobMsg {
+    Progress {
+        done: usize,
+        total: usize,
+        rendered_modules: usize,
+    },
+    Finished(ScreenshotBatchResult),
+}
+
+struct ScreenshotJob {
+    rx: mpsc::Receiver<ScreenshotJobMsg>,
+    cancel: Arc<AtomicBool>,
+    done: usize,
+    total: usize,
+    rendered_modules: usize,
+    is_full_library: bool,
+}
+
 /// Interactive VCV Rack rail pan/zoom viewer for opening `.vcv` files cleanly.
 pub(in crate::file_manager) struct Viewer {
     summary: PatchSummary,
     zoom: f32,
     pan: egui::Vec2,
     fitted_once: bool,
+    unique_modules: Vec<(String, String)>,
     panel_rasters: HashMap<(String, String), Option<Arc<image::RgbaImage>>>,
     panel_textures: HashMap<(String, String), Option<TextureHandle>>,
     visible_buf: Vec<(usize, (String, String), Rect)>,
+    auto_capture_pending: bool,
+    screenshot_job: Option<ScreenshotJob>,
+    screenshot_status: Option<String>,
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        if let Some(job) = self.screenshot_job.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Viewer {
@@ -572,14 +604,28 @@ impl Viewer {
             .and_then(|s| s.to_str())
             .unwrap_or("VCV Patch");
         let summary = inspect_bytes(title, &bytes)?;
+        let mut unique_modules = Vec::new();
+        let mut seen = BTreeSet::new();
+        for m in &summary.rack_dark.modules {
+            let key = (m.plugin.clone(), m.model.clone());
+            if seen.insert(key.clone()) {
+                unique_modules.push(key);
+            }
+        }
+        let auto_capture_pending =
+            !cfg!(test) && count_missing_local_screenshot_plugins(&unique_modules) > 0;
         let mut viewer = Self {
             summary,
             zoom: 0.65,
             pan: egui::Vec2::ZERO,
             fitted_once: false,
+            unique_modules,
             panel_rasters: HashMap::new(),
             panel_textures: HashMap::new(),
             visible_buf: Vec::new(),
+            auto_capture_pending,
+            screenshot_job: None,
+            screenshot_status: None,
         };
         viewer.reload_panels();
         Ok(viewer)
@@ -588,14 +634,133 @@ impl Viewer {
     fn reload_panels(&mut self) {
         self.panel_rasters.clear();
         self.panel_textures.clear();
+        self.summary.rack_dark = build_rack_rail_layout(&self.summary.analysis, true);
+        self.summary.rack_light = build_rack_rail_layout(&self.summary.analysis, false);
 
-        for m in &self.summary.rack_dark.modules {
-            let key = (m.plugin.clone(), m.model.clone());
-            if self.panel_rasters.contains_key(&key) {
-                continue;
+        for (plugin, model) in &self.unique_modules {
+            let rgba = resolve_panel(plugin, model).map(|panel| Arc::clone(&panel.rgba));
+            self.panel_rasters
+                .insert((plugin.clone(), model.clone()), rgba);
+        }
+    }
+
+    fn start_patch_screenshot_job(&mut self, ctx: &egui::Context) {
+        if self.screenshot_job.is_some() {
+            return;
+        }
+        let modules = self.unique_modules.clone();
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker_ctx = ctx.clone();
+        self.screenshot_job = Some(ScreenshotJob {
+            rx,
+            cancel,
+            done: 0,
+            total: count_missing_local_screenshot_plugins(&modules),
+            rendered_modules: 0,
+            is_full_library: false,
+        });
+        let _ = std::thread::Builder::new()
+            .name("vcv-local-screenshots".into())
+            .spawn(move || {
+                let res = ensure_local_screenshots_for_patch(&modules, &worker_cancel);
+                let _ = tx.send(ScreenshotJobMsg::Finished(res));
+                worker_ctx.request_repaint();
+            });
+    }
+
+    fn start_all_plugins_screenshot_job(&mut self, ctx: &egui::Context) {
+        if self.screenshot_job.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker_ctx = ctx.clone();
+        self.screenshot_job = Some(ScreenshotJob {
+            rx,
+            cancel,
+            done: 0,
+            total: 0,
+            rendered_modules: 0,
+            is_full_library: true,
+        });
+        let _ = std::thread::Builder::new()
+            .name("vcv-all-screenshots".into())
+            .spawn(move || {
+                let progress_tx = tx.clone();
+                let progress_ctx = worker_ctx.clone();
+                let res = generate_all_local_rack_screenshots(
+                    &worker_cancel,
+                    |done, total, rendered_modules| {
+                        let _ = progress_tx.send(ScreenshotJobMsg::Progress {
+                            done,
+                            total,
+                            rendered_modules,
+                        });
+                        progress_ctx.request_repaint();
+                    },
+                );
+                let _ = tx.send(ScreenshotJobMsg::Finished(res));
+                worker_ctx.request_repaint();
+            });
+    }
+
+    fn poll_screenshot_job(&mut self) {
+        let mut finished: Option<ScreenshotBatchResult> = None;
+        let mut should_reload = false;
+        if let Some(job) = self.screenshot_job.as_mut() {
+            while let Ok(msg) = job.rx.try_recv() {
+                match msg {
+                    ScreenshotJobMsg::Progress {
+                        done,
+                        total,
+                        rendered_modules,
+                    } => {
+                        if rendered_modules > job.rendered_modules {
+                            should_reload = true;
+                        }
+                        job.done = done;
+                        job.total = total;
+                        job.rendered_modules = rendered_modules;
+                    }
+                    ScreenshotJobMsg::Finished(res) => {
+                        if res.rendered_modules > 0 {
+                            should_reload = true;
+                        }
+                        finished = Some(res);
+                        break;
+                    }
+                }
             }
-            let rgba = resolve_panel(&m.plugin, &m.model).map(|panel| Arc::clone(&panel.rgba));
-            self.panel_rasters.insert(key, rgba);
+        }
+        if let Some(res) = finished {
+            let was_full = self
+                .screenshot_job
+                .as_ref()
+                .is_some_and(|j| j.is_full_library);
+            self.screenshot_job = None;
+            self.screenshot_status = Some(if res.cancelled {
+                format!("Cancelled ({} panels captured)", res.rendered_modules)
+            } else if res.rendered_modules > 0 {
+                format!(
+                    "Captured {} local panels ({} plugins)",
+                    res.rendered_modules, res.rendered_plugins
+                )
+            } else if was_full {
+                format!(
+                    "Local screenshots up to date ({} plugins checked)",
+                    res.skipped_plugins
+                )
+            } else if !res.failed_plugins.is_empty() {
+                format!("Rack could not render {}", res.failed_plugins.join(", "))
+            } else {
+                "Using local Rack screenshots".to_string()
+            });
+        }
+        if should_reload {
+            self.reload_panels();
         }
     }
 
@@ -619,6 +784,11 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette) {
         let dark = ui.visuals().dark_mode;
+        if self.auto_capture_pending {
+            self.auto_capture_pending = false;
+            self.start_patch_screenshot_job(ui.ctx());
+        }
+        self.poll_screenshot_job();
 
         StudioShell::new("VCV Rack", Icon::Midi, palette, close).render_header(ui, |ui| {
             ui.label(format!(
@@ -639,7 +809,46 @@ impl Viewer {
             }
             if ui.button("Clear Downloaded Cache").clicked() {
                 let _ = clear_downloaded_panel_cache();
+                self.screenshot_status = None;
                 self.reload_panels();
+            }
+            if local_rack_available() {
+                ui.separator();
+                if let Some(job) = &self.screenshot_job {
+                    let msg = if job.total > 0 {
+                        format!(
+                            "Capturing {} ({}/{})…",
+                            if job.is_full_library {
+                                "all plugins"
+                            } else {
+                                "patch plugins"
+                            },
+                            job.done,
+                            job.total
+                        )
+                    } else {
+                        "Capturing local Rack screenshots…".to_string()
+                    };
+                    ui.label(msg);
+                    if ui.button("Cancel Capture").clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    let missing = count_missing_local_screenshot_plugins(&self.unique_modules);
+                    if missing > 0
+                        && ui
+                            .button(format!("Generate Patch Screenshots ({missing})"))
+                            .clicked()
+                    {
+                        self.start_patch_screenshot_job(ui.ctx());
+                    }
+                    if ui.button("Generate All Local Screenshots").clicked() {
+                        self.start_all_plugins_screenshot_job(ui.ctx());
+                    }
+                    if let Some(status) = &self.screenshot_status {
+                        ui.small(status);
+                    }
+                }
             }
         });
 

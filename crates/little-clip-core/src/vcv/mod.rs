@@ -21,7 +21,11 @@ pub use layout::{
     DiagramBand, DiagramEdge, DiagramLayout, DiagramNode, ModulePanelSpec, MonitorView, PortTab,
     build_diagram_layout, build_dynamic_hover_layout, build_strip_layout,
 };
-pub use panels::{ResolvedPanel, clear_downloaded_panel_cache, resolve_panel};
+pub use panels::{
+    ResolvedPanel, ScreenshotBatchResult, clear_downloaded_panel_cache,
+    count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
+    generate_all_local_rack_screenshots, local_rack_available, resolve_panel,
+};
 pub use rack::{
     PlacedRackModule, RACK_HP_WIDTH, RACK_ROW_GAP, RACK_ROW_HEIGHT, RackRailLayout,
     RankedStripModule, StripLineup, build_rack_rail_layout, build_ranked_strip,
@@ -333,7 +337,7 @@ mod tests {
         .unwrap();
         std::fs::write(cache_plugin.join("MyVCO.png"), &png_bytes).unwrap();
 
-        let resolved = panels::resolve_panel_in_dir("CustomPlugin", "MyVCO", &cache, false)
+        let resolved = panels::resolve_panel_with_dirs("CustomPlugin", "MyVCO", &[], &cache, false)
             .expect("cached high-res library panel should resolve offline");
         assert_eq!(
             resolved.rgba.dimensions(),
@@ -354,8 +358,11 @@ mod tests {
         assert_eq!(uri_img.height(), 320);
 
         // Unsafe slugs and uncached offline modules must return None cleanly.
-        assert!(panels::resolve_panel_in_dir("../etc", "passwd", &cache, false).is_none());
-        assert!(panels::resolve_panel_in_dir("MissingPlugin", "Missing", &cache, false).is_none());
+        assert!(panels::resolve_panel_with_dirs("../etc", "passwd", &[], &cache, false).is_none());
+        assert!(
+            panels::resolve_panel_with_dirs("MissingPlugin", "Missing", &[], &cache, false)
+                .is_none()
+        );
         assert!(panels::resolve_panel("", "VCO").is_none());
 
         // Strip and rail SVGs render cleanly (embedding cached images or stylized fallbacks).
@@ -462,5 +469,110 @@ mod tests {
 
         let panel = panels::encode_raster_bytes_as_panel(&png_bytes).expect("encode tall raster");
         assert_eq!(panel.rgba.dimensions(), (228, 1520));
+    }
+
+    #[test]
+    fn local_rack_screenshot_takes_priority_over_library_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shots = tmp.path().join("screenshots");
+        let cache = tmp.path().join("cache");
+        std::fs::create_dir_all(shots.join("Valley")).unwrap();
+        std::fs::create_dir_all(cache.join("Valley")).unwrap();
+
+        let encode_png = |w: u32, h: u32, rgba: [u8; 4]| {
+            let img = image::RgbaImage::from_pixel(w, h, image::Rgba(rgba));
+            let mut out = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+
+        std::fs::write(
+            shots.join("Valley/Plateau.png"),
+            encode_png(360, 1520, [10, 200, 30, 255]),
+        )
+        .unwrap();
+        // Even with a valid cached library fallback, the local Rack screenshot must win.
+        std::fs::write(
+            cache.join("Valley/Plateau.png"),
+            encode_png(180, 380, [220, 20, 20, 255]),
+        )
+        .unwrap();
+
+        let resolved =
+            panels::resolve_panel_with_dirs("Valley", "Plateau", &[shots], &cache, false)
+                .expect("resolve panel");
+        assert_eq!(resolved.rgba.dimensions(), (360, 1520));
+        assert_eq!(resolved.rgba.get_pixel(0, 0).0, [10, 200, 30, 255]);
+    }
+
+    #[test]
+    fn discovers_rack_env_from_log_prepares_staging_settings_and_detects_gaps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let user_dir = home.join(".local/share/Rack2");
+        let sys_dir = home.join("Rack2App");
+        let plugin_dir = user_dir.join("plugins-lin-x64/MyPlugin");
+        let shots_dir = user_dir.join("screenshots");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::create_dir_all(shots_dir.join("MyPlugin")).unwrap();
+
+        let exe_name = if cfg!(target_os = "windows") {
+            "Rack.exe"
+        } else {
+            "Rack"
+        };
+        std::fs::write(sys_dir.join(exe_name), b"stub").unwrap();
+        std::fs::write(
+            user_dir.join("log.txt"),
+            format!(
+                "[0.000 info] System directory: {}\n[0.000 info] User directory: {}\n",
+                sys_dir.display(),
+                user_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let env = panels::discover_rack_env_in(Some(&home), None, None);
+        assert!(env.can_run_screenshots());
+        assert_eq!(env.primary_user_dir.as_deref(), Some(user_dir.as_path()));
+        assert_eq!(env.sys_dir.as_deref(), Some(sys_dir.as_path()));
+        assert!(env.screenshot_dirs.contains(&shots_dir));
+
+        let src_settings = user_dir.join("settings.json");
+        let dst_settings = tmp.path().join("staging_settings.json");
+        std::fs::write(
+            &src_settings,
+            r#"{"windowMaximized":true,"windowSize":[1920.0,1080.0],"preferDarkPanels":true}"#,
+        )
+        .unwrap();
+        panels::write_staging_settings_json(&src_settings, &dst_settings).unwrap();
+        let patched: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&dst_settings).unwrap()).unwrap();
+        assert_eq!(patched["windowMaximized"], serde_json::json!(false));
+        assert_eq!(patched["windowSize"], serde_json::json!([128.0, 128.0]));
+        assert_eq!(patched["preferDarkPanels"], serde_json::json!(true));
+
+        // Hidden modules in `plugin.json` do not mark a plugin as missing screenshots once visible modules exist.
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{"slug":"MyPlugin","modules":[{"slug":"VisibleMod"},{"slug":"OldHidden","hidden":true}]}"#,
+        )
+        .unwrap();
+        assert!(panels::plugin_needs_screenshots(
+            "MyPlugin",
+            Some(&plugin_dir),
+            Some(&sys_dir),
+            std::slice::from_ref(&shots_dir),
+        ));
+        std::fs::write(shots_dir.join("MyPlugin/VisibleMod.png"), b"png").unwrap();
+        assert!(!panels::plugin_needs_screenshots(
+            "MyPlugin",
+            Some(&plugin_dir),
+            Some(&sys_dir),
+            std::slice::from_ref(&shots_dir),
+        ));
     }
 }
