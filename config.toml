@@ -200,3 +200,10 @@ prompt_on_open = true
 # gebco_terrain_url = "https://data.source.coop/ausantarctic/gebco/GEBCO_2025.tif"
 # Copernicus NetCDF import requires GDAL 3.7+ (gdalwarp) with NetCDF support.
 # land_cover_url = "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content"
+
+# Optional NASADEM downloads (about 377 GB of elevation grids) use Earthdata Login.
+# Run scripts/download_nasadem.sh --plan to inspect the catalog and required space.
+# Store real values locally; do not commit credentials.
+# [geography.earthdata]
+# username = "your-earthdata-username"
+# password = "your-earthdata-password"

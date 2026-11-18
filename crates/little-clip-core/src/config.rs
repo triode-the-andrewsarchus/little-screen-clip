@@ -408,10 +408,30 @@ pub const DEFAULT_GEO_LAND_COVER_URL: &str =
 /// Default maximum disk budget for offline geography datasets (< 20 GB).
 pub const DEFAULT_GEO_MAX_ASSETS_BYTES: u64 = 18 * 1024 * 1024 * 1024;
 
+/// Stores optional NASA Earthdata download credentials.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EarthdataCredentials {
+    pub username: String,
+    pub password: String,
+}
+impl std::fmt::Debug for EarthdataCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EarthdataCredentials")
+            .field(
+                "configured",
+                &(!self.username.is_empty() && !self.password.is_empty()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 /// Offline 3D globe / 2D map basemap and elevation asset configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GeographyConfig {
+    /// Earthdata credentials for optional authenticated NASADEM downloads.
+    pub earthdata: EarthdataCredentials,
     /// Display units for map distances, elevations and scale bars.
     pub units: crate::geography::units::Units,
     /// Directory where downloaded basemap assets are stored (outside git).
@@ -452,6 +472,7 @@ pub struct GeographyConfig {
 impl Default for GeographyConfig {
     fn default() -> Self {
         Self {
+            earthdata: EarthdataCredentials::default(),
             units: crate::geography::units::Units::default(),
             assets_dir: None,
             terrain_override_dir: None,
@@ -1224,6 +1245,23 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn earthdata_credentials_round_trip_without_debug_disclosure() {
+        let config: AppConfig = toml::from_str(
+            r#"[geography.earthdata]
+username = "test-nasa-account"
+password = "test-pass-with-quotes\\and!"
+"#,
+        )
+        .unwrap();
+        let encoded = toml::to_string(&config).unwrap();
+        let loaded: AppConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(loaded.geography.earthdata, config.geography.earthdata);
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-nasa-account"));
+        assert!(!debug.contains("test-pass-with-quotes"));
+    }
 
     #[test]
     fn constellation_pad_keys_support_direct_hardware_remaps_and_reject_ambiguity() {
