@@ -863,7 +863,13 @@ mod tests {
     #[test]
     fn typed_columns_reserve_and_paint_size_and_modified_for_every_metadata_family() {
         let root = tempfile::tempdir().unwrap();
-        for name in ["sound.wav", "photo.png", "movie.mp4", "book.pdf"] {
+        for name in [
+            "sound.wav",
+            "photo.png",
+            "movie.mp4",
+            "book.pdf",
+            "patch.vcv",
+        ] {
             std::fs::write(root.path().join(name), "fixture").unwrap();
         }
         let directory =
@@ -945,5 +951,135 @@ mod tests {
                 assert_eq!(manager.selected_paths(), [root.path().join("track-00.wav")]);
             }
         }
+    }
+
+    #[test]
+    fn vcv_rack_group_header_paints_custom_sort_headers_and_sorts_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let write_patch = |name: &str, mods: usize, cables: usize, rows: i32| {
+            let modules = (0..mods)
+                .map(|i| {
+                    serde_json::json!({
+                        "id": i + 1,
+                        "plugin": "Fundamental",
+                        "model": "VCO",
+                        "pos": [i * 10, i as i32 % rows],
+                    })
+                })
+                .collect::<Vec<_>>();
+            let cable_list = (0..cables)
+                .map(|i| {
+                    serde_json::json!({
+                        "id": i + 1,
+                        "outputModuleId": 1,
+                        "outputId": 0,
+                        "inputModuleId": 1,
+                        "inputId": 0,
+                    })
+                })
+                .collect::<Vec<_>>();
+            std::fs::write(
+                root.path().join(name),
+                serde_json::to_vec(&serde_json::json!({
+                    "version": "2.6.0",
+                    "modules": modules,
+                    "cables": cable_list,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        write_patch("alpha.vcv", 8, 2, 1);
+        write_patch("beta.vcv", 2, 12, 2);
+        write_patch("gamma.vcv", 5, 6, 3);
+
+        let directory =
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap();
+        let mut manager = FileManager {
+            pending: None,
+            ..Default::default()
+        };
+        manager.commit(directory, Navigation::New);
+        assert_eq!(manager.single_family, Some(Category::VcvRack));
+
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while manager.metadata.status(Category::VcvRack) != "Metadata 3/3"
+            && std::time::Instant::now() < deadline
+        {
+            manager.tick_metadata(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(manager.metadata.status(Category::VcvRack), "Metadata 3/3");
+
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, GROUP_HEADER_HEIGHT));
+                let columns = ListColumns::new(header).for_family(manager.single_family);
+                let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                group_header(
+                    ui,
+                    header,
+                    manager.single_family,
+                    columns,
+                    manager.list_sort(),
+                    &manager.metadata,
+                    colors,
+                );
+            });
+        });
+        for expected in ["VCV Rack · Metadata 3/3", "Modules", "Cables", "Rows"] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == expected
+                )),
+                "missing VCV Rack header text: {expected}"
+            );
+        }
+
+        let visible_names = |manager: &FileManager| {
+            let directory = manager.directory.as_ref().unwrap();
+            manager
+                .visible
+                .iter()
+                .map(|&index| directory.entries[index].name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        GroupSort::Metadata(Category::VcvRack, Field::Modules).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["beta.vcv", "gamma.vcv", "alpha.vcv"]
+        );
+        GroupSort::Metadata(Category::VcvRack, Field::Modules).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["alpha.vcv", "gamma.vcv", "beta.vcv"]
+        );
+
+        GroupSort::Metadata(Category::VcvRack, Field::Cables).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["alpha.vcv", "gamma.vcv", "beta.vcv"]
+        );
+
+        GroupSort::Metadata(Category::VcvRack, Field::Rows).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["alpha.vcv", "beta.vcv", "gamma.vcv"]
+        );
+        GroupSort::Metadata(Category::VcvRack, Field::Rows).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["gamma.vcv", "beta.vcv", "alpha.vcv"]
+        );
+
+        GroupSort::Metadata(Category::VcvRack, Field::Filename).apply(&mut manager);
+        assert_eq!(
+            visible_names(&manager),
+            ["alpha.vcv", "beta.vcv", "gamma.vcv"]
+        );
     }
 }

@@ -1,12 +1,12 @@
 //! Reader for VCV Rack / Cardinal `.vcv` patch files (zstd tar bundles and raw JSON).
 
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
-const MAX_PATCH_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A port reference on a module inside a patch.
@@ -58,6 +58,17 @@ pub struct PatchDocument {
     pub version: String,
     pub modules: Vec<PatchModule>,
     pub cables: Vec<PatchCable>,
+}
+
+impl PatchDocument {
+    /// Returns the number of distinct Eurorack rows occupied by modules in this patch.
+    pub fn row_count(&self) -> usize {
+        self.modules
+            .iter()
+            .map(|module| module.row)
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
 }
 
 /// Reads and parses a `.vcv` patch from raw bytes (either zstd+tar archive or raw UTF-8 JSON).
