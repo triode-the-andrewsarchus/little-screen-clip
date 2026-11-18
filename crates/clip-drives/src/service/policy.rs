@@ -3,14 +3,14 @@ use super::*;
 mod views;
 pub(super) use views::mounted_views;
 
-pub(super) fn ram_records(db: &Store) -> Result<Vec<RamSession>> {
+pub(super) fn records<T: serde::de::DeserializeOwned>(db: &Store, kind: &str) -> Result<Vec<T>> {
     let snapshot =
         db.0.is_autocommit()
             .then(|| db.0.unchecked_transaction())
             .transpose()?;
     let mut records = Vec::new();
-    db.visit::<RamSession>("ram", |session| {
-        records.push(session);
+    db.visit::<T>(kind, |record| {
+        records.push(record);
         Ok(())
     })?;
     if let Some(snapshot) = snapshot {
@@ -35,7 +35,7 @@ impl Storage {
                 .transpose()?;
         let mut backups = preflight::managed_backup_paths(db)?;
         backups.extend(backup_directory.map(Path::to_path_buf));
-        let ram = ram_records(db)?
+        let ram = records::<RamSession>(db, "ram")?
             .into_iter()
             .map(|s| (s.id, s.path, s.backing.map(|b| b.directory)))
             .collect();
@@ -137,7 +137,7 @@ pub(super) fn validate_view_target(db: &Store, target: &Root) -> Result<()> {
         db.0.is_autocommit()
             .then(|| db.0.unchecked_transaction())
             .transpose()?;
-    let ram = ram_records(db)?;
+    let ram = records::<RamSession>(db, "ram")?;
     let views = mounted_views(db)?;
     if let Some(snapshot) = snapshot {
         snapshot.commit()?;
@@ -251,20 +251,34 @@ pub(super) fn validate_pair_targets(
             "Pause or remove an existing enrollment before adding more than 256 sync pairs".into(),
         );
     }
+    if overlapping_pair_roots(pairs, local, own)? {
+        return Err("This local folder overlaps an existing sync enrollment".into());
+    }
+    Ok(())
+}
+fn overlapping_pair_roots(pairs: &[SyncPair], local: &Root, own: Option<&str>) -> Result<bool> {
     let mounts = crate::mounts::inventory()?;
     let aliases = managed_mounts(&mounts, |id| {
         pairs.iter().any(|pair| pair.ram && pair.id == id)
     })
     .collect::<Vec<_>>();
-    for pair in pairs.iter().filter(|pair| own != Some(pair.id.as_str())) {
-        if managed_overlap(&pair.local, local, None, &aliases) {
-            return Err("This local folder overlaps an existing sync enrollment".into());
-        }
-    }
-    Ok(())
+    Ok(pairs
+        .iter()
+        .filter(|pair| own != Some(pair.id.as_str()))
+        .any(|pair| managed_overlap(&pair.local, local, None, &aliases)))
+}
+
+pub(super) fn same_pair_roots(db: &Store, prior: &[SyncPair]) -> Result<bool> {
+    let current = records::<SyncPair>(db, "pair")?;
+    Ok(prior
+        .iter()
+        .map(|pair| (&pair.id, &pair.local, &pair.local_identity))
+        .eq(current
+            .iter()
+            .map(|pair| (&pair.id, &pair.local, &pair.local_identity))))
 }
 pub(super) fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
-    let sessions = ram_records(db)?;
+    let sessions = records::<RamSession>(db, "ram")?;
     validate_backing_paths(
         sessions
             .iter()
@@ -292,12 +306,8 @@ pub(super) fn validate_backup_storage(db: &Store, state: &Path, target: &Root) -
     if target.overlap(&Root::open(state)?) {
         return Err("Backup directory overlaps drive-service state".into());
     }
-    for pair in db.list::<SyncPair>("pair", 0, 1000)? {
-        if let Ok(root) = Root::open(&pair.local)
-            && root.overlap(target)
-        {
-            return Err("Backup directory overlaps a paired local folder or RAM copy".into());
-        }
+    if overlapping_pair_roots(&records::<SyncPair>(db, "pair")?, target, None)? {
+        return Err("Backup directory overlaps a paired local folder or RAM copy".into());
     }
     validate_view_target(db, target)
 }
@@ -361,7 +371,7 @@ mod mounted_tests {
                 .iter()
                 .all(|session| session.id != "session-0000")
         );
-        let records = ram_records(&db).unwrap();
+        let records = records::<RamSession>(&db, "ram").unwrap();
         assert_eq!(records.len(), 1101);
         let mount = crate::mounts::Mount {
             id: 1,

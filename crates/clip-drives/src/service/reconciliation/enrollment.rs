@@ -8,12 +8,7 @@ pub(super) struct Input {
 }
 impl Input {
     pub fn current(&self, db: &Store) -> Result<bool> {
-        let current = db.list::<SyncPair>("pair", 0, 1000)?;
-        Ok(self
-            .targets
-            .iter()
-            .map(|p| (&p.id, &p.local, &p.local_identity))
-            .eq(current.iter().map(|p| (&p.id, &p.local, &p.local_identity))))
+        policy::same_pair_roots(db, &self.targets)
     }
     pub fn prepare(
         &self,
@@ -98,7 +93,7 @@ impl Owner {
             };
             let input = Input {
                 source,
-                targets: self.db.list("pair", 0, 1000)?,
+                targets: policy::records::<SyncPair>(&self.db, "pair")?,
                 claims,
             };
             Ok((pair, input))

@@ -36,6 +36,7 @@ pub struct Service {
 }
 mod admission;
 mod background;
+mod configuration;
 mod lifetime;
 mod maintenance;
 mod partition;
@@ -66,6 +67,7 @@ struct Owner {
     publication: publication::Publication,
     refresh: refresh::Refresh,
     scheduling: scheduling::Probes,
+    configuration: configuration::Configuration,
     policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
@@ -208,6 +210,7 @@ impl Service {
             publication: publication.with_inventory(inventory.clone()),
             refresh: refresh::Refresh::new(inventory.clone()),
             scheduling: scheduling::Probes::default(),
+            configuration: Default::default(),
             policy_waiting: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
@@ -454,6 +457,7 @@ impl Owner {
             let poll_ms = if self.sync_preparing.is_empty()
                 && self.scheduling.pending.is_empty()
                 && self.ram_access.is_none()
+                && !self.configuration.busy()
                 && !self.watch.as_ref().is_some_and(Watch::registration_pending)
             {
                 200
@@ -465,6 +469,7 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
+            self.poll_configuration();
             self.poll_scopes();
             self.poll_refresh();
             self.poll_policy();
@@ -533,6 +538,7 @@ impl Owner {
                 Err("Daemon stopping; queued operation cancelled before execution".into()),
             );
         }
+        self.drain_configuration();
         self.drain_scopes();
         self.drain_ram_preparation();
         self.drain_sync();
@@ -662,6 +668,7 @@ impl Owner {
             return;
         }
         match &envelope.request {
+            DriveRequest::Configure { .. } => self.start_configuration(envelope),
             DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope, source),
             DriveRequest::Pair { .. } => self.start_enrollment(envelope, source, claims),
             DriveRequest::Sync { .. }
@@ -729,24 +736,8 @@ impl Owner {
             DriveRequest::MeasureStorage => {
                 Err("Metadata measurement requires retained worker admission".into())
             }
-            DriveRequest::Configure { config } => {
-                policy::validate_config(&config)?;
-                let budgets = self
-                    .db
-                    .list::<RamSession>("ram", 0, 1000)?
-                    .iter()
-                    .map(|s| crate::ram::Budget {
-                        bytes: s.backing.as_ref().map_or(0, |b| b.capacity),
-                        inodes: s.backing.as_ref().map_or(0, |b| b.inodes),
-                    })
-                    .collect::<Vec<_>>();
-                crate::ram::validate_quotas(&config, &budgets)?;
-                if let Some(path) = &config.backup_directory {
-                    self.validate_backup_directory(&Root::create(path)?)?;
-                }
-                self.db.put("settings", "config", &config)?;
-                self.config = config;
-                Ok("Drive configuration reloaded".into())
+            DriveRequest::Configure { .. } => {
+                Err("Configuration requires retained settings preparation".into())
             }
             DriveRequest::BackupDirectory { path } => {
                 let root = Root::create(&path)?;
@@ -1071,7 +1062,7 @@ impl Owner {
             excluded.push(path.clone());
         }
         let mut ram = Vec::new();
-        for session in policy::ram_records(&self.db)? {
+        for session in policy::records::<RamSession>(&self.db, "ram")? {
             ram.push(session.id);
             excluded.push(session.path);
             if let Some(backing) = session.backing {
@@ -1184,6 +1175,7 @@ mod tests {
     mod catalog_cleanup;
     mod catalog_limits;
     mod catalog_workers;
+    mod configuration;
     mod event_loss;
     mod guest_ram;
     mod maintenance;
