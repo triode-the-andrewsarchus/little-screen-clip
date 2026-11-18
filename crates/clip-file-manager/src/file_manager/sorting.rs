@@ -78,6 +78,7 @@ pub(super) fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) ->
 pub(super) enum Category {
     Folder,
     Audio,
+    VcvRack,
     Image,
     Video,
     Scene,
@@ -106,10 +107,11 @@ fn format_family(entry: &Entry) -> Category {
         .extension()
         .map(|v| v.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    if little_clip_core::audio::is_audio_path(&entry.path)
+    if entry.is_vcv_patch() {
+        Category::VcvRack
+    } else if little_clip_core::audio::is_audio_path(&entry.path)
         || super::midi_strip::is_midi(&entry.path)
         || entry.is_multisample()
-        || entry.is_vcv_patch()
     {
         Category::Audio
     } else if entry.is_photo() {
@@ -159,6 +161,7 @@ impl Category {
         match self {
             Self::Folder => "Folders",
             Self::Audio => "Audio",
+            Self::VcvRack => "VCV Rack",
             Self::Image => "Images",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
@@ -297,5 +300,57 @@ mod tests {
         );
         assert!(natural_cmp("file", "file1").is_lt());
         assert!(natural_cmp("é2", "é10").is_lt());
+    }
+
+    fn file_entry(name: &str) -> Entry {
+        Entry {
+            path: std::path::PathBuf::from(name),
+            name: name.to_owned(),
+            directory: false,
+            regular_file: true,
+            system: None,
+            typescript: false,
+            symlink: false,
+            hidden: false,
+            size: String::new(),
+            size_bytes: 0,
+            modified: String::new(),
+            modified_time: None,
+            created_time: None,
+            warning: None,
+            revision: 0,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn vcv_patches_sort_as_dedicated_vcv_rack_category_without_audio_metadata() {
+        let patch = file_entry("ambient.vcv");
+        let uppercase_patch = file_entry("AMBIENT.VCV");
+        let wav = file_entry("loop.wav");
+
+        assert_eq!(family(&patch), Category::VcvRack);
+        assert_eq!(family(&uppercase_patch), Category::VcvRack);
+        assert_eq!(Category::VcvRack.label(), "VCV Rack");
+        assert_eq!(family(&wav), Category::Audio);
+        assert_eq!(Category::Audio.label(), "Audio");
+        assert!(super::super::metadata::Field::for_family(Category::VcvRack).is_empty());
+
+        let mut categories = [
+            Category::Image,
+            family(&patch),
+            family(&wav),
+            Category::Document,
+        ];
+        categories.sort();
+        assert_eq!(
+            categories,
+            [
+                Category::Audio,
+                Category::VcvRack,
+                Category::Image,
+                Category::Document,
+            ]
+        );
     }
 }
