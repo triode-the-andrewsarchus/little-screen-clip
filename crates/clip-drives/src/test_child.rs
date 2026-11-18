@@ -2,6 +2,21 @@
 use std::process::Child;
 
 pub(crate) struct Owned(pub Child);
+impl Owned {
+    pub fn wait(&mut self, timeout: std::time::Duration) -> std::process::ExitStatus {
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(status) = self.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                started.elapsed() < timeout,
+                "Owned fixture process did not exit within {timeout:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
 impl Drop for Owned {
     fn drop(&mut self) {
         let _ = self.0.kill();

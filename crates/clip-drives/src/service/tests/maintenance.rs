@@ -14,14 +14,7 @@ struct Fixture {
 impl Fixture {
     fn new(files: usize) -> Self {
         let drives = TestDrives::new(0);
-        let media = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").map(|base| {
-            crate::require_disposable_guest();
-            let media = tempfile::tempdir_in(base).unwrap();
-            let mut selected = drives.drives.lock().unwrap();
-            selected[1].mount = Some(media.path().into());
-            selected[1].filesystem = std::env::var("LITTLE_CLIP_DRIVE_TEST_FILESYSTEM").unwrap();
-            media
-        });
+        let media = drives.guest_source();
         let drive = drives.drives.lock().unwrap()[1].clone();
         let source = Root::open(drive.mount.as_ref().unwrap()).unwrap();
         for index in 0..files {

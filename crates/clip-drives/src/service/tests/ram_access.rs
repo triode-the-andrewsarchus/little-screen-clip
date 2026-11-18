@@ -333,18 +333,7 @@ fn held_ram_recovery_keeps_controls_and_sync_live() {
         .env("LITTLE_CLIP_RAM_ACCESS_E2FSCK", real)
         .env("PATH", std::env::join_paths(paths).unwrap());
     let mut child = crate::test_child::Owned(command.spawn().unwrap());
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            assert!(status.success());
-            break;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "Owned RAM recovery probe timed out"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert!(child.wait(Duration::from_secs(60)).success());
 }
 
 fn run_startup_case(control: &Path, outcome: &str) {

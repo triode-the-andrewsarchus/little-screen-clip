@@ -36,6 +36,7 @@ pub struct Service {
 }
 mod admission;
 mod background;
+mod catalog_mounts;
 mod configuration;
 mod lifetime;
 mod maintenance;
@@ -89,11 +90,12 @@ struct Owner {
     tokens: Tokens,
     watch: Option<Watch>,
     _lock: File,
-    children: HashMap<String, std::process::Child>,
+    children: HashMap<String, catalog_mounts::Server>,
     ram_children: HashMap<String, crate::ram::Mounted>,
     ram_setup: Option<ram_setup::Pending>,
     ram_access: Option<ram_access::Pending>,
     ram_recovery: ram_sessions::recovery::Recovery,
+    catalog_mounts: catalog_mounts::Controls,
     // Keep the creating worker alive until every transferred RAM server has exited.
     ram_setup_jobs: little_clip_core::jobs::BackgroundJobs,
 }
@@ -251,6 +253,7 @@ impl Service {
             ram_setup: None,
             ram_access: None,
             ram_recovery: Default::default(),
+            catalog_mounts: Default::default(),
             ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
                 1,
                 1,
@@ -439,19 +442,6 @@ impl Owner {
                 self.db.put("ram", &session.id, &session)?;
             }
         }
-        for mut catalog in self.db.list::<Catalog>("catalog", 0, 1000)? {
-            if let Some(path) = &catalog.mount {
-                let expected = self.state.join("mounts").join(&catalog.id);
-                if *path == expected && crate::mounts::catalog_mount(path, &catalog.id)?.is_some() {
-                    if self.unmount(&catalog.id).is_err() {
-                        continue;
-                    }
-                } else {
-                    catalog.mount = None;
-                    self.db.put("catalog", &catalog.id, &catalog)?;
-                }
-            }
-        }
         Ok(())
     }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
@@ -482,12 +472,15 @@ impl Owner {
                 discovered = Instant::now();
             }
             self.poll_background();
+            self.poll_catalog_controls();
             self.maintenance.poll(
                 &self.backup_jobs,
                 &self.db,
                 &self.state,
                 &self.closing,
-                self.background.is_empty() && !self.partition_backup_pending(),
+                self.background.is_empty()
+                    && !self.partition_backup_pending()
+                    && !self.catalog_mounts.busy(),
             );
             self.poll_partition();
             self.poll_ram_setup();
@@ -512,17 +505,6 @@ impl Owner {
                 self.automatic_changed(&changes, false);
             }
             self.reap_ram();
-            let retired = self
-                .children
-                .iter_mut()
-                .filter_map(|(id, child)| {
-                    matches!(child.try_wait(), Ok(Some(_))).then(|| id.clone())
-                })
-                .collect::<Vec<_>>();
-            for id in retired {
-                self.children.remove(&id);
-                let _ = self.unmount(&id);
-            }
         }
         self.closing.store(true, Ordering::Release);
         if let Ok(mut previews) = self.previews.lock() {
@@ -570,14 +552,7 @@ impl Owner {
         }
         self.ram_children.clear();
         self.mark_ram_unmounted();
-        // Unmount before retiring helpers; failed/busy mounts retain a recovery record.
-        for id in self.children.keys().cloned().collect::<Vec<_>>() {
-            let _ = self.unmount(&id);
-        }
-        for child in self.children.values_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.drain_catalog_controls();
         // Retain all status probes until actual exit, then observe the final
         // post-cleanup state before publishing exclusions and releasing ownership.
         self.request_refresh(true);
@@ -599,6 +574,7 @@ impl Owner {
             || !self.scheduling.pending.is_empty()
             || self.ram_access.is_some()
             || self.ram_recovery.busy()
+            || self.catalog_mounts.busy()
             || self.partition_preparing.is_some()
             || self.settings_busy()
             || self.watch.as_ref().is_some_and(Watch::registration_pending)
@@ -684,6 +660,9 @@ impl Owner {
         }
         match &envelope.request {
             DriveRequest::Configure { .. } => self.start_configuration(envelope),
+            DriveRequest::MountCatalog { .. } | DriveRequest::UnmountCatalog { .. } => {
+                self.start_catalog_control(envelope)
+            }
             DriveRequest::BackupDirectory { .. } => {
                 self.start_preference(envelope, preference::Continuation::Explicit, None, claims)
             }
@@ -800,8 +779,9 @@ impl Owner {
                 self.db.put("pair", &pair.id, &pair)?;
                 Ok("Deletion policy updated".into())
             }
-            DriveRequest::MountCatalog { catalog } => self.mount(&catalog),
-            DriveRequest::UnmountCatalog { catalog } => self.unmount(&catalog),
+            DriveRequest::MountCatalog { .. } | DriveRequest::UnmountCatalog { .. } => {
+                Err("Catalog mounts require retained control admission".into())
+            }
             DriveRequest::Rule {
                 drive,
                 relative,
@@ -922,125 +902,6 @@ impl Owner {
                 writeback: None,
             });
         }
-    }
-    fn mount(&mut self, id: &str) -> Result<String> {
-        if !Path::new("/dev/fuse").exists() {
-            return Err("FUSE is unavailable: /dev/fuse is missing".into());
-        }
-        let mut catalog: Catalog = self.db.get("catalog", id)?.ok_or("Unknown catalog")?;
-        if catalog.pending_redactions != 0 {
-            return Err("Catalog metadata cleanup is pending; unmount its existing view and wait for cleanup before mounting again".into());
-        }
-        if self.children.contains_key(id) {
-            return Err("Catalog is already mounted".into());
-        }
-        let mounts = Root::create(&self.state.join("mounts"))?;
-        mounts.ensure_directory(Path::new(id))?;
-        let path = mounts.path.join(id);
-        if crate::mounts::inventory()?
-            .iter()
-            .any(|mount| mount.target == path)
-        {
-            return Err("Catalog mountpoint is already occupied; unmount it first".into());
-        }
-        let helper = std::env::var_os("LITTLE_CLIP_DRIVE_MOUNT_HELPER")
-            .map(PathBuf::from)
-            .unwrap_or(
-                std::env::current_exe()?
-                    .parent()
-                    .ok_or("Missing executable directory")?
-                    .join("clip-drive-mount"),
-            );
-        if !helper.is_absolute() {
-            return Err("Catalog helper override must be an absolute path".into());
-        }
-        if self.children.len() >= 8 {
-            return Err(
-                "Eight catalog mounts are already active; unmount one before adding another".into(),
-            );
-        }
-        let mut child = CommandRequest::new(helper)
-            .arg(&self.state)
-            .arg(id)
-            .arg(&path)
-            .own_process_group()
-            .die_with_parent()
-            .build_command()
-            .spawn()?;
-        let started = Instant::now();
-        loop {
-            if let Some(mount) = crate::mounts::catalog_mount(&path, id)? {
-                self.db.put("catalog-mount", id, &mount.id)?;
-                break;
-            }
-            if let Some(status) = child.try_wait()? {
-                return Err(format!("Catalog mount helper exited: {status}").into());
-            }
-            if started.elapsed() >= Duration::from_secs(5) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Catalog helper did not publish a ready FUSE mount".into());
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        catalog.mount = Some(path.clone());
-        self.db.put("catalog", id, &catalog)?;
-        self.children.insert(id.into(), child);
-        Ok(format!("Catalog mounted at {}", path.display()))
-    }
-    fn unmount(&mut self, id: &str) -> Result<String> {
-        let mut catalog: Catalog = self.db.get("catalog", id)?.ok_or("Unknown catalog")?;
-        let path = catalog.mount.as_ref().ok_or("Catalog is not mounted")?;
-        let observed = crate::mounts::catalog_mount(path, id)?;
-        if let Some(mount) = &observed
-            && self
-                .db
-                .get::<u64>("catalog-mount", id)?
-                .is_some_and(|recorded| recorded != mount.id)
-        {
-            return Err("Catalog mount identity changed; refusing unmount".into());
-        }
-        let message = if observed.is_none() {
-            if crate::mounts::inventory()?
-                .iter()
-                .any(|mount| mount.target == *path)
-            {
-                return Err(
-                    "Catalog mount ownership changed; refusing to unmount another filesystem"
-                        .into(),
-                );
-            }
-            "Catalog is no longer mounted"
-        } else {
-            let output = CommandRequest::new("fusermount3")
-                .arg("-u")
-                .arg(path)
-                .timeout(Duration::from_secs(10))
-                .own_process_group()
-                .run()
-                .map_err(|e| e.to_string())?;
-            if !output.status.success() {
-                return Err(format!(
-                    "Could not unmount catalog: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )
-                .into());
-            }
-            if self
-                .children
-                .get_mut(id)
-                .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
-            {
-                self.children.remove(id);
-            }
-            "Catalog unmounted"
-        };
-        let transaction = self.db.0.unchecked_transaction()?;
-        self.db.remove("catalog-mount", id)?;
-        catalog.mount = None;
-        self.db.put("catalog", id, &catalog)?;
-        transaction.commit()?;
-        Ok(message.into())
     }
     fn publish_policy(&mut self, fresh: bool) -> Result<()> {
         let input = self
@@ -1192,6 +1053,7 @@ mod tests {
     mod backup_review;
     mod bulk_preparation;
     mod catalog_cleanup;
+    mod catalog_controls;
     mod catalog_limits;
     mod catalog_workers;
     mod configuration;
@@ -1541,6 +1403,17 @@ mod tests {
         drives: Arc<Mutex<Vec<Drive>>>,
     }
     impl TestDrives {
+        fn guest_source(&self) -> Option<tempfile::TempDir> {
+            std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").map(|base| {
+                crate::require_disposable_guest();
+                let media = tempfile::tempdir_in(base).unwrap();
+                let mut selected = self.drives.lock().unwrap();
+                selected[1].mount = Some(media.path().into());
+                selected[1].filesystem =
+                    std::env::var("LITTLE_CLIP_DRIVE_TEST_FILESYSTEM").unwrap();
+                media
+            })
+        }
         pub(super) fn native_source(
             &self,
             relative: &str,

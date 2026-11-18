@@ -562,9 +562,21 @@ unmount operation asynchronously; it is observational and never authorizes a
 write. Policy publication obtains its own fresh inventory and verifies that the
 mount inventory stayed unchanged. Shutdown retains probes until they actually
 exit. Startup initially reports **Checking mounted drives** until its first
-observation completes. Catalog mount cleanup during startup, measurement and
-image/catalog mount controls, and some operation-admission checks still perform
+observation completes. Measurement, image mount controls, and some
+operation-admission checks still perform
 synchronous filesystem work.
+
+Catalog mountpoint preparation, helper readiness, unmount commands and server
+retirement run on one retained catalog-control worker. Requests serialize with
+other catalog controls and metadata maintenance; independent sync remains usable.
+A ready helper remains owned if publishing its mount record fails, and explicit
+unmount can retire it even when that failed transaction saved no mount path.
+Late cancellation does not hide a completed mount or unmount. Shutdown drains
+the active control before retiring its helpers, preserving failed/busy mount
+records for recovery. Initial catalog cleanup visits bounded saved-key pages,
+including records beyond the status window and orphaned owned mounts with no
+published mount path. Unexpected legacy paths or changed mount ownership retain
+their boundary for explicit repair.
 
 Scheduling probes also run on a separate four-slot retained pool. They resolve
 device selectors and observe source/export destination regions without creating
