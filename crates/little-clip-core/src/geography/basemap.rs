@@ -1720,12 +1720,15 @@ fn hsl_to_rgb(h_deg: f32, s: f32, l: f32) -> [f32; 3] {
     [r1 + m, g1 + m, b1 + m]
 }
 
+pub const MIN_MAP_ZOOM: f64 = 0.75;
+pub const MAX_MAP_ZOOM: f64 = 65_536.0;
+
 /// Interactive camera supporting smooth 3D-globe to 2D-map transition.
 #[derive(Clone, Copy, Debug)]
 pub struct GlobeCamera {
     pub center_lat: f64,
     pub center_lon: f64,
-    /// `1.0` = full globe; `>= 4.5` = 2D map; up to `512.0`.
+    /// `1.0` = full globe; `>= 4.5` = 2D map; up to `MAX_MAP_ZOOM`.
     pub zoom: f64,
     pub mode: ProjectionMode,
 }
@@ -1755,8 +1758,8 @@ impl GlobeCamera {
             .abs()
             .max((south - self.center_lat).abs())
             * 2.0;
-        let span = lat_span.max(east - west).max(0.05);
-        self.zoom = (90.0 / span).clamp(1.15, 64.0);
+        let span = lat_span.max(east - west).max(0.001);
+        self.zoom = (90.0 / span).clamp(1.15, MAX_MAP_ZOOM);
     }
 
     /// Returns `1.0` for full 3D globe, `0.0` for flat 2D map, and smoothstepped values between.
@@ -2578,6 +2581,34 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fitting_a_local_walk_uses_the_available_map_area() {
+        let document = crate::geography::Document::gpx(include_bytes!(
+            "../../tests/fixtures/geography/harbor.gpx"
+        ))
+        .unwrap();
+        let mut camera = GlobeCamera::default();
+        camera.fit_bounds(document.geographic_bounds);
+        let positions: Vec<_> = document
+            .features
+            .iter()
+            .flat_map(|f| &f.paths)
+            .flatten()
+            .filter_map(|p| camera.project(p.point.lat, p.point.lon, 800.0, 280.0))
+            .collect();
+        let south = positions
+            .iter()
+            .map(|p| p[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let north = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+        assert!(
+            south - north > 150.0 && south - north < 280.0,
+            "Track spans {} px",
+            south - north
+        );
+        assert!(camera.zoom > 512.0 && camera.zoom <= MAX_MAP_ZOOM);
+    }
 
     #[test]
     fn installed_status_requires_usable_data_and_both_quick_start_layers() {

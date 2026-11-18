@@ -19,7 +19,10 @@ use little_clip_core::{
     config::AppConfig,
     geography::{
         Document, Feature, Kind, MAX_BYTES, Sample,
-        basemap::{BasemapAssets, BasemapStyle, GlobeCamera, ProjectionMode, oilslick_color},
+        basemap::{
+            BasemapAssets, BasemapStyle, GlobeCamera, MAX_MAP_ZOOM, MIN_MAP_ZOOM, ProjectionMode,
+            oilslick_color,
+        },
     },
     jobs::task::Task,
     palette::AppPalette,
@@ -265,7 +268,8 @@ impl Viewer {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll.abs() > 0.01 {
                     let factor = (scroll * 0.004).exp() as f64;
-                    self.camera.zoom = (self.camera.zoom * factor).clamp(0.75, 512.0);
+                    self.camera.zoom =
+                        (self.camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
                 }
             }
 
@@ -696,7 +700,7 @@ impl Viewer {
             }
             if ui
                 .add(
-                    egui::Slider::new(&mut zoom_f32, 0.75..=128.0)
+                    egui::Slider::new(&mut zoom_f32, MIN_MAP_ZOOM as f32..=MAX_MAP_ZOOM as f32)
                         .logarithmic(true)
                         .show_value(false)
                         .text("Zoom"),
