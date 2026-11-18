@@ -91,6 +91,13 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
+        if matches!(
+            envelope.request,
+            DriveRequest::MountImage { .. } | DriveRequest::UnmountImage { .. }
+        ) {
+            self.start_image_control(envelope);
+            return;
+        }
         if matches!(envelope.request, DriveRequest::PruneBackups { .. }) {
             self.start_prune(envelope);
             return;
@@ -229,7 +236,7 @@ impl Owner {
             worker.run()
         });
     }
-    fn launch(
+    pub(super) fn launch(
         &mut self,
         envelope: Envelope,
         drive_id: Option<String>,

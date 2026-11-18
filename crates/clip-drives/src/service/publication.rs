@@ -92,9 +92,6 @@ impl Publication {
     }
     pub(super) fn request(&mut self, state: &Path, input: Input, fresh: bool) -> Result<u64> {
         let changed = self.input.as_ref() != Some(&input);
-        if !changed && self.busy() && !fresh {
-            return Ok(self.epoch);
-        }
         if self.input.is_none() {
             self.previous = kernel_interface::read_content_bounded(
                 &state.join("index-policy.json"),
@@ -103,11 +100,17 @@ impl Publication {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         }
+        if input.metadata_error.is_some() {
+            self.blocked(state, &input)?;
+        }
+        if !changed && self.busy() && !fresh {
+            return Ok(self.epoch);
+        }
         let epoch = self
             .epoch
             .checked_add(1)
             .ok_or("Policy revision exhausted")?;
-        if changed {
+        if changed && input.metadata_error.is_none() {
             self.blocked(state, &input)?;
         }
         self.input = Some(input);

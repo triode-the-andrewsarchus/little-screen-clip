@@ -38,6 +38,7 @@ mod admission;
 mod background;
 mod catalog_mounts;
 mod configuration;
+mod image_controls;
 mod lifetime;
 mod maintenance;
 mod partition;
@@ -602,7 +603,10 @@ impl Owner {
         // State measurements and retirement do not need a source-drive pin.
         if matches!(
             envelope.request,
-            DriveRequest::PruneBackups { .. } | DriveRequest::MeasureStorage
+            DriveRequest::PruneBackups { .. }
+                | DriveRequest::MeasureStorage
+                | DriveRequest::MountImage { .. }
+                | DriveRequest::UnmountImage { .. }
         ) {
             self.start_background(envelope, None);
             return;
@@ -727,8 +731,9 @@ impl Owner {
             DriveRequest::Eject { .. } => {
                 Err("Eject must use retained pre-unmount admission".into())
             }
-            DriveRequest::MountImage { backup } => backup::mount_image(&self.db, &backup),
-            DriveRequest::UnmountImage { backup } => backup::unmount_image(&self.db, &backup),
+            DriveRequest::MountImage { .. } | DriveRequest::UnmountImage { .. } => {
+                Err("Image mounts require retained control admission".into())
+            }
             DriveRequest::PruneBackups { .. } => {
                 Err("Backup retirement requires retained worker admission".into())
             }
@@ -919,6 +924,7 @@ impl Owner {
     }
     fn policy_input(&self) -> Result<publication::Input> {
         let transaction = self.db.0.unchecked_transaction()?;
+        image_controls::policy_ready(&self.db)?;
         let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
             self.partition
@@ -1059,6 +1065,7 @@ mod tests {
     mod configuration;
     mod event_loss;
     mod guest_ram;
+    mod image_controls;
     mod maintenance;
     mod managed_views;
     mod native_images;
@@ -1403,6 +1410,25 @@ mod tests {
         drives: Arc<Mutex<Vec<Drive>>>,
     }
     impl TestDrives {
+        fn saved_image(&self) -> DriveBackup {
+            let state = Root::create(&self.temp.path().join("state")).unwrap();
+            let db = Store::open(&state.path.join("drives.sqlite")).unwrap();
+            let destination = Root::create(&self.temp.path().join("saved-images")).unwrap();
+            let input = File::open(self.temp.path().join("large/large-sparse")).unwrap();
+            let mut drive = self.drives.lock().unwrap()[1].clone();
+            drive.mount = None;
+            drive.capacity = input.metadata().unwrap().len();
+            backup::image_from(
+                &db,
+                &drive,
+                &destination,
+                &input,
+                &AtomicBool::new(false),
+                |_, _| Ok(()),
+                || Ok(()),
+            )
+            .unwrap()
+        }
         fn guest_source(&self) -> Option<tempfile::TempDir> {
             std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").map(|base| {
                 crate::require_disposable_guest();
@@ -1473,6 +1499,8 @@ mod tests {
             (service, id, entered, release)
         }
         fn image_authority(&self) -> partition::Authority {
+            let image: backup::ImageAction =
+                Arc::new(|_, _, _| Err("owned image mount authorization declined".into()));
             let action = |mounted: bool| -> partition::FilesystemAction {
                 let drives = self.drives.clone();
                 Arc::new(move |drive| {
@@ -1490,6 +1518,10 @@ mod tests {
                 unmount: action(false),
                 mount: action(true),
                 open_image: Arc::new(|_, _| Err("owned image authorization declined".into())),
+                images: backup::ImageAuthority {
+                    mount: image.clone(),
+                    unmount: image,
+                },
             }
         }
         fn held_unmount_authority(

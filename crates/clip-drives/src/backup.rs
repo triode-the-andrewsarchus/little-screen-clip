@@ -20,7 +20,11 @@ use std::{
 };
 
 mod collection;
+mod image_control;
 mod image_mount;
+pub(crate) use image_control::{
+    ImageAction, ImageAuthority, ImagePhase, KIND as IMAGE_CONTROL_KIND,
+};
 pub(crate) use image_mount::ImageMount;
 mod metadata;
 mod publication;
@@ -394,27 +398,27 @@ fn system_connection() -> Result<zbus::blocking::Connection> {
         .build()
         .map_err(|e| e.to_string().into())
 }
+fn udisks_proxy<'a>(
+    connection: &'a zbus::blocking::Connection,
+    path: &'a str,
+    interface: &'a str,
+) -> Result<zbus::blocking::Proxy<'a>> {
+    zbus::blocking::Proxy::new(connection, "org.freedesktop.UDisks2", path, interface)
+        .map_err(|error| error.to_string().into())
+}
 fn udisks_path(drive: &Drive) -> Result<String> {
     let connection = system_connection()?;
-    let manager = zbus::blocking::Proxy::new(
+    let manager = udisks_proxy(
         &connection,
-        "org.freedesktop.UDisks2",
         "/org/freedesktop/UDisks2/Manager",
         "org.freedesktop.UDisks2.Manager",
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
     let devices: Vec<zbus::zvariant::OwnedObjectPath> = manager
         .call("GetBlockDevices", &(options,))
         .map_err(|e| e.to_string())?;
     for path in devices {
-        let proxy = zbus::blocking::Proxy::new(
-            &connection,
-            "org.freedesktop.UDisks2",
-            path.as_str(),
-            "org.freedesktop.UDisks2.Block",
-        )
-        .map_err(|e| e.to_string())?;
+        let proxy = udisks_proxy(&connection, path.as_str(), "org.freedesktop.UDisks2.Block")?;
         let device: Vec<u8> = proxy.get_property("Device").map_err(|e| e.to_string())?;
         if device.strip_suffix(&[0]).unwrap_or(&device)
             == drive.device.as_os_str().as_encoded_bytes()
@@ -430,13 +434,7 @@ pub(crate) type ImageOpener =
 pub(crate) fn open_image(drive: &Drive, source: &crate::device::Source) -> Result<File> {
     let connection = system_connection()?;
     let path = udisks_path(drive)?;
-    let proxy = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.UDisks2",
-        path.as_str(),
-        "org.freedesktop.UDisks2.Block",
-    )
-    .map_err(|e| e.to_string())?;
+    let proxy = udisks_proxy(&connection, path.as_str(), "org.freedesktop.UDisks2.Block")?;
     let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
     source.validate()?;
     let descriptor: zbus::zvariant::OwnedFd = proxy
@@ -1241,120 +1239,6 @@ mod btrfs_tests {
         assert_eq!(fs::metadata(second.path.join("alias")).unwrap().nlink(), 2);
         publication::check_manifest(&third, &AtomicBool::new(false)).unwrap();
     }
-}
-
-pub(crate) fn mount_image(db: &Store, id: &str) -> Result<String> {
-    let mut backup: Backup = db.get("backup", id)?.ok_or("Unknown backup version")?;
-    if backup.kind != BackupKind::Image {
-        return Err("This backup is a file tree, not an image".into());
-    }
-    if backup.mount.is_some() || backup.loop_object.is_some() {
-        return Err("Image already has a loop mapping; unmount it before retrying".into());
-    }
-    let file = kernel_interface::open_content(&backup.path, false)?;
-    let source = little_clip_core::file_source::FileSource::capture_file(&file)?;
-    verify_image(&backup, &file)?;
-    let connection = system_connection()?;
-    let manager = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.UDisks2",
-        "/org/freedesktop/UDisks2/Manager",
-        "org.freedesktop.UDisks2.Manager",
-    )
-    .map_err(|e| e.to_string())?;
-    let mut options = HashMap::new();
-    options.insert("read-only", zbus::zvariant::Value::from(true));
-    let object: zbus::zvariant::OwnedObjectPath = manager
-        .call("LoopSetup", &(zbus::zvariant::Fd::from(&file), options))
-        .map_err(|e| e.to_string())?;
-    backup.loop_object = Some(object.to_string());
-    let result = (|| -> Result<String> {
-        db.put("backup", id, &backup)?;
-        let filesystem = zbus::blocking::Proxy::new(
-            &connection,
-            "org.freedesktop.UDisks2",
-            object.as_str(),
-            "org.freedesktop.UDisks2.Filesystem",
-        )
-        .map_err(|e| e.to_string())?;
-        let mut options = HashMap::new();
-        options.insert(
-            "options",
-            zbus::zvariant::Value::from("ro,nosuid,nodev,noexec"),
-        );
-        let mounted: String = filesystem
-            .call("Mount", &(options,))
-            .map_err(|e| e.to_string())?;
-        // Retain the actual successful mount even if later validation/publication
-        // fails. Cleanup must use this owner, not reload an older partial record.
-        backup.mount = Some(mounted.clone().into());
-        let root = Root::open(Path::new(&mounted))?;
-        let observation = ImageMount::capture(&backup, &root)?;
-        source.check_file(&file)?;
-        let transaction = db.0.unchecked_transaction()?;
-        db.put("image-mount", id, &observation)?;
-        db.put("backup", id, &backup)?;
-        transaction.commit()?;
-        Ok(format!("Image mounted read-only at {mounted}"))
-    })();
-    result.or_else(|error| {
-        // A failed admission may already own a mounted filesystem. Preserve
-        // that fact for retry when cleanup is busy, but still attempt cleanup
-        // using the retained owner if the journal itself is unavailable.
-        let owner_error = db.put("backup", id, &backup).err();
-        retire_image(db, backup).map_err(|cleanup| {
-            let journal = owner_error
-                .map(|error| format!("; mounted-image recovery record also failed: {error}"))
-                .unwrap_or_default();
-            crate::Error::from(format!(
-                "{error}; image cleanup also failed: {cleanup}{journal}"
-            ))
-        })?;
-        Err(error)
-    })
-}
-pub(crate) fn unmount_image(db: &Store, id: &str) -> Result<String> {
-    retire_image(db, db.get("backup", id)?.ok_or("Unknown backup version")?)
-}
-fn retire_image(db: &Store, mut backup: Backup) -> Result<String> {
-    let id = backup.id.clone();
-    let object = backup
-        .loop_object
-        .clone()
-        .ok_or("Image has no managed loop mapping")?;
-    let connection = system_connection()?;
-    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-    if backup.mount.is_some() {
-        let filesystem = zbus::blocking::Proxy::new(
-            &connection,
-            "org.freedesktop.UDisks2",
-            object.as_str(),
-            "org.freedesktop.UDisks2.Filesystem",
-        )
-        .map_err(|e| e.to_string())?;
-        filesystem
-            .call::<_, _, ()>("Unmount", &(options,))
-            .map_err(|e| e.to_string())?;
-        backup.mount = None;
-        db.put("backup", &id, &backup)?;
-    }
-    let proxy = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.UDisks2",
-        object.as_str(),
-        "org.freedesktop.UDisks2.Loop",
-    )
-    .map_err(|e| e.to_string())?;
-    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-    proxy
-        .call::<_, _, ()>("Delete", &(options,))
-        .map_err(|e| e.to_string())?;
-    backup.loop_object = None;
-    let transaction = db.0.unchecked_transaction()?;
-    db.remove("image-mount", &id)?;
-    db.put("backup", &id, &backup)?;
-    transaction.commit()?;
-    Ok("Read-only backup image unmounted".into())
 }
 
 fn verify_image(backup: &Backup, file: &File) -> Result<()> {

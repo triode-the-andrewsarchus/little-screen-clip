@@ -333,11 +333,34 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         .unwrap();
     assert!(loops.status.success());
     assert!(loops.stdout.is_empty(), "{}", loops.stdout_lossy());
-    finish(
+    image_state
+        .0
+        .execute_batch(
+            "CREATE TRIGGER image_ready_checkpoint_fault BEFORE UPDATE ON entities
+         WHEN NEW.kind='image-control' AND json_extract(NEW.json,'$.phase')='Ready'
+         BEGIN SELECT RAISE(FAIL,'ready image checkpoint fault'); END;",
+        )
+        .unwrap();
+    let ready = finish(
         &service,
         DriveRequest::MountImage {
             backup: first.id.clone(),
         },
+    );
+    image_state
+        .0
+        .execute_batch("DROP TRIGGER image_ready_checkpoint_fault")
+        .unwrap();
+    assert!(
+        ready.message.contains("ready image checkpoint fault"),
+        "{}",
+        ready.message
+    );
+    assert!(
+        image_state
+            .get::<serde_json::Value>(backup::IMAGE_CONTROL_KIND, &first.id)
+            .unwrap()
+            .is_none()
     );
     let mounted_backup = status(&service)
         .backups
@@ -447,11 +470,55 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
             .raw_os_error(),
         Some(libc::EROFS)
     );
-    finish(
+    let busy = File::open(mounted.join("seconds.txt")).unwrap();
+    let refused = completed(
         &service,
         DriveRequest::UnmountImage {
             backup: first.id.clone(),
         },
+    );
+    assert_eq!(refused.state, "failed", "{}", refused.message);
+    assert!(
+        refused.message.to_lowercase().contains("busy"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        image_state
+            .get::<serde_json::Value>(backup::IMAGE_CONTROL_KIND, &first.id)
+            .unwrap()
+            .is_none()
+    );
+    observed.validate(&Root::open(mounted).unwrap()).unwrap();
+    drop(busy);
+    image_state
+        .0
+        .execute_batch(
+            "CREATE TRIGGER image_retired_checkpoint_fault BEFORE UPDATE ON entities
+         WHEN NEW.kind='image-control' AND json_extract(NEW.json,'$.phase')='Retired'
+         BEGIN SELECT RAISE(FAIL,'retired image checkpoint fault'); END;",
+        )
+        .unwrap();
+    let retired = finish(
+        &service,
+        DriveRequest::UnmountImage {
+            backup: first.id.clone(),
+        },
+    );
+    image_state
+        .0
+        .execute_batch("DROP TRIGGER image_retired_checkpoint_fault")
+        .unwrap();
+    assert!(
+        retired.message.contains("retired image checkpoint fault"),
+        "{}",
+        retired.message
+    );
+    assert!(
+        image_state
+            .get::<serde_json::Value>(backup::IMAGE_CONTROL_KIND, &first.id)
+            .unwrap()
+            .is_none()
     );
     assert!(
         image_state

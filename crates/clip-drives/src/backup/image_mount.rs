@@ -43,6 +43,17 @@ impl ImageMount {
                 && backup.kind == BackupKind::Image
         }))
     }
+    pub(crate) fn validate_view(db: &Store, backup: &Backup) -> Result<()> {
+        let observed = Self::load(db, backup)?
+            .ok_or("Image mapping has no current mount lifetime evidence; retained for recovery")?;
+        let root = Root::open(
+            backup
+                .mount
+                .as_deref()
+                .ok_or("Image has no mounted view; lifetime recovery is required")?,
+        )?;
+        observed.validate(&root)
+    }
     pub(crate) fn validate(&self, root: &Root) -> Result<()> {
         if self.path != root.path {
             return Err("Backup image mount context is stale".into());

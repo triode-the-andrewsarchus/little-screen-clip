@@ -125,7 +125,7 @@ fn protected(db: &Store, backup: &Backup) -> Result<bool> {
         128,
     )?;
     let publishing: bool = db.0.query_row(
-        "SELECT EXISTS(SELECT 1 FROM entities WHERE kind='backup-publication' AND id=?1)",
+        "SELECT EXISTS(SELECT 1 FROM entities WHERE kind IN ('backup-publication','image-control') AND id=?1)",
         [&backup.id],
         |row| row.get(0),
     )?;
@@ -149,7 +149,10 @@ fn withdraw(db: &Store, version: &Backup, parent: &Root, cancel: &AtomicBool) ->
     intent.parent()?.validate()?;
     let transaction = db.0.unchecked_transaction()?;
     if protected(db, version)? {
-        return Err("A current, publishing or mounted backup cannot be retired".into());
+        return Err(
+            "A current, publishing, mounted or unresolved image-control backup cannot be retired"
+                .into(),
+        );
     }
     check_registered(db, version)?;
     cancelled(cancel)?;

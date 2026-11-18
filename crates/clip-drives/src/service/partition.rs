@@ -10,6 +10,7 @@ pub(super) struct Authority {
     pub unmount: FilesystemAction,
     pub mount: FilesystemAction,
     pub open_image: backup::ImageOpener,
+    pub images: backup::ImageAuthority,
 }
 impl Default for Authority {
     fn default() -> Self {
@@ -17,6 +18,7 @@ impl Default for Authority {
             unmount: Arc::new(unmount),
             mount: Arc::new(|drive| filesystem_action(drive, true)),
             open_image: Arc::new(backup::open_image),
+            images: Default::default(),
         }
     }
 }

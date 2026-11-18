@@ -52,7 +52,7 @@ impl Cleanup {
         // postpone revisiting an older, formerly reader-blocked intent.
         if self.through.is_none() {
             self.through = db.0.query_row(
-                "SELECT max(rowid) FROM entities WHERE kind IN ('catalog-redaction','catalog-capture','backup-publication','backup-prune')",
+                "SELECT max(rowid) FROM entities WHERE kind IN ('catalog-redaction','catalog-capture','backup-publication','backup-prune','image-control')",
                 [],
                 |row| row.get(0),
             )?;
@@ -61,7 +61,7 @@ impl Cleanup {
             return Ok(None);
         };
         let next: Option<(i64, String, Option<String>)> = db.0.query_row(
-            "SELECT rowid,kind,CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind IN ('catalog-redaction','catalog-capture','backup-publication','backup-prune') AND rowid>?1 AND rowid<=?2 ORDER BY rowid LIMIT 1",
+            "SELECT rowid,kind,CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind IN ('catalog-redaction','catalog-capture','backup-publication','backup-prune','image-control') AND rowid>?1 AND rowid<=?2 ORDER BY rowid LIMIT 1",
             rusqlite::params![self.after, through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         let Some((rowid, kind, id)) = next else {
@@ -98,6 +98,9 @@ fn run(state: Arc<Root>, kind: String, id: String, cancel: Arc<AtomicBool>) -> R
     }
     state.validate()?;
     let db = Store::existing(&state.path.join("drives.sqlite"), false)?;
+    if kind == image_controls::KIND {
+        return image_controls::recover(&db, &id, &cancel);
+    }
     if matches!(kind.as_str(), "backup-publication" | "backup-prune") {
         return backup::recover_record(&db, &kind, &id, &cancel);
     }

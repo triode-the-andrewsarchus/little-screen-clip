@@ -245,6 +245,28 @@ File and image backups validate their selected destination against managed stora
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
 
+Read-only image mount/unmount controls use the retained backup workers. Slow
+UDisks authorization or filesystem calls retain their operation until the actual
+reply, while configuration and unrelated folder synchronization stay available.
+Cancellation before mounting cleans up a recorded loop mapping; once a
+mount or retirement completes, Jobs preserves that completed result, including
+any warning about recording its checkpoint.
+
+UDisks assigns the image's mount location during its call. Before starting that
+call, the daemon saves a local image-control journal and pauses optional content
+indexing globally until it can establish the final location or confirm cleanup.
+An uncertain reply keeps that exclusion, protects the backup from retention and
+adds a recovery notice in Jobs. Restart reconciles provable checkpoints without
+replaying UDisks calls. Explicit unmount requires current mount-lifetime evidence;
+an unknown or replaced mapping remains protected for recovery rather than being
+deleted using an old loop-object name.
+
+These journals live only in the local `drives.sqlite` registry. Its version advances
+to 3 on first use of an image control, so older daemons/helpers refuse it instead
+of overlooking an unresolved mount. Saved catalog databases remain version 2.
+Rebuild and install the daemon and its helpers together. The removable filesystem
+receives no service metadata from this mechanism.
+
 File-backup and catalog root preparation shares the four retained scheduling
 workers. Fresh inventory, reviewed-root validation, destination creation, managed
 storage checks and space admission happen there before copy admission. The
