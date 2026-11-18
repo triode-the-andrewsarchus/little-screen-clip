@@ -583,7 +583,8 @@ pub(in crate::file_manager) struct Viewer {
     panel_rasters: HashMap<(String, String), Option<Arc<image::RgbaImage>>>,
     panel_textures: HashMap<(String, String), Option<TextureHandle>>,
     visible_buf: Vec<(usize, (String, String), Rect)>,
-    auto_capture_pending: bool,
+    has_local_rack: bool,
+    missing_local_plugins: usize,
     screenshot_job: Option<ScreenshotJob>,
     screenshot_status: Option<String>,
 }
@@ -612,8 +613,7 @@ impl Viewer {
                 unique_modules.push(key);
             }
         }
-        let auto_capture_pending =
-            !cfg!(test) && count_missing_local_screenshot_plugins(&unique_modules) > 0;
+        let has_local_rack = local_rack_available();
         let mut viewer = Self {
             summary,
             zoom: 0.65,
@@ -623,7 +623,8 @@ impl Viewer {
             panel_rasters: HashMap::new(),
             panel_textures: HashMap::new(),
             visible_buf: Vec::new(),
-            auto_capture_pending,
+            has_local_rack,
+            missing_local_plugins: 0,
             screenshot_job: None,
             screenshot_status: None,
         };
@@ -636,6 +637,11 @@ impl Viewer {
         self.panel_textures.clear();
         self.summary.rack_dark = build_rack_rail_layout(&self.summary.analysis, true);
         self.summary.rack_light = build_rack_rail_layout(&self.summary.analysis, false);
+        self.missing_local_plugins = if self.has_local_rack {
+            count_missing_local_screenshot_plugins(&self.unique_modules)
+        } else {
+            0
+        };
 
         for (plugin, model) in &self.unique_modules {
             let rgba = resolve_panel(plugin, model).map(|panel| Arc::clone(&panel.rgba));
@@ -784,10 +790,6 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette) {
         let dark = ui.visuals().dark_mode;
-        if self.auto_capture_pending {
-            self.auto_capture_pending = false;
-            self.start_patch_screenshot_job(ui.ctx());
-        }
         self.poll_screenshot_job();
 
         StudioShell::new("VCV Rack", Icon::Midi, palette, close).render_header(ui, |ui| {
@@ -812,7 +814,7 @@ impl Viewer {
                 self.screenshot_status = None;
                 self.reload_panels();
             }
-            if local_rack_available() {
+            if self.has_local_rack {
                 ui.separator();
                 if let Some(job) = &self.screenshot_job {
                     let msg = if job.total > 0 {
@@ -834,15 +836,26 @@ impl Viewer {
                         job.cancel.store(true, Ordering::Relaxed);
                     }
                 } else {
-                    let missing = count_missing_local_screenshot_plugins(&self.unique_modules);
-                    if missing > 0
+                    if self.missing_local_plugins > 0
                         && ui
-                            .button(format!("Generate Patch Screenshots ({missing})"))
+                            .button(format!(
+                                "Generate Patch Screenshots ({})",
+                                self.missing_local_plugins
+                            ))
+                            .on_hover_text(
+                                "Opens VCV Rack briefly to render local PNGs for missing patch plugins",
+                            )
                             .clicked()
                     {
                         self.start_patch_screenshot_job(ui.ctx());
                     }
-                    if ui.button("Generate All Local Screenshots").clicked() {
+                    if ui
+                        .button("Generate All Local Screenshots")
+                        .on_hover_text(
+                            "Runs VCV Rack -t 4 in batches to capture all installed plugins without screenshots",
+                        )
+                        .clicked()
+                    {
                         self.start_all_plugins_screenshot_job(ui.ctx());
                     }
                     if let Some(status) = &self.screenshot_status {

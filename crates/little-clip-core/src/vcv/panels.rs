@@ -659,7 +659,7 @@ fn run_rack_screenshot_batch(
 
     let live_licenses = user_dir.join("licenses");
     if live_licenses.is_dir() {
-        let _ = create_dir_link(&live_licenses, &staging.path().join("licenses"));
+        let _ = create_symlink(&live_licenses, &staging.path().join("licenses"));
     }
 
     let plugins_subdir_name = env
@@ -677,6 +677,16 @@ fn run_rack_screenshot_batch(
         };
     }
 
+    // Seed existing Core/Fundamental screenshots as symlinks so Rack skips
+    // re-rendering all 51 built-in modules during third-party plugin batches.
+    let staging_shots_dir = staging.path().join("screenshots");
+    for builtin in ["Core", "Fundamental"] {
+        seed_existing_screenshot_links(
+            &dest_screenshots.join(builtin),
+            &staging_shots_dir.join(builtin),
+        );
+    }
+
     for (slug, maybe_dir) in plugin_entries {
         if slug == "Core" {
             continue;
@@ -684,7 +694,7 @@ fn run_rack_screenshot_batch(
         if let Some(src_dir) = maybe_dir
             && src_dir.is_dir()
         {
-            let _ = create_dir_link(src_dir, &staging_plugins_dir.join(slug));
+            let _ = create_symlink(src_dir, &staging_plugins_dir.join(slug));
         }
     }
 
@@ -734,7 +744,7 @@ fn run_rack_screenshot_batch(
     }
 }
 
-fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path) -> usize {
+pub(crate) fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path) -> usize {
     let Ok(plugin_entries) = std::fs::read_dir(staging_shots) else {
         return 0;
     };
@@ -758,7 +768,11 @@ fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path) -> usize 
         let dst_plugin_dir = dest_shots.join(&plugin_slug);
         for file_entry in model_entries.flatten() {
             let src_file = file_entry.path();
-            if !src_file.is_file() {
+            // Skip seeded symlinks; only copy freshly generated regular PNG files.
+            let Ok(meta) = std::fs::symlink_metadata(&src_file) else {
+                continue;
+            };
+            if !meta.file_type().is_file() {
                 continue;
             }
             let Some(file_name) = file_entry.file_name().to_str().map(str::to_string) else {
@@ -767,9 +781,6 @@ fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path) -> usize 
             if !file_name.to_ascii_lowercase().ends_with(".png") {
                 continue;
             }
-            let Ok(meta) = std::fs::metadata(&src_file) else {
-                continue;
-            };
             if meta.len() == 0 || meta.len() > MAX_PANEL_IMAGE_BYTES as u64 {
                 continue;
             }
@@ -820,16 +831,38 @@ pub(crate) fn write_staging_settings_json(src: &Path, dst: &Path) -> Result<(), 
     std::fs::write(dst, out).map_err(|e| format!("write staging settings: {e}"))
 }
 
+pub(crate) fn seed_existing_screenshot_links(src_dir: &Path, dst_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(src_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.is_file() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().ends_with(".png") {
+            continue;
+        }
+        if std::fs::create_dir_all(dst_dir).is_err() {
+            return;
+        }
+        let _ = create_symlink(&src, &dst_dir.join(name));
+    }
+}
+
 #[cfg(unix)]
-fn create_dir_link(src: &Path, dst: &Path) -> std::io::Result<()> {
+fn create_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
 
 #[cfg(not(unix))]
-fn create_dir_link(_src: &Path, _dst: &Path) -> std::io::Result<()> {
+fn create_symlink(_src: &Path, _dst: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "directory symlinks unavailable",
+        "symlinks unavailable",
     ))
 }
 

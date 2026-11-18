@@ -574,5 +574,20 @@ mod tests {
             Some(&sys_dir),
             std::slice::from_ref(&shots_dir),
         ));
+
+        // Seeded symlinks are preserved in staging without being re-copied; regular PNGs copy atomically.
+        let staging_shots = tmp.path().join("staging_shots");
+        panels::seed_existing_screenshot_links(
+            &shots_dir.join("MyPlugin"),
+            &staging_shots.join("MyPlugin"),
+        );
+        std::fs::create_dir_all(staging_shots.join("NewPlugin")).unwrap();
+        std::fs::write(staging_shots.join("NewPlugin/Osc.png"), b"png-bytes").unwrap();
+        let copied = panels::copy_generated_screenshots(&staging_shots, &shots_dir);
+        assert_eq!(copied, 1);
+        assert_eq!(
+            std::fs::read(shots_dir.join("NewPlugin/Osc.png")).unwrap(),
+            b"png-bytes"
+        );
     }
 }
