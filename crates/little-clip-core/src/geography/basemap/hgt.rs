@@ -37,14 +37,15 @@ pub fn read_stored(file: &std::fs::File) -> io::Result<(Vec<u8>, crate::file_sou
 /// Returns errors for invalid dimensions, corrupt frames or excessive output/workspace.
 pub fn decode(bytes: Vec<u8>, compressed: bool) -> io::Result<Vec<u8>> {
     let result = if compressed {
-        let mut decoder = zstd::stream::read::Decoder::new(bytes.as_slice())?;
-        // 32 MiB bounds decoder workspace even for malicious frame headers.
-        decoder.window_log_max(25)?;
-        let mut result = Vec::new();
-        decoder
-            .take(MAX_BYTES as u64 + 1)
-            .read_to_end(&mut result)?;
-        result
+        let size = zstd::zstd_safe::get_frame_content_size(&bytes)
+            .map_err(|_| io::Error::other("Invalid terrain frame header"))?
+            .and_then(|size| usize::try_from(size).ok())
+            .filter(|size| hgt_samples(*size).is_some())
+            .ok_or_else(|| io::Error::other("Terrain frame must declare valid HGT dimensions"))?;
+        // Frames written by encode() declare their exact size. Decode straight
+        // into that allocation, without a streaming window or growing/copying
+        // an output buffer. The destination itself bounds history and output.
+        zstd::bulk::Decompressor::new()?.decompress(&bytes, size)?
     } else {
         bytes
     };
@@ -124,7 +125,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut encoded = Vec::new();
         encode(&mut raw.as_slice(), &mut encoded, 8, &cancel).unwrap();
-        assert_eq!(decode(encoded.clone(), true).unwrap(), raw);
+        let decoded = decode(encoded.clone(), true).unwrap();
+        assert_eq!(decoded, raw);
+        let unknown_size = zstd::encode_all(raw.as_slice(), 1).unwrap();
+        assert!(decode(unknown_size, true).is_err());
         for end in [0, 1, encoded.len() - 1] {
             assert!(decode(encoded[..end].to_vec(), true).is_err());
         }
@@ -136,7 +140,7 @@ mod tests {
         cancel.store(true, Ordering::Relaxed);
         assert!(encode(&mut raw.as_slice(), Vec::new(), 8, &cancel).is_err());
         // A valid compressed frame cannot expand beyond the terrain memory cap.
-        let oversized = zstd::encode_all(&vec![0; MAX_BYTES + 2][..], 1).unwrap();
+        let oversized = zstd::bulk::compress(&vec![0; MAX_BYTES + 2], 1).unwrap();
         assert!(decode(oversized, true).is_err());
     }
     #[test]

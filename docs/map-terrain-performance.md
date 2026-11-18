@@ -79,8 +79,9 @@ additional on-disk resolution copies are generated.
 
 New NASADEM and Viewfinder downloads stream their HGT member directly into a
 checksummed, size-tagged `.hgt.zst` frame. ZIP CRC and exact expanded size are
-validated before atomic installation. Runtime reads limit both decoded output
-and Zstandard window size, then retain decoded bytes in the bounded HGT cache.
+validated before atomic installation. Runtime reads require a valid, bounded frame size and decode directly into that
+one output allocation, using it for history instead of a separate streaming
+window. Decoded bytes are retained in the bounded HGT cache.
 Disk-budget planning uses conservative uncompressed sizes, and extraction charges
 the actual installed byte count.
 
@@ -126,3 +127,10 @@ image-diff test passes in isolation and all 843 studio tests pass serially.
 The migration example additionally has focused interruption/resume and replaced
 source retirement tests, and was exercised with six round-trip-verified files
 on the actual CIFS mount before conversion of the installed dataset.
+
+A final mixed raw/compressed Omaha check during the background bulk conversion
+reported 1.46 s inventory, 2.44 s first preparation (1.27 s in guarded reads),
+and 1.19 s second preparation (0.27 s in reads). HGT decoding took 0.10/0.07 s.
+These are under concurrent NAS traffic, unlike the earlier quiet CPU comparison;
+after removing the CPU costs, cold storage latency is a meaningful remaining
+part of loading. Conversion is deliberately run at lower CPU priority.
