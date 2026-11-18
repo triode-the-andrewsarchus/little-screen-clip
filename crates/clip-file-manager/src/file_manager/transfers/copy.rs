@@ -330,6 +330,7 @@ fn copy_file(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .bytes += bytes;
+            Ok(())
         },
     )?;
     preserve_metadata(&output, metadata)?;

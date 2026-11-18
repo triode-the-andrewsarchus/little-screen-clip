@@ -18,6 +18,7 @@ pub struct CopyStats {
 /// access and preserves equal ranges of a reflink clone. The caller owns destination
 /// admission, metadata, synchronization and atomic installation. An expected digest
 /// is checked during streaming, before the caller can publish the staged output.
+/// A progress failure stops the copy before another chunk is written.
 ///
 /// # Errors
 /// Returns cancellation, changed-source, seek, read or write failures.
@@ -27,7 +28,7 @@ pub fn copy_checked(
     cancelled: &AtomicBool,
     delta: bool,
     expected_sha256: Option<&str>,
-    mut progress: impl FnMut(u64),
+    mut progress: impl FnMut(u64) -> Result<(), String>,
 ) -> Result<CopyStats, String> {
     if cancelled.load(Ordering::Relaxed) {
         return Err("Copy cancelled".into());
@@ -62,7 +63,7 @@ pub fn copy_checked(
             stats.written += amount as u64;
         }
         stats.read += amount as u64;
-        progress(amount as u64);
+        progress(amount as u64)?;
     }
     output.set_len(size).map_err(|e| e.to_string())?;
     source.check_file(input)?;
@@ -94,7 +95,7 @@ mod tests {
             &AtomicBool::new(false),
             true,
             None,
-            |_| {},
+            |_| Ok(()),
         )
         .unwrap();
         assert_eq!(stats.read, 512 * 1024);
@@ -103,6 +104,31 @@ mod tests {
         let mut actual = Vec::new();
         output.read_to_end(&mut actual).unwrap();
         assert_eq!(actual, bytes);
+    }
+    #[test]
+    fn progress_failure_stops_before_the_next_payload_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source");
+        std::fs::write(&path, vec![0x5a; 1024 * 1024]).unwrap();
+        let mut input = crate::file_source::open_regular_file(&path, false).unwrap();
+        let mut output = tempfile::tempfile().unwrap();
+        let mut calls = 0;
+        let error = copy_checked(
+            &mut input,
+            &mut output,
+            &AtomicBool::new(false),
+            false,
+            None,
+            |_| {
+                calls += 1;
+                Err("local receipt failed".into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "local receipt failed");
+        assert_eq!(calls, 1);
+        assert_eq!(output.metadata().unwrap().len(), 256 * 1024);
+        assert_eq!(std::fs::read(path).unwrap(), vec![0x5a; 1024 * 1024]);
     }
     #[test]
     fn cancelled_copy_never_claims_completion() {
@@ -117,7 +143,7 @@ mod tests {
                 &AtomicBool::new(true),
                 false,
                 None,
-                |_| {}
+                |_| Ok(())
             )
             .is_err()
         );

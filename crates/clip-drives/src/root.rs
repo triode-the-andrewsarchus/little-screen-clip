@@ -448,7 +448,7 @@ impl Root {
             cancel,
             cloned,
             source_hash,
-            |_| {},
+            |_| Ok(()),
         )?;
         if let Some(expected) = expected
             && self.digest(target, u64::MAX, cancel)? != expected
