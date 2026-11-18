@@ -1612,6 +1612,7 @@ pub struct AssetStatus {
     pub has_grwl_masks: bool,
     pub has_gshhg: bool,
     pub has_gebco: bool,
+    pub has_full_gebco: bool,
     pub has_land_cover: bool,
     pub has_hydrorivers: bool,
     pub local_hgt_count: usize,
@@ -1638,6 +1639,11 @@ impl BasemapAssets {
             has_grwl_masks: self.grwl_masks.is_some(),
             has_gshhg: !self.coastlines.is_empty(),
             has_gebco: self.global_dem.is_some() || self.cog_dem.is_some(),
+            has_full_gebco: self.cog_dem.as_ref().is_some_and(|cog| {
+                cog.levels
+                    .iter()
+                    .any(|level| level.width >= 86400 && level.height >= 43200)
+            }),
             has_land_cover: self.land_cover.is_some(),
             has_hydrorivers: self.rivers.as_ref().is_some_and(|r| !r.segments.is_empty()),
             local_hgt_count: self.terrain_tiles.sources.len(),
@@ -1706,8 +1712,8 @@ impl BasemapAssets {
             return Self::default();
         }
         let global_dem = load_global_dem(assets_dir);
-        let cog_dem = find_first_with_ext(&assets_dir.join("gebco"), &["tif", "tiff"])
-            .and_then(|p| CogDemPyramid::open(&p));
+        let cog_dem =
+            find_dem_file(&assets_dir.join("gebco")).and_then(|p| CogDemPyramid::open(&p));
         if stopped() {
             return Self::default();
         }
@@ -2201,6 +2207,35 @@ fn find_first_with_ext(dir: &Path, exts: &[&str]) -> Option<PathBuf> {
     None
 }
 
+/// Prefer the most detailed source, including when a preview remains installed.
+fn find_dem_file(dir: &Path) -> Option<PathBuf> {
+    let directory = AssetDirectory::open(dir).ok()?;
+    fs::read_dir(directory.path())
+        .ok()?
+        .take(65_536)
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let path = dir.join(&name);
+            let ext = path.extension()?.to_str()?;
+            if !["tif", "tiff"]
+                .iter()
+                .any(|want| ext.eq_ignore_ascii_case(want))
+            {
+                return None;
+            }
+            let file = directory.open_file(&name).ok()?;
+            let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file)).ok()?;
+            let (width, height) = decoder.dimensions().ok()?;
+            if !matches!(decoder.colortype().ok(), Some(tiff::ColorType::Gray(_))) {
+                return None;
+            }
+            Some((u64::from(width) * u64::from(height), path))
+        })
+        .max_by_key(|(pixels, _)| *pixels)
+        .map(|(_, path)| path)
+}
+
 fn find_gshhg_file(dir: &Path) -> Option<PathBuf> {
     for name in [
         "gshhs_i.b",
@@ -2645,7 +2680,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     }
 
     // Extract an overview IFD (around 2400..=6000 px wide) from downloaded GEBCO GeoTIFF.
-    let tif_path = find_first_with_ext(&dir.join("gebco"), &["tif", "tiff"])?;
+    let tif_path = find_dem_file(&dir.join("gebco"))?;
     let file = crate::kernel_interface::open_content(&tif_path, true).ok()?;
     let mut decoder = tiff::decoder::Decoder::new(file)
         .ok()?
@@ -2720,6 +2755,46 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detailed_dem_source_supersedes_preview_and_cached_overview() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("gebco")).unwrap();
+        for (name, width, height, value) in
+            [("preview.tif", 16, 8, 100i16), ("fine.tif", 128, 64, 500)]
+        {
+            let file = fs::File::create(root.path().join("gebco").join(name)).unwrap();
+            let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+            let pixels: Vec<_> = (0..width * height)
+                .map(|i| value + (i % width) as i16)
+                .collect();
+            encoder
+                .write_image::<tiff::encoder::colortype::GrayI16>(width, height, &pixels)
+                .unwrap();
+        }
+        let mut cached = Vec::new();
+        cached.extend_from_slice(&2u32.to_le_bytes());
+        cached.extend_from_slice(&1u32.to_le_bytes());
+        cached.extend_from_slice(&100i16.to_le_bytes());
+        cached.extend_from_slice(&100i16.to_le_bytes());
+        fs::write(root.path().join("gebco_overview.i16"), cached).unwrap();
+        let assets = BasemapAssets::load(root.path(), None);
+        assert!(assets.status().has_gebco);
+        assert!(!assets.status().has_full_gebco);
+        assert_eq!(assets.sample_elevation_at(40., -96., 512.), Some(100.));
+        assert!(assets.sample_elevation_at(40., -96., 86400.).unwrap() > 500.);
+        let tile = tiles::SourceTile::prepare(
+            &assets,
+            tiles::TileId::at(5, 40., -96.),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let [low, high] = tile.elevation_range.unwrap();
+        assert!(
+            low > 500. && high > low,
+            "Fine GPU tiles must retain source detail rather than magnify the overview"
+        );
+    }
 
     #[test]
     fn invalid_dem_cache_does_not_hide_a_valid_source_overview() {

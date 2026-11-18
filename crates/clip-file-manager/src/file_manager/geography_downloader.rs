@@ -91,7 +91,7 @@ impl DownloadPack {
             Self::GrwlSummary => status.has_grwl,
             Self::GrwlMasks => status.has_grwl_masks,
             Self::WaterOutlines => status.has_gshhg,
-            Self::TerrainGebco => status.has_gebco,
+            Self::TerrainGebco => status.has_full_gebco,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
             Self::All => PACKS.into_iter().all(|p| p.installed(status)),
@@ -721,6 +721,17 @@ fn dir_size(dir: &Path) -> u64 {
 mod tests {
     use super::*;
     use std::{ffi::OsStr, io::Write, os::unix::fs::symlink};
+
+    #[test]
+    fn an_overview_does_not_satisfy_the_full_terrain_download() {
+        let mut status = AssetStatus {
+            has_gebco: true,
+            ..AssetStatus::default()
+        };
+        assert!(!DownloadPack::TerrainGebco.installed(&status));
+        status.has_full_gebco = true;
+        assert!(DownloadPack::TerrainGebco.installed(&status));
+    }
 
     fn download_fixture(config: &AppConfig, queue: &[DownloadPack]) -> DownloadOutcome {
         let root = AssetDirectory::create(&config.geo_assets_dir()).unwrap();

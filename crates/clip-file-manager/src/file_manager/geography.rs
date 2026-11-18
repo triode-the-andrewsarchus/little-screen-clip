@@ -547,7 +547,7 @@ impl Viewer {
                             yes_no(st.has_grwl),
                             yes_no(st.has_grwl_masks),
                             yes_no(st.has_gshhg),
-                            yes_no(st.has_gebco),
+                            if st.has_full_gebco { "15″" } else if st.has_gebco { "overview only" } else { "no" },
                             yes_no(st.has_land_cover),
                             st.local_hgt_count
                         ));
@@ -558,7 +558,7 @@ impl Viewer {
                             || !st.has_grwl
                             || !st.has_grwl_masks
                             || !st.has_gshhg
-                            || !st.has_gebco
+                            || !st.has_full_gebco
                             || !st.has_land_cover
                             || !st.has_hydrorivers)
                             && ui
@@ -641,11 +641,11 @@ impl Viewer {
                             self.downloader
                                 .start(DownloadPack::WaterOutlines, &self.config);
                         }
-                        if !st.has_gebco
+                        if !st.has_full_gebco
                             && ui
                                 .add(
                                     clip_ui::buttons::ButtonRole::Secondary
-                                        .button("Get GEBCO 2026 Terrain", palette)
+                                        .button("Get GEBCO 15″ Terrain", palette)
                                         .compact(),
                                 )
                                 .clicked()
