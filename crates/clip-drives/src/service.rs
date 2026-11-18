@@ -657,8 +657,8 @@ impl Owner {
         }
         match &envelope.request {
             DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope, source),
-            DriveRequest::Pair { .. }
-            | DriveRequest::Sync { .. }
+            DriveRequest::Pair { .. } => self.start_enrollment(envelope, source, claims),
+            DriveRequest::Sync { .. }
             | DriveRequest::FlushRam { .. }
             | DriveRequest::SaveRam { .. } => self.start_reconciliation(envelope),
             DriveRequest::Eject { .. }
@@ -1484,65 +1484,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-    }
-    #[test]
-    fn cancelled_queued_save_never_creates_its_destination_during_admission() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        fs::create_dir(&source).unwrap();
-        let drive = fixture_drive(&source, "queued-cancel");
-        let block = Arc::new(AtomicBool::new(false));
-        let barrier = block.clone();
-        let (entered_rx, release_tx, gate) = worker_gate();
-        let service = Service::start_with_inventory(
-            DriveConfig::default(),
-            temp.path().join("state"),
-            Arc::new(move || {
-                if std::thread::current().name() == Some("portable-drive-owner")
-                    && barrier.swap(false, Ordering::AcqRel)
-                {
-                    gate();
-                }
-                Ok(vec![drive.clone()])
-            }),
-        )
-        .unwrap();
-        block.store(true, Ordering::Release);
-        // Hold the still-synchronous reconciliation identity admission. Status
-        // discovery itself no longer occupies the owner or provides this barrier.
-        let pairing = accept(
-            &service,
-            DriveRequest::Pair {
-                drive: "part:queued-cancel".into(),
-                relative: PathBuf::new(),
-                local: temp.path().join("paired"),
-            },
-        );
-        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        let destination = temp.path().join("must-not-be-created");
-        let id = accept(
-            &service,
-            DriveRequest::SaveRam {
-                session: "not-an-enrolled-session".into(),
-                destination: destination.clone(),
-            },
-        );
-        service
-            .request(DriveRequest::Cancel {
-                operation: id.clone(),
-            })
-            .unwrap();
-        release_tx.send(()).unwrap();
-        assert_eq!(
-            wait_operation(&service, &id, |op| op.finished.is_some()).state,
-            "cancelled"
-        );
-        assert!(!destination.exists());
-        assert_eq!(
-            wait_operation(&service, &pairing, |op| op.finished.is_some()).state,
-            "complete"
-        );
-        service.shutdown().unwrap();
     }
     pub(super) struct TestDrives {
         temp: tempfile::TempDir,

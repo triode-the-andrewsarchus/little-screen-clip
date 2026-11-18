@@ -138,8 +138,7 @@ fn warm_observers(
             index: true,
         },
     );
-    // Observe the persistent policy/refresh peers before gating previously unseen
-    // inventory callers. Stable-ID pairing does not invoke inventory on probes.
+    // Observe policy/refresh and scope peers before arming the held-work phase.
     let started = Instant::now();
     while threads.lock().unwrap().len() < 4 {
         assert!(
@@ -161,20 +160,15 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
     let armed = Arc::new(AtomicBool::new(false));
     let active = armed.clone();
     let (entered, release, gate) = worker_gate();
+    let blocked = Mutex::new(HashSet::new());
     let service = fixture.start_observed_reads(Arc::new(move || {
         let thread = std::thread::current();
+        known.lock().unwrap().insert(thread.id());
         if thread
             .name()
-            .is_some_and(|name| name.starts_with("drive-sync-"))
-        {
-            return;
-        }
-        let first = known.lock().unwrap().insert(thread.id());
-        if first
-            && thread
-                .name()
-                .is_some_and(|name| name.starts_with("drive-scope-"))
+            .is_some_and(|name| name.starts_with("drive-scope-"))
             && active.load(Ordering::Acquire)
+            && blocked.lock().unwrap().insert(thread.id())
         {
             gate();
         }
@@ -209,6 +203,28 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
     );
     assert_configuration_responsive(&service);
     assert_unfinished(&service, &waiting);
+    service
+        .request(DriveRequest::Cancel {
+            operation: waiting.clone(),
+        })
+        .unwrap();
+    assert_eq!(
+        wait_operation(&service, &waiting, |op| op.finished.is_some()).state,
+        "cancelled"
+    );
+    assert!(!destination.parent().unwrap().exists());
+    // Cancellation of a queued save neither creates its directory nor releases
+    // any of the four independently held probe owners.
+    for operation in &operations {
+        assert_unfinished(&service, operation);
+    }
+    let waiting = accept(
+        &service,
+        DriveRequest::SaveRam {
+            session: "missing".into(),
+            destination: destination.clone(),
+        },
+    );
     fs::write(
         local.join("independent"),
         b"sync during four blocked probes",
@@ -260,7 +276,7 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
 #[test]
 #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; stops only its owned child"]
 fn stalled_fuse_scope_admission_keeps_controls_sync_and_shutdown_owned() {
-    for ram in [false, true] {
+    for operation in ["catalog", "ram", "enrollment"] {
         let fixture = TestDrives::new(0);
         let (backing, source_id, mut native, source) = fixture.native_source("partition");
         let selector = "/dev/little-clip-owned-scope-fixture";
@@ -289,19 +305,23 @@ fn stalled_fuse_scope_admission_keeps_controls_sync_and_shutdown_owned() {
         native.with_suspended(|| {
             let id = accept(
                 &service,
-                if ram {
-                    DriveRequest::CopyToRam {
+                match operation {
+                    "ram" => DriveRequest::CopyToRam {
                         drive: "part:large".into(),
-                    }
-                } else {
-                    DriveRequest::Catalog {
+                    },
+                    "enrollment" => DriveRequest::Pair {
+                        drive: "part:large".into(),
+                        relative: PathBuf::new(),
+                        local: fixture.temp.path().join("uncreated-enrollment"),
+                    },
+                    _ => DriveRequest::Catalog {
                         drive: selector.into(),
-                    }
+                    },
                 },
             );
             let (tid, wait) =
                 wait_fuse_request(|| threads.lock().unwrap().keys().copied().collect());
-            eprintln!("SCOPE_FUSE_METADATA_BLOCKED ram={ram} tid={tid} wchan={wait}");
+            eprintln!("SCOPE_FUSE_METADATA_BLOCKED operation={operation} tid={tid} wchan={wait}");
             assert!(
                 !threads.lock().unwrap()[&tid],
                 "Coordinator entered the FUSE wait"
@@ -332,6 +352,13 @@ fn stalled_fuse_scope_admission_keeps_controls_sync_and_shutdown_owned() {
             "cancelled"
         );
         assert!(status(&service).catalogs.is_empty());
+        assert!(!fixture.temp.path().join("uncreated-enrollment").exists());
+        assert!(
+            status(&service)
+                .pairs
+                .iter()
+                .all(|pair| pair.drive != "part:large")
+        );
         assert_eq!(
             fs::read(source.join("edit")).unwrap(),
             b"original portable content"
@@ -355,6 +382,7 @@ fn simultaneous_scope_deliveries_cannot_replace_the_retained_ram_setup_owner() {
     let current = phase.clone();
     let (entered, release, gate) = worker_gate();
     let (preparing, resume, prepare_gate) = worker_gate();
+    let phases = Mutex::new(HashSet::new());
     let service = fixture.start_configured(
         DriveConfig {
             ram_min_available: 0,
@@ -363,14 +391,10 @@ fn simultaneous_scope_deliveries_cannot_replace_the_retained_ram_setup_owner() {
         },
         Some(Arc::new(move || {
             let thread = std::thread::current();
-            if thread
-                .name()
-                .is_some_and(|name| name.starts_with("drive-sync-"))
-            {
-                return;
-            }
-            if known.lock().unwrap().insert(thread.id()) {
-                match current.load(Ordering::Acquire) {
+            known.lock().unwrap().insert(thread.id());
+            let phase = current.load(Ordering::Acquire);
+            if phases.lock().unwrap().insert((phase, thread.id())) {
+                match phase {
                     1 if thread
                         .name()
                         .is_some_and(|name| name.starts_with("drive-scope-")) =>

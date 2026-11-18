@@ -8,9 +8,14 @@ pub(super) struct Input {
     ram: ram_sessions::Reconciliation,
     cached: Option<(Arc<Root>, Arc<Root>)>,
     observed: bool,
+    enrollment: Option<enrollment::Input>,
 }
 impl Input {
-    pub fn capture(owner: &Owner, pair: SyncPair) -> Result<Self> {
+    pub fn capture(
+        owner: &Owner,
+        pair: SyncPair,
+        enrollment: Option<enrollment::Input>,
+    ) -> Result<Self> {
         Ok(Self {
             storage: policy::Storage::capture(
                 &owner.db,
@@ -24,18 +29,23 @@ impl Input {
                 .as_ref()
                 .is_some_and(Watch::has_complete_coverage),
             pair,
+            enrollment,
         })
     }
     fn current(&self, owner: &Owner) -> Result<bool> {
-        Ok(
-            owner.db.get::<SyncPair>("pair", &self.pair.id)?.as_ref() == Some(&self.pair)
-                && policy::Storage::capture(
-                    &owner.db,
-                    &owner.state,
-                    owner.config.backup_directory.as_deref(),
-                )? == self.storage
-                && self.ram.current(owner, &self.pair.id)?,
-        )
+        let pair = owner.db.get::<SyncPair>("pair", &self.pair.id)?;
+        let current = if let Some(enrollment) = &self.enrollment {
+            pair.is_none() && enrollment.current(&owner.db)?
+        } else {
+            pair.as_ref() == Some(&self.pair)
+        };
+        Ok(current
+            && policy::Storage::capture(
+                &owner.db,
+                &owner.state,
+                owner.config.backup_directory.as_deref(),
+            )? == self.storage
+            && self.ram.current(owner, &self.pair.id)?)
     }
     pub fn prepare_pair(&self, drive: &Drive) -> Result<Plan> {
         let pair = self.pair.clone();
@@ -51,8 +61,7 @@ impl Input {
             .as_ref()
             .ok_or("Drive is offline; local contents retained")?;
         let partition = Root::open(mount)?;
-        let selected = partition.directory(&pair.relative, false)?;
-        let portable = Arc::new(Root::open(&crate::root::anchor(&selected))?);
+        let portable = Arc::new(partition.subtree(&pair.relative)?);
         let local = Arc::new(Root::open(&pair.local)?);
         if pair.local_identity != Some(local.storage_identity()?) {
             return Err("Paired local directory was replaced; re-enroll it explicitly".into());
@@ -77,13 +86,18 @@ impl Input {
         cancelled(cancel)?;
         let mounts = Snapshot::capture()?.signature.clone();
         let drive = discovery::select(inventory()?, &self.pair.drive)?;
-        let plan = self.prepare_pair(&drive)?;
+        let plan = if let Some(enrollment) = &self.enrollment {
+            enrollment.prepare(&self.pair, &self.storage, &drive, cancel)?
+        } else {
+            self.prepare_pair(&drive)?
+        };
         cancelled(cancel)?;
         if discovery::select(inventory()?, &drive.id)? != drive {
             return Err(
                 "Drive changed while pinning sync roots; retry with fresh inventory".into(),
             );
         }
+        plan.validate_roots()?;
         if Snapshot::capture()?.signature != mounts {
             return Err("Mount inventory changed while preparing synchronization; retry".into());
         }
@@ -94,16 +108,40 @@ struct Prepared {
     plan: Plan,
     mounts: String,
 }
+impl Prepared {
+    fn accept(self, owner: &Owner, input: &Input, epoch: u64) -> Result<Option<Plan>> {
+        let current = input.current(owner)?
+            && epoch == owner.sync_epoch
+            && Snapshot::capture()?.signature == self.mounts;
+        if !current {
+            return if input.enrollment.is_some() {
+                Err("Enrollment inputs changed during preparation; no pair was registered. Created folders are retained; retry enrollment".into())
+            } else {
+                Ok(None)
+            };
+        }
+        if input.enrollment.is_some() {
+            owner.db.put("pair", &self.plan.pair.id, &self.plan.pair)?;
+        }
+        Ok(Some(self.plan))
+    }
+}
 pub(in crate::service) struct Pending {
     pub drive: String,
     pub intent: Intent,
+    pub claims: Vec<crate::root::Scope>,
     epoch: u64,
     input: Arc<Input>,
     task: Task<Result<Prepared>>,
 }
 impl Owner {
-    pub(super) fn prepare_sync_roots(&mut self, intent: Intent, pair: SyncPair) {
-        let input = match Input::capture(self, pair) {
+    pub(super) fn prepare_sync_roots(
+        &mut self,
+        intent: Intent,
+        pair: SyncPair,
+        enrollment: Option<enrollment::Input>,
+    ) {
+        let input = match Input::capture(self, pair, enrollment) {
             Ok(input) => Arc::new(input),
             Err(error) => {
                 self.sync_result(&intent, Err(error), None);
@@ -118,6 +156,10 @@ impl Owner {
             intent.pair.clone(),
             Pending {
                 drive: input.pair.drive.clone(),
+                claims: input
+                    .enrollment
+                    .as_ref()
+                    .map_or_else(Vec::new, |e| e.claims.clone()),
                 intent,
                 epoch: self.sync_epoch,
                 input,
@@ -126,11 +168,16 @@ impl Owner {
         );
     }
     pub(super) fn poll_sync_preparation(&mut self) {
-        for (id, job) in std::mem::take(&mut self.sync_preparing) {
-            let Some(delivered) = job.task.poll() else {
-                self.sync_preparing.insert(id, job);
-                continue;
-            };
+        let completed = self
+            .sync_preparing
+            .iter()
+            .filter_map(|(id, job)| job.task.poll().map(|delivered| (id.clone(), delivered)))
+            .collect::<Vec<_>>();
+        for (id, delivered) in completed {
+            let job = self
+                .sync_preparing
+                .remove(&id)
+                .expect("delivered root preparation");
             let result = write_result(delivered);
             let result = cancelled(&job.intent.cancel).and(result);
             if self.closing.load(Ordering::Acquire) {
@@ -141,20 +188,10 @@ impl Owner {
                 );
                 continue;
             }
-            match result {
+            match result.and_then(|prepared| prepared.accept(self, &job.input, job.epoch)) {
                 Err(error) => self.sync_result(&job.intent, Err(error), None),
-                Ok(prepared) => {
-                    let current = job.input.current(self).and_then(|current| {
-                        Ok(current
-                            && job.epoch == self.sync_epoch
-                            && Snapshot::capture()?.signature == prepared.mounts)
-                    });
-                    match current {
-                        Ok(true) => self.admit_sync_plan(job.intent, prepared.plan),
-                        Ok(false) => self.queue_sync(job.intent),
-                        Err(error) => self.sync_result(&job.intent, Err(error), None),
-                    }
-                }
+                Ok(Some(plan)) => self.admit_sync_plan(job.intent, plan),
+                Ok(None) => self.queue_sync(job.intent),
             }
         }
     }

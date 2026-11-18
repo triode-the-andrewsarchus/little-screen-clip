@@ -32,7 +32,7 @@ struct Observation {
     mounts: String,
     source: Option<Source>,
 }
-/// RAM preparation retains the exact source behind its scheduling claim.
+/// RAM and enrollment preparation retain the source behind their scheduling claim.
 pub(super) struct Source {
     pub drive: Drive,
     pub root: Arc<Root>,
@@ -121,17 +121,16 @@ impl Owner {
     }
     pub(super) fn start_scopes(&mut self, envelope: Envelope) {
         let input = (|| -> Result<Input> {
-            let save = if let DriveRequest::SaveRam {
-                destination,
-                session,
-            } = &envelope.request
-            {
-                Some((
+            let save = match &envelope.request {
+                DriveRequest::SaveRam {
+                    destination,
+                    session,
+                } => Some((
                     destination.clone(),
                     self.db.get::<RamSession>("ram", session)?.map(|s| s.path),
-                ))
-            } else {
-                None
+                )),
+                DriveRequest::Pair { local, .. } => Some((local.clone(), None)),
+                _ => None,
             };
             Ok(Input {
                 selector: self.request_selector(&envelope.request)?,
@@ -142,7 +141,10 @@ impl Owner {
                     .drives
                     .clone(),
                 save,
-                retain_source: matches!(envelope.request, DriveRequest::CopyToRam { .. }),
+                retain_source: matches!(
+                    envelope.request,
+                    DriveRequest::CopyToRam { .. } | DriveRequest::Pair { .. }
+                ),
             })
         })();
         let input = match input {

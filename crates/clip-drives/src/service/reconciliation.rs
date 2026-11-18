@@ -2,6 +2,7 @@
 use super::*;
 use little_clip_core::jobs::task::Task;
 use std::collections::HashSet;
+mod enrollment;
 #[cfg(test)]
 mod population_tests;
 pub(super) mod preparation;
@@ -63,6 +64,18 @@ pub(super) fn persist_result(db: &Store, intent: &Intent, result: &Result<String
 }
 
 impl Plan {
+    fn validate_roots(&self) -> Result<()> {
+        self.portable.validate()?;
+        self.local.validate()?;
+        if let Some(storage) = &self.storage {
+            storage.validate(
+                &self.portable,
+                &self.local,
+                self.pair.ram.then_some(self.pair.id.as_str()),
+            )?;
+        }
+        Ok(())
+    }
     pub(super) fn run_with_cancel(
         &self,
         db: &Store,
@@ -74,13 +87,12 @@ impl Plan {
         if let Some(save) = &intent.save {
             return save.run(db, cancel, progress);
         }
-        self.portable.validate()?;
-        self.local.validate()?;
-        if let Some(storage) = &self.storage {
-            storage.validate(
-                &self.portable,
+        self.validate_roots()?;
+        if !self.pair.ram && self.pair.last_success.is_none() {
+            policy::validate_pair_targets(
+                &db.list("pair", 0, 1000)?,
                 &self.local,
-                self.pair.ram.then_some(self.pair.id.as_str()),
+                Some(&self.pair.id),
             )?;
         }
         let passes = if intent.initialize { 2 } else { 1 };
@@ -219,50 +231,6 @@ impl Owner {
                 }
                 Ok((pair.clone(), initial, None))
             }
-            DriveRequest::Pair {
-                drive,
-                relative,
-                local,
-            } => {
-                if !valid_relative(relative) {
-                    return Err("Invalid sync subtree".into());
-                }
-                let drive = self.drive(drive)?;
-                if drive.ambiguous || (drive.part_uuid.is_none() && drive.filesystem_uuid.is_none())
-                {
-                    return Err(
-                        "Enrollment requires an unambiguous persistent media identity".into(),
-                    );
-                }
-                let mount = drive
-                    .mount
-                    .as_ref()
-                    .ok_or("Mount the drive before pairing a folder")?;
-                let partition = Root::open(mount)?;
-                let selected = partition.directory(relative, false)?;
-                let source = Root::open(&crate::root::anchor(&selected))?;
-                let local = Root::create(local)?;
-                self.validate_pair_target(&source, &local)?;
-                let id = uuid::Uuid::new_v4().to_string();
-                self.db.put(
-                    "pair",
-                    &id,
-                    &SyncPair {
-                        id: id.clone(),
-                        drive: drive.id,
-                        evidence: drive.evidence,
-                        relative: relative.clone(),
-                        local_identity: Some(local.storage_identity()?),
-                        local: local.path,
-                        paused: false,
-                        deletions: false,
-                        ram: false,
-                        last_success: None,
-                        status: "Waiting for initial union sync".into(),
-                    },
-                )?;
-                Ok((id, false, None))
-            }
             DriveRequest::SaveRam {
                 session,
                 destination,
@@ -280,7 +248,7 @@ impl Owner {
         }
     }
     pub(super) fn prepare_sync_pair(&self, pair: SyncPair, drive: &Drive) -> Result<Plan> {
-        preparation::Input::capture(self, pair)?.prepare_pair(drive)
+        preparation::Input::capture(self, pair, None)?.prepare_pair(drive)
     }
     pub(super) fn queue_sync(&mut self, intent: Intent) {
         if intent.operation.is_some() {
@@ -398,7 +366,7 @@ impl Owner {
                 };
                 self.admit_sync_plan(intent, plan);
             } else {
-                self.prepare_sync_roots(intent, pair);
+                self.prepare_sync_roots(intent, pair, None);
             }
         }
     }

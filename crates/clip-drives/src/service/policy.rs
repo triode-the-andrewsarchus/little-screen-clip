@@ -163,40 +163,13 @@ impl Owner {
                 .values()
                 .any(|job| job.plan.scopes().iter().any(&overlaps))
             || self
+                .sync_preparing
+                .values()
+                .any(|job| job.claims.iter().any(&overlaps))
+            || self
                 .background
                 .values()
                 .any(|job| job.scopes().any(|scope| overlaps(&scope)))
-    }
-    pub(super) fn validate_pair_target(&self, source: &Root, local: &Root) -> Result<()> {
-        self.validate_sync_storage(source, local, None)?;
-        let pairs = self.db.list::<SyncPair>("pair", 0, 1000)?;
-        if pairs.len() >= 256 {
-            return Err(
-                "Pause or remove an existing enrollment before adding more than 256 sync pairs"
-                    .into(),
-            );
-        }
-        for pair in pairs {
-            if let Ok(root) = Root::open(&pair.local)
-                && local.overlap(&root)
-            {
-                return Err("This local folder overlaps an existing sync enrollment".into());
-            }
-        }
-        Ok(())
-    }
-    pub(super) fn validate_sync_storage(
-        &self,
-        source: &Root,
-        local: &Root,
-        own_ram: Option<&str>,
-    ) -> Result<()> {
-        Storage::capture(
-            &self.db,
-            &self.state,
-            self.config.backup_directory.as_deref(),
-        )?
-        .validate(source, local, own_ram)
     }
     pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
         validate_ram_backing_storage(&self.db, target)
@@ -204,6 +177,23 @@ impl Owner {
     pub(super) fn validate_backup_directory(&self, target: &Root) -> Result<()> {
         validate_backup_storage(&self.db, &self.state, target)
     }
+}
+pub(super) fn validate_pair_targets(
+    pairs: &[SyncPair],
+    local: &Root,
+    own: Option<&str>,
+) -> Result<()> {
+    if own.is_none() && pairs.len() >= 256 {
+        return Err(
+            "Pause or remove an existing enrollment before adding more than 256 sync pairs".into(),
+        );
+    }
+    for pair in pairs.iter().filter(|pair| own != Some(pair.id.as_str())) {
+        if managed_overlap(&pair.local, local, None) {
+            return Err("This local folder overlaps an existing sync enrollment".into());
+        }
+    }
+    Ok(())
 }
 fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
     let sessions = db.list::<RamSession>("ram", 0, 1000)?;

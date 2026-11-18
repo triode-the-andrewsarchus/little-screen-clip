@@ -54,6 +54,120 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Retained folder-enrollment preparation checkpoint
+
+Folder enrollment now carries a fresh partition pin from read-only scheduling
+into the existing four reconciliation workers. Scheduling also plans the local
+destination region without creating it. Accepted preparation reserves both
+regions and the drive until actual worker exit; preparing and copying share the
+four-slot total. The worker selects the guarded source subtree, checks unchanged
+destination scheduling evidence, creates/pins the local directory through the
+existing core mechanism, validates managed storage and other enrollment targets,
+and captures its local storage identity. The shared Root subtree helper reuses
+the existing no-crossing directory walk and retains read-only requirements.
+
+The coordinator publishes the pair only after the completed preparation still
+matches managed storage, enrolled target addresses/identities, the observation
+epoch and current mount signature. Changed inputs, cancellation or publication
+failure cannot start the initial union. Created empty folders are retained when
+later validation fails. The write worker repeats other-target overlap checks
+until the first successful union, including after a scheduling deferral. Missing
+enrolled targets now retain lexical boundaries through the existing managed-root
+overlap mechanism. Publication and baseline mechanisms otherwise remain the same.
+Preparation polling removes only delivered jobs, keeping other workers' region
+reservations visible during admission.
+
+The final-inventory replacement control
+`/tmp/portable-drive-enrollment-final-root-before.log` exposed a further gap:
+the write worker refused a replaced local directory, but the pair had already
+been registered. Shared plan root/managed-storage validation now runs after the
+last inventory call before returning preparation, and again before payload
+work. The new control verifies the failure leaves no pair, preserves replacement
+bytes and installs no source payload. This shared validation also removes the
+duplicated write-path checks without changing their behavior.
+
+The negative control `/tmp/portable-drive-enrollment-source-before.log` records
+one coordinator inventory call during enrollment. The new zero-call expectation
+fails before this change. Controlled cases cover success, cancellation/shutdown,
+changed configuration/destination/drive, read-only refusal, forced registry-write
+failure, overlapping concurrent enrollment and missing previous targets. While
+the intended enrollment worker is held, configuration completes and another
+pair resumes and syncs. The fixture pauses the earlier pair before arming its
+one-shot gate so an unrelated automatic refresh cannot consume the gate.
+
+Two earlier fixtures waited for the removed owner inventory call or treated a
+warmed scope worker as unseen; their obsolete barriers timed out in the initial
+backend runs. Queued-Save cancellation assertions now run with all four real
+scope probes held: cancellation creates no directory and releases no probe
+owner. Warmed workers are tracked independently for each armed phase. The real
+FUSE scope fixture now includes enrollment alongside catalog and RAM requests;
+the reconciliation fixture exercises both an enrolled-source stall and a new
+enrollment destination stall after read-only scheduling has completed.
+
+The first combined guest run failed at another removed enrollment-owner barrier
+inside the real-overflow fixture. That failure left the guest's inotify limit
+changed and contaminated later cases. The replacement runs a real owned daemon
+subprocess with unchanged native drive facts and a one-hour fallback, waits for
+initial union, then observes SIGSTOP before producing more than 64 alternating
+file events. No daemon thread can drain that queue. SIGCONT allows the original
+union/conflict/default-restoration checks; a rule publication observes unchanged
+inventory before the later nested edit without running an explicit sync or
+refreshing its watches. The child is bounded and killed/reaped on parent failure;
+sysctl guards restore original limits. Its internal ignored probe is selected
+only by the parent; grouped event-loss runs use `--skip inotify_owner_probe`.
+RAM helper suspension and abrupt-daemon fixtures share the existing suspension
+and child-cleanup behavior through test_child rather than duplicate it.
+
+Current backend evidence: 237 passed, 96 explicit fixtures ignored in
+`/tmp/portable-drive-enrollment-backend-final-roots.log`. Five further controlled
+enrollment repetitions pass in `/tmp/portable-drive-enrollment-repeat-0.log`
+through `-4.log`. Affected-package all-target Clippy, the runtime build and
+changed-source rustfmt checks pass. Final guest evidence is
+`/tmp/portable-drive-enrollment-vm-final-roots/report.json`: 99 main cases pass
+across FAT32/exFAT/NTFS, with three further owned-daemon child probes (102 raw
+passing test-result counts). It includes the final-root replacement case, both
+FUSE preparation stalls, three source-scope stalls, RAM handoff/population,
+native sync/backup/name handling and real event-loss recovery. The earlier
+`/tmp/portable-drive-enrollment-vm-filesystems/report.json` remains a failed
+fixture checkpoint; it is superseded rather than treated as passing evidence.
+The host preparation/scope fixture logs also pass their selected cases.
+
+Full dark UI acceptance passes in
+`/tmp/portable-drive-enrollment-ui-dark/report.json` before the final root guard;
+the final build's full light flow passes in
+`/tmp/portable-drive-enrollment-ui-final-light/report.json`. Each exercises drive
+menus, RAM writeback, UI union enrollment, lazy backups, subtree exclusions,
+offline FUSE and preserved conflict review. Union/conflict screenshots were
+inspected. The focused light storage/enrollment flow also passes in
+`/tmp/portable-drive-enrollment-ui-light/report.json`.
+
+Local architecture remains REGRESSION because the new preparation, publication
+and negative-control cases add 490 NLOC, fourteen net functions and sixty total
+CCN. `prepare_reconciliation` improves from CCN 23 to 10. `run_with_cancel` grows
+19→20 for the initial-target overlap check; extracting validation for actual
+reuse after inventory reduces the draft's CCN 23 to 20. New draft test clones
+were removed by reusing Held's enrollment operation and dropping obsolete
+first-observation gating. The five remaining modified-file clone reports are
+all present in the baseline (four service tests and the root/copy fixture).
+No new clone group or dependency cycle remains, and no public protocol or
+dependency was added.
+
+| Local architecture dimension | Before | After |
+| --- | --- | --- |
+| Average / maximum CCN | 3.49 / 274 | 3.49 / 274 |
+| Duplication | 6.97% | 6.97% |
+| Clone groups | 4,300 | 4,300 |
+| Dependency cycles | 144 | 144 |
+
+Local report: `.fitness/portable-drives-enrollment-final-roots-local.json`.
+Original-baseline report:
+`.fitness/portable-drives-enrollment-final-roots-branch.json` remains REGRESSION:
+average CCN 3.44→3.49, maximum 274 unchanged, duplication 7.30%→6.97%, clone
+groups 4,289→4,300 and cycles 143→144. This checkpoint narrows
+1.5 and part of 1.6; the other unfinished rows, including watch registration,
+RAM resume/export, configuration/mount controls, remain with the final
+workspace/architecture gates.
+
 ## Retained RAM source handoff checkpoint
 
 Copy to RAM now retains the source opened by read-only scheduling admission,

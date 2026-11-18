@@ -31,7 +31,7 @@ pub(crate) struct Root {
     read_only_required: bool,
 }
 /// Scheduling evidence only: this never authorizes content access or keeps a mount busy.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Scope {
     path: PathBuf,
     identity: MountIdentity,
@@ -290,6 +290,11 @@ impl Root {
             held = pin;
         }
         Ok(held)
+    }
+    /// Selects a pinned ordinary subtree through the existing no-crossing walk.
+    pub fn subtree(&self, relative: &Path) -> Result<Self> {
+        let directory = self.directory(relative, false)?;
+        Self::open_with_read_only(&anchor(&directory), self.read_only_required)
     }
     /// Refuse mount crossings during lookup, before foreign getattr/open hooks.
     /// Keep the resulting pin through guarded reopen instead of resolving its name.
@@ -784,6 +789,12 @@ mod tests {
         fs::create_dir(data.join("actual")).unwrap();
         symlink("actual", data.join("alias")).unwrap();
         assert!(root.directory(Path::new("alias"), false).is_err());
+        assert!(root.subtree(Path::new("alias")).is_err());
+        assert!(root.subtree(Path::new("../outside")).is_err());
+        assert_eq!(
+            root.subtree(Path::new("actual")).unwrap().path,
+            data.join("actual")
+        );
         assert!(root.directory(Path::new("../outside"), true).is_err());
         fs::rename(&data, temp.path().join("old")).unwrap();
         symlink(temp.path().join("old"), &data).unwrap();
