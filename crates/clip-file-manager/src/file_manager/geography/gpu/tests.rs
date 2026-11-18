@@ -224,8 +224,21 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             (35..45).contains(&detail_pixel[0]) && (65..76).contains(&detail_pixel[1]),
             "Natural detail did not use the original close-zoom biome palette: {detail_pixel:?}"
         );
+        // Observed water remains true black in Oilslick, even above sea level.
+        Arc::get_mut(&mut frame.tiles[0]).unwrap().water.fill(255);
+        frame.style = BasemapStyle::Oilslick;
         frame.source = 2;
         renderer.paint(&gl, &info, &frame).unwrap();
+        gl.read_pixels(
+            450,
+            300,
+            1,
+            1,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(&mut detail_pixel),
+        );
+        assert_eq!(detail_pixel, [0, 0, 0, 255]);
         assert_eq!(
             renderer.tiles.len(),
             2,

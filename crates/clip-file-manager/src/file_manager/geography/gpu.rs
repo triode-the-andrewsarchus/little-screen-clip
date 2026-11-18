@@ -676,11 +676,24 @@ impl Renderer {
                     continue;
                 };
                 let layer = source.layer;
-                let Some((color, line_width, dash)) =
+                let Some((mut color, line_width, dash)) =
                     layer.appearance(frame.camera.zoom, frame.layers)
                 else {
                     continue;
                 };
+                if frame.style == BasemapStyle::Oilslick
+                    && matches!(
+                        layer,
+                        Layer::Lake
+                            | Layer::RiverSmall
+                            | Layer::RiverMedium
+                            | Layer::RiverLarge
+                            | Layer::GrwlSmall
+                            | Layer::GrwlLarge
+                    )
+                {
+                    color = [0.0, 0.0, 0.0, 1.0];
+                }
                 gl.bind_vertex_array(Some(batch.vao));
                 gl.uniform_4_f32_slice(gl.get_uniform_location(p, "u_color").as_ref(), &color);
                 gl.uniform_1_f32(gl.get_uniform_location(p, "u_width").as_ref(), line_width);

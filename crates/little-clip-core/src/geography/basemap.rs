@@ -1825,7 +1825,7 @@ pub fn hypsometric_color(elevation_m: f32, hillshade: f32) -> [u8; 3] {
 /// - Land cycles lightness `black -> white -> black` every `500 m` while rotating hue continuously.
 pub fn oilslick_color(elevation_m: f32, hillshade: f32) -> [u8; 3] {
     if elevation_m <= 0.0 {
-        return [24, 58, 102];
+        return [0, 0, 0];
     }
     // 500 m cyclic lightness zig-zag
     let phase = (elevation_m / 500.0).rem_euclid(1.0);
@@ -3104,7 +3104,8 @@ mod tests {
     fn oilslick_has_sharp_sea_level_contrast_and_500m_cycle() {
         let ocean = oilslick_color(0.0, 0.8);
         let coast = oilslick_color(1.0, 0.8);
-        assert_eq!(ocean, [24, 58, 102]);
+        assert_eq!(ocean, [0, 0, 0]);
+        assert_eq!(oilslick_color(-5000.0, 1.0), [0, 0, 0]);
         assert_ne!(ocean, coast);
         // 500 m cyclic palette repeats hue/lightness structure while shifting hue
         let low = oilslick_color(250.0, 1.0);

@@ -18,7 +18,7 @@ vec3 hsl(float hue,float s,float l) {
     return l+(rgb-0.5)*(1.0-abs(2.0*l-1.0))*s;
 }
 vec3 elevation_color(float h) {
-    if(h<=0.0) return vec3(0.094,0.227,0.40);
+    if(h<=0.0) return u_style==2?vec3(0.0):vec3(0.094,0.227,0.40);
     if(u_style==2) {
         float phase=fract(h/500.0);
         return hsl(mod(24.0+h/1850.0*360.0,360.0),0.86,0.14+0.76*(1.0-abs(2.0*phase-1.0)));
@@ -74,6 +74,6 @@ void main() {
         float major=mod(round(h/u_contour),5.0)==0.0?0.58:0.30;
         rgb=mix(rgb,vec3(0.10,0.09,0.08),coverage*major);
     }
-    if(u_show_water && u_style!=2 && texture(u_water,v_uv).r>0.75) rgb=mix(rgb,vec3(0.149,0.40,0.675),0.94);
+    if(u_show_water && texture(u_water,v_uv).r>0.75) rgb=u_style==2?vec3(0.0):mix(rgb,vec3(0.149,0.40,0.675),0.94);
     frag=vec4(rgb,1.0);
 }
