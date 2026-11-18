@@ -258,15 +258,7 @@ fn unavailable_enrollment_targets_keep_their_lexical_boundaries() {
     let service = fixture.start_observed_reads(Arc::new(|| {}));
     let parent = fixture.temp.path().join("ordinary");
     let local = parent.join("paired-small");
-    finish(
-        &service,
-        DriveRequest::Pair {
-            drive: "part:small".into(),
-            relative: PathBuf::new(),
-            local: local.clone(),
-        },
-    );
-    let pair = status(&service).pairs.pop().unwrap();
+    let pair = enroll_pair(&service, "part:small", Path::new(""), &local);
     finish(
         &service,
         DriveRequest::Pause {

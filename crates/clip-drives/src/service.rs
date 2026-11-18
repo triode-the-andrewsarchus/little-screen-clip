@@ -1071,6 +1071,7 @@ mod tests {
     mod managed_views;
     mod native_images;
     mod native_read_only;
+    mod native_reconnect;
     mod partition_preparation;
     mod policy_aliases;
     mod policy_coverage;
@@ -1406,6 +1407,21 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    fn enroll_pair(service: &Service, drive: &str, relative: &Path, local: &Path) -> SyncPair {
+        finish(
+            service,
+            DriveRequest::Pair {
+                drive: drive.into(),
+                relative: relative.into(),
+                local: local.into(),
+            },
+        );
+        status(service)
+            .pairs
+            .into_iter()
+            .find(|pair| pair.drive == drive && pair.relative == relative && pair.local == local)
+            .expect("Completed enrollment did not expose the addressed pair")
+    }
     pub(super) struct TestDrives {
         temp: tempfile::TempDir,
         drives: Arc<Mutex<Vec<Drive>>>,
@@ -1539,13 +1555,11 @@ mod tests {
         }
         fn pair(&self, service: &Service, drive: &str, relative: &str) -> PathBuf {
             let local = self.temp.path().join(format!("paired-{drive}"));
-            finish(
+            enroll_pair(
                 service,
-                DriveRequest::Pair {
-                    drive: format!("part:{drive}"),
-                    relative: relative.into(),
-                    local: local.clone(),
-                },
+                &format!("part:{drive}"),
+                Path::new(relative),
+                &local,
             );
             local
         }

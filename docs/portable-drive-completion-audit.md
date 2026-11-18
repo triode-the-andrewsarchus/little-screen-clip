@@ -6,14 +6,14 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 
 | Plan item | Audit status | Current evidence / remaining work |
 | --- | --- | --- |
-| 1.1 | Partial | Numeric inventory/capacity and mount routing exist in discovery.rs; verify stable reconnect with changed device paths on disposable media. |
-| 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
+| 1.1 | Complete | Numeric parent/partition capacities, stable filesystem/PARTUUID evidence, read-only state and mount routing are covered by discovery tests and native authority fixtures. The new actual GPT reconnect fixture preserves enrollment across changed /dev/loopN partition paths, disk sequences and mount directories on FAT32/exFAT/NTFS; parent capacity matches the whole backing image while partition capacity matches the selected partition. See the native reconnect checkpoint. |
+| 1.2 | Partial | Actual duplicate GPT partition IDs now suspend automatic writes, retain queued local edits and resume after the clone is detached on FAT32/exFAT/NTFS. Explicit sync refuses the ambiguity and the clone image hash stays unchanged. Fallback buckets exist; explicit fallback disclosure/enrollment still needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference destination/file saves and reviewed-backup continuations now retain worker completion, claims and saved-effect receipts; real stopped-config-filesystem cancellation/shutdown and superseded-reload fixtures pass. File-backup/catalog root preparation now shares scheduling workers, retains prepared roots and rejects stale settings/root inputs before copying; host discovery-thread and five real stopped-FUSE scenarios pass. Eject/image/read-only root and sync-plan preparation now retain one existing partition-worker slot, preserve original scheduled drive facts and compare current settings/enrollment/RAM metadata before flushing; six held and nine stopped-FUSE scenarios pass. Automatic/pre-unmount iteration now includes legacy pairs beyond status pagination. Initial discovery and RAM allocation/view startup recovery now reuse retained workers, with held inventory/enrollment/fsck, orphaned-enrollment, uncertain optional-policy and actual-exit shutdown checks. Catalog startup cleanup and mount/unmount now use a retained control worker, preserving actual helper ownership, atomic publication/retirement and failed boundaries; held commands, real stopped-FUSE, orphan startup and beyond-page recovery pass. Image mount/unmount now shares the retained backup pool, with local effect journals that pause optional indexing before an unknown UDisks mount location is admitted. Held-authority, cancellation, receipt-fault and provable restart cases pass; measurement admission, retention and the broader root/loop-lifetime responsiveness matrices remain. Safety validation of configured ordinary roots can still wait on those filesystems; independent-sync checks here use one-shot reviewed destinations. Large-export responsiveness and remaining mount-control scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
-| 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
+| 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Clean eject and changed device/mount-path reconnection now preserve both offline edits and union on all three formats. Unsafe removal during accepted writes still needs its separate interruption evidence. |
 | 2.3 | Partial | Watch overflow clears the root observation epoch; coarse/unknown filesystems never reuse full-scan fingerprints. Full-scan fingerprint reuse additionally requires complete watch registration, while named paths retain fresh bounded comparisons. Native lost-event same-size/mtime conflicts and watcher-unavailable recovery pass. Execution now also enforces per-root cache capabilities, and directory-change fallbacks use fresh scans instead of inheriting named-path coverage. Poisoned-cache controls verify both branches and native coarse-source refusal. Further reconnect matrices remain. |
 | 2.4 | Partial | Persistent collision-safe complete conflict variants tested; provenance and repeat behavior need a full matrix. |
 | 2.5 | Partial | Deletion and delete-versus-edit tests exist; event-loss and cancellation matrices remain. |
@@ -5102,3 +5102,65 @@ request nonce in its returned object. Legacy records, missing host context and
 inconsistent origins therefore remain protected rather than adopting or deleting
 unidentified mappings. The remaining provider, identity, interruption, UI and
 resource requirements above keep their original scope.
+
+## Native reconnect and cloned-partition checkpoint
+
+`service::tests::native_reconnect::native_reconnect_preserves_offline_edits_and_suspends_cloned_partition_ids`
+uses a clean copied GPT image with a fresh partition UUID inside the disposable
+native-filesystem guest. The runner's source is unmounted before copying and
+restored immediately afterward. The same headless service stays running through
+safe eject, detachment, relocation, offline edits, remount and clone ambiguity.
+All loop devices, images and namespace mounts belong to this fixture; no host
+block device or privileged host mount is used.
+
+The fixture ejects through the daemon so its retained write/read owners retire
+before normal unmount. It reserves the old loop number with an unrelated blank
+fixture, then reattaches the same partition at a different device path. Another
+private mount namespace performs the portable-side offline edit while the live
+owner's namespace still observes an unmounted partition. Both report edits keep
+their previous modification times and their ten-byte lengths. Local and portable
+one-sided additions and a local deletion are also made while disconnected.
+
+Remounting at a different directory converges automatically, without an explicit
+Sync request: both complete conflict variants and one-sided additions exist on
+both sides, the deleted file is restored under the default policy, and each
+original retains its own edited contents. Persistent enrollment ID/evidence and
+one conflict survive subsequent comparisons. Assertions verify changed device,
+kernel disk sequence and mount path with unchanged stable identity/evidence.
+Parent-drive capacity matches the complete GPT image and the selected partition
+retains its distinct reported capacity, filesystem UUID and layout facts.
+
+A second clean snapshot is attached with the same partition UUID. Discovery
+reports two ambiguous entries. Before any explicit retry, automatic reconciliation
+records the ambiguity; it does not install the queued local file. Explicit Sync
+also refuses. The cloned raw image remains byte-for-byte unchanged. Detaching
+only the clone automatically resumes synchronization to the remaining partition.
+
+The final source passes all three formats in
+`/tmp/portable-drive-native-reconnect-final/report.json`, with no timeout and a
+successful QEMU exit. FAT32, exFAT and NTFS3 take 17.44, 16.09 and 16.03 seconds
+respectively. `NATIVE_RECONNECTED_DEVICE` markers show the actual old/new device
+and mount paths. The earlier corrected fixture also passes all three formats in
+`/tmp/portable-drive-native-reconnect-v2/report.json`. The first fixture attempt
+used ordinary unmount despite retained owner handles and copied mounted NTFS;
+its busy/dirty-image failures in `...-v1/report.json` are not accepted evidence.
+
+The ordinary backend passes 268 tests with 117 opt-in cases ignored in
+`/tmp/portable-drive-native-reconnect-backend-final.log`. Backend all-target Clippy
+passes in `/tmp/portable-drive-native-reconnect-clippy-final.log`. The shared test
+enrollment helper now selects the addressed drive/subtree/local pair rather than
+popping an arbitrary status row; native, ordinary and unavailable-root fixtures
+reuse it. Changed-source rustfmt and whitespace checks pass.
+
+Relative to `pre-native-drive-reconnect`, the architecture report adds 335 NLOC,
+13 functions and 25 aggregate CCN, entirely in test support. Average/max CCN,
+duplication, clone groups and cycles remain 3.50/274, 6.93%, 4,321 and 144. There
+is no new production hotspot; consolidating enrollment removed the initial new
+clone. The tool still classifies the aggregate test growth as REGRESSION and
+lists unchanged touched-file clone/cycle regions. Report:
+`.fitness/portable-drives-native-reconnect-local.json`.
+
+This closes the specific changed-device-path requirement in 1.1 and strengthens
+clone and reconnect evidence in 1.2/2.2/2.7/7.2. It does not prove physical removal
+during accepted writes, fallback enrollment disclosure, failed inventory probes,
+or every remaining interruption requirement. Those items remain open.

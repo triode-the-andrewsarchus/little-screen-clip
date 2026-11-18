@@ -389,6 +389,13 @@ watcher creation at that interval. Explicit synchronization remains available.
 
 The daemon validates partition identity and additional device evidence before writing. Ambiguous cloned UUIDs suspend automatic synchronization. Local-folder replacement also requires re-enrollment rather than silently directing writes into a different directory.
 
+Native FAT32, exFAT and NTFS acceptance now verifies the same pair after a safe
+eject and a change to both its device and mount paths. Offline edits merge using
+the saved baseline, including preserved timestamps. Attaching a cloned partition
+ID suspends queued writes until the ambiguity disappears; the pair then resumes
+automatically. See the [native reconnect evidence](portable-drive-completion-audit.md#native-reconnect-and-cloned-partition-checkpoint).
+
+
 ## Offline catalogs and exclusions
 
 **Save / update catalog…** stores hierarchy, names, sizes, types, available modification times, and coverage status without copying file contents. **Mount saved catalog** exposes a read-only ordinary filesystem view. Saved catalogs remain accessible from the sidebar after the original drive is removed.
