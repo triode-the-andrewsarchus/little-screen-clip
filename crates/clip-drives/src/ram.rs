@@ -435,28 +435,7 @@ impl Mounted {
     }
     #[cfg(test)]
     pub fn with_suspended(&mut self, test: impl FnOnce()) {
-        struct Resume<'a>(&'a mut Child);
-        impl Drop for Resume<'_> {
-            fn drop(&mut self) {
-                // SAFETY: the borrowed child remains unreaped for this scope.
-                unsafe { libc::kill(self.0.id() as i32, libc::SIGCONT) };
-            }
-        }
-        assert!(!self.exited(), "Cannot suspend an exited fixture helper");
-        let resume = Resume(&mut self.child);
-        let pid = resume.0.id() as i32;
-        // SAFETY: this is our live, unreaped fixture child. No other owner waits.
-        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
-        let mut status = 0;
-        // SAFETY: status is writable; WUNTRACED observes the owned child's stop.
-        assert_eq!(
-            unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) },
-            pid
-        );
-        assert!(libc::WIFSTOPPED(status));
-        assert_eq!(libc::WSTOPSIG(status), libc::SIGSTOP);
-        test();
-        drop(resume);
+        crate::test_child::suspended(&mut self.child, test);
     }
 }
 impl Drop for Mounted {

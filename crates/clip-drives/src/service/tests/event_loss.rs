@@ -24,7 +24,7 @@ fn guest_unavailable_watcher_uses_periodic_fallback_and_recovers_when_capacity_r
     let queries = Arc::new(AtomicU64::new(0));
     let observed = queries.clone();
     let selector = drive.id.clone();
-    fs::write("/proc/sys/fs/inotify/max_user_instances", b"0").unwrap();
+    let _limit = Limit::set("max_user_instances", b"0");
     assert_eq!(inotify_instances(), 0);
     let service = Service::start_with_inventory(
         DriveConfig {
@@ -89,101 +89,142 @@ fn guest_unavailable_watcher_uses_periodic_fallback_and_recovers_when_capacity_r
     assert_eq!(inotify_instances(), 0);
 }
 
+struct Limit {
+    path: PathBuf,
+    original: Vec<u8>,
+}
+impl Limit {
+    fn set(name: &str, value: &[u8]) -> Self {
+        crate::require_disposable_guest();
+        let path = Path::new("/proc/sys/fs/inotify").join(name);
+        let original = fs::read(&path).unwrap();
+        fs::write(&path, value).unwrap();
+        Self { path, original }
+    }
+}
+impl Drop for Limit {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.path, &self.original);
+    }
+}
+
+#[test]
+#[ignore = "internal owned daemon child of the disposable event-overflow fixture"]
+fn inotify_owner_probe() {
+    crate::require_disposable_guest();
+    let root = PathBuf::from(std::env::var_os("LITTLE_CLIP_EVENT_LOSS_FIXTURE").unwrap());
+    assert!(root.starts_with("/work/tmp"));
+    let drive: Drive = serde_json::from_slice(&fs::read(root.join("drive.json")).unwrap()).unwrap();
+    let selected = drive.id.clone();
+    let service = Service::start_with_inventory(
+        DriveConfig {
+            sync_interval_seconds: 3600,
+            ..Default::default()
+        },
+        root.join("state"),
+        Arc::new(move || Ok(vec![drive.clone()])),
+    )
+    .unwrap();
+    finish(
+        &service,
+        DriveRequest::Pair {
+            drive: selected.clone(),
+            relative: PathBuf::new(),
+            local: root.join("local"),
+        },
+    );
+    fs::write(root.join("ready"), b"ready").unwrap();
+    let started = Instant::now();
+    let mut settled = false;
+    while !root.join("stop").exists() {
+        if !settled && root.join("settle").exists() {
+            // Observe unchanged drive facts without refreshing sync watches or
+            // running an explicit comparison that could conceal lost coverage.
+            finish(
+                &service,
+                DriveRequest::Rule {
+                    drive: selected.clone(),
+                    relative: "settle".into(),
+                    catalog: true,
+                    index: true,
+                },
+            );
+            fs::write(root.join("settled"), b"settled").unwrap();
+            settled = true;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "Overflow parent did not retire its child"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    service.shutdown().unwrap();
+}
+
 #[test]
 #[ignore = "changes inotify limits only inside a disposable guest"]
 fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_client() {
     let mut drive = native_fs::guest_drive();
-    fs::write("/proc/sys/fs/inotify/max_queued_events", b"64").unwrap();
+    let _limit = Limit::set("max_queued_events", b"64");
     let media = tempfile::tempdir_in(drive.mount.as_ref().unwrap()).unwrap();
     drive.mount = Some(media.path().into());
     fs::write(media.path().join("report.txt"), b"base").unwrap();
     fs::write(media.path().join("restore.txt"), b"restore by default").unwrap();
     let temp = tempfile::tempdir().unwrap();
     let local = temp.path().join("local");
-    let armed = Arc::new(AtomicBool::new(false));
-    let held = armed.clone();
-    let (entered, release, gate) = worker_gate();
-    let gate_source = temp.path().join("gate-source");
-    fs::create_dir(&gate_source).unwrap();
-    let gate_drive = fixture_drive(&gate_source, "overflow-owner-gate");
-    let inventory_drive = drive.clone();
-    let inventory: Inventory = Arc::new(move || {
-        if std::thread::current().name() == Some("portable-drive-owner")
-            && held.swap(false, Ordering::AcqRel)
-        {
-            gate();
-        }
-        Ok(vec![inventory_drive.clone(), gate_drive.clone()])
-    });
-    let service = Service::start_with_inventory(
-        DriveConfig {
-            sync_interval_seconds: 3600,
-            ..Default::default()
-        },
-        temp.path().join("state"),
-        inventory,
+    fs::write(
+        temp.path().join("drive.json"),
+        serde_json::to_vec(&drive).unwrap(),
     )
     .unwrap();
-    // Release the held owner before Service joins it if an assertion fails.
-    let cleanup_release = release;
-    finish(
-        &service,
-        DriveRequest::Pair {
-            drive: drive.id.clone(),
-            relative: PathBuf::new(),
-            local: local.clone(),
-        },
-    );
-    armed.store(true, Ordering::Release);
-    // Explicit enrollment still has a coordinator-owned stage. Hold that stage
-    // on a separate ordinary fixture so the native watcher truly stops draining;
-    // background sync inventory no longer provides a coordinator barrier.
-    let first_gate = accept(
-        &service,
-        DriveRequest::Pair {
-            drive: "part:overflow-owner-gate".into(),
-            relative: PathBuf::new(),
-            local: temp.path().join("gate-local-one"),
-        },
-    );
-    entered.recv_timeout(Duration::from_secs(10)).unwrap();
-    for index in 0..256 {
-        fs::write(media.path().join(format!("noise-{}", index % 2)), b"noise").unwrap();
-    }
-    // This inventory callback returns exactly the same drive facts. Recovery
-    // therefore cannot be explained by insertion/removal or the one-hour timer.
-    for (root, bytes) in [(media.path(), b"card"), (local.as_path(), b"host")] {
-        let mut file = File::options()
-            .read(true)
-            .write(true)
-            .open(root.join("report.txt"))
-            .unwrap();
-        let before = file.metadata().unwrap();
-        file.write_all(bytes).unwrap();
-        file.set_times(FileTimes::new().set_modified(before.modified().unwrap()))
-            .unwrap();
-        let after = file.metadata().unwrap();
-        assert_eq!(
-            (after.len(), after.mtime(), after.mtime_nsec()),
-            (before.len(), before.mtime(), before.mtime_nsec())
-        );
-    }
-    fs::remove_file(media.path().join("restore.txt")).unwrap();
+    let mut command = CommandRequest::new(std::env::current_exe().unwrap())
+        .args([
+            "service::tests::event_loss::inotify_owner_probe",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .die_with_parent()
+        .build_command();
+    command.env("LITTLE_CLIP_EVENT_LOSS_FIXTURE", temp.path());
+    let mut owner = crate::test_child::Owned(command.spawn().unwrap());
+    wait_contents(&temp.path().join("ready"), b"ready");
     let nested = Path::new("lost-directory/deep/edit.txt");
-    fs::create_dir_all(media.path().join(nested.parent().unwrap())).unwrap();
-    fs::write(media.path().join(nested), b"created after overflow").unwrap();
-    fs::write(local.join("local-only.txt"), b"union from local").unwrap();
-    cleanup_release.send(()).unwrap();
-    assert_eq!(
-        wait_operation(&service, &first_gate, |op| op.finished.is_some()).state,
-        "complete"
-    );
+    // No daemon thread can drain inotify while its owned process is stopped.
+    // Alternating names prevent event coalescing; >64 queued mutations force
+    // real kernel overflow with unchanged drive facts and a one-hour fallback.
+    crate::test_child::suspended(&mut owner.0, || {
+        for index in 0..256 {
+            fs::write(media.path().join(format!("noise-{}", index % 2)), b"noise").unwrap();
+        }
+        for (root, bytes) in [(media.path(), b"card"), (local.as_path(), b"host")] {
+            let mut file = File::options()
+                .read(true)
+                .write(true)
+                .open(root.join("report.txt"))
+                .unwrap();
+            let before = file.metadata().unwrap();
+            file.write_all(bytes).unwrap();
+            file.set_times(FileTimes::new().set_modified(before.modified().unwrap()))
+                .unwrap();
+            let after = file.metadata().unwrap();
+            assert_eq!(
+                (after.len(), after.mtime(), after.mtime_nsec()),
+                (before.len(), before.mtime(), before.mtime_nsec())
+            );
+        }
+        fs::remove_file(media.path().join("restore.txt")).unwrap();
+        fs::create_dir_all(media.path().join(nested.parent().unwrap())).unwrap();
+        fs::write(media.path().join(nested), b"created after overflow").unwrap();
+        fs::write(local.join("local-only.txt"), b"union from local").unwrap();
+    });
     wait_contents(&local.join(nested), b"created after overflow");
     wait_contents(&media.path().join("local-only.txt"), b"union from local");
     wait_contents(&media.path().join("restore.txt"), b"restore by default");
+    let db = Store::existing(&temp.path().join("state/drives.sqlite"), true).unwrap();
     let started = Instant::now();
     let conflict = loop {
-        let conflicts = status(&service).conflicts;
+        let conflicts = db.list::<DriveConflict>("conflict", 0, 100).unwrap();
         if let Some(conflict) = conflicts.into_iter().find(|conflict| conflict.complete) {
             break conflict;
         }
@@ -200,25 +241,25 @@ fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_c
     }
     assert_eq!(fs::read(media.path().join("report.txt")).unwrap(), b"card");
     assert_eq!(fs::read(local.join("report.txt")).unwrap(), b"host");
-    // Wait through another unchanged explicit inventory observation, allowing notifications
-    // produced by the recovery itself to settle before the later nested edit.
-    armed.store(true, Ordering::Release);
-    let second_gate = accept(
-        &service,
-        DriveRequest::Pair {
-            drive: "part:overflow-owner-gate".into(),
-            relative: PathBuf::new(),
-            local: temp.path().join("gate-local-two"),
-        },
-    );
-    entered.recv_timeout(Duration::from_secs(10)).unwrap();
-    cleanup_release.send(()).unwrap();
-    assert_eq!(
-        wait_operation(&service, &second_gate, |op| op.finished.is_some()).state,
-        "complete"
-    );
+    fs::write(temp.path().join("settle"), b"settle").unwrap();
+    wait_contents(&temp.path().join("settled"), b"settled");
     fs::write(media.path().join(nested), b"later nested portable edit").unwrap();
     wait_contents(&local.join(nested), b"later nested portable edit");
-    assert_eq!(status(&service).conflicts.len(), 1);
-    service.shutdown().unwrap();
+    assert_eq!(
+        db.list::<DriveConflict>("conflict", 0, 100).unwrap().len(),
+        1
+    );
+    fs::write(temp.path().join("stop"), b"stop").unwrap();
+    let started = Instant::now();
+    loop {
+        if let Some(status) = owner.0.try_wait().unwrap() {
+            assert!(status.success(), "Owned overflow daemon failed: {status}");
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "Overflow child did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

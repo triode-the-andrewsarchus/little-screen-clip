@@ -242,15 +242,6 @@ fn crash_owner_probe() {
     panic!("crash fixture owner was not terminated by its parent");
 }
 
-struct CrashOwner(std::process::Child);
-
-impl Drop for CrashOwner {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 #[test]
 #[ignore = "requires the disposable vm_ram.sh guest with bounded tmpfs mounts"]
 fn abrupt_daemon_death_recovers_an_external_unflushed_write() {
@@ -481,7 +472,7 @@ fn crash_case(edit: impl FnOnce(&Path) -> Option<File>, verify: impl Fn(&Path), 
         .die_with_parent()
         .build_command();
     command.env("LITTLE_CLIP_RAM_CRASH_FIXTURE", root);
-    let mut owner = CrashOwner(command.spawn().unwrap());
+    let mut owner = crate::test_child::Owned(command.spawn().unwrap());
     let started = Instant::now();
     let ram: RamSession = loop {
         if let Ok(bytes) = fs::read(root.join("ready.json"))

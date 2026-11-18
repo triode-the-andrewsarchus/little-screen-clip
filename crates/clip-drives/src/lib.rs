@@ -11,6 +11,8 @@ mod service;
 mod storage;
 mod store;
 mod sync;
+#[cfg(test)]
+mod test_child;
 mod watch;
 
 pub use catalog::mount_catalog;
