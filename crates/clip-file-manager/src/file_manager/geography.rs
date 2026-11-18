@@ -186,31 +186,7 @@ impl Viewer {
     }
 
     fn fit_document(&mut self) {
-        let mut min_lat = 90.0_f64;
-        let mut max_lat = -90.0_f64;
-        let mut min_lon = 180.0_f64;
-        let mut max_lon = -180.0_f64;
-        let mut any = false;
-        for feat in &self.document.features {
-            for path in &feat.paths {
-                for s in path {
-                    any = true;
-                    min_lat = min_lat.min(s.point.lat);
-                    max_lat = max_lat.max(s.point.lat);
-                    min_lon = min_lon.min(s.point.lon);
-                    max_lon = max_lon.max(s.point.lon);
-                }
-            }
-        }
-        if !any {
-            self.camera = GlobeCamera::default();
-            return;
-        }
-        self.camera.center_lat = ((min_lat + max_lat) * 0.5).clamp(-85.0, 85.0);
-        self.camera.center_lon = (min_lon + max_lon) * 0.5;
-        let span = (max_lat - min_lat).max(max_lon - min_lon).max(0.05);
-        // Start in 3D globe for continental/global files, and smooth-transition into 2D for local tracks.
-        self.camera.zoom = (90.0 / span).clamp(1.15, 64.0);
+        self.camera.fit_bounds(self.document.geographic_bounds);
     }
 
     fn poll_background(&mut self, ctx: &egui::Context) {

@@ -1432,6 +1432,23 @@ impl Default for GlobeCamera {
 }
 
 impl GlobeCamera {
+    /// Fits the document's compact, unwrapped geographic bounds, retaining the
+    /// chosen projection mode. Missing positions restore the default globe.
+    pub fn fit_bounds(&mut self, bounds: Option<[f64; 4]>) {
+        let Some([west, south, east, north]) = bounds else {
+            *self = Self::default();
+            return;
+        };
+        self.center_lat = ((south + north) * 0.5).clamp(-85.0, 85.0);
+        self.center_lon = wrap_lon((west + east) * 0.5);
+        let lat_span = (north - self.center_lat)
+            .abs()
+            .max((south - self.center_lat).abs())
+            * 2.0;
+        let span = lat_span.max(east - west).max(0.05);
+        self.zoom = (90.0 / span).clamp(1.15, 64.0);
+    }
+
     /// Returns `1.0` for full 3D globe, `0.0` for flat 2D map, and smoothstepped values between.
     pub fn globe_blend(&self) -> f64 {
         match self.mode {
@@ -2279,6 +2296,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fitting_dateline_documents_keeps_the_track_visible() {
+        let document = crate::geography::Document::geojson(
+            br#"{"type":"LineString","coordinates":[[179,0],[-179,0]]}"#,
+        )
+        .unwrap();
+        let mut camera = GlobeCamera::default();
+        camera.fit_bounds(document.geographic_bounds);
+        assert!(wrap_lon_delta(camera.center_lon - 180.0).abs() < 1e-8);
+        assert!(camera.zoom > 10.0);
+        for point in document.features.iter().flat_map(|f| &f.paths).flatten() {
+            let p = camera
+                .project(point.point.lat, point.point.lon, 960.0, 720.0)
+                .unwrap();
+            assert!((0.0..960.0).contains(&p[0]) && (0.0..720.0).contains(&p[1]));
+        }
+        camera.mode = ProjectionMode::Globe3D;
+        camera.fit_bounds(document.geographic_bounds);
+        assert_eq!(camera.mode, ProjectionMode::Globe3D);
+        camera.fit_bounds(None);
+        assert_eq!(camera.zoom, 1.0);
     }
 
     #[test]
