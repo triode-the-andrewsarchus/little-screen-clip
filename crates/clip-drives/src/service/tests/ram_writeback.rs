@@ -1,6 +1,7 @@
 //! Real bounded source-filesystem failures retain edits in a separate RAM mount.
 use super::*;
 mod source;
+mod usb;
 use std::{
     io::{Read, Write},
     os::{fd::OwnedFd, unix::net::UnixStream},
@@ -96,12 +97,7 @@ fn writeback_failure(inject: impl FnOnce(&source::Portable) -> source::Failure) 
             paused: true,
         },
     );
-    // Distinct old confirmation avoids a false pass when failed and successful
-    // requests finish within the timestamp's same one-second precision.
-    let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
-    let mut seeded: RamSession = db.get("ram", &ram.id).unwrap().unwrap();
-    seeded.last_flushed = Some(1);
-    db.put("ram", &ram.id, &seeded).unwrap();
+    source::seed_confirmation(&service, &ram);
 
     assert!(
         !fixture.drives.lock().unwrap()[1].read_only,
@@ -109,11 +105,7 @@ fn writeback_failure(inject: impl FnOnce(&source::Portable) -> source::Failure) 
     );
     let failure = inject(&source);
     let edits = vec![0x5a; 8 * 1024 * 1024];
-    fs::write(ram.path.join("edit"), &edits).unwrap();
-    File::open(ram.path.join("edit"))
-        .unwrap()
-        .sync_all()
-        .unwrap();
+    source::write_edit(&ram, &edits);
     let ram_free = rustix::fs::fstatvfs(File::open(&ram.path).unwrap()).unwrap();
     let available = ram_free.f_bavail.saturating_mul(ram_free.f_frsize);
     assert!(

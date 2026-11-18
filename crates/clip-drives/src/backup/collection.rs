@@ -214,6 +214,7 @@ impl Collection<'_> {
                     destination_hash: old.as_ref().and_then(|entry| entry.hash.as_deref()),
                     delta: self.incremental,
                     basic_metadata: false,
+                    staging: None,
                 },
                 self.cancel,
             );
@@ -225,7 +226,10 @@ impl Collection<'_> {
             &entry.path,
             old.as_ref(),
             self.cancel,
-            self.incremental,
+            sync::InstallOptions {
+                delta: self.incremental,
+                ..Default::default()
+            },
         )
     }
 }

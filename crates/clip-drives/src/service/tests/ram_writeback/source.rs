@@ -79,3 +79,18 @@ impl Failure {
         }
     }
 }
+
+/// Distinguish a failed retry from a confirmation in the same wall-clock second.
+pub(super) fn seed_confirmation(service: &Service, ram: &RamSession) {
+    let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
+    let mut saved: RamSession = db.get("ram", &ram.id).unwrap().unwrap();
+    saved.last_flushed = Some(1);
+    db.put("ram", &ram.id, &saved).unwrap();
+}
+
+/// Confirm the fixture's application write before removing native storage.
+pub(super) fn write_edit(ram: &RamSession, bytes: &[u8]) {
+    let path = ram.path.join("edit");
+    fs::write(&path, bytes).unwrap();
+    File::open(path).unwrap().sync_all().unwrap();
+}

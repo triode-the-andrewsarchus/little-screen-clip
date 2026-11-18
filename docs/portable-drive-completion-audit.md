@@ -23,7 +23,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 3.2 | Complete | Pinned filesystem and effective-user write/search/read-only checks select a usable tmpfs; RAM and backup admission share the directory check. A disposable guest covers /tmp with each native FAT32/exFAT/NTFS mount: all 36 selection cases pass, including XDG/shm fallback, read-only/unavailable candidates, explicit overrides and writable-tmpfs /tmp preference. Positive cases create 0700 private directories/0600 images on verified tmpfs, mount/write/read/discard successfully. Existing quota/restart/unmount tests pass. See the RAM-directory checkpoint. |
 | 3.3 | Complete | Bounded streaming runs on retained workers; initial and explicit-resume jobs use catch-up before successful ready publication. Per-file callback cases deterministically change a same-size/same-mtime source and add an unenumerated path after the first installation, with a one-pass negative control. Cancellation, missing source and changed source preserve accepted files, incomplete/paused state and pending work; verified retry enables browsing. Both cases pass on real FAT32/exFAT/NTFS sources and bounded RAM destinations. Live coordinator cancel/resume and 1 GB independent-session responsiveness pass. See the initial-population checkpoint. |
 | 3.4 | Complete | RAM sidebar shows connection state and bounded observed pending-path counts, with explicit full-check/unknown states. Menus and Jobs show the stable drive ID, RAM path and last confirmed drive sync separately from export history. Native removal/offline restart/reconnect and dark/light UI acceptance pass; acknowledgements preserve newer events and exports cannot advance drive confirmation. Counts remain advisory and never authorize eject/discard. See the RAM pending-status checkpoint. |
-| 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Native FAT32/exFAT/NTFS ENOSPC and kernel-read-only writeback now also preserve the old portable file, dirty RAM, pending state and prior confirmation, and recover after capacity/access returns. Device-transport and native interrupted-I/O matrices remain. |
+| 3.5 | Partial | Real bounded-media ENOSPC and controlled removal during a confirmed partial FUSE write pass. Failure/cancellation retain the original portable file, complete RAM edit, pending work and previous confirmation. Reconnect preserves both concurrent conflict variants and converges after catch-up. Native FAT32/exFAT/NTFS ENOSPC and kernel-read-only writeback now also preserve the old portable file, dirty RAM, pending state and prior confirmation, and recover after capacity/access returns. Controlled mid-write USB transport removal now passes on all three kernel filesystems, including retained RAM, further same-file offline edits/export, owner restart, actual replug and verified staging cleanup before union. Broader interrupted-I/O matrices remain. |
 | 3.6 | Partial | Eject includes paused ready RAM mirrors and refuses incomplete population/failed preflush. Native tests also queue eject and unconfirmed discard behind a held write, preserve ownership through cancellation, keep unrelated controls responsive and retain terminal results after reconnect. The same paused-session preflush/queued-discard barrier now passes with native full and read-only FAT32/exFAT/NTFS sources. Remaining interrupted-write and eject/discard cancellation combinations still need evidence. |
 | 3.7 | Partial | Native quota, restart, directory-fsync kill and cancellation fixtures pass. Bounded guest tests prove available-memory admission refusal, underlying-tmpfs exhaustion/recovery, acknowledged external writes retained across abrupt daemon death while held open, 13 namespace/metadata edits without later data writes/fsync, and immutable-flag recovery with correctly refused truncation. The helper propagates eviction/operation errors and flushes successful mutations before acknowledgement. Interrupted unacknowledged operations and broader concurrent pressure matrices remain. |
 | 4.1 | Partial | Lazy selection produces a five-minute review bound to retained partition/destination roots. Cancel/expiry, replaced roots, changed partition facts, one-shot destination after preference changes and failed preference writes are backend-tested. Pending reviews are bounded and released before unmount. Dark/light focused UI runs prove cancellation, file backup publication, and image review; alias and broader failure matrices remain. |
@@ -48,7 +48,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
 | 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Ordinary-sync completed-item cancellation, receipt/baseline rollback, killed-worker startup and retry now pass on FAT32/exFAT/NTFS. Additive receipt-schema migration preserves supported versions 1–3 and legacy progress without inventing completion. Other mutation types, interrupted-intent reconciliation and migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
-| 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. The filesystem matrix uses whole-volume loop files with filesystem-UUID fallback; partitioned-device image/flush lifecycles also pass on FAT32/exFAT/NTFS. Native RAM writeback additionally covers full and kernel-read-only sources on all three formats. Remaining mount-option and interrupted-I/O cases remain. |
+| 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. The filesystem matrix uses whole-volume loop files with filesystem-UUID fallback; partitioned-device image/flush lifecycles also pass on FAT32/exFAT/NTFS. Native RAM writeback additionally covers full and kernel-read-only sources on all three formats. The owned USB fixture also verifies actual mid-write transport removal/replug, native I/O failure, offline RAM/export/restart and staging recovery on all three kernel drivers. Remaining mount-option and interruption cases remain. |
 | 7.4 | Partial | Real FUSE, Btrfs, authorized partition-image/loop-provider and temporary read-only file-collection tests pass. Provider concurrency, interrupted-device and capability-failure matrices remain. |
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Filesystem-UUID fallback pairing, lazy backup review, exact bucket browsing, reconnect and service restart now also pass in both appearances. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
@@ -5564,3 +5564,100 @@ This establishes controlled real guest device disappearance/reappearance. The
 probe unmounts cleanly before removal; it does not close the active native-write
 or application recovery requirements in 3.5/3.6/7.3. Those are the next users of
 the fixture, alongside the original unfinished coverage/provider/UI gates.
+
+
+## Interrupted USB staging recovery checkpoint
+
+The previous status-only turn was no progress. This turn implements and verifies
+recovery for a production bug exposed by actual emulated USB removal: a failed
+`NamedTempFile` unlink on the absent card left a partial file that the next union
+copied into RAM. The failing FAT32 run is
+`/tmp/portable-drive-usb-writeback-v2/report.json`; it reached the intended leaked-
+staging assertion after native EIO, retained RAM, export and restart. Its later
+cleanup panic is not accepted as passing evidence.
+
+Shared checked copies now allow progress receipts to fail before the next payload
+write (commit `25613ad6`). A regression proves the first 256 KiB write remains
+unpublished and subsequent chunks are not written after a receipt failure.
+The Files caller still records ordinary byte progress through that fallible API.
+
+Ordinary sync and conflict-file copies now use a caller-owned local staging
+journal. The root primitive owns admitted descriptors, streaming/reflink output,
+metadata and installation; it has no Store/sync dependency. The journal commits
+a UUID name before exclusive creation, then a separate creation/empty-prefix
+receipt. Every completed chunk records its cumulative SHA-256 prefix before the
+next write. Successful installation and parent flush retire the record/proofs.
+The first intent atomically creates its proof table and upgrades the operational
+registry to version 4, which pre-journal daemons do not accept. Backup manifests
+and catalogs retain their own existing versions.
+
+Before either a named or complete user reconciliation, pending receipts require
+a bounded metadata-only inventory of the affected enrolled root. Known names can
+be found after parent renames and ASCII case normalization. Cleanup verifies the
+persisted length and checksum, even when the original RAM file has since changed.
+Both its original and deterministic quarantine name are known before deletion,
+so another interruption during cleanup does not invent a new untracked name.
+Uncertain creation, unproven lengths, changed contents, symlinks and duplicate
+candidates retain data and stop union; proof failures identify the candidate's
+path for review. These are safe refusals, not automatic repair claims.
+
+Host staging tests exercise empty/partial/full prefixes in both directions,
+renamed parents, normalized names, subsequent source edits, changed candidates,
+creation uncertainty, symlinks, duplicate names, unknown persisted lengths,
+quarantine/absent-stage recovery, reopened version-4 state and receipt faults.
+The complete backend suite passes 279 enabled tests with 122 opt-in cases ignored
+in `/tmp/portable-drive-usb-stage-backend-v5.log`. Shared stream tests pass three
+cases in `/tmp/portable-drive-usb-stage-core-v3.log`; the Files transfer suite
+passes four existing preservation/cancellation cases in
+`/tmp/portable-drive-usb-stage-files-copy-v5.log`. Affected all-target Clippy with
+the fixture feature and warnings denied passes in
+`/tmp/portable-drive-usb-stage-clippy-v6.log`.
+
+The final native application run passes on vfat, exfat and ntfs3 in
+`/tmp/portable-drive-usb-stage-v6-vfat/report.json`,
+`/tmp/portable-drive-usb-stage-v6-exfat/report.json` and
+`/tmp/portable-drive-usb-stage-v6-ntfs3/report.json`. Each report records exit 0,
+no timeout and exactly one completed unplug/replug sequence. The test fsyncs a
+1 MiB prefix of an 8 MiB write before requesting actual QMP frontend deletion;
+the native write fails with EIO, preserves the original target and old sync
+confirmation, and leaves the RAM copy browsable/dirty. Another partition's rule
+request succeeds while the writer is held. After further same-file offline edits,
+full export and service restart, replug exposes the actual old partial file.
+Recovery removes it before union, installs the newer RAM bytes and offline-added
+file, and leaves no staging filename in either tree. The verifier and exact test
+binary digest are in `/tmp/portable-drive-usb-stage-v6-proof.json`.
+
+The existing native full-media and kernel-read-only writeback/eject fixtures also
+pass again with the new journal on all three source formats (six test
+invocations) in
+`/tmp/portable-drive-usb-stage-v6-pressure-regression/report.json`. The guest exits
+0 without timeout; every filesystem reports two passed tests and the expected
+ENOSPC/EROFS refusals before successful retry.
+
+The first exFAT attempt selected the tool tree's userspace mount helper and failed
+its read-only-to-writable remount; that failed run is not kernel-driver evidence.
+The guest now uses `mount --internal-only`, and the Rust fixture checks the actual
+mounted filesystem before writing. All final runs use the specified kernel
+filesystem. No host block node, privileged mount or system service is used.
+
+Architecture review first found new recovery hotspots (CCN 26 and 18) and two
+repeated fixture blocks. Recovery now owns its two snapshot lifetimes across a
+bounded receipt walk, separates ownership/content attestation from deletion, and
+shares write/confirmation fixture setup. No newly introduced function exceeds the hotspot threshold after those
+revisions; clone-group and cycle counts are unchanged. The existing shared
+stream gains one fallible-progress branch (CCN 16 to 17), which Valknut also
+flags as a newly classified high-complexity entity. Aggregate growth at the final reviewed revision
+is 1,073 NLOC, 41 functions and 160 aggregate CCN; average/max CCN remain 3.50/274,
+duplication changes 6.91% to 6.90%, and clones/cycles remain 4,322/145. Required
+fallible-receipt handling and pre-scan recovery add branches to existing shared
+stream/named/full-sync functions. The tool still reports REGRESSION, including
+reordered unrelated cycles; the feature-wide architecture gate remains open.
+Its apparent `install` improvement conflates two same-named functions and is not
+claimed as a measured simplification. Report:
+`.fitness/portable-drives-usb-stage-final.json`.
+
+Items 1.4, 3.5, 3.6 and 7.3 remain Partial. This covers ordinary/conflict regular-
+file staging and controlled transport removal, not every persisted torn length,
+electrical power failure, directory/link mutation, second-removal cleanup,
+cancellation/eject/discard combination or conflict/export/backup item receipt.
+The other provider, identity, UI and final acceptance gates remain unchanged.

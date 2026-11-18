@@ -2,7 +2,7 @@
 use crate::{Result, cancelled};
 use little_clip_core::{
     drives::valid_relative,
-    file_source::{FileSource, copy_checked},
+    file_source::FileSource,
     kernel_interface::{self, MountIdentity, Namespace},
 };
 use std::{
@@ -11,8 +11,12 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
+#[cfg(test)]
+pub(crate) mod copy_gate;
+mod staging;
+use staging::Temporary;
 
-pub(crate) struct CopySpec<'a> {
+pub(crate) struct CopySpec<'a, 's> {
     pub source: &'a Path,
     pub destination: &'a Path,
     pub source_hash: Option<&'a str>,
@@ -20,6 +24,13 @@ pub(crate) struct CopySpec<'a> {
     pub delta: bool,
     /// Restore mode/mtime here; false when the caller owns richer restoration.
     pub basic_metadata: bool,
+    pub staging: Option<&'s mut dyn CopyStage>,
+}
+
+/// A caller-owned journal; root traversal and payload admission remain here.
+pub(crate) trait CopyStage {
+    fn create(&mut self, parent: &File) -> Result<tempfile::NamedTempFile>;
+    fn progress(&mut self, bytes: u64) -> Result<()>;
 }
 
 pub(crate) struct Root {
@@ -398,7 +409,7 @@ impl Root {
         }
         Ok(())
     }
-    pub fn copy(&self, from: &Root, spec: CopySpec<'_>, cancel: &AtomicBool) -> Result<u64> {
+    pub fn copy(&self, from: &Root, spec: CopySpec<'_, '_>, cancel: &AtomicBool) -> Result<u64> {
         let CopySpec {
             source: path,
             destination: target,
@@ -406,6 +417,7 @@ impl Root {
             destination_hash: expected,
             delta,
             basic_metadata,
+            staging,
         } = spec;
         cancelled(cancel)?;
         from.validate()?;
@@ -427,29 +439,9 @@ impl Root {
         } else if previous.is_some() {
             return Err("Destination appeared during synchronization".into());
         }
-        let mut temporary = tempfile::NamedTempFile::new_in(anchor(&parent))?;
-        let cloned = if delta {
-            old.as_ref().is_some_and(|old| {
-                // SAFETY: FICLONE borrows two live regular-file descriptors.
-                unsafe {
-                    libc::ioctl(
-                        temporary.as_file().as_raw_fd(),
-                        0x40049409_u64 as libc::c_ulong,
-                        old.as_raw_fd(),
-                    ) == 0
-                }
-            })
-        } else {
-            false
-        };
-        let stats = copy_checked(
-            &mut input,
-            temporary.as_file_mut(),
-            cancel,
-            cloned,
-            source_hash,
-            |_| Ok(()),
-        )?;
+        let mut temporary = Temporary::new(self, target, &parent, staging)?;
+        let cloned = temporary.reflink(delta, old.as_ref());
+        let stats = temporary.stream(&mut input, cancel, cloned, source_hash)?;
         if let Some(expected) = expected
             && self.digest(target, u64::MAX, cancel)? != expected
         {
@@ -461,19 +453,22 @@ impl Root {
         }
         if basic_metadata {
             temporary
+                .file
                 .as_file()
                 .set_permissions(metadata.permissions())?;
             temporary
+                .file
                 .as_file()
                 .set_times(fs::FileTimes::new().set_modified(metadata.modified()?))?;
         }
-        temporary.as_file().sync_all()?;
+        temporary.file.as_file().sync_all()?;
         self.validate()?;
         from.validate()?;
         if old.is_some() {
-            temporary.persist(&destination).map_err(|e| e.error)?;
+            temporary.file.persist(&destination).map_err(|e| e.error)?;
         } else {
             temporary
+                .file
                 .persist_noclobber(&destination)
                 .map_err(|e| e.error)?;
         }
@@ -484,12 +479,13 @@ impl Root {
         &self,
         relative: &Path,
         cancel: &AtomicBool,
+        quarantine_name: Option<&std::ffi::OsStr>,
         verify: impl Fn(&Path) -> Result<()>,
     ) -> Result<()> {
         let (parent, path) = self.parent(relative, false)?;
         verify(&path)?;
         cancelled(cancel)?;
-        let name = format!(".little-clip-delete-{}", uuid::Uuid::new_v4());
+        let name = deletion_name(quarantine_name)?;
         let quarantine = anchor(&parent).join(&name);
         little_clip_core::file_source::rename_noreplace(&path, &quarantine)?;
         let result: Result<()> = (|| {
@@ -518,9 +514,18 @@ impl Root {
         Ok(())
     }
     pub fn delete_file(&self, relative: &Path, expected: &str, cancel: &AtomicBool) -> Result<()> {
+        self.delete_file_as(relative, expected, cancel, None)
+    }
+    pub fn delete_file_as(
+        &self,
+        relative: &Path,
+        expected: &str,
+        cancel: &AtomicBool,
+        quarantine: Option<&std::ffi::OsStr>,
+    ) -> Result<()> {
         let file = self.input(relative)?;
         let identity = file.metadata()?;
-        self.remove_verified(relative, cancel, |path| {
+        self.remove_verified(relative, cancel, quarantine, |path| {
             let held = kernel_interface::open_content(path, false)?;
             let metadata = held.metadata()?;
             if metadata.dev() != identity.dev()
@@ -543,7 +548,7 @@ impl Root {
         identity: (u64, u64),
         cancel: &AtomicBool,
     ) -> Result<()> {
-        self.remove_verified(relative, cancel, |path| {
+        self.remove_verified(relative, cancel, None, |path| {
             let metadata = fs::symlink_metadata(path)?;
             if !metadata.file_type().is_symlink()
                 || (metadata.dev(), metadata.ino()) != identity
@@ -559,6 +564,16 @@ impl Root {
             .metadata(relative)?
             .is_some_and(|m| m.dev() == dev && m.ino() == ino))
     }
+}
+
+fn deletion_name(requested: Option<&std::ffi::OsStr>) -> Result<std::ffi::OsString> {
+    let name = requested
+        .map(std::ffi::OsString::from)
+        .unwrap_or_else(|| format!(".little-clip-delete-{}", uuid::Uuid::new_v4()).into());
+    if Path::new(&name).file_name() != Some(name.as_os_str()) || !valid_relative(Path::new(&name)) {
+        return Err("Invalid deletion quarantine name".into());
+    }
+    Ok(name)
 }
 
 fn reliable_change_metadata(filesystem: u64) -> bool {
@@ -833,6 +848,7 @@ mod tests {
                     destination_hash: None,
                     delta: false,
                     basic_metadata: true,
+                    staging: None,
                 },
                 &cancel,
             )
@@ -851,6 +867,7 @@ mod tests {
                         destination_hash: None,
                         delta: false,
                         basic_metadata: true,
+                        staging: None,
                     },
                     &cancel
                 )
@@ -867,6 +884,7 @@ mod tests {
                     destination_hash: Some(&hash),
                     delta: true,
                     basic_metadata: true,
+                    staging: None,
                 },
                 &cancel,
             )

@@ -50,7 +50,8 @@ impl Store {
         // Version 2 gates typed catalog coverage. Registry version 3 additionally
         // gates image-control journals, so older daemons cannot ignore an unknown
         // mount outcome and relax its fail-closed indexing policy.
-        if !matches!(version, 1..=3) {
+        // Version 4 gates unpublished sync staging ownership and prefix proofs.
+        if !matches!(version, 1..=4) {
             return Err("Unsupported drive database version".into());
         }
         Ok(Self(db))

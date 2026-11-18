@@ -73,7 +73,7 @@ impl Save {
                 &entry.path,
                 None,
                 cancel,
-                false,
+                Default::default(),
             )?;
             count += 1;
             progress(count, bytes);

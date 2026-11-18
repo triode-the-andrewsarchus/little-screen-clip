@@ -1302,6 +1302,7 @@ fn native_fat32_size_limit_is_refused_before_reading_sparse_payload() {
                 destination_hash: None,
                 delta: false,
                 basic_metadata: true,
+                staging: None,
             },
             &fixture.cancel,
         )

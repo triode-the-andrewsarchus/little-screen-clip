@@ -35,6 +35,11 @@ fn signature(entry: &Entry) -> Result<String> {
         _ => Err("Unverified tree entry cannot authorize synchronization".into()),
     }
 }
+#[derive(Default)]
+pub(crate) struct InstallOptions<'a> {
+    pub delta: bool,
+    pub staging: Option<&'a mut dyn crate::root::CopyStage>,
+}
 pub(crate) fn install(
     from: &Root,
     to: &Root,
@@ -42,7 +47,7 @@ pub(crate) fn install(
     target: &Path,
     existing: Option<&Entry>,
     cancel: &AtomicBool,
-    delta: bool,
+    options: InstallOptions<'_>,
 ) -> Result<u64> {
     match entry.kind.as_str() {
         "directory" => {
@@ -56,8 +61,9 @@ pub(crate) fn install(
                 destination: target,
                 source_hash: entry.hash.as_deref(),
                 destination_hash: existing.and_then(|e| e.hash.as_deref()),
-                delta,
+                delta: options.delta,
                 basic_metadata: true,
+                staging: options.staging,
             },
             cancel,
         ),
@@ -118,6 +124,7 @@ fn save_baseline(db: &Store, pair: &str, path: &Path, hash: Option<&str>) -> Res
 mod completion;
 mod conflicts;
 pub(crate) mod fingerprints;
+mod staging;
 fn delete(root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
     match entry.kind.as_str() {
         "file" => root.delete_file(
@@ -153,6 +160,41 @@ struct Reconcile<'a> {
     operation: Option<&'a str>,
 }
 impl Reconcile<'_> {
+    fn install(
+        &self,
+        from: &Root,
+        to: &Root,
+        entry: &Entry,
+        target: &Path,
+        existing: Option<&Entry>,
+    ) -> Result<u64> {
+        if entry.kind != "file" {
+            return install(
+                from,
+                to,
+                entry,
+                target,
+                existing,
+                self.cancel,
+                InstallOptions::default(),
+            );
+        }
+        let mut stage = staging::Copy::new(self, to, target, entry)?;
+        let written = install(
+            from,
+            to,
+            entry,
+            target,
+            existing,
+            self.cancel,
+            InstallOptions {
+                staging: Some(&mut stage),
+                ..Default::default()
+            },
+        )?;
+        stage.finish()?;
+        Ok(written)
+    }
     fn path(&mut self, path: &Path, a: Option<Entry>, b: Option<Entry>) -> Result<()> {
         let blocked:bool=self.db.0.query_row("SELECT EXISTS(SELECT 1 FROM sync_blocked WHERE pair=?1 AND substr(?2,1,length(prefix))=prefix)",params![self.pair.id,path.as_os_str().as_bytes()],|r|r.get(0))?;
         if blocked {
@@ -219,7 +261,7 @@ impl Reconcile<'_> {
                 delete(from, entry, self.cancel)?;
                 self.commit(path, None, [(portable_to_local, None)])?;
             } else {
-                let bytes = install(from, to, entry, path, existing, self.cancel, false)?;
+                let bytes = self.install(from, to, entry, path, existing)?;
                 self.report.bytes += bytes;
                 self.report.files += 1;
                 if existing.is_none() && old.is_some() && old.as_deref() != hash {
@@ -255,6 +297,9 @@ pub(crate) fn changed(
         reuse: false,
         ..options
     };
+    if staging::pending(db, pair)? {
+        return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, options);
+    }
     let mut relative = std::collections::BTreeSet::new();
     for path in paths {
         for root in [portable, local] {
@@ -353,6 +398,7 @@ pub(crate) fn synchronize_with(
     if portable.overlap(local) {
         return Err("Sync roots overlap".into());
     }
+    staging::recover(db, pair, roots, cancel)?;
     let a = format!("{}:portable:next", pair.id);
     let b = format!("{}:local:next", pair.id);
     let provenance = fingerprints::Provenance::capture(pair, portable).ok();

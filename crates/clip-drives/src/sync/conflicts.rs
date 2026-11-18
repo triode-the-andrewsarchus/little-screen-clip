@@ -150,15 +150,7 @@ impl Reconcile<'_> {
                         );
                     }
                 } else {
-                    install(
-                        &tree.root,
-                        &target,
-                        &child,
-                        &child.path,
-                        None,
-                        cancel,
-                        false,
-                    )?;
+                    self.install(&tree.root, &target, &child, &child.path, None)?;
                 }
             }
         } else if let Some(existing) = scan::observe(to, name, true, u64::MAX, cancel)? {
@@ -166,7 +158,7 @@ impl Reconcile<'_> {
                 return Err("A preserved variant was edited; both originals retained".into());
             }
         } else {
-            install(from, to, entry, name, None, cancel, false)?;
+            self.install(from, to, entry, name, None)?;
         }
         Ok(())
     }

@@ -17,6 +17,16 @@ Keep `clip-drive-mount` beside `little-clipd`. Catalog mounts use FUSE and `fuse
 
 A completed copy appears as a separate **RAM** entry. Browse and edit that entry to commit locally first; the daemon reconciles those edits back to the connected partition. Ejecting or physically removing the partition leaves the RAM entry accessible. Reconnection compares both copies with the last common state before propagating edits.
 
+Ordinary sync and conflict-file copies journal their unpublished staging names and
+SHA-256 prefix fingerprints in the daemon's local database. A returned drive is
+checked before its files can enter union sync. Matching interrupted files are
+removed through verified, recoverable quarantine names; edited, duplicated or
+otherwise unproven candidates stop reconciliation with a retained-data error.
+RAM remains available for further edits and export. The journal stores metadata
+and hashes rather than payload bytes, and adds no persistent control file to the
+removable partition. Its first use upgrades the local registry to version 4;
+older daemons refuse that registry instead of overlooking pending staging.
+
 The RAM sidebar reports distinct observed paths awaiting reconciliation, including
 renames and removals. These are queued observations rather than an exact count of
 different file contents. Each session tracks at most 4096 names and 1 MiB of path

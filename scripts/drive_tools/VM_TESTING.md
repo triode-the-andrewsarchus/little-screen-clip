@@ -349,7 +349,9 @@ That limitation remains in the completion audit.
 
 New catalogs use database version 2 so a version-1 helper cannot silently serve
 an unfinished directory as an empty folder. The current helper reads both
-versions. Keep ordinary drive state and backup manifests at version 1.
+versions. Backup manifests remain version 1. The operational registry has
+separate image-control and unpublished-sync journals, upgrading it to versions 3
+and 4 respectively; it must not be downgraded to run an older daemon.
 
 Build the current `clip-drive-mount` and backend test binary first, then select
 only the owned real-FUSE cases with:
@@ -380,3 +382,36 @@ scenario exercises partial labels, failure navigation, Retry and Dismiss in eith
 appearance. `--catalog-boundary-only` separately verifies excluded and genuinely
 empty folders. These use private compositor/IPC/configuration and owned FUSE
 mounts; the native FAT/exFAT/NTFS driver checks remain in the disposable guest.
+
+## USB removal during native writeback
+
+Use `vm_usb_writeback.sh` with `--removable-disk` and one source selection before
+the exact current backend test binary:
+
+```text
+--guest-script scripts/drive_tools/vm_usb_writeback.sh \
+--removable-disk /absolute/owned-256MiB-fixture.raw \
+--memory-mib 6144 --timeout 180 -- \
+--filesystem exfat /absolute/current/backend-test-binary \
+service::tests::ram_writeback::usb::virtual_usb_removal_retains_ram_and_reconciles_after_return \
+--exact --ignored --nocapture
+```
+
+Select `vfat`, `exfat` or `ntfs3` independently; this script reformats only the
+runner's owned emulated USB artifact. Mounts explicitly use `--internal-only`,
+and the Rust fixture verifies the actual kernel filesystem. A host tool tree
+may contain `mount.exfat`, whose userspace provider would otherwise hide which
+driver is tested and cannot necessarily reconfigure a read-only mount.
+
+The test pauses writeback at a confirmed 1 MiB staging prefix of an 8 MiB edit,
+then requests actual frontend removal over the private QMP socket. It requires
+native I/O failure, unchanged confirmation, continued RAM access, further edits
+to the same RAM file, and a full offline export. It restarts the service across
+reconnection, checks the original destination before writing, then requires
+successful newer-content union without transferring or retaining the partial
+staging file. The alternate partition's rule request must complete while the
+write is held. Keep Cargo and sweeps stopped while the guest reads the binaries.
+
+This is controlled USB transport removal, not an electrical power-loss test.
+Unknown persisted lengths or modified staging are deliberately retained and
+reported; their safe-refusal cases also have host-side backend tests.
