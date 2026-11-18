@@ -59,6 +59,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub font: Option<std::sync::Arc<super::font_strip::Document>>,
     pub binary: Option<std::sync::Arc<super::binary_strip::Document>>,
     pub document: Option<std::sync::Arc<super::text_strip::Document>>,
+    pub vcv: Option<std::sync::Arc<super::vcv_strip::Document>>,
     pub materials:
         Option<std::sync::Arc<Vec<std::sync::Arc<little_clip_core::model3d::materials::Material>>>>,
 }
@@ -79,6 +80,7 @@ impl PreviewData {
             waveform_colors: Vec::new(),
             music: None,
             document: None,
+            vcv: None,
             binary: None,
             font: None,
             book: None,

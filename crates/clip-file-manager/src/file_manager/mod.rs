@@ -62,6 +62,7 @@ mod tests;
 mod tree;
 mod type_navigation;
 mod ui;
+mod vcv_strip;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

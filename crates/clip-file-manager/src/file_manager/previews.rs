@@ -34,6 +34,7 @@ pub(super) struct EntryPreviews {
     rasters: Previews,
     raster_sizes: BTreeMap<uuid::Uuid, (RasterCacheKey, uuid::Uuid)>,
     image_hover: super::image_strip::Hover,
+    vcv_hover: super::vcv_strip::Hover,
     markdown_hover: super::markdown_hover::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
@@ -230,6 +231,7 @@ impl EntryPreviews {
         self.multisample.retain(visible);
         self.pdf_pages.retain(visible);
         self.image_hover.retain(visible);
+        self.vcv_hover.retain(visible);
         self.scenes.retain(visible);
         self.identities.retain(|path, _| visible.contains(path));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
@@ -285,6 +287,7 @@ impl EntryPreviews {
         self.cache.clear();
         self.pdf_pages.clear();
         self.image_hover.clear();
+        self.vcv_hover.clear();
         self.markdown_hover.clear();
         self.scenes.clear();
         self.materials.clear();
@@ -375,6 +378,21 @@ impl EntryPreviews {
                 .map(|(instrument, region)| {
                     super::DocumentPosition::SampleRegion(instrument, region)
                 })
+        } else if entry.is_vcv_patch() {
+            let id = self.identity(entry);
+            self.listing(entry);
+            let ready = self.cache.get(id);
+            super::vcv_strip::show_list(
+                ui,
+                row,
+                entry,
+                columns,
+                id,
+                ready,
+                &mut self.vcv_hover,
+                colors,
+            );
+            None
         } else if entry.is_toolpath() {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)
