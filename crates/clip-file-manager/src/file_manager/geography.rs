@@ -1,6 +1,7 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
 mod geometry;
 pub(super) mod gpu;
+mod river_coverage;
 mod terrain_download;
 mod tiles;
 

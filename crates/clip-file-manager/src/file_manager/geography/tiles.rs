@@ -115,7 +115,12 @@ impl Tiles {
                     SourceTile::prepare(&source, id, cancel)
                         .ok_or_else(|| "Map tile preparation cancelled".into())
                 });
-        let river_keys = RiverKey::visible(&camera, [rect.width(), rect.height()], layers.rivers);
+        let river_keys = RiverKey::visible(
+            &camera,
+            [rect.width(), rect.height()],
+            layers.rivers,
+            wanted.iter().map(|tile| tile.level).max().unwrap_or(0),
+        );
         let source = assets.clone();
         let river_error = self.rivers.update(
             &river_keys,

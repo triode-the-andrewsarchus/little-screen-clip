@@ -1,8 +1,9 @@
 //! Geographic vector batches prepared once on a worker, projected by the GPU.
+use super::river_coverage::{Coverage, mask_represents, spans};
 use little_clip_core::geography::basemap::{
-    BasemapAssets, GlobeCamera,
+    BasemapAssets, GlobeCamera, GrwlMaskStore,
     tiles::{TileId, surface_tiles},
-    wrap_lon_delta,
+    wrap_lon, wrap_lon_delta,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -66,13 +67,13 @@ impl Layer {
                 ([0.15, 0.40, 0.67, 0.94], -1.0, false)
             }
             Self::RiverLarge if layers.rivers && zoom >= 2.5 => {
-                ([0.25, 0.57, 0.88, 0.65], -1.0, false)
-            }
-            Self::GrwlSmall if layers.rivers && zoom >= 6.0 => {
                 ([0.15, 0.40, 0.67, 0.94], -1.0, false)
             }
-            Self::RiverMedium if layers.rivers && zoom >= 4.5 => {
+            Self::GrwlSmall if layers.rivers && zoom >= 6.0 => {
                 ([0.25, 0.57, 0.88, 0.65], -1.0, false)
+            }
+            Self::RiverMedium if layers.rivers && zoom >= 4.5 => {
+                ([0.20, 0.49, 0.78, 0.78], -1.0, false)
             }
             Self::RiverSmall if layers.rivers && zoom >= 9.0 => {
                 ([0.25, 0.57, 0.88, 0.65], -1.0, false)
@@ -178,6 +179,44 @@ impl Builder {
                 &[a[0], a[1], b[0], b[1], c[0], c[1]],
             )
         }
+    }
+
+    fn river_line(
+        &mut self,
+        layer: Layer,
+        points: &[[f32; 2]],
+        width: f32,
+        cancel: &AtomicBool,
+        higher: Option<&Coverage>,
+        mask: Option<&GrwlMaskStore>,
+    ) -> Result<(), String> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Map preparation cancelled".into());
+        }
+        if higher
+            .is_some_and(|coverage| spans(points).all(|pair| coverage.covers(pair[0], pair[1])))
+        {
+            return Ok(());
+        }
+        let masked = mask.is_some_and(|mask| mask_represents(points, width, mask));
+        if !masked && higher.is_none() {
+            return self.line(layer, points, width, cancel);
+        }
+        for pair in spans(points) {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Map preparation cancelled".into());
+            }
+            if higher.is_some_and(|coverage| coverage.covers(pair[0], pair[1])) {
+                continue;
+            }
+            let lon = pair[0][0] as f64 + wrap_lon_delta((pair[1][0] - pair[0][0]) as f64) * 0.5;
+            let lat = (pair[0][1] as f64 + pair[1][1] as f64) * 0.5;
+            if masked && mask.is_some_and(|mask| mask.sample_water(lat, wrap_lon(lon)).is_some()) {
+                continue;
+            }
+            self.line(layer, &pair, width, cancel)?;
+        }
+        Ok(())
     }
 }
 fn length(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -286,9 +325,15 @@ impl Builder {
 pub(super) struct RiverKey {
     pub tile: TileId,
     detail: u8,
+    mask_level: u8,
 }
 impl RiverKey {
-    pub fn visible(camera: &GlobeCamera, size: [f32; 2], enabled: bool) -> BTreeSet<Self> {
+    pub fn visible(
+        camera: &GlobeCamera,
+        size: [f32; 2],
+        enabled: bool,
+        mask_level: u8,
+    ) -> BTreeSet<Self> {
         if !enabled || camera.zoom < 2.5 {
             return BTreeSet::new();
         }
@@ -312,7 +357,11 @@ impl RiverKey {
         };
         surface_tiles(camera, size[0], size[1], level)
             .into_iter()
-            .map(|tile| Self { tile, detail })
+            .map(|tile| Self {
+                tile,
+                detail,
+                mask_level,
+            })
             .collect()
     }
     pub fn prepare(self, assets: &BasemapAssets, cancel: &AtomicBool) -> Result<Scene, String> {
@@ -336,6 +385,11 @@ impl RiverKey {
             floats: 0,
             target: Some(self.tile),
         };
+        let mask = assets.grwl_masks.as_ref().filter(|_| self.mask_level >= 8);
+        // A mask narrower than a couple of raster texels can disappear during
+        // resampling. Keep its centerline until the raster can resolve the river.
+        let mask_width = 1.5 * 111_320. * 180. / (256. * (1u32 << self.mask_level) as f64);
+        let mut coverage = Coverage::new(self.tile);
         if let Some(grwl) = &assets.grwl_summary {
             for seg in grwl.query_bbox(
                 west,
@@ -345,7 +399,11 @@ impl RiverKey {
                 min_width,
                 usize::MAX,
             ) {
-                b.line(
+                if !coverage.intersects(&seg.points) {
+                    continue;
+                }
+                coverage.insert(&seg.points, seg.width_med_m)?;
+                b.river_line(
                     if seg.width_med_m >= 90.0 {
                         Layer::GrwlLarge
                     } else {
@@ -354,6 +412,8 @@ impl RiverKey {
                     &seg.points,
                     seg.width_med_m,
                     cancel,
+                    None,
+                    mask.filter(|_| seg.width_med_m as f64 >= mask_width),
                 )?;
             }
         }
@@ -366,7 +426,11 @@ impl RiverKey {
                 min_order,
                 usize::MAX,
             ) {
-                b.line(
+                if !coverage.intersects(&seg.points) {
+                    continue;
+                }
+                let width = (7.2 * seg.dis_cms.max(1.0).sqrt()).clamp(50.0, 2400.0);
+                b.river_line(
                     if seg.ord_stra >= 6 {
                         Layer::RiverLarge
                     } else if seg.ord_stra >= 4 {
@@ -375,8 +439,10 @@ impl RiverKey {
                         Layer::RiverSmall
                     },
                     &seg.points,
-                    (7.2 * seg.dis_cms.max(1.0).sqrt()).clamp(50.0, 2400.0),
+                    width,
                     cancel,
+                    Some(&coverage),
+                    mask.filter(|_| width as f64 >= mask_width),
                 )?;
             }
         }
@@ -434,6 +500,158 @@ fn triangulate(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<[[f32;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observed_masks_replace_both_centerlines_and_retain_uncovered_waterways() {
+        use std::{fs, path::Path};
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("grwl_masks")).unwrap();
+        let file = fs::File::create(root.path().join("grwl_masks/river.tif")).unwrap();
+        let pixels: Vec<u8> = (0..1024).map(|i| u8::from(i / 32 == 16)).collect();
+        image::ImageEncoder::write_image(
+            image::codecs::tiff::TiffEncoder::new(file),
+            &pixels,
+            32,
+            32,
+            image::ExtendedColorType::L8,
+        )
+        .unwrap();
+        let index = serde_json::json!([{
+            "file":"river.tif", "epsg":4326, "origin":[0.,0.032], "scale":[0.001,0.001],
+            "width":32, "height":32, "min_lon":0., "max_lon":0.032, "min_lat":0., "max_lat":0.032
+        }]);
+        fs::write(
+            root.path().join("grwl_masks_idx_v2.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        let mask = GrwlMaskStore::load_or_index(Path::new(root.path())).unwrap();
+        let points = [[0.002, 0.0155], [0.010, 0.0155], [0.030, 0.0155]];
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        coverage.insert(&points, 200.).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut b = Builder {
+            batches: BTreeMap::new(),
+            floats: 0,
+            target: None,
+        };
+        b.river_line(Layer::GrwlLarge, &points, 200., &cancel, None, Some(&mask))
+            .unwrap();
+        b.river_line(
+            Layer::RiverLarge,
+            &points,
+            200.,
+            &cancel,
+            Some(&coverage),
+            Some(&mask),
+        )
+        .unwrap();
+        assert_eq!(b.floats, 0, "Three providers drew the same river");
+        // The mask alone can replace an offset HydroRIVERS line without GRWL.
+        let offset = points.map(|p| [p[0], p[1] + 0.0015]);
+        b.river_line(Layer::RiverLarge, &offset, 100., &cancel, None, Some(&mask))
+            .unwrap();
+        assert_eq!(
+            b.floats, 0,
+            "Mask-only coverage left a duplicate centerline"
+        );
+        // Land in a mask rectangle does not establish coverage of another river.
+        let other = points.map(|p| [p[0], 0.028]);
+        b.river_line(Layer::RiverSmall, &other, 50., &cancel, None, Some(&mask))
+            .unwrap();
+        assert!(
+            b.floats > 0,
+            "An unmapped tributary inside the mask bounds disappeared"
+        );
+        let partial = [
+            [0.002, 0.0155],
+            [0.01, 0.0155],
+            [0.02, 0.0155],
+            [0.03, 0.0155],
+            [0.04, 0.0155],
+            [0.05, 0.0155],
+        ];
+        b.river_line(Layer::GrwlLarge, &partial, 200., &cancel, None, Some(&mask))
+            .unwrap();
+        let fallback: Vec<_> = b
+            .batches
+            .iter()
+            .filter(|((_, l), _)| *l == Layer::GrwlLarge)
+            .flat_map(|(_, v)| v.chunks_exact(6))
+            .collect();
+        assert!(
+            !fallback.is_empty(),
+            "Fallback stopped at the mask boundary"
+        );
+        assert!(fallback.iter().all(|p| p[0] > 0.03));
+    }
+
+    #[test]
+    fn centerline_fallback_keeps_unmatched_tributaries_and_partial_coverage() {
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        coverage.insert(&[[0., 0.], [0.02, 0.]], 100.).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut b = Builder {
+            batches: BTreeMap::new(),
+            floats: 0,
+            target: None,
+        };
+        b.river_line(
+            Layer::RiverLarge,
+            &[[0.005, 0.], [0.01, 0.]],
+            100.,
+            &cancel,
+            Some(&coverage),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            b.floats, 0,
+            "Duplicate HydroRIVERS reach survived GRWL coverage"
+        );
+        b.river_line(
+            Layer::RiverSmall,
+            &[[0., 0.05], [0.01, 0.05]],
+            50.,
+            &cancel,
+            Some(&coverage),
+            None,
+        )
+        .unwrap();
+        assert!(b.floats > 0, "Unmapped tributary was hidden");
+        b.river_line(
+            Layer::RiverLarge,
+            &[[0., 0.], [0.1, 0.]],
+            100.,
+            &cancel,
+            Some(&coverage),
+            None,
+        )
+        .unwrap();
+        let remaining: Vec<_> = b
+            .batches
+            .iter()
+            .filter(|((_, layer), _)| *layer == Layer::RiverLarge)
+            .flat_map(|(_, data)| data.chunks_exact(6))
+            .collect();
+        assert!(!remaining.is_empty());
+        assert!(remaining.iter().all(|p| p[0] > 0.02));
+    }
+
+    #[test]
+    fn tributaries_stay_lighter_than_main_channels_regardless_of_provider() {
+        let layers = Layers {
+            countries: false,
+            states: false,
+            rivers: true,
+            roads: false,
+        };
+        let appearance = |layer: Layer| layer.appearance(20., layers).unwrap().0;
+        assert_eq!(appearance(Layer::GrwlLarge), appearance(Layer::RiverLarge));
+        assert_eq!(appearance(Layer::GrwlSmall), appearance(Layer::RiverSmall));
+        assert!(appearance(Layer::RiverSmall)[2] > appearance(Layer::RiverLarge)[2]);
+        assert!(appearance(Layer::RiverMedium)[2] > appearance(Layer::RiverLarge)[2]);
+    }
+
     #[test]
     fn river_buckets_partition_crossing_lines_and_wrap_the_dateline() {
         let cancel = AtomicBool::new(false);
@@ -495,13 +713,13 @@ mod tests {
             center_lon: 21.3,
             ..GlobeCamera::default()
         };
-        let before = RiverKey::visible(&camera, [1000., 700.], true);
+        let before = RiverKey::visible(&camera, [1000., 700.], true, 0);
         camera.center_lon += 0.00001;
-        assert_eq!(before, RiverKey::visible(&camera, [1000., 700.], true));
-        assert!(RiverKey::visible(&camera, [1000., 700.], false).is_empty());
+        assert_eq!(before, RiverKey::visible(&camera, [1000., 700.], true, 0));
+        assert!(RiverKey::visible(&camera, [1000., 700.], false, 0).is_empty());
         for (zoom, detail) in [(3., 0), (4., 1), (5., 2), (7., 3), (10., 4)] {
             camera.zoom = zoom;
-            let keys = RiverKey::visible(&camera, [1000., 700.], true);
+            let keys = RiverKey::visible(&camera, [1000., 700.], true, 0);
             assert!(!keys.is_empty());
             assert!(keys.iter().all(|key| key.detail == detail));
         }

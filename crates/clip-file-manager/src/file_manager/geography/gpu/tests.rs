@@ -180,7 +180,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             assert_eq!(renderer.bytes, bytes);
         }
         frame.camera.zoom = 6.0;
-        let key = *RiverKey::visible(&frame.camera, frame.size, true)
+        let key = *RiverKey::visible(&frame.camera, frame.size, true, 0)
             .first()
             .unwrap();
         frame.rivers.push((
@@ -201,7 +201,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         renderer.paint(&gl, &info, &frame).unwrap();
         assert_eq!(renderer.vectors.values().next().unwrap().buffer, buffer);
         frame.camera.zoom = 10.0;
-        frame.rivers[0].0 = *RiverKey::visible(&frame.camera, frame.size, true)
+        frame.rivers[0].0 = *RiverKey::visible(&frame.camera, frame.size, true, 0)
             .first()
             .unwrap();
         renderer.paint(&gl, &info, &frame).unwrap();
