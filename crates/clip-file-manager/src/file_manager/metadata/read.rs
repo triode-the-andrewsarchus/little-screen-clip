@@ -13,6 +13,7 @@ fn epub(entry: &Entry) -> bool {
 }
 pub(super) fn supported(entry: &Entry) -> bool {
     little_clip_core::audio::is_audio_path(&entry.path)
+        || entry.is_vcv_patch()
         || entry.is_photo()
         || entry.is_video()
         || little_clip_core::pdf::is_pdf_path(&entry.path)
@@ -27,6 +28,7 @@ pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
     let source = crate::file_source::FileSource::capture(&entry.path)?;
     let mut summary = match sorting::family(entry) {
         Category::Audio => audio(entry, cancel),
+        Category::VcvRack => vcv_patch(entry, cancel)?,
         Category::Image => photo(entry, cancel)?,
         Category::Video => video(entry, cancel)?,
         Category::Document => document(entry, cancel)?,
@@ -59,6 +61,22 @@ fn audio(entry: &Entry, cancel: &AtomicBool) -> Summary {
             .then(|| (f64::from(metadata.duration) * 1000.0) as u64),
         ..Default::default()
     }
+}
+fn vcv_patch(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
+    let bytes = crate::file_source::read_file_snapshot(
+        &entry.path,
+        little_clip_core::vcv::MAX_PATCH_BYTES as usize,
+    )?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Metadata read cancelled".into());
+    }
+    let document = little_clip_core::vcv::read_patch_bytes(&bytes)?;
+    Ok(Summary {
+        modules: document.modules.len().try_into().ok(),
+        cables: document.cables.len().try_into().ok(),
+        rows: document.row_count().try_into().ok(),
+        ..Default::default()
+    })
 }
 fn photo(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
     let metadata = little_clip_core::gallery_image::metadata::probe_cancellable(
@@ -174,5 +192,59 @@ mod tests {
         notebook.path.set_extension("xopp");
         assert!(supported(&notebook));
         assert_eq!(sorting::family(&notebook), Category::Document);
+    }
+
+    #[test]
+    fn vcv_patch_headers_read_modules_cables_and_rows_across_formats() {
+        use std::io::Write;
+
+        let directory = tempfile::tempdir().unwrap();
+        let json_bytes = serde_json::to_vec(&serde_json::json!({
+            "version": "2.6.0",
+            "modules": [
+                { "id": 1, "plugin": "Fundamental", "model": "VCO", "pos": [0, 0] },
+                { "id": 2, "plugin": "Fundamental", "model": "VCF", "pos": [10, 0] },
+                { "id": 3, "plugin": "Fundamental", "model": "VCA-1", "pos": [0, 1] },
+                { "id": 4, "plugin": "Core", "model": "AudioInterface2", "pos": [8, 2] },
+            ],
+            "cables": [
+                { "id": 1, "outputModuleId": 1, "outputId": 0, "inputModuleId": 2, "inputId": 0 },
+                { "id": 2, "outputModuleId": 2, "outputId": 0, "inputModuleId": 3, "inputId": 0 },
+                { "id": 3, "outputModuleId": 3, "outputId": 0, "inputModuleId": 4, "inputId": 0 },
+            ]
+        }))
+        .unwrap();
+
+        let raw_path = directory.path().join("raw.vcv");
+        std::fs::write(&raw_path, &json_bytes).unwrap();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.set_path("patch.json").unwrap();
+            header.set_size(json_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append(&header, json_bytes.as_slice()).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut encoder = zstd::stream::Encoder::new(Vec::new(), 3).unwrap();
+        encoder.write_all(&tar_bytes).unwrap();
+        let archive_bytes = encoder.finish().unwrap();
+
+        let archive_path = directory.path().join("archive.vcv");
+        std::fs::write(&archive_path, &archive_bytes).unwrap();
+
+        for path in [&raw_path, &archive_path] {
+            let file = entry(path);
+            assert!(supported(&file));
+            assert_eq!(sorting::family(&file), Category::VcvRack);
+            let summary = load(&file, &AtomicBool::new(false)).unwrap();
+            assert_eq!(summary.value(Field::Modules), Some(Value::Number(4)));
+            assert_eq!(summary.value(Field::Cables), Some(Value::Number(3)));
+            assert_eq!(summary.value(Field::Rows), Some(Value::Number(3)));
+            assert!(load(&file, &AtomicBool::new(true)).is_err());
+        }
     }
 }

@@ -24,6 +24,9 @@ pub(super) enum Field {
     Album,
     Genre,
     Duration,
+    Modules,
+    Cables,
+    Rows,
     Width,
     Height,
     Pixels,
@@ -35,9 +38,11 @@ pub(super) enum Field {
 }
 impl Field {
     pub const AUDIO: [Self; 4] = [Self::Artist, Self::Album, Self::Genre, Self::Duration];
+    pub const VCV_RACK: [Self; 3] = [Self::Modules, Self::Cables, Self::Rows];
     pub fn for_family(family: Category) -> &'static [Self] {
         match family {
             Category::Audio => &Self::AUDIO,
+            Category::VcvRack => &Self::VCV_RACK,
             Category::Image => &[Self::Width, Self::Height, Self::Pixels],
             Category::Video => &[Self::Duration, Self::Width, Self::Height, Self::Codec],
             Category::Document => &[Self::Title, Self::Author, Self::Pages],
@@ -50,6 +55,9 @@ impl Field {
             Self::Album => "Album",
             Self::Genre => "Genre",
             Self::Duration => "Duration",
+            Self::Modules => "Modules",
+            Self::Cables => "Cables",
+            Self::Rows => "Rows",
             Self::Width => "Width",
             Self::Height => "Height",
             Self::Pixels => "Megapixels",
@@ -67,6 +75,9 @@ struct Summary {
     album: String,
     genre: String,
     duration: Option<u64>,
+    modules: Option<u64>,
+    cables: Option<u64>,
+    rows: Option<u64>,
     width: Option<u32>,
     height: Option<u32>,
     codec: String,
@@ -74,7 +85,7 @@ struct Summary {
     author: String,
     pages: Option<u64>,
 }
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Value {
     Text(String),
     Number(u64),
@@ -94,6 +105,9 @@ impl Summary {
     fn number(&self, field: Field) -> Option<u64> {
         match field {
             Field::Duration => self.duration,
+            Field::Modules => self.modules,
+            Field::Cables => self.cables,
+            Field::Rows => self.rows,
             Field::Width => self.width.map(u64::from),
             Field::Height => self.height.map(u64::from),
             Field::Pixels => self
@@ -657,7 +671,134 @@ mod tests {
             Field::for_family(Category::Document),
             [Field::Title, Field::Author, Field::Pages]
         );
+        assert_eq!(
+            Field::for_family(Category::VcvRack),
+            [Field::Modules, Field::Cables, Field::Rows]
+        );
         assert!(Field::for_family(Category::Folder).is_empty());
+    }
+
+    #[test]
+    fn vcv_rack_fields_display_counts_and_sort_numerically_with_failures_last() {
+        let folder = tempfile::tempdir().unwrap();
+        let make_patch = |modules: usize, cables: usize, row_count: i32| {
+            let mut mods = Vec::new();
+            for index in 0..modules {
+                let row = if row_count > 0 {
+                    index as i32 % row_count
+                } else {
+                    0
+                };
+                mods.push(serde_json::json!({
+                    "id": index + 1,
+                    "plugin": "Fundamental",
+                    "model": "VCO",
+                    "pos": [index * 10, row],
+                }));
+            }
+            let cbs = (0..cables)
+                .map(|index| {
+                    serde_json::json!({
+                        "id": index + 1,
+                        "outputModuleId": 1,
+                        "outputId": 0,
+                        "inputModuleId": 1,
+                        "inputId": 0,
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_vec(&serde_json::json!({
+                "version": "2.6.0",
+                "modules": mods,
+                "cables": cbs,
+            }))
+            .unwrap()
+        };
+
+        std::fs::write(folder.path().join("sparse.vcv"), make_patch(2, 12, 1)).unwrap();
+        std::fs::write(folder.path().join("dense.vcv"), make_patch(10, 3, 2)).unwrap();
+        std::fs::write(folder.path().join("empty.vcv"), make_patch(0, 0, 0)).unwrap();
+        std::fs::write(folder.path().join("broken.vcv"), b"not json").unwrap();
+
+        let directory =
+            super::super::filesystem::read_directory(folder.path(), &AtomicBool::new(false))
+                .unwrap();
+        let mut state = Metadata::default();
+        for entry in &directory.entries {
+            state
+                .values
+                .insert(key(entry), read::load(entry, &AtomicBool::new(false)));
+        }
+
+        let by_name = |name: &str| {
+            directory
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+        };
+        assert_eq!(state.cell(by_name("sparse.vcv"), Field::Modules), "2");
+        assert_eq!(state.cell(by_name("sparse.vcv"), Field::Cables), "12");
+        assert_eq!(state.cell(by_name("sparse.vcv"), Field::Rows), "1");
+        assert_eq!(state.cell(by_name("dense.vcv"), Field::Modules), "10");
+        assert_eq!(state.cell(by_name("dense.vcv"), Field::Cables), "3");
+        assert_eq!(state.cell(by_name("dense.vcv"), Field::Rows), "2");
+        assert_eq!(state.cell(by_name("empty.vcv"), Field::Modules), "0");
+        assert_eq!(state.cell(by_name("empty.vcv"), Field::Cables), "0");
+        assert_eq!(state.cell(by_name("empty.vcv"), Field::Rows), "0");
+        assert_eq!(
+            state.cell(by_name("broken.vcv"), Field::Modules),
+            "Unavailable"
+        );
+
+        let visible_all = (0..directory.entries.len()).collect::<Vec<_>>();
+        state.reconcile(&directory, &visible_all);
+        assert!(state.status(Category::VcvRack).starts_with("Metadata 4/4"));
+        assert!(state.status(Category::Audio).starts_with("Metadata 0/0"));
+
+        let ordered = |state: &mut Metadata, field: Field, descending: bool| {
+            state.toggle_sort(Category::VcvRack, Field::Filename);
+            state.toggle_sort(Category::VcvRack, field);
+            if descending {
+                state.toggle_sort(Category::VcvRack, field);
+            }
+            let mut visible = (0..directory.entries.len()).collect::<Vec<_>>();
+            sorting::Sort {
+                column: sorting::Column::Type,
+                descending: false,
+            }
+            .apply(&directory, &mut visible);
+            state.order(&directory, &mut visible);
+            visible
+                .iter()
+                .map(|&index| directory.entries[index].name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            ordered(&mut state, Field::Modules, false),
+            ["empty.vcv", "sparse.vcv", "dense.vcv", "broken.vcv"]
+        );
+        assert_eq!(
+            ordered(&mut state, Field::Modules, true),
+            ["dense.vcv", "sparse.vcv", "empty.vcv", "broken.vcv"]
+        );
+        assert_eq!(
+            ordered(&mut state, Field::Cables, false),
+            ["empty.vcv", "dense.vcv", "sparse.vcv", "broken.vcv"]
+        );
+        assert_eq!(
+            ordered(&mut state, Field::Cables, true),
+            ["sparse.vcv", "dense.vcv", "empty.vcv", "broken.vcv"]
+        );
+        assert_eq!(
+            ordered(&mut state, Field::Rows, false),
+            ["empty.vcv", "sparse.vcv", "dense.vcv", "broken.vcv"]
+        );
+        assert_eq!(
+            ordered(&mut state, Field::Rows, true),
+            ["dense.vcv", "sparse.vcv", "empty.vcv", "broken.vcv"]
+        );
     }
 
     #[test]

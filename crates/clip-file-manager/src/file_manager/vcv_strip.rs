@@ -8,8 +8,8 @@ use little_clip_core::{
     ImageThumbnail,
     palette::AppPalette,
     vcv::{
-        PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram, ScreenshotBatchResult,
-        build_rack_rail_layout, clear_downloaded_panel_cache,
+        MAX_PATCH_BYTES, PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram,
+        ScreenshotBatchResult, build_rack_rail_layout, clear_downloaded_panel_cache,
         count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
         generate_all_local_rack_screenshots, inspect_bytes, local_rack_available,
         render_rack_rails_rgba, render_strip_rgba, resolve_panel,
@@ -25,7 +25,7 @@ use std::{
     },
 };
 
-const MAX_VCV_BYTES: usize = 64 * 1024 * 1024;
+const MAX_VCV_BYTES: usize = MAX_PATCH_BYTES as usize;
 const VIEWER_MIN_ZOOM: f32 = 0.15;
 const VIEWER_MAX_ZOOM: f32 = 3.0;
 const STRIP_RASTER_SCALE: f32 = 2.0;
@@ -477,7 +477,7 @@ fn format_summary_detail(summary: &PatchSummary) -> String {
     } else {
         "cables"
     };
-    let rows = summary.rack_dark.rows.len();
+    let rows = summary.analysis.document.row_count();
     let row_word = if rows == 1 { "row" } else { "rows" };
     format!(
         "{} {mod_word} · {} {cable_word} · {rows} {row_word}",
@@ -496,8 +496,20 @@ pub(in crate::file_manager) fn show_list(
     hover: &mut Hover,
     colors: WorkbenchColors,
 ) -> Option<usize> {
-    let detail = ready.map_or("VCV Rack patch", |r| r.data.detail.as_str());
-    let body = super::ui::information_strip(ui, row, entry, detail, Some(columns), colors);
+    let detail = columns.metadata_fields().is_empty().then(|| {
+        ready
+            .map_or("VCV Rack patch", |r| r.data.detail.as_str())
+            .to_owned()
+    });
+    super::ui::media_header(
+        ui,
+        Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
+        entry,
+        detail,
+        Some(columns),
+        colors,
+    );
+    let body = Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0));
     let Some(doc) = ready.and_then(|r| r.data.vcv.as_ref()) else {
         ui.painter()
             .with_clip_rect(body.intersect(ui.clip_rect()))

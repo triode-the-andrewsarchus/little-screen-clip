@@ -14,7 +14,8 @@ pub use analyze::{
     analyze_patch, build_patch_groups,
 };
 pub use archive::{
-    PatchCable, PatchDocument, PatchModule, PortRef, read_patch_bytes, read_patch_path,
+    MAX_PATCH_BYTES, PatchCable, PatchDocument, PatchModule, PortRef, read_patch_bytes,
+    read_patch_path,
 };
 pub use catalog::{ModuleFunction, ModuleInfo, Role, RoleSource, VcvCatalog};
 pub use layout::{
@@ -230,6 +231,26 @@ mod tests {
         let doc_tar = read_patch_bytes(&tar_bytes).expect("read zstd+tar vcv");
         assert_eq!(doc_json.modules.len(), doc_tar.modules.len());
         assert_eq!(doc_json.cables.len(), doc_tar.cables.len());
+        assert_eq!(doc_json.row_count(), 2);
+        assert_eq!(doc_tar.row_count(), 2);
+
+        let empty = read_patch_bytes(br#"{"version":"2.6.0","modules":[],"cables":[]}"#)
+            .expect("empty patch");
+        assert_eq!(empty.row_count(), 0);
+
+        let sparse = read_patch_bytes(
+            br#"{
+                "version":"2.6.0",
+                "modules":[
+                    {"id":1,"plugin":"Fundamental","model":"VCO","pos":[0,-1]},
+                    {"id":2,"plugin":"Fundamental","model":"VCF","pos":[10,-1]},
+                    {"id":3,"plugin":"Fundamental","model":"VCA-1","pos":[0,2]}
+                ],
+                "cables":[]
+            }"#,
+        )
+        .expect("sparse rows patch");
+        assert_eq!(sparse.row_count(), 2);
     }
 
     #[test]

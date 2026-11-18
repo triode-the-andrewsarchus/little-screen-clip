@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn vcv_patches_sort_as_dedicated_vcv_rack_category_without_audio_metadata() {
+    fn vcv_patches_sort_as_dedicated_vcv_rack_category_with_vcv_metadata() {
         let patch = file_entry("ambient.vcv");
         let uppercase_patch = file_entry("AMBIENT.VCV");
         let wav = file_entry("loop.wav");
@@ -334,7 +334,14 @@ mod tests {
         assert_eq!(Category::VcvRack.label(), "VCV Rack");
         assert_eq!(family(&wav), Category::Audio);
         assert_eq!(Category::Audio.label(), "Audio");
-        assert!(super::super::metadata::Field::for_family(Category::VcvRack).is_empty());
+        assert_eq!(
+            super::super::metadata::Field::for_family(Category::VcvRack),
+            [
+                super::super::metadata::Field::Modules,
+                super::super::metadata::Field::Cables,
+                super::super::metadata::Field::Rows,
+            ]
+        );
 
         let mut categories = [
             Category::Image,
