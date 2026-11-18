@@ -1,5 +1,6 @@
 //! Offline 3D-globe / 2D-map projection, Oilslick elevation shading, and basemap data loaders.
 
+pub mod land_cover;
 pub mod storage;
 pub mod tiles;
 use storage::AssetDirectory;

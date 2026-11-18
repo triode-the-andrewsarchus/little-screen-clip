@@ -395,18 +395,44 @@ impl AssetDownloader {
                         }
                     }
                     DownloadPack::LandCover => {
-                        report(
-                            base + 0.02 * span,
-                            "Downloading Copernicus 300m land cover…",
-                        );
-                        let _ = download_to_file(
-                            &assets_dir,
-                            "land_cover_lccs_class_2020_v2_1_1.nc",
-                            &lc_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.90) * span, m),
-                        )?;
+                        use little_clip_core::geography::basemap::land_cover::{
+                            CONVERSION_SPACE, import_netcdf,
+                        };
+                        let tool=CommandRequest::new("gdalwarp").arg("--version").run_cancellable(cancelled)
+                            .map_err(|error|format!("Install GDAL 3.7+ with NetCDF support (gdalwarp) to import land cover: {error}"))?;
+                        if !tool.status.success() {
+                            return Err("GDAL land-cover converter is unavailable".into());
+                        }
+                        let directory =
+                            AssetDirectory::open(&assets_dir).map_err(|error| error.to_string())?;
+                        let filename = "land_cover_lccs_class_2020_v2_1_1.nc";
+                        if let Ok(source) = directory.open_file(std::ffi::OsStr::new(filename)) {
+                            report(
+                                base + 0.2 * span,
+                                "Converting downloaded Copernicus land cover…",
+                            );
+                            import_netcdf(&directory, &source, remaining, cancelled)?;
+                        } else {
+                            let limit = remaining
+                                .checked_sub(CONVERSION_SPACE)
+                                .ok_or("Insufficient disk budget for land-cover import")?;
+                            report(base + 0.02 * span, "Downloading Copernicus land cover…");
+                            let downloaded = download_to_file(
+                                &assets_dir,
+                                filename,
+                                &lc_url,
+                                limit,
+                                cancelled,
+                                |f, m| report(base + (0.02 + f * 0.70) * span, m),
+                            )?;
+                            report(base + 0.75 * span, "Converting Copernicus land cover…");
+                            import_netcdf(
+                                &directory,
+                                &downloaded.file,
+                                downloaded.expansion_budget + CONVERSION_SPACE,
+                                cancelled,
+                            )?;
+                        }
                     }
                     DownloadPack::HydroRivers => {
                         let rivers_dir = assets_dir.join("hydrorivers");

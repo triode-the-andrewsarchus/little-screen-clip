@@ -192,4 +192,5 @@ prompt_on_open = true
 # gshhg_water_url = "https://www.soest.hawaii.edu/pwessel/gshhg/gshhg-bin-2.3.7.zip"
 # hydrorivers_url = "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_shp.zip"
 # gebco_terrain_url = "https://data.source.coop/ausantarctic/gebco/GEBCO_2025.tif"
+# Copernicus NetCDF import requires GDAL 3.7+ (gdalwarp) with NetCDF support.
 # land_cover_url = "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content"
