@@ -10,7 +10,7 @@ use storage::AssetDirectory;
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{BufReader, Read},
     path::{Path, PathBuf},
@@ -314,7 +314,15 @@ fn sample_hgt(
 #[derive(Default)]
 pub struct HgtStore {
     sources: HashMap<(i32, i32), (Arc<AssetDirectory>, std::ffi::OsString)>,
-    cache: Mutex<(HashMap<(i32, i32), Arc<Vec<u8>>>, VecDeque<(i32, i32)>)>,
+    cache: Mutex<HgtCache>,
+}
+#[derive(Default)]
+struct HgtCache {
+    tiles: HashMap<(i32, i32), Arc<Vec<u8>>>,
+    order: VecDeque<(i32, i32)>,
+    // Failed payloads must not be reopened for every pixel. Asset reload starts
+    // a fresh inventory/cache, including after successful downloads or retry.
+    failed: HashSet<(i32, i32)>,
 }
 impl HgtStore {
     pub fn is_empty(&self) -> bool {
@@ -331,42 +339,50 @@ impl HgtStore {
     fn tile(&self, key: (i32, i32)) -> Option<Arc<Vec<u8>>> {
         let (directory, name) = self.sources.get(&key)?;
         let mut cache = self.cache.lock().ok()?;
-        let heights = if let Some(hit) = cache.0.get(&key) {
+        if cache.failed.contains(&key) {
+            return None;
+        }
+        if let Some(hit) = cache.tiles.get(&key) {
             let hit = hit.clone();
-            cache.1.retain(|old| *old != key);
-            cache.1.push_back(key);
-            hit
-        } else {
-            #[cfg(test)]
-            let profile_start = std::time::Instant::now();
-            let (file, compressed) = match directory.open_file(name) {
-                Ok(file) => (file, false),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    (directory.open_file(&hgt::compressed_name(name)).ok()?, true)
-                }
-                Err(_) => return None,
-            };
-            let bytes = hgt::read_stored(&file).ok()?;
-            #[cfg(test)]
-            let profile_read = profile_start.elapsed();
-            #[cfg(test)]
-            let stored_bytes = bytes.len();
-            let mut bytes = hgt::decode(bytes, compressed).ok()?;
-            // The snapshot reader grows geometrically; do not let spare capacity
-            // evict another useful degree tile from the byte-bounded cache.
-            bytes.shrink_to_fit();
-            #[cfg(test)]
-            profile::record(
-                name,
-                stored_bytes,
-                profile_read,
-                profile_start.elapsed() - profile_read,
-            );
-            let (values, order) = &mut *cache;
-            cache_chunk(values, order, key, bytes, 128 * 1024 * 1024)?
+            cache.order.retain(|old| *old != key);
+            cache.order.push_back(key);
+            return Some(hit);
+        }
+        let Some(bytes) = load_hgt_tile(directory, name) else {
+            cache.failed.insert(key);
+            return None;
         };
-        Some(heights)
+        let HgtCache { tiles, order, .. } = &mut *cache;
+        cache_chunk(tiles, order, key, bytes, 128 * 1024 * 1024)
     }
+}
+
+fn load_hgt_tile(directory: &AssetDirectory, name: &std::ffi::OsStr) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    let profile_start = std::time::Instant::now();
+    let (file, compressed) = match directory.open_file(name) {
+        Ok(file) => (file, false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (directory.open_file(&hgt::compressed_name(name)).ok()?, true)
+        }
+        Err(_) => return None,
+    };
+    let bytes = hgt::read_stored(&file).ok()?;
+    #[cfg(test)]
+    let profile_read = profile_start.elapsed();
+    #[cfg(test)]
+    let stored_bytes = bytes.len();
+    let mut bytes = hgt::decode(bytes, compressed).ok()?;
+    // Snapshot reads grow geometrically; spare capacity must not evict useful tiles.
+    bytes.shrink_to_fit();
+    #[cfg(test)]
+    profile::record(
+        name,
+        stored_bytes,
+        profile_read,
+        profile_start.elapsed() - profile_read,
+    );
+    Some(bytes)
 }
 
 fn hgt_samples(bytes: usize) -> Option<usize> {
@@ -379,7 +395,7 @@ fn hgt_samples(bytes: usize) -> Option<usize> {
 // at most 52 MB beyond the shared 128 MiB cache when their current tile is evicted.
 struct HgtSampler<'a> {
     store: &'a HgtStore,
-    last: Option<((i32, i32), usize, Arc<Vec<u8>>)>,
+    last: Option<((i32, i32), Option<(usize, Arc<Vec<u8>>)>)>,
 }
 impl HgtSampler<'_> {
     fn sample(&mut self, lat: f64, lon: f64) -> Option<f32> {
@@ -387,13 +403,16 @@ impl HgtSampler<'_> {
             return None;
         }
         let key = (lat.floor() as i32, lon.floor() as i32);
-        if self.last.as_ref().is_none_or(|(old, _, _)| *old != key) {
+        if self.last.as_ref().is_none_or(|(old, _)| *old != key) {
             // Drop the previous lease before admitting another tile.
             self.last = None;
-            let bytes = self.store.tile(key)?;
-            self.last = Some((key, hgt_samples(bytes.len())?, bytes));
+            let tile = self
+                .store
+                .tile(key)
+                .and_then(|bytes| Some((hgt_samples(bytes.len())?, bytes)));
+            self.last = Some((key, tile));
         }
-        let (_, samples, bytes) = self.last.as_ref()?;
+        let (samples, bytes) = self.last.as_ref()?.1.as_ref()?;
         sample_hgt(*samples, key.0, key.1, lat, lon, |i| {
             i16::from_be_bytes([bytes[i * 2], bytes[i * 2 + 1]])
         })
@@ -3141,7 +3160,7 @@ mod tests {
         let mut store = HgtStore::default();
         load_hgt_dir(root.path(), &mut store);
         assert_eq!(store.sources.len(), 1);
-        assert!(store.cache.lock().unwrap().0.is_empty());
+        assert!(store.cache.lock().unwrap().tiles.is_empty());
         assert_eq!(store.sample(0.5, 0.5), Some(10.0));
         let mut cache = HashMap::new();
         let mut order = VecDeque::new();
@@ -3151,6 +3170,33 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn invalid_terrain_is_not_reopened_per_pixel_and_reload_can_retry_it() {
+        let root = tempfile::tempdir().unwrap();
+        let name = root.path().join("N00E000.hgt.zst");
+        fs::write(&name, b"broken frame").unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        for _ in 0..10 {
+            assert_eq!(store.sample(0.5, 0.5), None);
+        }
+        assert_eq!(store.cache.lock().unwrap().failed.len(), 1);
+        let raw = 123_i16.to_be_bytes().repeat(4);
+        let mut frame = Vec::new();
+        hgt::encode(
+            &mut raw.as_slice(),
+            &mut frame,
+            8,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        fs::write(name, &frame).unwrap();
+        assert_eq!(store.sample(0.5, 0.5), None);
+        let mut reloaded = HgtStore::default();
+        load_hgt_dir(root.path(), &mut reloaded);
+        assert_eq!(reloaded.sample(0.5, 0.5), Some(123.));
     }
 
     #[test]
@@ -3259,17 +3305,17 @@ mod tests {
         let mut assets = BasemapAssets::default();
         load_hgt_dir(root.path(), &mut assets.terrain_tiles);
         assert_eq!(assets.sample_elevation_at(0.5, 0.5, 512.0), None);
-        assert!(assets.terrain_tiles.cache.lock().unwrap().0.is_empty());
+        assert!(assets.terrain_tiles.cache.lock().unwrap().tiles.is_empty());
         assets.global_dem = Some(GlobalDemGrid {
             width: 4,
             height: 2,
             heights: vec![100; 8],
         });
         assert_eq!(assets.sample_elevation_at(0.5, 0.5, 4.0), Some(100.0));
-        assert!(assets.terrain_tiles.cache.lock().unwrap().0.is_empty());
+        assert!(assets.terrain_tiles.cache.lock().unwrap().tiles.is_empty());
         assert_eq!(assets.sample_elevation_at(0.5, 0.5, 8.0), Some(777.0));
         assert_eq!(assets.sample_elevation_m(0.5, 0.5), Some(777.0));
-        assert_eq!(assets.terrain_tiles.cache.lock().unwrap().0.len(), 1);
+        assert_eq!(assets.terrain_tiles.cache.lock().unwrap().tiles.len(), 1);
     }
 
     #[test]
