@@ -530,6 +530,15 @@ and an already enrolled independent sync pair remain usable when all four slots
 are occupied. Changed mount observations are rejected or scheduled again; these
 scopes never replace the fresh checks used to prepare and execute a mutation.
 
+Reconciliation root preparation now shares the four retained sync-worker slots.
+It captures enrollment, RAM ownership and managed-storage settings, validates
+fresh drive/mount facts and pins both roots off the coordinator. Changed inputs
+require another preparation before copying. Accepted catalog/image/control
+requests take priority over automatic preparation for their drive. The copy worker
+checks managed paths again before scanning or installing files. Cancelling or
+stopping the daemon retains blocked preparation until the underlying call exits.
+Worker names identify their storage role for diagnostics.
+
 Logical row bytes count stored text and raw path bytes without materializing
 every JSON record. They are components of registry storage, with page/index
 overhead excluded. The registry file observation includes `drives.sqlite`, its

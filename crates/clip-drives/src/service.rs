@@ -55,6 +55,7 @@ struct Owner {
     closing: Arc<AtomicBool>,
     sync_pool: little_clip_core::jobs::BackgroundJobs,
     sync_jobs: HashMap<String, reconciliation::Pending>,
+    sync_preparing: HashMap<String, reconciliation::preparation::Pending>,
     sync_waiting: std::collections::VecDeque<reconciliation::Intent>,
     sync_auto: std::collections::BTreeMap<String, reconciliation::Intent>,
     deferred: std::collections::VecDeque<Envelope>,
@@ -193,8 +194,9 @@ impl Service {
         let previews = Arc::new(Mutex::new(HashMap::new()));
         let mut owner = Owner {
             closing: closing.clone(),
-            sync_pool: little_clip_core::jobs::BackgroundJobs::new(4, 4),
+            sync_pool: little_clip_core::jobs::BackgroundJobs::new_named(4, 4, "drive-sync"),
             sync_jobs: HashMap::new(),
+            sync_preparing: HashMap::new(),
             sync_waiting: Default::default(),
             sync_auto: Default::default(),
             deferred: Default::default(),
@@ -206,12 +208,17 @@ impl Service {
             scheduling: scheduling::Probes::default(),
             policy_waiting: Default::default(),
             partition: None,
-            partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
+            partition_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
+                1,
+                1,
+                "drive-partition",
+            ),
             authority,
             previews: previews.clone(),
-            backup_jobs: little_clip_core::jobs::BackgroundJobs::new(
+            backup_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
                 little_clip_core::drives::MAX_CATALOG_WORKERS,
                 little_clip_core::drives::MAX_CATALOG_WORKERS,
+                "drive-backup",
             ),
             inventory: inventory.clone(),
             unidentified_ram: HashMap::new(),
@@ -227,7 +234,11 @@ impl Service {
             children: HashMap::new(),
             ram_children: HashMap::new(),
             ram_setup: None,
-            ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
+            ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
+                1,
+                1,
+                "drive-ram-setup",
+            ),
         };
         rules::migrate(&owner.db)?;
         catalog::redaction::migrate(&owner.db)?;
@@ -435,7 +446,14 @@ impl Owner {
             if self.closing.load(Ordering::Acquire) {
                 break;
             }
-            match receiver.recv_timeout(Duration::from_millis(200)) {
+            // Retained admission adds a read phase before copying. Poll those
+            // short phases promptly instead of adding an idle 200 ms per phase.
+            let poll_ms = if self.sync_preparing.is_empty() && self.scheduling.pending.is_empty() {
+                200
+            } else {
+                20
+            };
+            match receiver.recv_timeout(Duration::from_millis(poll_ms)) {
                 Ok(envelope) => self.operation(envelope),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
@@ -508,23 +526,7 @@ impl Owner {
             );
         }
         self.drain_scopes();
-        let mut waiting = std::mem::take(&mut self.sync_waiting);
-        waiting.extend(std::mem::take(&mut self.sync_auto).into_values());
-        for intent in waiting {
-            intent.cancel.store(true, Ordering::Release);
-            self.sync_result(
-                &intent,
-                Err("Daemon stopping; queued reconciliation cancelled".into()),
-                None,
-            );
-        }
-        for job in self.sync_jobs.values() {
-            job.intent.cancel.store(true, Ordering::Release);
-        }
-        while !self.sync_jobs.is_empty() {
-            self.poll_sync();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        self.drain_sync();
         while let Some(job) = &self.partition {
             job.cancel.store(true, Ordering::Release);
             self.poll_partition();
@@ -633,10 +635,20 @@ impl Owner {
             });
         if busy {
             if matches!(envelope.request, DriveRequest::Pause { paused: true, .. }) {
-                for job in self.sync_jobs.values().filter(|job| {
-                    drive.as_ref() == Some(&job.drive) && job.intent.operation.is_none()
-                }) {
-                    job.intent.cancel.store(true, Ordering::Release);
+                for intent in self
+                    .sync_jobs
+                    .values()
+                    .filter(|job| drive.as_ref() == Some(&job.drive))
+                    .map(|job| &job.intent)
+                    .chain(
+                        self.sync_preparing
+                            .values()
+                            .filter(|job| drive.as_ref() == Some(&job.drive))
+                            .map(|job| &job.intent),
+                    )
+                    .filter(|intent| intent.operation.is_none())
+                {
+                    intent.cancel.store(true, Ordering::Release);
                 }
             }
             self.defer_operation(envelope);
@@ -1163,6 +1175,7 @@ mod tests {
     mod scope_admission;
     mod status_refresh;
     mod storage;
+    mod sync_preparation;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
@@ -1359,6 +1372,36 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+    fn shutdown_while_held(
+        service: &Service,
+    ) -> (std::thread::JoinHandle<Result<()>>, mpsc::Receiver<()>) {
+        let closing = service.clone();
+        let (exited, completed) = mpsc::channel();
+        let joining = std::thread::spawn(move || {
+            let result = closing.shutdown();
+            exited.send(()).unwrap();
+            result
+        });
+        assert_shutdown_retained(service, &completed);
+        (joining, completed)
+    }
+    fn finish_held_shutdown(
+        (joining, completed): (std::thread::JoinHandle<Result<()>>, mpsc::Receiver<()>),
+    ) {
+        completed.recv_timeout(Duration::from_secs(5)).unwrap();
+        joining.join().unwrap().unwrap();
+    }
+    fn assert_configuration_responsive(service: &Service) {
+        let started = Instant::now();
+        let result = completed(
+            service,
+            DriveRequest::Configure {
+                config: status(service).config,
+            },
+        );
+        assert_eq!(result.state, "complete", "{}", result.message);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
     fn assert_shutdown_retained(service: &Service, finished: &mpsc::Receiver<()>) {
         let started = Instant::now();
@@ -1622,6 +1665,18 @@ mod tests {
                 },
                 observed,
                 authority,
+            )
+        }
+        // Disable RAM allocation and the periodic fallback for read-stall probes.
+        fn start_observed_reads(&self, observed: Arc<dyn Fn() + Send + Sync>) -> Service {
+            self.start_configured(
+                DriveConfig {
+                    ram_min_available: u64::MAX,
+                    sync_interval_seconds: 3600,
+                    ..Default::default()
+                },
+                Some(observed),
+                self.image_authority(),
             )
         }
         fn start_configured(
@@ -2683,7 +2738,9 @@ mod tests {
         let (temp, service, small) = two_drives_observed(
             1024,
             Some(Arc::new(move || {
-                if std::thread::current().name() != Some("portable-drive-owner")
+                if std::thread::current()
+                    .name()
+                    .is_some_and(|name| name.starts_with("drive-ram-setup-"))
                     && hold.swap(false, Ordering::AcqRel)
                 {
                     gate();

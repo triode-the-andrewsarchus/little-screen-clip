@@ -29,16 +29,15 @@ impl Held {
         let observed = armed.clone();
         let seen = calls.clone();
         let once = AtomicBool::new(false);
-        let (publisher, publication_thread) = traced_publication();
-        let caller = std::thread::current().id();
+        let (publisher, _) = traced_publication();
         let (entered, release, gate) = worker_gate();
         let service = fixture.start_with_publication(
             config,
             Some(Arc::new(move || {
                 let thread = std::thread::current();
-                let refresh = thread.name() != Some("portable-drive-owner")
-                    && thread.id() != caller
-                    && Some(thread.id()) != *publication_thread.lock().unwrap();
+                let refresh = thread
+                    .name()
+                    .is_some_and(|name| name.starts_with("drive-status-"));
                 if refresh && observed.load(Ordering::Acquire) {
                     seen.fetch_add(1, Ordering::AcqRel);
                     if !once.swap(true, Ordering::AcqRel) {

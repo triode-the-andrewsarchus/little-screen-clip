@@ -12,7 +12,11 @@ pub(super) struct Probes {
 impl Default for Probes {
     fn default() -> Self {
         Self {
-            jobs: little_clip_core::jobs::BackgroundJobs::new(WORKERS, WORKERS),
+            jobs: little_clip_core::jobs::BackgroundJobs::new_named(
+                WORKERS,
+                WORKERS,
+                "drive-scope",
+            ),
             pending: HashMap::new(),
         }
     }

@@ -33,7 +33,9 @@ fn guest_unavailable_watcher_uses_periodic_fallback_and_recovers_when_capacity_r
         },
         temp.path().join("state"),
         Arc::new(move || {
-            if std::thread::current().name() == Some("portable-drive-owner") {
+            if std::thread::current().name().is_some_and(|name| {
+                name == "portable-drive-owner" || name.starts_with("drive-sync-")
+            }) {
                 observed.fetch_add(1, Ordering::Relaxed);
             }
             Ok(vec![drive.clone()])
@@ -101,19 +103,17 @@ fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_c
     let armed = Arc::new(AtomicBool::new(false));
     let held = armed.clone();
     let (entered, release, gate) = worker_gate();
+    let gate_source = temp.path().join("gate-source");
+    fs::create_dir(&gate_source).unwrap();
+    let gate_drive = fixture_drive(&gate_source, "overflow-owner-gate");
     let inventory_drive = drive.clone();
-    let last_owner_query = Mutex::new(Instant::now());
     let inventory: Inventory = Arc::new(move || {
-        if std::thread::current().name() == Some("portable-drive-owner") {
-            let mut last = last_owner_query.lock().unwrap();
-            let quiet = last.elapsed() >= Duration::from_secs(2);
-            *last = Instant::now();
-            drop(last);
-            if quiet && held.swap(false, Ordering::AcqRel) {
-                gate();
-            }
+        if std::thread::current().name() == Some("portable-drive-owner")
+            && held.swap(false, Ordering::AcqRel)
+        {
+            gate();
         }
-        Ok(vec![inventory_drive.clone()])
+        Ok(vec![inventory_drive.clone(), gate_drive.clone()])
     });
     let service = Service::start_with_inventory(
         DriveConfig {
@@ -135,6 +135,17 @@ fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_c
         },
     );
     armed.store(true, Ordering::Release);
+    // Explicit enrollment still has a coordinator-owned stage. Hold that stage
+    // on a separate ordinary fixture so the native watcher truly stops draining;
+    // background sync inventory no longer provides a coordinator barrier.
+    let first_gate = accept(
+        &service,
+        DriveRequest::Pair {
+            drive: "part:overflow-owner-gate".into(),
+            relative: PathBuf::new(),
+            local: temp.path().join("gate-local-one"),
+        },
+    );
     entered.recv_timeout(Duration::from_secs(10)).unwrap();
     for index in 0..256 {
         fs::write(media.path().join(format!("noise-{}", index % 2)), b"noise").unwrap();
@@ -163,6 +174,10 @@ fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_c
     fs::write(media.path().join(nested), b"created after overflow").unwrap();
     fs::write(local.join("local-only.txt"), b"union from local").unwrap();
     cleanup_release.send(()).unwrap();
+    assert_eq!(
+        wait_operation(&service, &first_gate, |op| op.finished.is_some()).state,
+        "complete"
+    );
     wait_contents(&local.join(nested), b"created after overflow");
     wait_contents(&media.path().join("local-only.txt"), b"union from local");
     wait_contents(&media.path().join("restore.txt"), b"restore by default");
@@ -185,11 +200,23 @@ fn guest_event_loss_recovers_union_conflicts_and_prompt_nested_edits_without_a_c
     }
     assert_eq!(fs::read(media.path().join("report.txt")).unwrap(), b"card");
     assert_eq!(fs::read(local.join("report.txt")).unwrap(), b"host");
-    // Wait through another unchanged inventory tick, allowing notifications
+    // Wait through another unchanged explicit inventory observation, allowing notifications
     // produced by the recovery itself to settle before the later nested edit.
     armed.store(true, Ordering::Release);
+    let second_gate = accept(
+        &service,
+        DriveRequest::Pair {
+            drive: "part:overflow-owner-gate".into(),
+            relative: PathBuf::new(),
+            local: temp.path().join("gate-local-two"),
+        },
+    );
     entered.recv_timeout(Duration::from_secs(10)).unwrap();
     cleanup_release.send(()).unwrap();
+    assert_eq!(
+        wait_operation(&service, &second_gate, |op| op.finished.is_some()).state,
+        "complete"
+    );
     fs::write(media.path().join(nested), b"later nested portable edit").unwrap();
     wait_contents(&local.join(nested), b"later nested portable edit");
     assert_eq!(status(&service).conflicts.len(), 1);

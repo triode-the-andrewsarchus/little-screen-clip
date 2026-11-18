@@ -2,18 +2,6 @@
 use super::*;
 use std::collections::HashSet;
 
-fn assert_configuration_responsive(service: &Service) {
-    let started = Instant::now();
-    let result = completed(
-        service,
-        DriveRequest::Configure {
-            config: status(service).config,
-        },
-    );
-    assert_eq!(result.state, "complete", "{}", result.message);
-    assert!(started.elapsed() < Duration::from_secs(2));
-}
-
 fn warm_observers(
     fixture: &TestDrives,
     service: &Service,
@@ -52,20 +40,24 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
     let armed = Arc::new(AtomicBool::new(false));
     let active = armed.clone();
     let (entered, release, gate) = worker_gate();
-    let service = fixture.start_configured(
-        DriveConfig {
-            ram_min_available: u64::MAX,
-            sync_interval_seconds: 3600,
-            ..Default::default()
-        },
-        Some(Arc::new(move || {
-            let first = known.lock().unwrap().insert(std::thread::current().id());
-            if first && active.load(Ordering::Acquire) {
-                gate();
-            }
-        })),
-        fixture.image_authority(),
-    );
+    let service = fixture.start_observed_reads(Arc::new(move || {
+        let thread = std::thread::current();
+        if thread
+            .name()
+            .is_some_and(|name| name.starts_with("drive-sync-"))
+        {
+            return;
+        }
+        let first = known.lock().unwrap().insert(thread.id());
+        if first
+            && thread
+                .name()
+                .is_some_and(|name| name.starts_with("drive-scope-"))
+            && active.load(Ordering::Acquire)
+        {
+            gate();
+        }
+    }));
     let local = warm_observers(&fixture, &service, &threads);
     armed.store(true, Ordering::Release);
     let selector = fixture.drives.lock().unwrap()[1]
@@ -126,19 +118,11 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
         .collect::<Vec<_>>();
     assert_eq!(terminal.len(), 1);
     assert_eq!(terminal[0].state, "cancelled");
-    let closing = service.clone();
-    let (exited, completed) = mpsc::channel();
-    let shutdown = std::thread::spawn(move || {
-        let result = closing.shutdown();
-        exited.send(()).unwrap();
-        result
-    });
-    assert_shutdown_retained(&service, &completed);
+    let (shutdown, completed) = shutdown_while_held(&service);
     for _ in 0..3 {
         release.send(()).unwrap();
     }
-    completed.recv_timeout(Duration::from_secs(5)).unwrap();
-    shutdown.join().unwrap().unwrap();
+    finish_held_shutdown((shutdown, completed));
     for id in operations {
         assert_eq!(
             wait_operation(&service, &id, |op| op.finished.is_some()).state,
@@ -209,20 +193,11 @@ fn stalled_fuse_scope_admission_keeps_controls_sync_and_shutdown_owned() {
             })
             .unwrap();
         assert_unfinished(&service, &id);
-        let closing = service.clone();
-        let (exited, completed) = mpsc::channel();
-        let joining = std::thread::spawn(move || {
-            let result = closing.shutdown();
-            exited.send(()).unwrap();
-            result
-        });
-        assert_shutdown_retained(&service, &completed);
+        let (joining, completed) = shutdown_while_held(&service);
         accepted = Some(id);
         shutdown = Some((joining, completed));
     });
-    let (joining, completed) = shutdown.unwrap();
-    completed.recv_timeout(Duration::from_secs(5)).unwrap();
-    joining.join().unwrap().unwrap();
+    finish_held_shutdown(shutdown.unwrap());
     assert_eq!(
         wait_operation(&service, &accepted.unwrap(), |op| op.finished.is_some()).state,
         "cancelled"
@@ -257,10 +232,27 @@ fn simultaneous_scope_deliveries_cannot_replace_the_retained_ram_setup_owner() {
             ..Default::default()
         },
         Some(Arc::new(move || {
-            if known.lock().unwrap().insert(std::thread::current().id()) {
+            let thread = std::thread::current();
+            if thread
+                .name()
+                .is_some_and(|name| name.starts_with("drive-sync-"))
+            {
+                return;
+            }
+            if known.lock().unwrap().insert(thread.id()) {
                 match current.load(Ordering::Acquire) {
-                    1 => gate(),
-                    2 => prepare_gate(),
+                    1 if thread
+                        .name()
+                        .is_some_and(|name| name.starts_with("drive-scope-")) =>
+                    {
+                        gate()
+                    }
+                    2 if thread
+                        .name()
+                        .is_some_and(|name| name.starts_with("drive-ram-setup-")) =>
+                    {
+                        prepare_gate()
+                    }
                     _ => (),
                 }
             }

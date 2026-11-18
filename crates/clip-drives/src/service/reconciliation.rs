@@ -4,6 +4,7 @@ use little_clip_core::jobs::task::Task;
 use std::collections::HashSet;
 #[cfg(test)]
 mod population_tests;
+pub(super) mod preparation;
 
 #[derive(Clone)]
 pub(super) struct Plan {
@@ -15,6 +16,7 @@ pub(super) struct Plan {
     // additionally requires complete observation coverage.
     cached: bool,
     observed: bool,
+    storage: Option<policy::Storage>,
 }
 #[derive(Clone)]
 pub(super) struct Intent {
@@ -74,6 +76,13 @@ impl Plan {
         }
         self.portable.validate()?;
         self.local.validate()?;
+        if let Some(storage) = &self.storage {
+            storage.validate(
+                &self.portable,
+                &self.local,
+                self.pair.ram.then_some(self.pair.id.as_str()),
+            )?;
+        }
         let passes = if intent.initialize { 2 } else { 1 };
         let mut files = 0;
         let mut conflicts = 0;
@@ -126,6 +135,28 @@ impl Plan {
     }
 }
 impl Owner {
+    pub(super) fn drain_sync(&mut self) {
+        let mut waiting = std::mem::take(&mut self.sync_waiting);
+        waiting.extend(std::mem::take(&mut self.sync_auto).into_values());
+        for intent in waiting {
+            intent.cancel.store(true, Ordering::Release);
+            self.sync_result(
+                &intent,
+                Err("Daemon stopping; queued reconciliation cancelled".into()),
+                None,
+            );
+        }
+        for job in self.sync_jobs.values() {
+            job.intent.cancel.store(true, Ordering::Release);
+        }
+        for job in self.sync_preparing.values() {
+            job.intent.cancel.store(true, Ordering::Release);
+        }
+        while !self.sync_jobs.is_empty() || !self.sync_preparing.is_empty() {
+            self.poll_sync();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     pub(super) fn watch_changes(&mut self, periodic: bool) -> crate::watch::Changes {
         let unavailable = self.watch.is_none();
         if unavailable && periodic {
@@ -248,52 +279,8 @@ impl Owner {
             _ => Err("Invalid reconciliation request".into()),
         }
     }
-    pub(super) fn prepare_sync(&self, id: &str) -> Result<Plan> {
-        let pair: SyncPair = self.db.get("pair", id)?.ok_or("Unknown sync pair")?;
-        let drive = self.drive(&pair.drive)?;
-        let plan = self.prepare_sync_pair(pair, &drive)?;
-        if self.drive(&drive.id)? != drive {
-            return Err(
-                "Drive changed while pinning sync roots; retry with fresh inventory".into(),
-            );
-        }
-        Ok(plan)
-    }
     pub(super) fn prepare_sync_pair(&self, pair: SyncPair, drive: &Drive) -> Result<Plan> {
-        if drive.ambiguous || drive.evidence != pair.evidence {
-            return Err("Drive identity differs from the enrollment; sync suspended".into());
-        }
-        let initial_ram = self.validate_ram_reconciliation(&pair, drive)?;
-        if drive.read_only && !initial_ram {
-            return Err("Drive is read-only; edits remain local".into());
-        }
-        let mount = drive
-            .mount
-            .as_ref()
-            .ok_or("Drive is offline; local contents retained")?;
-        let partition = Root::open(mount)?;
-        let selected = partition.directory(&pair.relative, false)?;
-        let portable = Arc::new(Root::open(&crate::root::anchor(&selected))?);
-        let local = Arc::new(Root::open(&pair.local)?);
-        if pair.local_identity != Some(local.storage_identity()?) {
-            return Err("Paired local directory was replaced; re-enroll it explicitly".into());
-        }
-        self.validate_sync_storage(&portable, &local, pair.ram.then_some(pair.id.as_str()))?;
-        let cached = self.sync_roots.get(&pair.id).is_some_and(|(a, b)| {
-            [(a, &portable), (b, &local)]
-                .into_iter()
-                .all(|(prior, current)| prior.validate().is_ok() && prior.same_root(current))
-        });
-        Ok(Plan {
-            pair,
-            portable,
-            local,
-            cached,
-            observed: self
-                .watch
-                .as_ref()
-                .is_some_and(Watch::has_complete_coverage),
-        })
+        preparation::Input::capture(self, pair)?.prepare_pair(drive)
     }
     pub(super) fn queue_sync(&mut self, intent: Intent) {
         if intent.operation.is_some() {
@@ -347,6 +334,7 @@ impl Owner {
             let roots = (job.epoch == self.sync_epoch).then_some(job.plan);
             self.sync_result(&job.intent, result, roots);
         }
+        self.poll_sync_preparation();
         if self.closing.load(Ordering::Acquire) {
             return;
         }
@@ -356,7 +344,7 @@ impl Owner {
             .collect::<Vec<_>>();
         automatic.sort_by_key(|intent| intent.queued);
         ready.extend(automatic);
-        while let Some(mut intent) = ready.pop_front() {
+        while let Some(intent) = ready.pop_front() {
             if intent.cancel.load(Ordering::Acquire) {
                 self.sync_result(
                     &intent,
@@ -365,11 +353,13 @@ impl Owner {
                 );
                 continue;
             }
-            if self.sync_jobs.len() >= 4 {
+            if self.sync_jobs.len() + self.sync_preparing.len() >= 4 {
                 self.queue_sync(intent);
                 continue;
             }
-            if self.sync_jobs.contains_key(&intent.pair) {
+            if self.sync_jobs.contains_key(&intent.pair)
+                || self.sync_preparing.contains_key(&intent.pair)
+            {
                 self.queue_sync(intent);
                 continue;
             }
@@ -379,97 +369,128 @@ impl Owner {
                 self.queue_sync(intent);
                 continue;
             }
-            let prepared = if let Some(save) = &intent.save {
-                self.db
-                    .get::<SyncPair>("pair", &intent.pair)
-                    .and_then(|pair| pair.ok_or_else(|| "RAM enrollment disappeared".into()))
-                    .map(|pair| Plan {
-                        pair,
-                        portable: save.source.clone(),
-                        local: save.target.clone(),
-                        cached: false,
-                        observed: false,
-                    })
+            let pair = match self
+                .db
+                .get::<SyncPair>("pair", &intent.pair)
+                .and_then(|pair| pair.ok_or_else(|| "Unknown sync pair".into()))
+            {
+                Ok(pair) => pair,
+                Err(error) => {
+                    self.sync_result(&intent, Err(error), None);
+                    continue;
+                }
+            };
+            if intent.operation.is_none() && pair.paused {
+                continue;
+            }
+            if intent.operation.is_none() && self.waiting_for_drive(&pair.drive) {
+                self.queue_sync(intent);
+                continue;
+            }
+            if let Some(save) = &intent.save {
+                let plan = Plan {
+                    pair,
+                    portable: save.source.clone(),
+                    local: save.target.clone(),
+                    cached: false,
+                    observed: false,
+                    storage: None,
+                };
+                self.admit_sync_plan(intent, plan);
             } else {
-                self.prepare_sync(&intent.pair)
-            };
-            let plan = match prepared {
-                Ok(plan) => plan,
-                Err(error) => {
-                    self.sync_result(&intent, Err(error), None);
-                    continue;
-                }
-            };
-            if intent.operation.is_none() && plan.pair.paused {
-                continue;
+                self.prepare_sync_roots(intent, pair);
             }
-            if intent.operation.is_none()
-                && self.deferred.iter().any(|waiting| {
-                    self.request_drive(&waiting.request).ok().flatten().as_ref()
-                        == Some(&plan.pair.drive)
-                })
-            {
-                self.queue_sync(intent);
-                continue;
-            }
-            if self.claims_busy(&plan.scopes()) || self.check_busy(&plan.pair.drive).is_err() {
-                self.queue_sync(intent);
-                continue;
-            }
-            match plan.writeback_checkpoint(&self.db, &intent) {
-                Ok(checkpoint) => intent.writeback = checkpoint,
-                Err(error) => {
-                    self.sync_result(&intent, Err(error), None);
-                    continue;
-                }
-            }
-            // Watch before population, retaining/coalescing notifications while the task runs.
-            if let Some(watch) = &mut self.watch
-                && intent.save.is_none()
-            {
-                watch.add(plan.portable.clone());
-                watch.add(plan.local.clone());
-            }
-            if let Some(id) = &intent.operation
-                && let Ok(Some(mut op)) = self.db.get::<DriveOperation>("operation", id)
-            {
-                op.state = "running".into();
-                if let Some(save) = &intent.save {
-                    op.message = format!("Saving RAM copy to {}", save.target.path.display());
-                }
-                let _ = self.db.put("operation", id, &op);
-            }
-            let state = self.state.clone();
-            let worker = plan.clone();
-            let worker_intent = intent.clone();
-            let task = write_task(&self.sync_pool, move || {
-                let db = Store::existing(&state.join("drives.sqlite"), false)?;
-                let mut progress = worker_intent
-                    .operation
-                    .clone()
-                    .map(|id| job_progress(state, id));
-                worker.run_with_cancel(
-                    &db,
-                    &worker_intent,
-                    &worker_intent.cancel,
-                    &mut |files, bytes| {
-                        if let Some(progress) = &mut progress {
-                            progress(files, bytes);
-                        }
-                    },
-                )
-            });
-            self.sync_jobs.insert(
-                intent.pair.clone(),
-                Pending {
-                    drive: plan.pair.drive.clone(),
-                    intent,
-                    plan,
-                    epoch: self.sync_epoch,
-                    task,
-                },
-            );
         }
+    }
+    fn waiting_for_drive(&self, drive: &str) -> bool {
+        let status = self.shared.lock().ok();
+        self.deferred
+            .iter()
+            .chain(self.scheduling.pending.values().map(|job| &job.envelope))
+            .filter_map(|waiting| self.request_selector(&waiting.request).ok().flatten())
+            .any(|selector| {
+                selector == drive
+                    || (selector.starts_with("/dev/")
+                        && status.as_ref().is_some_and(|status| {
+                            status.drives.iter().any(|candidate| {
+                                candidate.id == drive && candidate.device == Path::new(&selector)
+                            })
+                        }))
+            })
+    }
+    pub(super) fn admit_sync_plan(&mut self, mut intent: Intent, mut plan: Plan) {
+        // Coverage may have changed while roots were being prepared.
+        plan.observed &= self
+            .watch
+            .as_ref()
+            .is_some_and(Watch::has_complete_coverage);
+        if intent.operation.is_none() && plan.pair.paused {
+            return;
+        }
+        if intent.operation.is_none() && self.waiting_for_drive(&plan.pair.drive) {
+            self.queue_sync(intent);
+            return;
+        }
+        if self.claims_busy(&plan.scopes()) || self.check_busy(&plan.pair.drive).is_err() {
+            self.queue_sync(intent);
+            return;
+        }
+        match plan.writeback_checkpoint(&self.db, &intent) {
+            Ok(checkpoint) => intent.writeback = checkpoint,
+            Err(error) => {
+                self.sync_result(&intent, Err(error), None);
+                return;
+            }
+        }
+        self.launch_sync(intent, plan);
+    }
+    fn launch_sync(&mut self, intent: Intent, plan: Plan) {
+        // Watch before population, retaining/coalescing notifications while the task runs.
+        if let Some(watch) = &mut self.watch
+            && intent.save.is_none()
+        {
+            watch.add(plan.portable.clone());
+            watch.add(plan.local.clone());
+        }
+        if let Some(id) = &intent.operation
+            && let Ok(Some(mut op)) = self.db.get::<DriveOperation>("operation", id)
+        {
+            op.state = "running".into();
+            if let Some(save) = &intent.save {
+                op.message = format!("Saving RAM copy to {}", save.target.path.display());
+            }
+            let _ = self.db.put("operation", id, &op);
+        }
+        let state = self.state.clone();
+        let worker = plan.clone();
+        let worker_intent = intent.clone();
+        let task = write_task(&self.sync_pool, move || {
+            let db = Store::existing(&state.join("drives.sqlite"), false)?;
+            let mut progress = worker_intent
+                .operation
+                .clone()
+                .map(|id| job_progress(state, id));
+            worker.run_with_cancel(
+                &db,
+                &worker_intent,
+                &worker_intent.cancel,
+                &mut |files, bytes| {
+                    if let Some(progress) = &mut progress {
+                        progress(files, bytes);
+                    }
+                },
+            )
+        });
+        self.sync_jobs.insert(
+            intent.pair.clone(),
+            Pending {
+                drive: plan.pair.drive.clone(),
+                intent,
+                plan,
+                epoch: self.sync_epoch,
+                task,
+            },
+        );
     }
     pub(super) fn sync_result(
         &mut self,

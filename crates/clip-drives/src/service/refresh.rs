@@ -26,7 +26,7 @@ impl Refresh {
     pub(super) fn new(inventory: Inventory) -> Self {
         Self {
             inventory,
-            jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
+            jobs: little_clip_core::jobs::BackgroundJobs::new_named(1, 1, "drive-status"),
             desired: None,
             pending: None,
             again: false,

@@ -1,5 +1,89 @@
 //! Enrollment checks keep managed storage out of synchronization feedback loops.
 use super::*;
+
+/// Descriptor-free managed-storage inputs, compared again after worker preparation.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Storage {
+    state: PathBuf,
+    backups: Vec<PathBuf>,
+    ram: Vec<(String, PathBuf, Option<PathBuf>)>,
+    catalogs: Vec<PathBuf>,
+}
+impl Storage {
+    pub fn capture(db: &Store, state: &Path, backup_directory: Option<&Path>) -> Result<Self> {
+        let snapshot =
+            db.0.is_autocommit()
+                .then(|| db.0.unchecked_transaction())
+                .transpose()?;
+        let mut backups = preflight::managed_backup_paths(db)?;
+        backups.extend(backup_directory.map(Path::to_path_buf));
+        let ram = db
+            .list::<RamSession>("ram", 0, 1000)?
+            .into_iter()
+            .map(|s| (s.id, s.path, s.backing.map(|b| b.directory)))
+            .collect();
+        let catalogs = db
+            .list::<Catalog>("catalog", 0, 1000)?
+            .into_iter()
+            .filter_map(|c| c.mount)
+            .collect();
+        if let Some(snapshot) = snapshot {
+            snapshot.commit()?;
+        }
+        Ok(Self {
+            state: state.to_path_buf(),
+            backups,
+            ram,
+            catalogs,
+        })
+    }
+    pub fn validate(&self, source: &Root, local: &Root, own_ram: Option<&str>) -> Result<()> {
+        validate_backing_paths(
+            self.ram
+                .iter()
+                .filter_map(|(_, _, backing)| backing.as_ref()),
+            source,
+        )?;
+        if own_ram.is_none() {
+            validate_backing_paths(
+                self.ram
+                    .iter()
+                    .filter_map(|(_, _, backing)| backing.as_ref()),
+                local,
+            )?;
+        }
+        if source.overlap(local) {
+            return Err("Sync roots overlap after a directory or mount change; pause and re-enroll the pair".into());
+        }
+        let managed = std::iter::once((&self.state, false))
+            .chain(self.backups.iter().map(|p| (p, false)))
+            .chain(
+                self.ram
+                    .iter()
+                    .map(|(id, path, _)| (path, own_ram == Some(id.as_str()))),
+            )
+            .chain(self.catalogs.iter().map(|p| (p, false)));
+        for (path, own_view) in managed {
+            if managed_overlap(path, source, (!own_view).then_some(local)) {
+                return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+// Missing managed roots retain their lexical boundary; observed roots also
+// compare filesystem coordinates, covering bind aliases without granting writes.
+fn managed_overlap(path: &Path, source: &Root, local: Option<&Root>) -> bool {
+    let managed = Root::open(path).ok();
+    std::iter::once(source)
+        .chain(local)
+        .any(|target| match &managed {
+            Some(root) => target.overlap(root),
+            None => target.path.starts_with(path) || path.starts_with(&target.path),
+        })
+}
+
 impl Owner {
     pub(super) fn backup_destination(&self, source: Option<&Root>) -> Result<Arc<Root>> {
         let path = self
@@ -57,52 +141,12 @@ impl Owner {
         local: &Root,
         own_ram: Option<&str>,
     ) -> Result<()> {
-        self.validate_ram_backing_target(source)?;
-        if own_ram.is_none() {
-            self.validate_ram_backing_target(local)?;
-        }
-        if source.overlap(local) {
-            return Err("Sync roots overlap after a directory or mount change; pause and re-enroll the pair".into());
-        }
-        let mut managed = vec![(self.state.clone(), false)];
-        managed.extend(
-            preflight::managed_backup_paths(&self.db)?
-                .into_iter()
-                .map(|path| (path, false)),
-        );
-        managed.extend(
-            self.config
-                .backup_directory
-                .clone()
-                .map(|path| (path, false)),
-        );
-        managed.extend(
-            self.db
-                .list::<RamSession>("ram", 0, 1000)?
-                .into_iter()
-                .map(|session| (session.path, own_ram == Some(session.id.as_str()))),
-        );
-        managed.extend(
-            self.db
-                .list::<Catalog>("catalog", 0, 1000)?
-                .into_iter()
-                .filter_map(|catalog| catalog.mount)
-                .map(|path| (path, false)),
-        );
-        for (path, own_view) in managed {
-            let overlaps = if let Ok(root) = Root::open(&path) {
-                source.overlap(&root) || (!own_view && local.overlap(&root))
-            } else {
-                source.path.starts_with(&path)
-                    || path.starts_with(&source.path)
-                    || (!own_view
-                        && (local.path.starts_with(&path) || path.starts_with(&local.path)))
-            };
-            if overlaps {
-                return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
-            }
-        }
-        Ok(())
+        Storage::capture(
+            &self.db,
+            &self.state,
+            self.config.backup_directory.as_deref(),
+        )?
+        .validate(source, local, own_ram)
     }
     pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
         validate_ram_backing_storage(&self.db, target)
@@ -112,17 +156,25 @@ impl Owner {
     }
 }
 fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
-    for session in db.list::<RamSession>("ram", 0, 1000)? {
-        if let Some(backing) = session.backing {
-            if let Ok(root) = Root::open(&backing.directory) {
-                if target.overlap(&root) {
-                    return Err("Destination overlaps private RAM backing storage".into());
-                }
-            } else if target.path.starts_with(&backing.directory)
-                || backing.directory.starts_with(&target.path)
-            {
-                return Err("Destination overlaps unavailable RAM backing storage".into());
+    let sessions = db.list::<RamSession>("ram", 0, 1000)?;
+    validate_backing_paths(
+        sessions
+            .iter()
+            .filter_map(|session| session.backing.as_ref().map(|backing| &backing.directory)),
+        target,
+    )
+}
+fn validate_backing_paths<'a>(
+    paths: impl Iterator<Item = &'a PathBuf>,
+    target: &Root,
+) -> Result<()> {
+    for path in paths {
+        if let Ok(root) = Root::open(path) {
+            if target.overlap(&root) {
+                return Err("Destination overlaps private RAM backing storage".into());
             }
+        } else if target.path.starts_with(path) || path.starts_with(&target.path) {
+            return Err("Destination overlaps unavailable RAM backing storage".into());
         }
     }
     Ok(())

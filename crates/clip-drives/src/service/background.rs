@@ -44,6 +44,7 @@ impl Owner {
                 .values()
                 .any(|job| job.drive.as_deref() == Some(drive))
             || self.sync_jobs.values().any(|job| job.drive == drive)
+            || self.sync_preparing.values().any(|job| job.drive == drive)
         {
             return Err("This partition has an active storage operation; synchronization resumes when it finishes".into());
         }

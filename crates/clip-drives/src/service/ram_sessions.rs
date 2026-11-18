@@ -1,6 +1,47 @@
 //! RAM helper lifetime and durable sessions remain separate from catalog mounts.
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct Reconciliation {
+    session: Option<RamSession>,
+    live: bool,
+    unidentified: Option<Arc<Root>>,
+}
+impl Reconciliation {
+    pub fn capture(owner: &Owner, id: &str) -> Result<Self> {
+        Ok(Self {
+            session: owner.db.get("ram", id)?,
+            live: owner.ram_children.contains_key(id),
+            unidentified: owner.unidentified_ram.get(id).cloned(),
+        })
+    }
+    pub fn current(&self, owner: &Owner, id: &str) -> Result<bool> {
+        let now = Self::capture(owner, id)?;
+        Ok(self.session == now.session
+            && self.live == now.live
+            && match (&self.unidentified, &now.unidentified) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_root(b),
+                _ => false,
+            })
+    }
+    pub fn validate(&self, pair: &SyncPair, drive: &Drive) -> Result<bool> {
+        if pair.ram && self.session.is_none() {
+            return Err("RAM session metadata is missing; retained contents need recovery before synchronization".into());
+        }
+        if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
+            self.unidentified
+                .as_ref()
+                .ok_or("No persistent media identity; writeback requires a new explicit session")?
+                .validate()?;
+        }
+        if let Some(session) = &self.session {
+            available(session, self.live)?;
+        }
+        Ok(pair.ram && self.session.as_ref().is_some_and(|s| !s.ready))
+    }
+}
+
 /// Starts the same identity-checked view for initial preparation and restart recovery.
 pub(super) fn start_view(
     db: &Store,
@@ -49,27 +90,6 @@ pub(super) fn start_view(
 }
 
 impl Owner {
-    /// Validate the retained RAM owner and report whether this is initial population.
-    pub(super) fn validate_ram_reconciliation(
-        &self,
-        pair: &SyncPair,
-        drive: &Drive,
-    ) -> Result<bool> {
-        let session = self.db.get::<RamSession>("ram", &pair.id)?;
-        if pair.ram && session.is_none() {
-            return Err("RAM session metadata is missing; retained contents need recovery before synchronization".into());
-        }
-        if pair.ram && drive.part_uuid.is_none() && drive.filesystem_uuid.is_none() {
-            self.unidentified_ram
-                .get(&pair.id)
-                .ok_or("No persistent media identity; writeback requires a new explicit session")?
-                .validate()?;
-        }
-        if let Some(session) = &session {
-            self.ram_available(session)?;
-        }
-        Ok(pair.ram && session.is_some_and(|session| !session.ready))
-    }
     pub(super) fn mount_ram(&mut self, id: &str) -> Result<()> {
         let mut session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
         if self.ram_children.contains_key(id) {
@@ -127,22 +147,7 @@ impl Owner {
         }
     }
     pub(super) fn ram_available(&self, session: &RamSession) -> Result<()> {
-        if let Some(backing) = &session.backing {
-            if !backing.mounted
-                || !self.ram_children.contains_key(&session.id)
-                || crate::mounts::owned_mount(&session.path, "little-clip-ram", &session.id)?
-                    .is_none()
-            {
-                return Err(
-                    "RAM filesystem is unavailable; retained image must be recovered first".into(),
-                );
-            }
-            crate::ram::open(backing)?;
-        }
-        if kernel_interface::MountIdentity::directory(&session.path)? != session.identity {
-            return Err("RAM view identity changed; refusing access".into());
-        }
-        Ok(())
+        available(session, self.ram_children.contains_key(&session.id))
     }
     pub(super) fn discard_ram(&mut self, session: &RamSession, cancel: &AtomicBool) -> Result<()> {
         self.sync_roots.remove(&session.id);
@@ -191,4 +196,22 @@ impl Owner {
         fs::remove_dir_all(&root.path)?;
         Ok(())
     }
+}
+
+fn available(session: &RamSession, live: bool) -> Result<()> {
+    if let Some(backing) = &session.backing {
+        if !backing.mounted
+            || !live
+            || crate::mounts::owned_mount(&session.path, "little-clip-ram", &session.id)?.is_none()
+        {
+            return Err(
+                "RAM filesystem is unavailable; retained image must be recovered first".into(),
+            );
+        }
+        crate::ram::open(backing)?;
+    }
+    if kernel_interface::MountIdentity::directory(&session.path)? != session.identity {
+        return Err("RAM view identity changed; refusing access".into());
+    }
+    Ok(())
 }
