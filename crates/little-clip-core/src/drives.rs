@@ -80,6 +80,35 @@ pub struct Drive {
     pub ambiguous: bool,
 }
 
+impl Drive {
+    /// Returns the stable directory component used for this drive's backups.
+    ///
+    /// Uses the partition UUID when present, otherwise `fs-{filesystem UUID}`.
+    /// Returns `None` when neither identifier is available; each such backup
+    /// needs its own unidentified directory and cannot share a stable bucket.
+    ///
+    /// # Errors
+    /// Returns an error when the selected identifier is empty or contains bytes
+    /// other than ASCII letters, digits and hyphens. No filesystem is accessed.
+    pub fn backup_bucket(&self) -> Result<Option<String>, &'static str> {
+        let (uuid, prefix) = if let Some(uuid) = &self.part_uuid {
+            (uuid, "")
+        } else if let Some(uuid) = &self.filesystem_uuid {
+            (uuid, "fs-")
+        } else {
+            return Ok(None);
+        };
+        if uuid.is_empty()
+            || !uuid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("Invalid partition or filesystem UUID for a backup directory");
+        }
+        Ok(Some(format!("{prefix}{uuid}")))
+    }
+}
+
 /// Partition-table facts captured without reading partition payload bytes.
 ///
 /// Unknown fields remain absent. These describe a partition image's placement on
@@ -663,6 +692,54 @@ mod tests {
         assert_eq!(catalog.pending_redactions, 0);
         assert_eq!(catalog.redaction_error, None);
         assert!(!catalog.root_excluded);
+    }
+    #[test]
+    fn backup_buckets_keep_uuid_precedence_and_refuse_path_components() {
+        let mut drive = Drive {
+            id: "fs:volume".into(),
+            label: "media".into(),
+            device: "/dev/owned".into(),
+            mount: None,
+            part_uuid: None,
+            filesystem_uuid: None,
+            filesystem: "vfat".into(),
+            capacity: 1,
+            drive_capacity: 1,
+            disk_sequence: None,
+            partition_layout: None,
+            removable: true,
+            read_only: false,
+            evidence: "owned".into(),
+            ambiguous: false,
+        };
+        for (part, filesystem, expected) in [
+            (Some("part-id"), Some("VOLUME-42"), Some("part-id")),
+            (None, Some("VOLUME-42"), Some("fs-VOLUME-42")),
+            (Some("part-id"), Some("../unused"), Some("part-id")),
+            (None, None, None),
+        ] {
+            drive.part_uuid = part.map(str::to_owned);
+            drive.filesystem_uuid = filesystem.map(str::to_owned);
+            assert_eq!(drive.backup_bucket().unwrap().as_deref(), expected);
+            drive.device = "/dev/relocated-owned".into();
+            assert_eq!(drive.backup_bucket().unwrap().as_deref(), expected);
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "/absolute",
+            "a/b",
+            "raw\0name",
+            "é",
+        ] {
+            for partition in [false, true] {
+                drive.part_uuid = partition.then(|| invalid.into());
+                drive.filesystem_uuid = Some(invalid.into());
+                assert!(drive.backup_bucket().is_err(), "{invalid:?}");
+            }
+        }
     }
     #[test]
     fn drive_defaults_remain_opt_in_and_relative_paths_cannot_escape() {

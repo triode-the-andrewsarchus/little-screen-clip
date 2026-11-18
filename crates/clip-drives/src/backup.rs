@@ -146,20 +146,9 @@ fn last(db: &Store, drive: &Drive, kind: BackupKind) -> Result<Option<Backup>> {
 }
 fn backup_parent(destination: &Root, drive: &Drive) -> Result<Root> {
     let key = drive
-        .part_uuid
-        .clone()
-        .or_else(|| {
-            drive
-                .filesystem_uuid
-                .as_ref()
-                .map(|uuid| format!("fs-{uuid}"))
-        })
+        .backup_bucket()?
         .unwrap_or_else(|| format!("unidentified-{}", uuid::Uuid::new_v4()));
-    let uuid = &key;
-    if uuid.is_empty() || !uuid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-        return Err("Invalid partition UUID".into());
-    }
-    let pin = destination.directory(Path::new(uuid), true)?;
+    let pin = destination.directory(Path::new(&key), true)?;
     Root::open(&anchor(&pin))
 }
 pub(crate) fn files(
