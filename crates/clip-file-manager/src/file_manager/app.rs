@@ -68,6 +68,7 @@ impl DropDestination {
 
 struct FileManagerApp {
     vector_runtime: Option<clip_ui::vectors::Runtime>,
+    map_runtime: Option<super::geography::gpu::Runtime>,
     browser: FileManager,
     viewers: super::viewers::Viewers,
     external: super::external::Launcher,
@@ -93,6 +94,10 @@ impl FileManagerApp {
                     .map_err(|error| tracing::warn!(%error, "Native vector initialization failed"))
                     .ok()
             });
+        let map_runtime = cc
+            .gl
+            .as_ref()
+            .map(|gl| super::geography::gpu::Runtime::install(ctx, gl));
         let config = AppConfig::load();
         let palette = ui_appearance::palette(config.workbench.appearance);
         ui_ext::configure_workbench_style(ctx);
@@ -134,6 +139,7 @@ impl FileManagerApp {
         }
         Self {
             vector_runtime,
+            map_runtime,
             browser,
             viewers: super::viewers::Viewers::new(config),
             pad_studio: None,
@@ -680,6 +686,12 @@ impl FileManagerApp {
 
 impl eframe::App for FileManagerApp {
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(runtime), Some(gl)) = (&mut self.map_runtime, gl) {
+            // SAFETY: eframe retains this host's owning current context through on_exit.
+            unsafe {
+                runtime.destroy(gl);
+            }
+        }
         if let (Some(runtime), Some(gl)) = (&mut self.vector_runtime, gl) {
             // SAFETY: eframe retains this application's current context through
             // on_exit. Runtime checks the identity before releasing GPU objects.
@@ -860,6 +872,7 @@ mod media_view_removal_tests {
         let source = crate::file_source::FileSource::capture(&path).unwrap();
         let mut app = FileManagerApp {
             vector_runtime: None,
+            map_runtime: None,
             browser: FileManager::default(),
             viewers: super::super::viewers::Viewers::default(),
             external: Default::default(),

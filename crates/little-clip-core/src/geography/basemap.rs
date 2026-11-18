@@ -118,6 +118,8 @@ pub struct RoadLine {
 /// One Natural Earth 1:10m inland lake / reservoir outline.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LakePolygon {
+    #[serde(default)]
+    pub holes: Vec<Vec<[f32; 2]>>,
     /// Bounding box `[min_lon, min_lat, max_lon, max_lat]` in degrees.
     pub bounds: [f32; 4],
     pub points: Vec<[f32; 2]>,
@@ -254,6 +256,10 @@ pub struct GrwlSummaryIndex {
 }
 
 impl GrwlSummaryIndex {
+    pub fn segments(&self) -> &[GrwlSegment] {
+        &self.segments
+    }
+
     pub fn load_or_build(dir: &Path) -> Option<Self> {
         let cache_path = dir.join("grwl_summary.bin");
         if let Ok(bytes) = fs::read(&cache_path)
@@ -630,6 +636,10 @@ pub struct HydroRiversIndex {
 }
 
 impl HydroRiversIndex {
+    pub fn segments(&self) -> &[RiverSegment] {
+        &self.segments
+    }
+
     pub fn load_or_build(dir: &Path) -> Option<Self> {
         let legacy = dir.join("rivers_stra3.bin");
         if legacy.is_file() {
@@ -1194,7 +1204,7 @@ impl BasemapAssets {
                     .is_file());
         status.has_roads_lakes = (assets_dir.join("roads_10m.json").is_file()
             || assets_dir.join("ne_10m_roads.geojson").is_file())
-            && (assets_dir.join("lakes_10m.json").is_file()
+            && (assets_dir.join("lakes_10m_v2.json").is_file()
                 || assets_dir.join("ne_10m_lakes.geojson").is_file());
         status.has_grwl = assets_dir.join("grwl_summary.bin").is_file()
             || find_first_with_ext(&assets_dir.join("grwl"), &["shp"]).is_some();
@@ -1307,41 +1317,6 @@ impl BasemapAssets {
         self.sample_elevation_at(lat, lon, 5400.0)
     }
 
-    /// Estimates elevation in meters, falling back to a smooth coarse approximation derived from
-    /// Natural Earth II shading or continental/orogenic hints when GEBCO is not yet downloaded.
-    pub fn sample_elevation_or_estimate(&self, lat: f64, lon: f64) -> (f32, bool) {
-        self.sample_elevation_or_estimate_at(lat, lon, 5400.0)
-    }
-
-    /// Resolution-aware elevation lookup with fallback estimate.
-    pub fn sample_elevation_or_estimate_at(
-        &self,
-        lat: f64,
-        lon: f64,
-        target_global_width: f64,
-    ) -> (f32, bool) {
-        if let Some(m) = self.sample_elevation_at(lat, lon, target_global_width) {
-            return (m, true);
-        }
-        if let Some(ne2) = &self.ne2 {
-            let [r, g, b] = ne2.sample_rgb(lat, lon);
-            // Natural Earth II ocean pixels are strongly blue-dominant.
-            if b > r.saturating_add(16) && b > g.saturating_add(6) && b > 140 {
-                return (0.0, false);
-            }
-            // Approximate relative relief from brightness/snow/highland cues so Oilslick remains
-            // inspectable before the full 7.2 GB GEBCO download.
-            let luma = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
-            let highland = (1.0 - (g as f32 / 255.0)).max(0.0);
-            let elev = (luma * 1400.0 + highland * 2200.0 - 250.0).max(15.0);
-            return (elev, false);
-        }
-        // Zero-asset fallback: subtle latitude/longitude harmonic relief above sea level.
-        let s = (lat.to_radians() * 3.0).sin() * (lon.to_radians() * 2.0).cos();
-        let elev = ((s * 0.5 + 0.5) * 1600.0) as f32;
-        (elev, false)
-    }
-
     /// Samples Natural Earth II RGB using the full 21600×10800 GeoTIFF when zoomed past the 4096×2048 overview.
     pub fn sample_ne2_at(&self, lat: f64, lon: f64, target_global_width: f64) -> Option<[u8; 3]> {
         if target_global_width > 4096.0
@@ -1351,38 +1326,6 @@ impl BasemapAssets {
             return Some(rgb);
         }
         self.ne2.as_ref().map(|n| n.sample_rgb(lat, lon))
-    }
-
-    /// Computes a normalized northwest hillshade factor (`0.0..=1.0`) at `(lat, lon)`.
-    pub fn sample_hillshade(&self, lat: f64, lon: f64, step_deg: f64) -> f32 {
-        self.sample_hillshade_at(lat, lon, step_deg, 5400.0)
-    }
-
-    /// Resolution-aware northwest hillshade factor (`0.0..=1.0`).
-    pub fn sample_hillshade_at(
-        &self,
-        lat: f64,
-        lon: f64,
-        step_deg: f64,
-        target_global_width: f64,
-    ) -> f32 {
-        let d = step_deg.clamp(0.002, 0.5);
-        let (e_w, _) = self.sample_elevation_or_estimate_at(lat, lon - d, target_global_width);
-        let (e_e, _) = self.sample_elevation_or_estimate_at(lat, lon + d, target_global_width);
-        let (e_s, _) = self.sample_elevation_or_estimate_at(lat - d, lon, target_global_width);
-        let (e_n, _) = self.sample_elevation_or_estimate_at(lat + d, lon, target_global_width);
-        let meters_per_deg = 111_320.0 * lat.to_radians().cos().abs().max(0.15) as f32;
-        let dx = (e_e - e_w) / (2.0 * d as f32 * meters_per_deg);
-        let dy = (e_n - e_s) / (2.0 * d as f32 * 111_320.0);
-        // Northwest sun (azimuth 315°, altitude 45°)
-        let nx = -dx * 2.4;
-        let ny = -dy * 2.4;
-        let nz = 1.0_f32;
-        let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-5);
-        let lx = -0.5_f32;
-        let ly = 0.5_f32;
-        let lz = 0.7071_f32;
-        ((nx * lx + ny * ly + nz * lz) / len).clamp(0.12, 1.0)
     }
 }
 
@@ -1597,15 +1540,6 @@ impl GlobeCamera {
     }
 }
 
-/// Rendered basemap frame with local elevation range and active contour interval metadata.
-pub struct BasemapFrame {
-    pub rgba: Vec<u8>,
-    pub contour_interval_m: Option<f32>,
-    pub local_min_m: f32,
-    pub local_max_m: f32,
-}
-
-/// Picks a clean round topographic contour interval in meters for the visible elevation span and zoom.
 pub fn choose_contour_interval_m(span_m: f32, zoom: f64) -> f32 {
     let target = (span_m.max(20.0) / 14.0) / (zoom as f32 / 6.0).clamp(0.6, 2.5);
     for &step in &[10.0_f32, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0] {
@@ -1618,506 +1552,6 @@ pub fn choose_contour_interval_m(span_m: f32, zoom: f64) -> f32 {
 
 /// Maps a Natural Earth II pixel into a clean, smudge-free biome color (water, forest, grass,
 /// scrub/desert, rock, snow/ice) so close-zoom terrain stays crisp without blurry baked rivers.
-fn classify_ne2_biome_rgb(
-    ne2_rgb: [u8; 3],
-    elev_m: f32,
-    lat: f64,
-    allow_ne2_water: bool,
-) -> [u8; 3] {
-    if elev_m <= 0.0 {
-        return LandCoverClass::Ocean.rgb();
-    }
-    let [r, g, b] = ne2_rgb;
-    if allow_ne2_water && b > r.saturating_add(12) && b > g.saturating_add(4) {
-        return LandCoverClass::Ocean.rgb();
-    }
-    let luma = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
-    if elev_m > 2400.0 && luma > 0.78 || elev_m > 4200.0 || (lat.abs() > 62.0 && luma > 0.78) {
-        return LandCoverClass::SnowIce.rgb();
-    }
-    if r > g.saturating_add(14) && r > b.saturating_add(25) {
-        return LandCoverClass::BareGround.rgb();
-    }
-    if g >= r && g > b.saturating_add(10) {
-        if luma < 0.52 {
-            return LandCoverClass::Forest.rgb();
-        }
-        return LandCoverClass::GrassCrops.rgb();
-    }
-    if r >= g && g > b {
-        return LandCoverClass::Scrub.rgb();
-    }
-    LandCoverClass::GrassCrops.rgb()
-}
-
-/// Renders the offline basemap raster (Natural / Oilslick / Hillshade) for the given camera and
-/// viewport dimensions into `width * height * 4` RGBA8 bytes.
-pub fn render_basemap_rgba(
-    assets: Option<&BasemapAssets>,
-    camera: &GlobeCamera,
-    style: BasemapStyle,
-    width: u32,
-    height: u32,
-    bg_rgb: [u8; 3],
-) -> Vec<u8> {
-    render_basemap_frame(assets, camera, style, false, width, height, bg_rgb).rgba
-}
-
-/// Renders the offline basemap raster with optional topographic contour lines and local
-/// min/max elevation gradient shading.
-pub fn render_basemap_frame(
-    assets: Option<&BasemapAssets>,
-    camera: &GlobeCamera,
-    style: BasemapStyle,
-    show_contours: bool,
-    width: u32,
-    height: u32,
-    bg_rgb: [u8; 3],
-) -> BasemapFrame {
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
-    let step_deg =
-        (180.0 / (camera.scale_px(width as f32, height as f32).max(32.0) * 2.0)).clamp(0.002, 0.35);
-    let blend = camera.globe_blend();
-    let scale = camera.scale_px(width as f32, height as f32).max(1.0);
-    let target_global_width = (scale * 2.0 * std::f64::consts::PI).max(2048.0);
-    let supersample =
-        width >= 420 && (style == BasemapStyle::Oilslick || target_global_width > 4096.0);
-    let cx = width as f64 * 0.5;
-    let cy = height as f64 * 0.5;
-
-    // Sample local min/max elevation across the visible viewport for gradient & contour scaling.
-    let mut local_min_m = f32::INFINITY;
-    let mut local_max_m = f32::NEG_INFINITY;
-    let has_dem = assets.is_some_and(|a| {
-        !a.terrain_tiles.is_empty() || a.global_dem.is_some() || a.cog_dem.is_some()
-    });
-    if let Some(assets) = assets
-        && has_dem
-    {
-        for sy in (0..14).map(|i| (i as f32 + 0.5) * height as f32 / 14.0) {
-            for sx in (0..20).map(|i| (i as f32 + 0.5) * width as f32 / 20.0) {
-                if let Some((lat, lon)) = camera.unproject(sx, sy, width as f32, height as f32)
-                    && let Some(e) = assets.sample_elevation_at(lat, lon, target_global_width)
-                    && e > 0.0
-                {
-                    local_min_m = local_min_m.min(e);
-                    local_max_m = local_max_m.max(e);
-                }
-            }
-        }
-    }
-    if !local_min_m.is_finite() || !local_max_m.is_finite() {
-        local_min_m = 0.0;
-        local_max_m = 1000.0;
-    }
-    let local_span_m = (local_max_m - local_min_m).max(20.0);
-    let contour_interval_m = (show_contours && has_dem && camera.zoom >= 3.5)
-        .then(|| choose_contour_interval_m(local_span_m, camera.zoom));
-    let biome_blend = ((camera.zoom - 5.0) / 4.0).clamp(0.0, 1.0) as f32;
-    let px_deg = (180.0 / (scale * std::f64::consts::PI)).clamp(0.0005, 0.25);
-
-    // River ribbon field:
-    // Tier 2: GRWL summary centerlines using Landsat-measured `width_med / 2` on each side.
-    // Fallback (when GRWL isn't downloaded): HydroRIVERS discharge-derived hydraulic ribbon.
-    let mut river_field: Vec<f32> = Vec::new();
-    if style != BasemapStyle::Oilslick
-        && camera.zoom >= 3.5
-        && let Some(assets) = assets
-        && (assets.grwl_summary.is_some() || assets.rivers.is_some())
-    {
-        let mut r_min_lat = 90.0_f64;
-        let mut r_max_lat = -90.0_f64;
-        let mut r_min_lon = 180.0_f64;
-        let mut r_max_lon = -180.0_f64;
-        let mut any_c = false;
-        for (cx, cy) in [
-            (0.0, 0.0),
-            (width as f32, 0.0),
-            (0.0, height as f32),
-            (width as f32, height as f32),
-            (width as f32 * 0.5, height as f32 * 0.5),
-        ] {
-            if let Some((lat, lon)) = camera.unproject(cx, cy, width as f32, height as f32) {
-                any_c = true;
-                r_min_lat = r_min_lat.min(lat);
-                r_max_lat = r_max_lat.max(lat);
-                r_min_lon = r_min_lon.min(lon);
-                r_max_lon = r_max_lon.max(lon);
-            }
-        }
-        if any_c && (r_max_lon - r_min_lon) < 120.0 {
-            river_field = vec![2.0_f32; (width * height) as usize];
-            let meters_per_px = (6_371_000.0 / scale).max(1.0);
-            let mut splat_ribbon = |points: &[[f32; 2]], half_w_m: f64| {
-                let rad_px = ((half_w_m / meters_per_px) as f32).clamp(0.75, 24.0);
-                let rad_i = rad_px.ceil() as i32;
-                for pair in points.windows(2) {
-                    let [lon0, lat0] = pair[0];
-                    let [lon1, lat1] = pair[1];
-                    let Some([x0, y0]) =
-                        camera.project(lat0 as f64, lon0 as f64, width as f32, height as f32)
-                    else {
-                        continue;
-                    };
-                    let Some([x1, y1]) =
-                        camera.project(lat1 as f64, lon1 as f64, width as f32, height as f32)
-                    else {
-                        continue;
-                    };
-                    let min_x = (x0.min(x1).floor() as i32 - rad_i).max(0);
-                    let max_x = (x0.max(x1).ceil() as i32 + rad_i).min(width as i32 - 1);
-                    let min_y = (y0.min(y1).floor() as i32 - rad_i).max(0);
-                    let max_y = (y0.max(y1).ceil() as i32 + rad_i).min(height as i32 - 1);
-                    let dx = x1 - x0;
-                    let dy = y1 - y0;
-                    let len2 = (dx * dx + dy * dy).max(1e-5);
-                    for py in min_y..=max_y {
-                        for px in min_x..=max_x {
-                            let t = (((px as f32 + 0.5 - x0) * dx + (py as f32 + 0.5 - y0) * dy)
-                                / len2)
-                                .clamp(0.0, 1.0);
-                            let cx_p = x0 + dx * t;
-                            let cy_p = y0 + dy * t;
-                            let dist = ((px as f32 + 0.5 - cx_p).powi(2)
-                                + (py as f32 + 0.5 - cy_p).powi(2))
-                            .sqrt();
-                            let frac = dist / rad_px;
-                            if frac < 1.0 {
-                                let cell =
-                                    &mut river_field[(py as u32 * width + px as u32) as usize];
-                                if frac < *cell {
-                                    *cell = frac;
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-
-            if let Some(grwl) = &assets.grwl_summary {
-                let min_w = if camera.zoom < 6.0 { 90.0 } else { 20.0 };
-                let segs = grwl.query_bbox(
-                    r_min_lon - 1.5,
-                    r_min_lat - 1.5,
-                    r_max_lon + 1.5,
-                    r_max_lat + 1.5,
-                    min_w,
-                    3500,
-                );
-                for seg in segs {
-                    splat_ribbon(&seg.points, (seg.width_med_m as f64) * 0.5);
-                }
-            } else if let Some(rivers) = &assets.rivers {
-                let min_ord = if camera.zoom < 9.0 { 4 } else { 3 };
-                let segs = rivers.query_bbox(
-                    r_min_lon - 1.5,
-                    r_min_lat - 1.5,
-                    r_max_lon + 1.5,
-                    r_max_lat + 1.5,
-                    min_ord,
-                    3000,
-                );
-                for seg in segs {
-                    let half_w_m = (3.6 * seg.dis_cms.max(1.0).sqrt()).clamp(25.0, 1200.0) as f64;
-                    splat_ribbon(&seg.points, half_w_m);
-                }
-            }
-        }
-    }
-
-    let sample_style = |lat: f64, lon: f64| -> [u8; 3] {
-        let mut rgb = match style {
-            BasemapStyle::Natural => {
-                if let Some(assets) = assets {
-                    if let Some(lc) = &assets.land_cover {
-                        let class = lc.sample(lat, lon);
-                        let base = class.rgb();
-                        if class == LandCoverClass::Ocean {
-                            base
-                        } else {
-                            let hs =
-                                assets.sample_hillshade_at(lat, lon, step_deg, target_global_width);
-                            let shade = 0.58 + 0.42 * hs;
-                            [
-                                (base[0] as f32 * shade).clamp(0.0, 255.0) as u8,
-                                (base[1] as f32 * shade).clamp(0.0, 255.0) as u8,
-                                (base[2] as f32 * shade).clamp(0.0, 255.0) as u8,
-                            ]
-                        }
-                    } else if let Some(ne2_rgb) =
-                        assets.sample_ne2_at(lat, lon, target_global_width)
-                    {
-                        if let Some(elev) =
-                            assets.sample_elevation_at(lat, lon, target_global_width)
-                        {
-                            if elev <= 0.0 && biome_blend > 0.2 {
-                                let ocean = LandCoverClass::Ocean.rgb();
-                                [
-                                    (ne2_rgb[0] as f32 * (1.0 - biome_blend)
-                                        + ocean[0] as f32 * biome_blend)
-                                        as u8,
-                                    (ne2_rgb[1] as f32 * (1.0 - biome_blend)
-                                        + ocean[1] as f32 * biome_blend)
-                                        as u8,
-                                    (ne2_rgb[2] as f32 * (1.0 - biome_blend)
-                                        + ocean[2] as f32 * biome_blend)
-                                        as u8,
-                                ]
-                            } else if elev > 0.0
-                                && (biome_blend > 0.01 || target_global_width > 4096.0)
-                            {
-                                let biome = classify_ne2_biome_rgb(
-                                    ne2_rgb,
-                                    elev,
-                                    lat,
-                                    assets.rivers.is_none(),
-                                );
-                                let base = [
-                                    ne2_rgb[0] as f32 * (1.0 - biome_blend)
-                                        + biome[0] as f32 * biome_blend,
-                                    ne2_rgb[1] as f32 * (1.0 - biome_blend)
-                                        + biome[1] as f32 * biome_blend,
-                                    ne2_rgb[2] as f32 * (1.0 - biome_blend)
-                                        + biome[2] as f32 * biome_blend,
-                                ];
-                                let hs = assets.sample_hillshade_at(
-                                    lat,
-                                    lon,
-                                    step_deg,
-                                    target_global_width,
-                                );
-                                let local_norm =
-                                    ((elev - local_min_m) / local_span_m).clamp(0.0, 1.0);
-                                let elev_grad =
-                                    1.0 - biome_blend * 0.14 + biome_blend * 0.24 * local_norm;
-                                let shade = (0.76 + 0.36 * (hs - 0.5)) * elev_grad;
-                                [
-                                    (base[0] * shade).clamp(0.0, 255.0) as u8,
-                                    (base[1] * shade).clamp(0.0, 255.0) as u8,
-                                    (base[2] * shade).clamp(0.0, 255.0) as u8,
-                                ]
-                            } else {
-                                ne2_rgb
-                            }
-                        } else {
-                            ne2_rgb
-                        }
-                    } else {
-                        fallback_natural_rgb(lat, lon)
-                    }
-                } else {
-                    fallback_natural_rgb(lat, lon)
-                }
-            }
-            BasemapStyle::Hypsometric => {
-                if let Some(assets) = assets {
-                    let (elev, _) =
-                        assets.sample_elevation_or_estimate_at(lat, lon, target_global_width);
-                    let hs = assets.sample_hillshade_at(lat, lon, step_deg, target_global_width);
-                    hypsometric_color(elev, hs)
-                } else {
-                    let s = (lat.to_radians() * 3.0).sin() * (lon.to_radians() * 2.0).cos();
-                    let elev = ((s * 0.5 + 0.5) * 1600.0) as f32;
-                    hypsometric_color(elev, 0.78)
-                }
-            }
-            BasemapStyle::Oilslick => {
-                if let Some(assets) = assets {
-                    let (elev, _) =
-                        assets.sample_elevation_or_estimate_at(lat, lon, target_global_width);
-                    let hs = assets.sample_hillshade_at(lat, lon, step_deg, target_global_width);
-                    oilslick_color(elev, hs)
-                } else {
-                    let s = (lat.to_radians() * 3.0).sin() * (lon.to_radians() * 2.0).cos();
-                    let elev = ((s * 0.5 + 0.5) * 1600.0) as f32;
-                    oilslick_color(elev, 0.78)
-                }
-            }
-            BasemapStyle::Hillshade => {
-                if let Some(assets) = assets {
-                    let (elev, _) =
-                        assets.sample_elevation_or_estimate_at(lat, lon, target_global_width);
-                    if elev <= 0.0 {
-                        [28, 52, 82]
-                    } else {
-                        let hs =
-                            assets.sample_hillshade_at(lat, lon, step_deg, target_global_width);
-                        let local_norm = ((elev - local_min_m) / local_span_m).clamp(0.0, 1.0);
-                        let v = (48.0 + 170.0 * hs + 26.0 * local_norm).clamp(0.0, 255.0) as u8;
-                        [v, v, v.saturating_add(4)]
-                    }
-                } else {
-                    [76, 82, 92]
-                }
-            }
-        };
-
-        // Topographic contour lines from DEM using screen-space gradient for crisp 1px AA lines.
-        if let Some(interval) = contour_interval_m
-            && let Some(assets) = assets
-            && let Some(e) = assets.sample_elevation_at(lat, lon, target_global_width)
-            && e > 0.0
-        {
-            let ex = assets
-                .sample_elevation_at(lat, lon + px_deg, target_global_width)
-                .unwrap_or(e);
-            let ey = assets
-                .sample_elevation_at(lat + px_deg, lon, target_global_width)
-                .unwrap_or(e);
-            let grad = ((ex - e).powi(2) + (ey - e).powi(2)).sqrt().max(0.25);
-            let phase = (e / interval).rem_euclid(1.0);
-            let dist_m = phase.min(1.0 - phase) * interval;
-            let dist_px = dist_m / grad;
-            if dist_px < 1.15 {
-                let is_major = ((e / interval).round() as i32).rem_euclid(5) == 0;
-                let line_alpha =
-                    ((1.15 - dist_px) / 1.15).clamp(0.0, 1.0) * if is_major { 0.58 } else { 0.30 };
-                let line_rgb = if style == BasemapStyle::Oilslick {
-                    [15.0_f32, 18.0, 24.0]
-                } else {
-                    [34.0_f32, 30.0, 26.0]
-                };
-                rgb[0] = (rgb[0] as f32 * (1.0 - line_alpha) + line_rgb[0] * line_alpha) as u8;
-                rgb[1] = (rgb[1] as f32 * (1.0 - line_alpha) + line_rgb[1] * line_alpha) as u8;
-                rgb[2] = (rgb[2] as f32 * (1.0 - line_alpha) + line_rgb[2] * line_alpha) as u8;
-            }
-        }
-
-        rgb
-    };
-
-    for y in 0..height {
-        for x in 0..width {
-            let idx = ((y * width + x) as usize) * 4;
-            let dx = (x as f64 + 0.5 - cx) / scale;
-            let dy = (y as f64 + 0.5 - cy) / scale;
-            let d = (dx * dx + dy * dy).sqrt();
-            let halo_rgb = |dist: f64| -> [u8; 3] {
-                if blend > 0.25 && dist >= 0.99 && dist < 1.06 {
-                    let glow = ((1.06 - dist.max(1.0)) / 0.06).powi(2) * 0.45 * blend;
-                    [
-                        (bg_rgb[0] as f64 + (90.0 - bg_rgb[0] as f64) * glow) as u8,
-                        (bg_rgb[1] as f64 + (150.0 - bg_rgb[1] as f64) * glow) as u8,
-                        (bg_rgb[2] as f64 + (235.0 - bg_rgb[2] as f64) * glow) as u8,
-                    ]
-                } else {
-                    bg_rgb
-                }
-            };
-
-            let px_dist = (1.0 - d) * scale;
-            let (coord, limb_cov) = if blend >= 0.5 && px_dist <= -0.75 {
-                let outer = halo_rgb(d);
-                rgba[idx] = outer[0];
-                rgba[idx + 1] = outer[1];
-                rgba[idx + 2] = outer[2];
-                rgba[idx + 3] = 255;
-                continue;
-            } else if blend >= 0.5 && px_dist < 0.75 {
-                let clamp_scale = (0.997 / d.max(1e-6)) as f32;
-                let sx = cx as f32 + (x as f32 + 0.5 - cx as f32) * clamp_scale;
-                let sy = cy as f32 + (y as f32 + 0.5 - cy as f32) * clamp_scale;
-                let cov = ((px_dist + 0.75) / 1.5).clamp(0.0, 1.0) as f32;
-                (camera.unproject(sx, sy, width as f32, height as f32), cov)
-            } else {
-                (
-                    camera.unproject(x as f32 + 0.5, y as f32 + 0.5, width as f32, height as f32),
-                    1.0_f32,
-                )
-            };
-            let Some((lat, lon)) = coord else {
-                let outer = halo_rgb(d);
-                rgba[idx] = outer[0];
-                rgba[idx + 1] = outer[1];
-                rgba[idx + 2] = outer[2];
-                rgba[idx + 3] = 255;
-                continue;
-            };
-
-            let mut rgb = if supersample && limb_cov >= 0.999 {
-                let mut acc = [0u32; 3];
-                let mut count = 0u32;
-                for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                    if let Some((slat, slon)) =
-                        camera.unproject(x as f32 + ox, y as f32 + oy, width as f32, height as f32)
-                    {
-                        let c = sample_style(slat, slon);
-                        acc[0] += c[0] as u32;
-                        acc[1] += c[1] as u32;
-                        acc[2] += c[2] as u32;
-                        count += 1;
-                    }
-                }
-                if count > 0 {
-                    [
-                        (acc[0] / count) as u8,
-                        (acc[1] / count) as u8,
-                        (acc[2] / count) as u8,
-                    ]
-                } else {
-                    sample_style(lat, lon)
-                }
-            } else {
-                sample_style(lat, lon)
-            };
-
-            if limb_cov < 0.999 {
-                let outer = halo_rgb(d.max(1.0));
-                rgba[idx] = (outer[0] as f32 + (rgb[0] as f32 - outer[0] as f32) * limb_cov) as u8;
-                rgba[idx + 1] =
-                    (outer[1] as f32 + (rgb[1] as f32 - outer[1] as f32) * limb_cov) as u8;
-                rgba[idx + 2] =
-                    (outer[2] as f32 + (rgb[2] as f32 - outer[2] as f32) * limb_cov) as u8;
-                rgba[idx + 3] = 255;
-            } else {
-                let mask_sample = if style != BasemapStyle::Oilslick
-                    && camera.zoom >= 6.0
-                    && let Some(assets) = assets
-                    && let Some(masks) = &assets.grwl_masks
-                {
-                    masks.sample_water(lat, lon)
-                } else {
-                    None
-                };
-                let water_alpha = match mask_sample {
-                    Some(true) => 0.94_f32,
-                    Some(false) => 0.0_f32,
-                    None => {
-                        if let Some(&dist_frac) = river_field.get((y * width + x) as usize)
-                            && dist_frac < 1.0
-                        {
-                            ((1.0 - dist_frac) * 3.0).clamp(0.0, 0.94)
-                        } else {
-                            0.0
-                        }
-                    }
-                };
-                if water_alpha > 0.01 {
-                    let w_rgb = [38.0_f32, 102.0, 172.0];
-                    rgb[0] = (rgb[0] as f32 * (1.0 - water_alpha) + w_rgb[0] * water_alpha) as u8;
-                    rgb[1] = (rgb[1] as f32 * (1.0 - water_alpha) + w_rgb[1] * water_alpha) as u8;
-                    rgb[2] = (rgb[2] as f32 * (1.0 - water_alpha) + w_rgb[2] * water_alpha) as u8;
-                }
-                rgba[idx] = rgb[0];
-                rgba[idx + 1] = rgb[1];
-                rgba[idx + 2] = rgb[2];
-                rgba[idx + 3] = 255;
-            }
-        }
-    }
-    BasemapFrame {
-        rgba,
-        contour_interval_m,
-        local_min_m,
-        local_max_m,
-    }
-}
-
-fn fallback_natural_rgb(lat: f64, lon: f64) -> [u8; 3] {
-    let checker = (((lat / 15.0).floor() as i32 + (lon / 15.0).floor() as i32) & 1) == 0;
-    if checker { [34, 48, 66] } else { [30, 43, 60] }
-}
-
 pub fn wrap_lon(lon: f64) -> f64 {
     ((lon + 180.0).rem_euclid(360.0)) - 180.0
 }
@@ -2482,9 +1916,24 @@ pub fn parse_lakes_geojson(bytes: &[u8]) -> Result<Vec<LakePolygon>, String> {
                 }
             }
             if pts.len() >= 3 {
+                let holes = poly
+                    .iter()
+                    .skip(1)
+                    .filter_map(|ring| ring.as_array())
+                    .map(|ring| {
+                        ring.iter()
+                            .filter_map(|v| {
+                                let a = v.as_array()?;
+                                Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|ring| ring.len() >= 3)
+                    .collect();
                 out.push(LakePolygon {
                     bounds: b,
                     points: pts,
+                    holes,
                 });
             }
         };
@@ -2502,7 +1951,7 @@ pub fn parse_lakes_geojson(bytes: &[u8]) -> Result<Vec<LakePolygon>, String> {
 }
 
 fn load_lakes_from_dir(dir: &Path) -> Vec<LakePolygon> {
-    let compact = dir.join("lakes_10m.json");
+    let compact = dir.join("lakes_10m_v2.json");
     if let Ok(bytes) = fs::read(&compact)
         && let Ok(polys) = serde_json::from_slice::<Vec<LakePolygon>>(&bytes)
     {
@@ -2732,6 +2181,15 @@ mod tests {
 
         cam.zoom = 5.0;
         assert_eq!(cam.globe_blend(), 0.0);
+    }
+
+    #[test]
+    fn lake_parser_preserves_island_rings_for_gpu_tessellation() {
+        let json=br#"{"features":[{"geometry":{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,4],[0,0]],[[1,1],[2,1],[2,2],[1,2],[1,1]]]}}]}"#;
+        let lakes = parse_lakes_geojson(json).unwrap();
+        assert_eq!(lakes.len(), 1);
+        assert_eq!(lakes[0].holes.len(), 1);
+        assert_eq!(lakes[0].holes[0][0], [1.0, 1.0]);
     }
 
     #[test]

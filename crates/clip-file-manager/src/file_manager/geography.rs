@@ -1,4 +1,8 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
+mod geometry;
+pub(super) mod gpu;
+mod tiles;
+
 use super::{
     filesystem::Entry,
     geography_downloader::{AssetDownloader, DownloadPack},
@@ -15,10 +19,7 @@ use little_clip_core::{
     config::AppConfig,
     geography::{
         Document, Feature, Kind, MAX_BYTES, Sample,
-        basemap::{
-            BasemapAssets, BasemapStyle, GlobeCamera, ProjectionMode, oilslick_color,
-            render_basemap_frame,
-        },
+        basemap::{BasemapAssets, BasemapStyle, GlobeCamera, ProjectionMode, oilslick_color},
     },
     palette::AppPalette,
 };
@@ -100,29 +101,6 @@ struct Hit {
     point: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct RasterKey {
-    lat_q: i32,
-    lon_q: i32,
-    zoom_q: u32,
-    mode: u8,
-    style: u8,
-    contours: bool,
-    width: u32,
-    height: u32,
-    assets_gen: u64,
-}
-
-struct RasterJob {
-    key: RasterKey,
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
-    contour_interval_m: Option<f32>,
-    local_min_m: f32,
-    local_max_m: f32,
-}
-
 pub(super) struct Viewer {
     document: Document,
     selected: usize,
@@ -139,14 +117,11 @@ pub(super) struct Viewer {
     config: AppConfig,
     downloader: AssetDownloader,
     assets: Option<Arc<BasemapAssets>>,
-    assets_gen: u64,
     assets_rx: Option<mpsc::Receiver<Arc<BasemapAssets>>>,
     prompt_dismissed: bool,
     show_assets_panel: bool,
-    raster_texture: Option<egui::TextureHandle>,
-    raster_key: Option<RasterKey>,
-    raster_rx: Option<mpsc::Receiver<RasterJob>>,
-    raster_in_flight: Option<RasterKey>,
+    tiles: tiles::Tiles,
+    render_error: Option<String>,
 }
 
 impl Viewer {
@@ -184,14 +159,11 @@ impl Viewer {
             config,
             downloader,
             assets: None,
-            assets_gen: 0,
             assets_rx: Some(rx),
             prompt_dismissed: false,
             show_assets_panel: false,
-            raster_texture: None,
-            raster_key: None,
-            raster_rx: None,
-            raster_in_flight: None,
+            tiles: tiles::Tiles::default(),
+            render_error: None,
         };
         viewer.fit_document();
         viewer.select(selected);
@@ -246,104 +218,13 @@ impl Viewer {
             && let Ok(loaded) = rx.try_recv()
         {
             self.assets = Some(loaded);
-            self.assets_gen = self.assets_gen.wrapping_add(1);
             self.assets_rx = None;
-            self.raster_key = None;
             ctx.request_repaint();
         }
         if let Some(downloaded) = self.downloader.poll(ctx) {
             self.assets = Some(downloaded);
-            self.assets_gen = self.assets_gen.wrapping_add(1);
-            self.raster_key = None;
             ctx.request_repaint();
         }
-        if let Some(rx) = &self.raster_rx
-            && let Ok(job) = rx.try_recv()
-        {
-            self.raster_rx = None;
-            self.raster_in_flight = None;
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [job.width as usize, job.height as usize],
-                &job.rgba,
-            );
-            self.raster_texture = Some(ctx.load_texture(
-                "geography-basemap-raster",
-                image,
-                egui::TextureOptions::LINEAR,
-            ));
-            self.raster_key = Some(job.key);
-            self.contour_interval_m = job.contour_interval_m;
-            self.local_elev_range = [job.local_min_m, job.local_max_m];
-            ctx.request_repaint();
-        }
-    }
-
-    fn ensure_raster(
-        &mut self,
-        ctx: &egui::Context,
-        rect: egui::Rect,
-        bg_rgb: [u8; 3],
-        interactive: bool,
-    ) {
-        let max_w = if interactive { 280.0 } else { 960.0 };
-        let scale = (max_w / rect.width().max(1.0)).min(1.0);
-        let rw = (rect.width() * scale).round().clamp(64.0, 960.0) as u32;
-        let rh = (rect.height() * scale).round().clamp(48.0, 720.0) as u32;
-        let key = RasterKey {
-            lat_q: (self.camera.center_lat * 100.0).round() as i32,
-            lon_q: (self.camera.center_lon * 100.0).round() as i32,
-            zoom_q: (self.camera.zoom * 100.0).round() as u32,
-            mode: match self.camera.mode {
-                ProjectionMode::Auto => 0,
-                ProjectionMode::Globe3D => 1,
-                ProjectionMode::Map2D => 2,
-            },
-            style: match self.style {
-                BasemapStyle::Natural => 0,
-                BasemapStyle::Hypsometric => 1,
-                BasemapStyle::Oilslick => 2,
-                BasemapStyle::Hillshade => 3,
-            },
-            contours: self.show_contours,
-            width: rw,
-            height: rh,
-            assets_gen: self.assets_gen,
-        };
-        if self.raster_key == Some(key) || self.raster_in_flight == Some(key) {
-            return;
-        }
-        if self.raster_in_flight.is_some() {
-            return;
-        }
-        self.raster_in_flight = Some(key);
-        let assets = self.assets.clone();
-        let camera = self.camera;
-        let style = self.style;
-        let show_contours = self.show_contours;
-        let (tx, rx) = mpsc::channel();
-        self.raster_rx = Some(rx);
-        let ctx_clone = ctx.clone();
-        std::thread::spawn(move || {
-            let frame = render_basemap_frame(
-                assets.as_deref(),
-                &camera,
-                style,
-                show_contours,
-                rw,
-                rh,
-                bg_rgb,
-            );
-            let _ = tx.send(RasterJob {
-                key,
-                width: rw,
-                height: rh,
-                rgba: frame.rgba,
-                contour_interval_m: frame.contour_interval_m,
-                local_min_m: frame.local_min_m,
-                local_max_m: frame.local_max_m,
-            });
-            ctx_clone.request_repaint();
-        });
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
@@ -381,13 +262,11 @@ impl Viewer {
             );
 
             // Handle drag-to-rotate/pan and scroll-to-zoom with smooth 3D -> 2D transition
-            let mut interacting = false;
             if response.dragged() {
                 let delta = response.drag_delta();
                 if delta.length_sq() > 0.0 {
                     self.camera
                         .pan_by(delta.x, delta.y, rect.width(), rect.height());
-                    interacting = true;
                 }
             }
             if response.hovered() {
@@ -395,16 +274,28 @@ impl Viewer {
                 if scroll.abs() > 0.01 {
                     let factor = (scroll * 0.004).exp() as f64;
                     self.camera.zoom = (self.camera.zoom * factor).clamp(0.75, 512.0);
-                    interacting = true;
                 }
             }
 
-            let bg_rgb = [
-                colors.recessed.r(),
-                colors.recessed.g(),
-                colors.recessed.b(),
-            ];
-            self.ensure_raster(ui.ctx(), rect, bg_rgb, interacting);
+            ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
+            if let Err(error) = self.tiles.update(
+                ui,
+                rect,
+                self.assets.as_ref(),
+                self.camera,
+                self.style,
+                self.show_contours,
+                geometry::Layers {
+                    countries: self.show_country_borders,
+                    states: self.show_state_borders,
+                    rivers: self.show_rivers,
+                    roads: self.show_roads,
+                },
+            ) {
+                self.render_error = Some(error);
+            }
+            self.contour_interval_m = self.tiles.contour;
+            self.local_elev_range = self.tiles.range;
 
             let hit = paint_globe_map(
                 ui,
@@ -412,12 +303,7 @@ impl Viewer {
                 &self.document,
                 Some(self.selected),
                 &self.camera,
-                self.raster_texture.as_ref(),
                 self.assets.as_deref(),
-                self.show_country_borders,
-                self.show_state_borders,
-                self.show_rivers,
-                self.show_roads,
                 self.contour_interval_m,
                 self.local_elev_range,
                 colors,
@@ -448,6 +334,9 @@ impl Viewer {
                 paint_oilslick_legend(ui, colors);
             }
 
+            if let Some(error) = &self.render_error {
+                ui.colored_label(colors.warning, error);
+            }
             let blend = self.camera.globe_blend();
             let proj_label = if blend > 0.9 {
                 "3D Globe"
@@ -463,7 +352,7 @@ impl Viewer {
             {
                 "DEM loaded"
             } else {
-                "Coarse/supplied elevation"
+                "Terrain unavailable"
             };
             ui.label(format!(
                 "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
@@ -907,334 +796,12 @@ fn paint_globe_map(
     doc: &Document,
     selected: Option<usize>,
     camera: &GlobeCamera,
-    raster: Option<&egui::TextureHandle>,
     assets: Option<&BasemapAssets>,
-    show_country_borders: bool,
-    show_state_borders: bool,
-    show_rivers: bool,
-    show_roads: bool,
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
     colors: WorkbenchColors,
 ) -> Option<Hit> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 3.0, colors.recessed);
-    if let Some(tex) = raster {
-        painter.image(
-            tex.id(),
-            rect,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    }
-
-    // Graticule lines
-    let step_deg: i32 = if camera.zoom < 3.0 {
-        30
-    } else if camera.zoom < 12.0 {
-        10
-    } else if camera.zoom < 40.0 {
-        2
-    } else {
-        1
-    };
-    let grid_stroke = egui::Stroke::new(1.0_f32, colors.text_secondary.gamma_multiply(0.18));
-    for lat in (-60..=60).step_by(step_deg as usize) {
-        let mut pts = Vec::new();
-        for lon in (-180..=180).step_by(6) {
-            if let Some([px, py]) =
-                camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-            {
-                pts.push(egui::pos2(rect.left() + px, rect.top() + py));
-            } else if pts.len() > 1 {
-                painter.add(egui::Shape::line(std::mem::take(&mut pts), grid_stroke));
-            } else {
-                pts.clear();
-            }
-        }
-        if pts.len() > 1 {
-            painter.add(egui::Shape::line(pts, grid_stroke));
-        }
-    }
-    for lon in (-180..180).step_by(step_deg as usize) {
-        let mut pts = Vec::new();
-        for lat in (-84..=84).step_by(6) {
-            if let Some([px, py]) =
-                camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-            {
-                pts.push(egui::pos2(rect.left() + px, rect.top() + py));
-            } else if pts.len() > 1 {
-                painter.add(egui::Shape::line(std::mem::take(&mut pts), grid_stroke));
-            } else {
-                pts.clear();
-            }
-        }
-        if pts.len() > 1 {
-            painter.add(egui::Shape::line(pts, grid_stroke));
-        }
-    }
-
-    // GSHHG coastlines & lakes when downloaded
-    if let Some(assets) = assets
-        && !assets.coastlines.is_empty()
-    {
-        let coast_stroke = egui::Stroke::new(
-            1.0_f32,
-            egui::Color32::from_rgba_unmultiplied(180, 215, 245, 130),
-        );
-        let lake_stroke = egui::Stroke::new(
-            1.0_f32,
-            egui::Color32::from_rgba_unmultiplied(120, 185, 240, 150),
-        );
-        for poly in &assets.coastlines {
-            let stroke = if poly.level == 2 {
-                lake_stroke
-            } else {
-                coast_stroke
-            };
-            let mut pts: Vec<egui::Pos2> = Vec::new();
-            for &[lon, lat] in &poly.points {
-                if let Some([px, py]) =
-                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-                {
-                    let pos = egui::pos2(rect.left() + px, rect.top() + py);
-                    if let Some(prev) = pts.last().copied()
-                        && prev.distance_sq(pos) > (rect.width() * 0.45).powi(2)
-                    {
-                        if pts.len() > 1 {
-                            painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
-                        } else {
-                            pts.clear();
-                        }
-                    }
-                    pts.push(pos);
-                } else if pts.len() > 1 {
-                    painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
-                } else {
-                    pts.clear();
-                }
-            }
-            if pts.len() > 1 {
-                painter.add(egui::Shape::line(pts, stroke));
-            }
-        }
-    }
-
-    // HydroRIVERS network (spatially indexed, filtered by stream order & visible bbox)
-    if show_rivers
-        && camera.zoom >= 2.5
-        && let Some(assets) = assets
-        && let Some(rivers) = &assets.rivers
-    {
-        let mut min_lat = 90.0_f64;
-        let mut max_lat = -90.0_f64;
-        let mut min_lon = 180.0_f64;
-        let mut max_lon = -180.0_f64;
-        let mut any_corner = false;
-        for (cx, cy) in [
-            (0.0, 0.0),
-            (rect.width(), 0.0),
-            (0.0, rect.height()),
-            (rect.width(), rect.height()),
-            (rect.width() * 0.5, rect.height() * 0.5),
-        ] {
-            if let Some((lat, lon)) = camera.unproject(cx, cy, rect.width(), rect.height()) {
-                any_corner = true;
-                min_lat = min_lat.min(lat);
-                max_lat = max_lat.max(lat);
-                min_lon = min_lon.min(lon);
-                max_lon = max_lon.max(lon);
-            }
-        }
-        if any_corner && (max_lon - min_lon) < 160.0 {
-            let min_ord = if camera.zoom < 4.5 {
-                6
-            } else if camera.zoom < 9.0 {
-                4
-            } else {
-                3
-            };
-            let visible_rivers = rivers.query_bbox(
-                min_lon - 2.0,
-                min_lat - 2.0,
-                max_lon + 2.0,
-                max_lat + 2.0,
-                min_ord,
-                4500,
-            );
-            for seg in visible_rivers {
-                let has_fill = camera.zoom >= 4.5
-                    && (!assets.terrain_tiles.is_empty()
-                        || assets.global_dem.is_some()
-                        || assets.cog_dem.is_some());
-                let width = (0.7 + 0.22 * (seg.ord_stra.saturating_sub(3) as f32)).min(1.8);
-                let alpha = if has_fill { 50 } else { 200 };
-                let stroke = egui::Stroke::new(
-                    width,
-                    egui::Color32::from_rgba_unmultiplied(64, 146, 224, alpha),
-                );
-                let mut pts: Vec<egui::Pos2> = Vec::new();
-                for &[lon, lat] in &seg.points {
-                    if let Some([px, py]) =
-                        camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-                    {
-                        pts.push(egui::pos2(rect.left() + px, rect.top() + py));
-                    } else if pts.len() > 1 {
-                        painter.add(egui::Shape::line(std::mem::take(&mut pts), stroke));
-                    } else {
-                        pts.clear();
-                    }
-                }
-                if pts.len() > 1 {
-                    painter.add(egui::Shape::line(pts, stroke));
-                }
-            }
-        }
-    }
-
-    // Natural Earth 1:10m lakes & reservoirs (when Rivers/water is enabled)
-    if show_rivers
-        && camera.zoom >= 2.0
-        && let Some(assets) = assets
-        && !assets.lakes.is_empty()
-    {
-        let lake_fill = egui::Color32::from_rgba_unmultiplied(38, 102, 172, 220);
-        let lake_edge = egui::Stroke::new(
-            0.9_f32,
-            egui::Color32::from_rgba_unmultiplied(110, 178, 235, 190),
-        );
-        for lake in &assets.lakes {
-            let mut pts: Vec<egui::Pos2> = Vec::new();
-            for &[lon, lat] in &lake.points {
-                if let Some([px, py]) =
-                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-                {
-                    pts.push(egui::pos2(rect.left() + px, rect.top() + py));
-                }
-            }
-            if pts.len() >= 3 && pts.iter().any(|p| rect.contains(*p)) {
-                painter.add(egui::Shape::convex_polygon(pts, lake_fill, lake_edge));
-            }
-        }
-    }
-
-    // Natural Earth 1:10m roads (major highways at zoom >= 3.0, secondary roads at zoom >= 5.5)
-    if show_roads
-        && camera.zoom >= 3.0
-        && let Some(assets) = assets
-        && !assets.roads.is_empty()
-    {
-        let major_stroke = egui::Stroke::new(
-            if camera.zoom >= 8.0 { 1.8_f32 } else { 1.2_f32 },
-            egui::Color32::from_rgba_unmultiplied(238, 182, 86, 200),
-        );
-        let minor_stroke = egui::Stroke::new(
-            1.0_f32,
-            egui::Color32::from_rgba_unmultiplied(212, 204, 186, 130),
-        );
-        for road in &assets.roads {
-            if !road.major && camera.zoom < 5.5 {
-                continue;
-            }
-            let mut pts: Vec<egui::Pos2> = Vec::new();
-            let mut any_in = false;
-            for &[lon, lat] in &road.points {
-                if let Some([px, py]) =
-                    camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-                {
-                    let pos = egui::pos2(rect.left() + px, rect.top() + py);
-                    if rect.contains(pos) {
-                        any_in = true;
-                    }
-                    pts.push(pos);
-                }
-            }
-            if any_in && pts.len() > 1 {
-                painter.add(egui::Shape::line(
-                    pts,
-                    if road.major {
-                        major_stroke
-                    } else {
-                        minor_stroke
-                    },
-                ));
-            }
-        }
-    }
-
-    // Natural Earth 1:10m Admin 0 country borders (all zooms) & Admin 1 state/province lines (regional zoom fade-in)
-    if let Some(assets) = assets {
-        let draw_borders = |lines: &[little_clip_core::geography::basemap::BorderLine],
-                            stroke: egui::Stroke,
-                            disputed_stroke: egui::Stroke| {
-            for line in lines {
-                let st = if line.disputed {
-                    disputed_stroke
-                } else {
-                    stroke
-                };
-                let mut pts: Vec<egui::Pos2> = Vec::new();
-                for &[lon, lat] in &line.points {
-                    if let Some([px, py]) =
-                        camera.project(lat as f64, lon as f64, rect.width(), rect.height())
-                    {
-                        let pos = egui::pos2(rect.left() + px, rect.top() + py);
-                        if let Some(prev) = pts.last().copied()
-                            && prev.distance_sq(pos) > (rect.width() * 0.45).powi(2)
-                        {
-                            if pts.len() > 1 {
-                                painter.add(egui::Shape::line(std::mem::take(&mut pts), st));
-                            } else {
-                                pts.clear();
-                            }
-                        }
-                        pts.push(pos);
-                    } else if pts.len() > 1 {
-                        painter.add(egui::Shape::line(std::mem::take(&mut pts), st));
-                    } else {
-                        pts.clear();
-                    }
-                }
-                if pts.len() > 1 {
-                    if line.disputed {
-                        for pair in pts.chunks(2) {
-                            if pair.len() == 2 {
-                                painter.line_segment([pair[0], pair[1]], st);
-                            }
-                        }
-                    } else {
-                        painter.add(egui::Shape::line(pts, st));
-                    }
-                }
-            }
-        };
-
-        if show_state_borders && !assets.state_borders.is_empty() && camera.zoom >= 2.0 {
-            let fade = ((camera.zoom - 2.0) / 3.0).clamp(0.0, 1.0) as f32;
-            let a = (95.0 * fade) as u8;
-            let state_stroke = egui::Stroke::new(
-                0.9_f32,
-                egui::Color32::from_rgba_unmultiplied(210, 215, 222, a),
-            );
-            let state_disputed = egui::Stroke::new(
-                0.8_f32,
-                egui::Color32::from_rgba_unmultiplied(210, 180, 140, a),
-            );
-            draw_borders(&assets.state_borders, state_stroke, state_disputed);
-        }
-        if show_country_borders && !assets.country_borders.is_empty() {
-            let country_stroke = egui::Stroke::new(
-                1.2_f32,
-                egui::Color32::from_rgba_unmultiplied(235, 238, 245, 165),
-            );
-            let country_disputed = egui::Stroke::new(
-                1.0_f32,
-                egui::Color32::from_rgba_unmultiplied(235, 195, 130, 140),
-            );
-            draw_borders(&assets.country_borders, country_stroke, country_disputed);
-        }
-    }
-
     // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
     if let Some(assets) = assets
         && !assets.cities.is_empty()

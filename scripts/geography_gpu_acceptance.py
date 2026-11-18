@@ -89,6 +89,7 @@ def main():
             GL.glUniform1i(uniform(name), unit)
         GL.glUniform2f(uniform("u_view"), width, height)
         GL.glUniform2f(uniform("u_range"), 500, 2600)
+        GL.glUniform1i(uniform("u_show_water"), 1)
         GL.glUniform1f(uniform("u_side"), 180)
 
         def draw(style=0, lat=0, lon=0, blend=1, zoom=1):

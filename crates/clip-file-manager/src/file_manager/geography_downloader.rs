@@ -260,7 +260,7 @@ impl AssetDownloader {
                                 little_clip_core::geography::basemap::parse_lakes_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("lakes_10m.json"), encoded);
+                            let _ = fs::write(assets_dir.join("lakes_10m_v2.json"), encoded);
                         }
                         let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
                         report(base + 0.20 * span, "Downloading Natural Earth 10m roads…");

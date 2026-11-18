@@ -7,6 +7,7 @@ uniform sampler2D u_color;
 uniform sampler2D u_height;
 uniform sampler2D u_water;
 uniform int u_style;
+uniform bool u_show_water;
 uniform float u_blend;
 uniform float u_side;
 uniform float u_contour;
@@ -56,6 +57,6 @@ void main() {
         float major=mod(round(h/u_contour),5.0)==0.0?0.58:0.30;
         rgb=mix(rgb,vec3(0.10,0.09,0.08),coverage*major);
     }
-    if(u_style!=2 && texture(u_water,v_uv).r>0.75) rgb=mix(rgb,vec3(0.149,0.40,0.675),0.94);
+    if(u_show_water && u_style!=2 && texture(u_water,v_uv).r>0.75) rgb=mix(rgb,vec3(0.149,0.40,0.675),0.94);
     frag=vec4(rgb,1.0);
 }
