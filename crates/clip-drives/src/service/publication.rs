@@ -7,6 +7,7 @@ pub(super) struct Input {
     pub paths: Vec<PathBuf>,
     pub drives: Vec<Drive>,
     pub rules: Vec<DriveRule>,
+    pub mount_signature: Option<String>,
 }
 type Observer = Arc<dyn Fn(Input, Option<IndexPolicy>) -> Result<IndexPolicy> + Send + Sync>;
 
@@ -25,6 +26,16 @@ impl Default for Publication {
     }
 }
 impl Publication {
+    pub(super) fn with_inventory(mut self, inventory: Inventory) -> Self {
+        let observer = self.observer.clone();
+        self.observer = Arc::new(move |mut input, previous| {
+            let before = little_clip_core::mount_inventory::Snapshot::capture()?;
+            input.drives = inventory()?;
+            input.mount_signature = Some(before.signature.clone());
+            observer(input, previous)
+        });
+        self
+    }
     pub(super) fn new(observer: Observer) -> Self {
         Self {
             jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
@@ -196,6 +207,9 @@ impl Owner {
 
 pub(super) fn observe(input: Input, previous: Option<IndexPolicy>) -> Result<IndexPolicy> {
     let routed = little_clip_core::mount_inventory::Snapshot::capture()?;
+    if input.mount_signature.as_deref() != Some(routed.signature.as_str()) {
+        return Err("Mount inventory changed while establishing drive policy sources".into());
+    }
     let sources = rules::IndexSources::observed(&input.drives, &routed.mounts);
     let mut requests = input
         .rules

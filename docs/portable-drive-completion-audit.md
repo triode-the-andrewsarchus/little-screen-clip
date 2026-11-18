@@ -10,7 +10,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Source/destination pin admission, image/catalog mount controls, retention and startup work still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
@@ -53,6 +53,80 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Retained status-refresh checkpoint
+
+Periodic discovery and operation-completion refreshes now use one retained
+`BackgroundJobs`/`Task` worker. Same-input refreshes coalesce; changed inputs retain
+one latest desired configuration. The owner keeps servicing controls and other
+pairs while inventory or RAM-availability metadata is blocked. A changed RAM
+directory/minimum shows a pending observation, and an older configuration's
+availability result cannot replace it. Status is observational: fresh operation
+admission remains independent, and a completed mount/unmount may precede its
+status refresh.
+
+Policy observation independently obtains fresh drive facts, bound to an unchanged
+mount-inventory signature. It cannot reuse a stale status source to reopen
+indexing. Failed inventory or a changed mount context keeps the root exclusion
+and previous offline observations; an explicit retry establishes fresh evidence.
+Shutdown retains active probes through actual exit and obtains a final
+post-cleanup observation. Finishing a held rule during the later publication
+drain cannot start an unowned late status probe. Singleton ownership and the
+accepted rule's durable completion remain intact through that sequence.
+
+Save-RAM queue scheduling now plans a missing destination's region from its
+existing ordinary ancestor without creating directories. This scheduling scope
+does not invent destination object identity or authorize writes. Execution keeps
+the existing guarded creation and enrollment checks. Missing siblings retain
+conservative name-equivalence overlap; existing aliases and file ancestors are
+tested. An unknown RAM session cannot create its requested output parent.
+
+The final ordinary backend suite passes **220 tests**, with 90 opt-in cases
+ignored (`/tmp/portable-drive-refresh-backend-shutdown-final.log`). Core passes
+**467 tests**, with four ignored
+(`/tmp/portable-drive-refresh-ordinary-final.log`). Two real stopped-FUSE tests
+pass (`/tmp/portable-drive-refresh-stalls-final.log`): kernel wait-channel evidence
+proves the policy and RAM-availability workers actually block while configuration
+and another pair remain responsive. The RAM test also holds the next observation
+to prove the stale failure was rejected before a good result can hide it. Twelve
+held-refresh configuration changes coalesce into two observations; a moved source
+still receives its fresh no-index policy while displayed inventory remains old.
+Four-package all-target Clippy passes with warnings denied
+(`/tmp/portable-drive-refresh-clippy-shutdown-final.log`), and the runtime build
+passes (`/tmp/portable-drive-refresh-runtime-final.log`).
+
+Nine native bind/case/unmount policy cases pass across FAT32, exFAT and default
+NTFS3 (`/tmp/portable-drive-refresh-vm-aliases/report.json`). The first combined
+invocation incorrectly appended them after image restoration had moved the
+source mount; its alias failures are retained at
+`/tmp/portable-drive-refresh-vm-final/report.json` and do not count as native
+coverage. The separate alias run uses its original verified mount fixture.
+The clean standalone lifecycle run passes all **27 cases**, nine per format,
+covering retirement/recovery responsiveness, original/backup provider validation,
+nested catalog refusal, external-write preflush and authorized partition-image
+backup (`/tmp/portable-drive-refresh-vm-lifecycle/report.json`). Both successful
+guest runs use LTS 6.18; they do not close the separately tracked CachyOS 7.3.4
+exFAT durability issue.
+Private UI acceptance passes explicit metadata measurement in dark appearance
+(`/tmp/portable-drive-refresh-ui-storage-dark/report.json`) and RAM pending
+changes, removal, offline export and reconnection in light appearance
+(`/tmp/portable-drive-refresh-ui-ram-light/report.json`). The rendered report,
+offline pending status and reconnected confirmation were inspected.
+
+Compared with `pre-drive-admission-responsiveness`, clone groups remain 4,300,
+cycles 144, duplication 6.99%, average CCN 3.49 and maximum 274. The implementation
+and regression fixtures add 660 NLOC and 28 functions. No refresh or modified
+policy-test function exceeds CCN 15. The comparison still reports REGRESSION:
+total CCN grows by 91, the flagged root/service clone fragments already exist in
+HEAD, and the reported Python cycles only change member ordering. The original
+`pre-portable-drive-services` comparison also remains REGRESSION (11 additional
+clone groups and one cycle across the whole branch); it is not reset or waived.
+
+This advances 1.5 without completing it. Initial discovery/recovery, fresh
+source/destination admission, configuration backup-directory validation,
+image/catalog controls and broader cleanup scheduling remain synchronous stages
+requiring their own responsiveness evidence. Physical-device interruption,
+provider lifetime and remaining no-index consumer matrices remain open.
 
 ## Historical catalog name-resolution checkpoint
 

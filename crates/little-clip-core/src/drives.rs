@@ -7,7 +7,7 @@ pub const MAX_CATALOG_WORKERS: usize = 4;
 mod catalog_limits;
 pub use catalog_limits::{CatalogLimitOverrides, CatalogLimits};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DriveConfig {
     #[serde(with = "crate::path_serde::optional")]

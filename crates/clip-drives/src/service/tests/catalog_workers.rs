@@ -37,27 +37,20 @@ fn invalid_worker_counts_fail_before_startup_or_reload_changes_preferences() {
 #[test]
 fn completed_configuration_exposes_new_limits_while_inventory_refresh_is_held() {
     let fixture = TestDrives::new(0);
-    let armed = Arc::new(AtomicBool::new(false));
-    let observed = armed.clone();
-    let (entered, release, gate) = worker_gate();
-    let service = fixture.start_authority(
-        Some(Arc::new(move || {
-            if std::thread::current().name() == Some("portable-drive-owner")
-                && observed.swap(false, Ordering::AcqRel)
-            {
-                gate();
-            }
-        })),
-        fixture.image_authority(),
+    let mut held = status_refresh::Held::new(
+        &fixture,
+        DriveConfig {
+            ram_min_available: 0,
+            ..Default::default()
+        },
     );
-    // Release the owner before Service joins it if an assertion fails.
-    let cleanup_release = release;
-    let mut config = status(&service).config;
+    let service = &held.service;
+    let mut config = status(service).config;
     config.catalog_workers = 2;
-    armed.store(true, Ordering::Release);
-    let id = accept(&service, DriveRequest::Configure { config });
-    entered.recv_timeout(Duration::from_secs(5)).unwrap();
-    let snapshot = status(&service);
+    held.arm();
+    let id = accept(service, DriveRequest::Configure { config });
+    held.wait();
+    let snapshot = status(service);
     assert_eq!(
         snapshot
             .operations
@@ -68,8 +61,11 @@ fn completed_configuration_exposes_new_limits_while_inventory_refresh_is_held() 
         "complete"
     );
     assert_eq!(snapshot.config.catalog_workers, 2);
-    cleanup_release.send(()).unwrap();
-    service.shutdown().unwrap();
+    let mut config = snapshot.config;
+    config.catalog_workers = 3;
+    finish(service, DriveRequest::Configure { config });
+    assert_eq!(status(service).config.catalog_workers, 3);
+    held.release();
 }
 
 struct Captures {

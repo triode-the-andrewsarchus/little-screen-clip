@@ -665,18 +665,11 @@ fn failed_policy_observation_installs_a_fail_closed_publication_and_can_recover(
         catalog: true,
         index: false,
     };
-    let failed = completed(&service, request.clone());
-    assert_eq!(failed.state, "failed", "{}", failed.message);
-    assert!(
-        failed.message.contains("Background indexing paused"),
-        "{}",
-        failed.message
-    );
-    let policy = published_policy(&service);
-    assert!(policy.excluded.contains(&PathBuf::from("/")));
-    assert_eq!(
-        policy.context, verified.context,
-        "A failed refresh retains offline-owner observations behind the root exclusion"
+    assert_policy_paused(
+        &service,
+        request.clone(),
+        &verified,
+        "Background indexing paused",
     );
     fs::remove_file(source.join("loop")).unwrap();
     let recovered = completed(&service, request);
@@ -832,10 +825,41 @@ fn held_policy_observation_coalesces_rules_without_blocking_controls_or_sync() {
 fn shutdown_retains_policy_ownership_until_observation_and_rule_completion_exit() {
     let (fixture, drive, _) = policy_fixture();
     let (entered, release, gate) = worker_gate();
-    let publisher = policy_observer_once("private", move || gate());
+    let publication_thread = Arc::new(Mutex::new(None));
+    let published = publication_thread.clone();
+    let publisher = policy_observer_once("private", move || {
+        *published.lock().unwrap() = Some(std::thread::current().id());
+        gate();
+    });
+    let tracking = Arc::new(AtomicBool::new(false));
+    let tracked = tracking.clone();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_calls = calls.clone();
+    let drives = fixture.drives.clone();
+    let caller = std::thread::current().id();
+    let (late_entered, late_release, late_gate) = worker_gate();
     let service = fixture.start_with_publication(
-        DriveConfig::default(),
-        None,
+        DriveConfig {
+            ram_min_available: u64::MAX,
+            ..Default::default()
+        },
+        Some(Arc::new(move || {
+            let current = std::thread::current();
+            if tracked.load(Ordering::Acquire)
+                && current.name() != Some("portable-drive-owner")
+                && current.id() != caller
+                && Some(current.id()) != *publication_thread.lock().unwrap()
+            {
+                let count = observed_calls.fetch_add(1, Ordering::AcqRel) + 1;
+                let mut drives = drives.lock().unwrap();
+                drives[0].label = format!("shutdown-status-{count}");
+                if count > 1 {
+                    // A forbidden late probe would retain this mutex and block
+                    // the final policy's fresh inventory until released.
+                    late_gate();
+                }
+            }
+        })),
         fixture.image_authority(),
         publisher,
     );
@@ -850,6 +874,7 @@ fn shutdown_retains_policy_ownership_until_observation_and_rule_completion_exit(
         panic!("expected accepted rule");
     };
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    tracking.store(true, Ordering::Release);
     let draining = service.clone();
     let (exited, completed) = mpsc::channel();
     let shutdown = std::thread::spawn(move || {
@@ -857,35 +882,31 @@ fn shutdown_retains_policy_ownership_until_observation_and_rule_completion_exit(
         exited.send(()).unwrap();
         result
     });
-    let started = Instant::now();
-    while !service.runtime.closing.load(Ordering::Acquire) {
-        assert!(started.elapsed() < Duration::from_secs(3));
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(
-        completed.try_recv().is_err(),
-        "Shutdown dropped a live observer"
-    );
+    assert_shutdown_retained(&service, &completed);
     assert_unfinished(&service, &id);
     let config = status(&service).config;
-    assert!(
-        service
-            .request(DriveRequest::Configure {
-                config: config.clone()
-            })
-            .is_err()
-    );
-    let competing = Service::start_with_inventory(
-        config.clone(),
-        service.state.clone(),
-        Arc::new(|| Ok(Vec::new())),
-    );
-    assert!(
-        matches!(competing, Err(error) if error.to_string().contains("Another drive coordinator"))
-    );
+    let observed = Instant::now();
+    while !status(&service)
+        .drives
+        .iter()
+        .any(|drive| drive.label == "shutdown-status-1")
+    {
+        assert!(
+            observed.elapsed() < Duration::from_secs(5),
+            "Final status observation did not retire"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     release.send(()).unwrap();
     completed.recv_timeout(Duration::from_secs(5)).unwrap();
     shutdown.join().unwrap().unwrap();
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        1,
+        "Completing a closing rule queued a new status probe"
+    );
+    assert!(late_entered.try_recv().is_err());
+    let _ = late_release.send(());
     let result = wait_operation(&service, &id, |operation| operation.finished.is_some());
     assert_eq!(result.state, "complete", "{}", result.message);
     let drives = fixture.drives.clone();
@@ -948,19 +969,8 @@ fn stalled_fuse_policy_metadata_leaves_controls_and_another_pair_responsive() {
             },
         );
         let tid = observing.recv_timeout(Duration::from_secs(5)).unwrap();
-        let started = Instant::now();
-        loop {
-            let wait = fs::read_to_string(format!("/proc/self/task/{tid}/wchan")).unwrap();
-            if wait.contains("request_wait_answer") || wait.contains("fuse") {
-                eprintln!("POLICY_FUSE_METADATA_BLOCKED tid={tid} wchan={wait}");
-                break;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "Policy worker did not enter a kernel FUSE wait: {wait}"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let (tid, wait) = wait_fuse_request(|| vec![tid]);
+        eprintln!("POLICY_FUSE_METADATA_BLOCKED tid={tid} wchan={wait}");
         assert_unfinished(&service, &id);
         assert!(
             published_policy(&service)

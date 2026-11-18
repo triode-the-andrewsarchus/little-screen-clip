@@ -37,6 +37,7 @@ pub(crate) struct Scope {
     identity: MountIdentity,
     namespace: Namespace,
     physical: Option<PathBuf>,
+    object: bool,
 }
 impl Scope {
     pub fn overlap(&self, other: &Self) -> bool {
@@ -44,7 +45,8 @@ impl Scope {
             || self.path.starts_with(&other.path)
             || other.path.starts_with(&self.path)
             || (self.identity.device == other.identity.device
-                && self.identity.inode == other.identity.inode)
+                && self.identity.inode == other.identity.inode
+                && self.object == other.object)
         {
             return true;
         }
@@ -192,7 +194,38 @@ impl Root {
             physical: (fs::read_link(anchor(&self.file)).ok().as_ref() == Some(&self.path))
                 .then(|| self.physical.clone())
                 .flatten(),
+            object: true,
         }
+    }
+    /// Plans a destination region without creating it or authorizing a write.
+    /// Missing siblings share uncertain parent-name semantics until created.
+    pub fn planned_scope(path: &Path) -> Result<Scope> {
+        let absolute = std::path::absolute(path)?;
+        for ancestor in absolute.ancestors() {
+            let root = match Self::open(ancestor) {
+                Ok(root) => root,
+                Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let relative = absolute
+                .strip_prefix(ancestor)
+                .map_err(|_| "Invalid destination ancestry")?;
+            if !valid_relative(relative) {
+                return Err("Invalid future destination address".into());
+            }
+            root.ordinary_names(relative)?;
+            let mut scope = root.scope();
+            if !relative.as_os_str().is_empty() {
+                scope.path.push(relative);
+                scope.physical = scope.physical.map(|path| path.join(relative));
+                scope.object = false;
+            }
+            root.validate()?;
+            return Ok(scope);
+        }
+        Err("No ordinary destination ancestor is available".into())
     }
     fn ordinary_names(&self, relative: &Path) -> Result<()> {
         let stream = relative.as_os_str().as_encoded_bytes().contains(&b':');
@@ -543,6 +576,42 @@ fn queried_change_metadata(release: &[u8], filesystem: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn future_destination_scopes_never_create_paths_or_invent_object_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first/new");
+        let second = temp.path().join("second/new");
+        let planned = Root::planned_scope(&first).unwrap();
+        let sibling = Root::planned_scope(&second).unwrap();
+        assert!(!first.parent().unwrap().exists());
+        assert!(!second.parent().unwrap().exists());
+        assert!(
+            planned.overlap(&sibling),
+            "Uncreated sibling names have uncertain equivalence"
+        );
+        assert!(planned.overlap(&Root::open(temp.path()).unwrap().scope()));
+        fs::create_dir_all(&first).unwrap();
+        let installed = Root::open(&first).unwrap().scope();
+        assert!(planned.overlap(&installed));
+        assert!(
+            !installed.overlap(&sibling),
+            "An existing disjoint sibling is not its parent object"
+        );
+    }
+    #[test]
+    fn future_destination_scopes_resolve_existing_aliases_and_reject_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let actual = temp.path().join("actual");
+        fs::create_dir(&actual).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        let planned = Root::planned_scope(&alias.join("future")).unwrap();
+        assert!(planned.overlap(&Root::planned_scope(&actual.join("future")).unwrap()));
+        assert!(!actual.join("future").exists());
+        fs::write(actual.join("file"), b"ordinary bytes").unwrap();
+        assert!(Root::planned_scope(&actual.join("file/child")).is_err());
+        assert_eq!(fs::read(actual.join("file")).unwrap(), b"ordinary bytes");
+    }
+    #[test]
     fn queried_change_tracking_requires_a_known_kernel_and_opted_in_driver() {
         for filesystem in ["ext4", "btrfs", "xfs", "tmpfs"] {
             for release in [b"7.0.0".as_slice(), b"7.3.4-custom", b"8.1.0"] {
@@ -668,6 +737,7 @@ mod tests {
             },
             namespace: namespace.clone(),
             physical: Some("/original".into()),
+            object: true,
         };
         let alias = Scope {
             path: "/alias/nested".into(),
@@ -678,6 +748,7 @@ mod tests {
             },
             physical: mount.project(Path::new("/alias/nested")),
             namespace,
+            object: true,
         };
         assert!(source.overlap(&alias));
         let unrelated = Scope {

@@ -47,6 +47,7 @@ mod ram_save;
 mod ram_sessions;
 mod ram_setup;
 mod reconciliation;
+mod refresh;
 mod rules;
 
 struct Owner {
@@ -60,6 +61,7 @@ struct Owner {
     background: HashMap<String, background::Pending>,
     maintenance: maintenance::Cleanup,
     publication: publication::Publication,
+    refresh: refresh::Refresh,
     policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
@@ -197,7 +199,8 @@ impl Service {
             sync_epoch: 0,
             background: HashMap::new(),
             maintenance: Default::default(),
-            publication,
+            publication: publication.with_inventory(inventory.clone()),
+            refresh: refresh::Refresh::new(inventory.clone()),
             policy_waiting: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
@@ -419,28 +422,6 @@ impl Owner {
         }
         Ok(())
     }
-    fn discover(&self) -> bool {
-        let inventory = (self.inventory)();
-        let mut status = match self.shared.lock() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        let previous = status.drives.clone();
-        match inventory {
-            Ok(drives) => {
-                status.drives = drives;
-                status.discovery_error = None;
-            }
-            Err(e) => {
-                status.drives.clear();
-                status.discovery_error = Some(e.to_string());
-            }
-        }
-        status.ram_unavailable = ram_reason(&self.config).err().map(|e| e.to_string());
-        status.backup_directory = self.config.backup_directory.clone();
-        status.config = self.config.clone();
-        previous != status.drives
-    }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
         self.recover_ram();
         let mut discovered = Instant::now();
@@ -456,13 +437,10 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
+            self.poll_refresh();
             self.poll_policy();
             if discovered.elapsed() >= Duration::from_secs(5) {
-                if self.discover() {
-                    self.sync_roots.clear();
-                    self.sync_epoch = self.sync_epoch.wrapping_add(1);
-                    self.automatic();
-                }
+                self.request_refresh(false);
                 let _ = self.publish_policy(false);
                 discovered = Instant::now();
             }
@@ -579,6 +557,13 @@ impl Owner {
             let _ = child.kill();
             let _ = child.wait();
         }
+        // Retain all status probes until actual exit, then observe the final
+        // post-cleanup state before publishing exclusions and releasing ownership.
+        self.request_refresh(true);
+        while self.refresh.busy() {
+            self.poll_refresh();
+            std::thread::sleep(Duration::from_millis(20));
+        }
         // Policy observations own temporary media pins until their actual exit.
         // Shutdown also installs the latest retained exclusions before releasing
         // the singleton, including startup followed immediately by shutdown.
@@ -624,6 +609,7 @@ impl Owner {
         }
         let drive = self.request_drive(&envelope.request).ok().flatten();
         let mut roots = Vec::new();
+        let mut claims = Vec::new();
         if let Some(drive) = &drive
             && let Some(drive) = self
                 .shared
@@ -640,8 +626,12 @@ impl Owner {
             session,
         } = &envelope.request
         {
-            if let Ok(root) = Root::create(destination) {
-                roots.push(root);
+            match Root::planned_scope(destination) {
+                Ok(scope) => claims.push(scope),
+                Err(error) => {
+                    self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+                    return;
+                }
             }
             if let Ok(Some(session)) = self.db.get::<RamSession>("ram", session)
                 && let Ok(root) = Root::open(&session.path)
@@ -649,7 +639,7 @@ impl Owner {
                 roots.push(root);
             }
         }
-        let claims = roots.iter().map(Root::scope).collect::<Vec<_>>();
+        claims.extend(roots.iter().map(Root::scope));
         let busy = drive
             .as_ref()
             .is_some_and(|drive| self.check_busy(drive).is_err())
@@ -1138,6 +1128,7 @@ impl Owner {
                 paths: excluded,
                 drives,
                 rules,
+                mount_signature: None,
             },
             fresh,
         )?;
@@ -1233,6 +1224,7 @@ mod tests {
     mod policy_coverage;
     mod ram_writeback;
     mod read_only;
+    mod status_refresh;
     mod storage;
     use super::*;
     #[test]
@@ -1414,6 +1406,71 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+    fn wait_fuse_request(threads: impl Fn() -> Vec<libc::c_long>) -> (libc::c_long, String) {
+        let started = Instant::now();
+        loop {
+            for tid in threads() {
+                let wait =
+                    fs::read_to_string(format!("/proc/self/task/{tid}/wchan")).unwrap_or_default();
+                if wait.contains("request_wait_answer") || wait.contains("fuse") {
+                    return (tid, wait);
+                }
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "Owned worker did not enter a kernel FUSE wait"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn assert_shutdown_retained(service: &Service, finished: &mpsc::Receiver<()>) {
+        let started = Instant::now();
+        while !service.runtime.closing.load(Ordering::Acquire) {
+            assert!(started.elapsed() < Duration::from_secs(3));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            finished.try_recv().is_err(),
+            "Shutdown dropped live observer ownership"
+        );
+        let config = status(service).config;
+        assert!(
+            service
+                .request(DriveRequest::Configure {
+                    config: config.clone()
+                })
+                .is_err()
+        );
+        let competing = Service::start_with_inventory(
+            config,
+            service.state.clone(),
+            Arc::new(|| Ok(Vec::new())),
+        );
+        assert!(
+            matches!(competing, Err(error) if error.to_string().contains("Another drive coordinator"))
+        );
+    }
+    fn assert_policy_paused(
+        service: &Service,
+        request: DriveRequest,
+        previous: &IndexPolicy,
+        reason: &str,
+    ) {
+        let failed = completed(service, request);
+        assert_eq!(failed.state, "failed", "{}", failed.message);
+        assert!(
+            failed.message.contains("Background indexing paused"),
+            "{}",
+            failed.message
+        );
+        assert!(failed.message.contains(reason), "{}", failed.message);
+        let paused = published_policy(service);
+        assert!(paused.excluded.contains(&PathBuf::from("/")));
+        assert_eq!(
+            paused.context, previous.context,
+            "Offline-owner observations remain behind the root exclusion"
+        );
+    }
     fn wait_ram(
         service: &Service,
         id: &str,
@@ -1448,7 +1505,9 @@ mod tests {
             DriveConfig::default(),
             temp.path().join("state"),
             Arc::new(move || {
-                if barrier.swap(false, Ordering::AcqRel) {
+                if std::thread::current().name() == Some("portable-drive-owner")
+                    && barrier.swap(false, Ordering::AcqRel)
+                {
                     gate();
                 }
                 Ok(vec![drive.clone()])
@@ -1456,8 +1515,16 @@ mod tests {
         )
         .unwrap();
         block.store(true, Ordering::Release);
-        // Block the owner's periodic discovery, independently of any client's
-        // read-only selector preparation before operation admission.
+        // Hold the still-synchronous reconciliation identity admission. Status
+        // discovery itself no longer occupies the owner or provides this barrier.
+        let pairing = accept(
+            &service,
+            DriveRequest::Pair {
+                drive: "part:queued-cancel".into(),
+                relative: PathBuf::new(),
+                local: temp.path().join("paired"),
+            },
+        );
         entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         let destination = temp.path().join("must-not-be-created");
         let id = accept(
@@ -1478,6 +1545,10 @@ mod tests {
             "cancelled"
         );
         assert!(!destination.exists());
+        assert_eq!(
+            wait_operation(&service, &pairing, |op| op.finished.is_some()).state,
+            "complete"
+        );
         service.shutdown().unwrap();
     }
     pub(super) struct TestDrives {
@@ -2188,15 +2259,21 @@ mod tests {
         );
         assert!(status(&service).backups.is_empty());
         assert!(!fixture.temp.path().join("backup/large").exists());
-        assert!(
-            status(&service)
-                .drives
-                .iter()
-                .find(|drive| drive.id == "part:large")
-                .unwrap()
-                .mount
-                .is_none()
-        );
+        let refreshed = Instant::now();
+        while status(&service)
+            .drives
+            .iter()
+            .find(|drive| drive.id == "part:large")
+            .unwrap()
+            .mount
+            .is_some()
+        {
+            assert!(
+                refreshed.elapsed() < Duration::from_secs(5),
+                "Unmount observation was not refreshed"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         service.shutdown().unwrap();
     }
 

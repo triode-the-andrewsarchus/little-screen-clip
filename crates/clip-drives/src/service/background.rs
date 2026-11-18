@@ -294,7 +294,7 @@ impl Owner {
         if let Ok(mut tokens) = self.tokens.lock() {
             tokens.remove(id);
         }
-        self.discover();
+        self.request_refresh(false);
         let _ = self.publish_policy(false);
     }
 }

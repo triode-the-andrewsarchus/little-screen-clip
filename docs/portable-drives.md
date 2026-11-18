@@ -511,6 +511,17 @@ The report remains in job history after restart. Cancel stops an active query;
 SQL work also has a 30-second measurement budget and does not publish a partial
 successful report.
 
+Routine drive discovery and RAM-storage availability checks run on one retained
+worker. A slow filesystem observation leaves settings and independent sync jobs
+responsive; repeated refreshes coalesce to the latest settings. Changing the RAM
+directory or minimum available memory shows **Checking RAM storage availability**
+until the matching check completes. Drive status can follow a completed mount or
+unmount operation asynchronously; it is observational and never authorizes a
+write. Policy publication obtains its own fresh inventory and verifies that the
+mount inventory stayed unchanged. Shutdown retains probes until they actually
+exit. Initial startup/recovery and some operation-admission checks still perform
+synchronous filesystem work.
+
 Logical row bytes count stored text and raw path bytes without materializing
 every JSON record. They are components of registry storage, with page/index
 overhead excluded. The registry file observation includes `drives.sqlite`, its
