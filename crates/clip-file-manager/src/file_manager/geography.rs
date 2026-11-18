@@ -462,7 +462,11 @@ impl Viewer {
         let needs_prompt = self.config.geography.prompt_on_open
             && !self.downloader.status.has_quick_start()
             && !self.prompt_dismissed;
-        if !needs_prompt && !self.show_assets_panel && self.downloader.active.is_none() {
+        if !needs_prompt
+            && !self.show_assets_panel
+            && self.downloader.active.is_none()
+            && self.downloader.last_error.is_none()
+        {
             return;
         }
         egui::Frame::none()
@@ -656,6 +660,7 @@ impl Viewer {
                                         .button("Get Land Cover", palette)
                                         .compact(),
                                 )
+                                .on_hover_text("Importing land cover requires GDAL 3.7+ (gdalwarp) with NetCDF support. Other map layers download independently.")
                                 .clicked()
                         {
                             self.downloader.start(DownloadPack::LandCover, &self.config);

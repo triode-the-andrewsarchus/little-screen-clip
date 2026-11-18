@@ -175,7 +175,55 @@ struct DownloadSession<'a> {
     cancelled: &'a AtomicBool,
     progress: &'a Mutex<DownloadProgress>,
 }
+struct DownloadOutcome {
+    assets: Arc<BasemapAssets>,
+    disk_usage_bytes: u64,
+    errors: Vec<String>,
+}
 impl DownloadSession<'_> {
+    fn download(
+        &self,
+        queue: &[DownloadPack],
+        override_dir: Option<&Path>,
+    ) -> Result<DownloadOutcome, String> {
+        let mut failures = Vec::new();
+        for (i, &pack) in queue.iter().enumerate() {
+            if let Err(error) = self.run(
+                pack,
+                i as f32 / queue.len() as f32,
+                0.95 / queue.len() as f32,
+            ) {
+                failures.push((pack, error));
+            }
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("Download cancelled".into());
+            }
+        }
+        self.report(0.96, "Loading offline basemap assets…");
+        let assets = Arc::new(BasemapAssets::load_with_cancel(
+            &self.root.path(),
+            override_dir,
+            self.cancelled,
+        ));
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("Download cancelled".into());
+        }
+        let status = assets.status();
+        for &pack in queue {
+            if !pack.installed(&status) && !failures.iter().any(|(failed, _)| *failed == pack) {
+                failures.push((pack, "Download did not produce usable map data".into()));
+            }
+        }
+        Ok(DownloadOutcome {
+            assets,
+            disk_usage_bytes: dir_size(&self.root.path()),
+            errors: failures
+                .into_iter()
+                .map(|(pack, error)| format!("{}: {error}", pack.label()))
+                .collect(),
+        })
+    }
+
     fn report(&self, fraction: f32, message: &str) {
         if let Ok(mut p) = self.progress.lock() {
             p.fraction = fraction.clamp(0.0, 1.0);
@@ -310,7 +358,7 @@ pub struct AssetDownloader {
     pub last_error: Option<String>,
     progress: Arc<Mutex<DownloadProgress>>,
     cancelled: Arc<AtomicBool>,
-    job: Option<Task<Result<(Arc<BasemapAssets>, u64), String>>>,
+    job: Option<Task<Result<DownloadOutcome, String>>>,
 }
 
 impl AssetDownloader {
@@ -387,26 +435,7 @@ impl AssetDownloader {
             } else {
                 vec![pack]
             };
-            for (i, &single) in queue.iter().enumerate() {
-                session.run(
-                    single,
-                    i as f32 / queue.len() as f32,
-                    0.95 / queue.len() as f32,
-                )?;
-            }
-            session.report(0.96, "Loading offline basemap assets…");
-            let assets = Arc::new(BasemapAssets::load_with_cancel(
-                &root.path(),
-                override_dir.as_deref(),
-                cancelled,
-            ));
-            if cancelled.load(Ordering::Relaxed) {
-                return Err("Download cancelled".into());
-            }
-            if !pack.installed(&assets.status()) {
-                return Err(format!("{} did not produce usable map data", pack.label()));
-            }
-            Ok((assets, dir_size(&root.path())))
+            session.download(&queue, override_dir.as_deref())
         });
         self.cancelled = job.token.clone();
         self.job = Some(job);
@@ -420,10 +449,12 @@ impl AssetDownloader {
         self.active = None;
         self.job = None;
         match result {
-            Ok(Ok((assets, usage))) => {
-                self.disk_usage_bytes = usage;
-                self.status = assets.status();
-                Some(assets)
+            Ok(Ok(outcome)) => {
+                self.disk_usage_bytes = outcome.disk_usage_bytes;
+                self.status = outcome.assets.status();
+                self.last_error = (!outcome.errors.is_empty())
+                    .then(|| format!("Unavailable map layers:\n{}", outcome.errors.join("\n")));
+                Some(outcome.assets)
             }
             Ok(Err(error)) => {
                 self.last_error = Some(error);
@@ -690,6 +721,97 @@ fn dir_size(dir: &Path) -> u64 {
 mod tests {
     use super::*;
     use std::{ffi::OsStr, io::Write, os::unix::fs::symlink};
+
+    fn download_fixture(config: &AppConfig, queue: &[DownloadPack]) -> DownloadOutcome {
+        let root = AssetDirectory::create(&config.geo_assets_dir()).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let progress = Mutex::new(DownloadProgress {
+            fraction: 0.0,
+            message: String::new(),
+        });
+        DownloadSession {
+            root: &root,
+            config,
+            cancelled: &cancelled,
+            progress: &progress,
+        }
+        .download(queue, None)
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_pack_keeps_and_publishes_layers_downloaded_before_and_after_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let line = temp.path().join("line.geojson");
+        fs::write(
+            &line,
+            br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[1,1]]}}]}"#,
+        )
+        .unwrap();
+        let lake = temp.path().join("lake.geojson");
+        fs::write(
+            &lake,
+            br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#,
+        )
+        .unwrap();
+        let mut config = AppConfig::default();
+        config.geography.assets_dir = Some(temp.path().join("assets"));
+        let line_url = format!("file://{}", line.display());
+        config.geography.countries_url = Some(line_url.clone());
+        config.geography.states_url = Some(line_url.clone());
+        config.geography.roads_url = Some(line_url);
+        config.geography.lakes_url = Some(format!("file://{}", lake.display()));
+        // With GDAL absent this fails at the dependency check; with it installed
+        // the deliberately unsupported URL fails without contacting a server.
+        config.geography.land_cover_url = Some("unavailable-test://land-cover".into());
+        let outcome = download_fixture(
+            &config,
+            &[
+                DownloadPack::Borders,
+                DownloadPack::LandCover,
+                DownloadPack::RoadsAndLakes,
+            ],
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains(DownloadPack::LandCover.label()));
+        let pool = BackgroundJobs::new(1, 1);
+        let mut downloader = AssetDownloader::new(&config);
+        downloader.active = Some(DownloadPack::All);
+        downloader.job = Some(Task::start_unbounded(&pool, move |_| Ok(outcome)));
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let assets = loop {
+            if let Some(assets) = downloader.poll(&ctx) {
+                break assets;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Partial download was not published"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(assets.status().has_borders);
+        assert!(downloader.status.has_roads_lakes);
+        assert!(!downloader.status.has_land_cover);
+        assert!(downloader.disk_usage_bytes > 0);
+        assert!(downloader.last_error.unwrap().contains("Land Cover"));
+    }
+
+    #[test]
+    fn successful_transfer_of_unusable_data_is_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("empty.geojson");
+        fs::write(&source, br#"{"type":"FeatureCollection","features":[]}"#).unwrap();
+        let mut config = AppConfig::default();
+        config.geography.assets_dir = Some(temp.path().join("assets"));
+        let url = format!("file://{}", source.display());
+        config.geography.countries_url = Some(url.clone());
+        config.geography.states_url = Some(url);
+        let outcome = download_fixture(&config, &[DownloadPack::Borders]);
+        assert!(!outcome.assets.status().has_borders);
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("usable map data"));
+    }
 
     #[test]
     fn cancelling_an_accepted_download_retains_its_owner_until_worker_exit() {
