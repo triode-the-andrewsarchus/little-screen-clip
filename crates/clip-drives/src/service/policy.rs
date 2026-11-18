@@ -25,6 +25,7 @@ pub(super) struct Storage {
     state: PathBuf,
     backups: Vec<PathBuf>,
     ram: Vec<(String, PathBuf, Option<PathBuf>)>,
+    allocations: Vec<PathBuf>,
     views: Vec<PathBuf>,
 }
 impl Storage {
@@ -39,6 +40,7 @@ impl Storage {
             .into_iter()
             .map(|s| (s.id, s.path, s.backing.map(|b| b.directory)))
             .collect();
+        let allocations = allocation_paths(db)?;
         let views = mounted_views(db)?;
         if let Some(snapshot) = snapshot {
             snapshot.commit()?;
@@ -47,6 +49,7 @@ impl Storage {
             state: state.to_path_buf(),
             backups,
             ram,
+            allocations,
             views,
         })
     }
@@ -68,14 +71,16 @@ impl Storage {
         validate_backing_paths(
             self.ram
                 .iter()
-                .filter_map(|(_, _, backing)| backing.as_ref()),
+                .filter_map(|(_, _, backing)| backing.as_ref())
+                .chain(self.allocations.iter()),
             source,
         )?;
         if let Some(local) = local.filter(|_| own_ram.is_none()) {
             validate_backing_paths(
                 self.ram
                     .iter()
-                    .filter_map(|(_, _, backing)| backing.as_ref()),
+                    .filter_map(|(_, _, backing)| backing.as_ref())
+                    .chain(self.allocations.iter()),
                 local,
             )?;
         }
@@ -270,12 +275,21 @@ pub(super) fn same_pair_roots(db: &Store, prior: &[SyncPair]) -> Result<bool> {
             .iter()
             .map(|pair| (&pair.id, &pair.local, &pair.local_identity))))
 }
+fn allocation_paths(db: &Store) -> Result<Vec<PathBuf>> {
+    Ok(records::<ram_setup::Allocation>(db, "ram-allocation")?
+        .into_iter()
+        .filter_map(|allocation| allocation.backing.map(|backing| backing.directory))
+        .collect())
+}
+
 pub(super) fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
     let sessions = records::<RamSession>(db, "ram")?;
+    let allocations = allocation_paths(db)?;
     validate_backing_paths(
         sessions
             .iter()
-            .filter_map(|session| session.backing.as_ref().map(|backing| &backing.directory)),
+            .filter_map(|session| session.backing.as_ref().map(|backing| &backing.directory))
+            .chain(allocations.iter()),
         target,
     )
 }

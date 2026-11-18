@@ -93,6 +93,7 @@ struct Owner {
     ram_children: HashMap<String, crate::ram::Mounted>,
     ram_setup: Option<ram_setup::Pending>,
     ram_access: Option<ram_access::Pending>,
+    ram_recovery: ram_sessions::recovery::Recovery,
     // Keep the creating worker alive until every transferred RAM server has exited.
     ram_setup_jobs: little_clip_core::jobs::BackgroundJobs,
 }
@@ -194,6 +195,8 @@ impl Service {
         let shared = Arc::new(Mutex::new(DriveStatus {
             config: config.clone(),
             backup_directory: config.backup_directory.clone(),
+            discovery_error: Some(refresh::INITIAL_DISCOVERY.into()),
+            ram_unavailable: Some("Checking RAM storage availability".into()),
             ..Default::default()
         }));
         let tokens = Arc::new(Mutex::new(HashMap::new()));
@@ -247,6 +250,7 @@ impl Service {
             ram_children: HashMap::new(),
             ram_setup: None,
             ram_access: None,
+            ram_recovery: Default::default(),
             ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
                 1,
                 1,
@@ -256,7 +260,7 @@ impl Service {
         rules::migrate(&owner.db)?;
         catalog::redaction::migrate(&owner.db)?;
         owner.recover()?;
-        owner.discover();
+        owner.request_refresh(true);
         owner.publish_policy(false)?;
         let thread = std::thread::Builder::new()
             .name("portable-drive-owner".into())
@@ -428,8 +432,7 @@ impl Owner {
             }
             offset += 128;
         }
-        self.recover_ram_allocations();
-        for mut session in self.db.list::<RamSession>("ram", 0, 1000)? {
+        for mut session in policy::records::<RamSession>(&self.db, "ram")? {
             if let Some(backing) = &mut session.backing {
                 backing.mounted = false;
                 session.status = "RAM image retained; waiting for filesystem recovery".into();
@@ -452,7 +455,6 @@ impl Owner {
         Ok(())
     }
     fn run(&mut self, receiver: mpsc::Receiver<Envelope>) {
-        self.recover_ram();
         let mut discovered = Instant::now();
         let mut synchronized = Instant::now() - Duration::from_secs(3600);
 
@@ -490,6 +492,7 @@ impl Owner {
             self.poll_partition();
             self.poll_ram_setup();
             self.poll_ram_access();
+            self.poll_ram_recovery();
             self.poll_sync();
             for envelope in std::mem::take(&mut self.deferred) {
                 self.operation(envelope);
@@ -539,6 +542,7 @@ impl Owner {
         self.drain_scopes();
         self.drain_partition_preparation();
         self.drain_ram_preparation();
+        self.drain_ram_recovery();
         self.drain_sync();
         drop(self.watch.take()); // Drain actual watch-worker pins before unmount/helper retirement.
         while let Some(job) = &self.partition {
@@ -594,6 +598,7 @@ impl Owner {
         !self.sync_preparing.is_empty()
             || !self.scheduling.pending.is_empty()
             || self.ram_access.is_some()
+            || self.ram_recovery.busy()
             || self.partition_preparing.is_some()
             || self.settings_busy()
             || self.watch.as_ref().is_some_and(Watch::registration_pending)
@@ -1204,6 +1209,7 @@ mod tests {
     mod ram_writeback;
     mod read_only;
     mod scope_admission;
+    mod startup;
     mod status_refresh;
     mod storage;
     mod sync_preparation;
@@ -1694,7 +1700,7 @@ mod tests {
             publisher: publication::Publication,
         ) -> Service {
             let drives = self.drives.clone();
-            Service::start_with_authority(
+            let service = Service::start_with_authority(
                 config,
                 self.temp.path().join("state"),
                 Arc::new(move || {
@@ -1707,7 +1713,13 @@ mod tests {
                 Arc::new(authority),
                 publisher,
             )
-            .unwrap()
+            .unwrap();
+            let started = Instant::now();
+            while status(&service).discovery_error.as_deref() == Some(refresh::INITIAL_DISCOVERY) {
+                assert!(started.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            service
         }
     }
     fn two_drives(bytes: u64) -> (tempfile::TempDir, Service, PathBuf) {

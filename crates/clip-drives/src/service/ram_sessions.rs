@@ -1,5 +1,6 @@
 //! RAM helper lifetime and durable sessions remain separate from catalog mounts.
 use super::*;
+pub(super) mod recovery;
 
 #[derive(Clone)]
 pub(super) struct Reconciliation {
@@ -40,6 +41,35 @@ impl Reconciliation {
         }
         Ok(pair.ram && self.session.as_ref().is_some_and(|s| !s.ready))
     }
+}
+
+pub(super) fn same_source(a: &RamSession, b: &RamSession) -> bool {
+    a.id == b.id
+        && a.drive == b.drive
+        && a.path == b.path
+        && a.identity == b.identity
+        && a.ready == b.ready
+        && a.backing == b.backing
+}
+
+pub(super) fn recover_view(
+    db: &Store,
+    expected: &RamSession,
+    pair: Option<&SyncPair>,
+    live: bool,
+    helper: &mut Option<crate::ram::Mounted>,
+) -> Result<(RamSession, Option<SyncPair>)> {
+    let mut session: RamSession = db.get("ram", &expected.id)?.ok_or("Unknown RAM session")?;
+    if !same_source(&session, expected) || db.get::<SyncPair>("pair", &session.id)?.as_ref() != pair
+    {
+        return Err("RAM ownership changed before preparation; retry".into());
+    }
+    if !live {
+        *helper = start_view(db, &mut session)?;
+    }
+    available(&session, live || helper.is_some())?;
+    let pair = db.get("pair", &session.id)?;
+    Ok((session, pair))
 }
 
 /// Starts the same identity-checked view for initial preparation and restart recovery.
@@ -90,33 +120,6 @@ pub(super) fn start_view(
 }
 
 impl Owner {
-    pub(super) fn mount_ram(&mut self, id: &str) -> Result<()> {
-        let mut session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
-        if self.ram_children.contains_key(id) {
-            return self.ram_available(&session);
-        }
-        if let Some(helper) = start_view(&self.db, &mut session)? {
-            self.ram_children.insert(id.into(), helper);
-        }
-        if let Some(watch) = &mut self.watch {
-            watch.add(Arc::new(Root::open(&session.path)?));
-        }
-        self.sync_roots.remove(id);
-        Ok(())
-    }
-    pub(super) fn recover_ram(&mut self) {
-        let Ok(sessions) = self.db.list::<RamSession>("ram", 0, 1000) else {
-            return;
-        };
-        for mut session in sessions {
-            if session.backing.is_some()
-                && let Err(error) = self.mount_ram(&session.id)
-            {
-                session.status = format!("RAM image retained; recovery unavailable: {error}");
-                let _ = self.db.put("ram", &session.id, &session);
-            }
-        }
-    }
     pub(super) fn mark_ram_unmounted(&self) {
         if let Ok(sessions) = self.db.list::<RamSession>("ram", 0, 1000) {
             for mut session in sessions {
@@ -145,9 +148,6 @@ impl Owner {
                 let _ = self.db.put("ram", &id, &session);
             }
         }
-    }
-    pub(super) fn ram_available(&self, session: &RamSession) -> Result<()> {
-        available(session, self.ram_children.contains_key(&session.id))
     }
     pub(super) fn discard_ram(&mut self, session: &RamSession, cancel: &AtomicBool) -> Result<()> {
         self.sync_roots.remove(&session.id);

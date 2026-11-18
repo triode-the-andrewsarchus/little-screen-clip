@@ -21,15 +21,6 @@ struct Prepared {
     save: Option<Arc<ram_save::Save>>,
 }
 
-fn same_source(a: &RamSession, b: &RamSession) -> bool {
-    a.id == b.id
-        && a.drive == b.drive
-        && a.path == b.path
-        && a.identity == b.identity
-        && a.ready == b.ready
-        && a.backing == b.backing
-}
-
 struct Input {
     session: RamSession,
     pair: SyncPair,
@@ -52,24 +43,14 @@ impl Input {
         db: &Store,
         helper: &mut Option<crate::ram::Mounted>,
     ) -> Result<(RamSession, SyncPair)> {
-        let mut session: RamSession = db
-            .get("ram", &self.session.id)?
-            .ok_or("Unknown RAM session")?;
-        if !same_source(&session, &self.session)
-            || db.get::<SyncPair>("pair", &session.id)?.as_ref() != Some(&self.pair)
-        {
-            return Err("RAM ownership changed before preparation; retry".into());
-        }
-        if !self.live {
-            *helper = ram_sessions::start_view(db, &mut session)?;
-        }
-        ram_sessions::available(&session, self.live || helper.is_some())?;
-        let mut pair = self.pair.clone();
-        if helper.is_some() {
-            pair.local_identity = Some(Root::open(&session.path)?.storage_identity()?);
-        }
-        Ok((session, pair))
+        let (session, pair) =
+            ram_sessions::recover_view(db, &self.session, Some(&self.pair), self.live, helper)?;
+        Ok((
+            session,
+            pair.ok_or("RAM enrollment disappeared during recovery")?,
+        ))
     }
+
     fn prepare(
         &self,
         db: &Store,
@@ -121,7 +102,7 @@ impl Owner {
         session: RamSession,
         claims: Vec<crate::root::Scope>,
     ) {
-        if self.ram_setup.is_some() || self.ram_access.is_some() {
+        if self.ram_setup.is_some() || self.ram_access.is_some() || self.ram_recovery.busy() {
             self.defer_operation(envelope);
             return;
         }
@@ -211,7 +192,7 @@ impl Owner {
                     .db
                     .get("ram", &prepared.session.id)?
                     .ok_or("RAM session disappeared during preparation")?;
-                if !same_source(&session, &prepared.session)
+                if !ram_sessions::same_source(&session, &prepared.session)
                     || self.db.get::<SyncPair>("pair", &session.id)?.as_ref()
                         != Some(&prepared.pair)
                     || policy::Storage::capture(

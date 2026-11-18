@@ -48,6 +48,7 @@ impl Owner {
                 .ram_access
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)
+            || self.ram_recovery.drive() == Some(drive)
             || self
                 .partition
                 .as_ref()

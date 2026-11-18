@@ -21,7 +21,7 @@ pub(super) struct Allocation {
 
 impl Owner {
     pub(super) fn ram_setup_blocks(&self, request: &DriveRequest) -> bool {
-        ((self.ram_access.is_some() || self.settings_busy())
+        ((self.ram_access.is_some() || self.ram_recovery.busy() || self.settings_busy())
             && matches!(request, DriveRequest::CopyToRam { .. }))
             || self.ram_setup.is_some()
                 && matches!(
@@ -153,24 +153,21 @@ impl Owner {
             }
         }
     }
+}
 
-    pub(super) fn recover_ram_allocations(&self) {
-        let Ok(rows) = self.db.list::<Allocation>("ram-allocation", 0, 1000) else {
-            return;
-        };
-        for allocation in rows {
-            if let Err(error) = cleanup_allocation(&self.db, &allocation.session) {
-                if let Ok(Some(mut operation)) = self
-                    .db
-                    .get::<DriveOperation>("operation", &allocation.operation)
-                {
-                    operation.message = error.to_string();
-                    let _ = self.db.put("operation", &operation.id, &operation);
-                }
-                tracing::warn!("{error}");
-            }
-        }
+pub(super) fn recover_allocation(db: &Store, id: &str) -> Result<()> {
+    let operation = db
+        .get::<Allocation>("ram-allocation", id)?
+        .map(|record| record.operation);
+    let result = cleanup_allocation(db, id);
+    if let Err(error) = &result
+        && let Some(operation) = operation
+        && let Some(mut record) = db.get::<DriveOperation>("operation", &operation)?
+    {
+        record.message = error.to_string();
+        db.put("operation", &operation, &record)?;
     }
+    result
 }
 
 fn eligible(db: &Store, config: &DriveConfig, drive: &Drive) -> Result<()> {
@@ -350,7 +347,30 @@ fn size_check(
 
 fn cleanup_allocation(db: &Store, id: &str) -> Result<()> {
     if let Some(allocation) = db.get::<Allocation>("ram-allocation", id)? {
-        if db.get::<RamSession>("ram", id)?.is_some() {
+        if allocation.session != id {
+            return Err(
+                "RAM allocation address differs from its registry key; retaining data".into(),
+            );
+        }
+        let published = policy::records::<RamSession>(db, "ram")?
+            .into_iter()
+            .any(|session| {
+                session.id == id
+                    || allocation
+                        .backing
+                        .as_ref()
+                        .zip(session.backing.as_ref())
+                        .is_some_and(|(a, b)| {
+                            a.directory == b.directory
+                                || [
+                                    (&a.directory_identity, &b.directory_identity),
+                                    (&a.image_identity, &b.image_identity),
+                                ]
+                                .into_iter()
+                                .any(|(a, b)| (a.filesystem, a.inode) == (b.filesystem, b.inode))
+                        })
+            });
+        if published {
             return Err(
                 "Published RAM data has a stale allocation record; retaining both for inspection"
                     .into(),
@@ -419,6 +439,15 @@ mod tests {
         .unwrap();
         let service = restart_coordinator(db, &state);
         let db = Store::existing(&state.join("drives.sqlite"), true).unwrap();
+        let started = Instant::now();
+        while db
+            .get::<Allocation>("ram-allocation", "fixture")
+            .unwrap()
+            .is_some()
+        {
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(
             db.get::<Allocation>("ram-allocation", "fixture")
                 .unwrap()
@@ -471,6 +500,11 @@ mod tests {
         };
         let abandoned = allocate(&db);
         let service = restart_coordinator(db, &state);
+        let started = Instant::now();
+        while abandoned.directory.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(
             !abandoned.directory.exists(),
             "startup should retire an empty unpublished image"
@@ -499,25 +533,27 @@ mod tests {
         fs::rename(retained, &replaced.directory).unwrap();
         let path = replaced.directory.join("contents");
         fs::write(path.join("edit"), b"published user edit").unwrap();
-        db.put(
-            "ram",
-            "fixture",
-            &RamSession {
-                identity: kernel_interface::MountIdentity::directory(&path).unwrap(),
-                id: "fixture".into(),
-                drive: "owned-fixture".into(),
-                path: path.clone(),
-                ready: false,
-                connected: false,
-                status: "retained".into(),
-                backing: Some(replaced),
-                last_saved: None,
-                save_status: None,
-                last_flushed: None,
-                pending: None,
-            },
-        )
-        .unwrap();
+        let mut published = RamSession {
+            identity: kernel_interface::MountIdentity::directory(&path).unwrap(),
+            id: "published-under-another-key".into(),
+            drive: "owned-fixture".into(),
+            path: path.clone(),
+            ready: false,
+            connected: false,
+            status: "retained".into(),
+            backing: Some(replaced),
+            last_saved: None,
+            save_status: None,
+            last_flushed: None,
+            pending: None,
+        };
+        db.put("ram", &published.id, &published).unwrap();
+        let error = cleanup_allocation(&db, "fixture").unwrap_err();
+        assert!(error.to_string().contains("Published RAM data"), "{error}");
+        assert_eq!(fs::read(path.join("edit")).unwrap(), b"published user edit");
+        db.remove("ram", &published.id).unwrap();
+        published.id = "fixture".into();
+        db.put("ram", &published.id, &published).unwrap();
         assert!(cleanup_allocation(&db, "fixture").is_err());
         assert_eq!(fs::read(path.join("edit")).unwrap(), b"published user edit");
         // Explicit fixture teardown after proving published data is never auto-cleaned.

@@ -22,43 +22,77 @@ fn ram_access_owner_probe() {
     ] {
         run_recovery_case(&control, outcome);
     }
+    for outcome in [
+        "startup",
+        "startup-shutdown",
+        "startup-orphan",
+        "startup-policy",
+    ] {
+        run_startup_case(&control, outcome);
+    }
+}
+
+struct Retained {
+    backing: RamBacking,
+    id: String,
+    view: PathBuf,
+    session: RamSession,
+    pair: SyncPair,
+}
+impl Retained {
+    fn new(fixture: &TestDrives) -> Self {
+        let (mut backing, id, native, view) = fixture.native_source("");
+        backing.mounted = false;
+        backing.initialized = true;
+        let identity = kernel_interface::MountIdentity::directory(&view).unwrap();
+        let local_identity = Root::open(&view).unwrap().storage_identity().unwrap();
+        let session = RamSession {
+            id: id.clone(),
+            drive: "part:large".into(),
+            path: view.clone(),
+            identity,
+            ready: true,
+            connected: false,
+            status: "Retained owned image".into(),
+            backing: Some(backing.clone()),
+            last_saved: None,
+            save_status: None,
+            last_flushed: Some(1),
+            pending: None,
+        };
+        let pair = SyncPair {
+            id: id.clone(),
+            drive: session.drive.clone(),
+            evidence: "large".into(),
+            relative: PathBuf::new(),
+            local: view.clone(),
+            local_identity: Some(local_identity),
+            paused: true,
+            deletions: false,
+            ram: true,
+            last_success: Some(1),
+            status: "Paused".into(),
+        };
+        drop(native);
+        Self {
+            backing,
+            id,
+            view,
+            session,
+            pair,
+        }
+    }
 }
 
 fn run_recovery_case(control: &Path, outcome: &str) {
     let fixture = TestDrives::new(0);
-    let (mut backing, id, native, view) = fixture.native_source("");
-    backing.mounted = false;
-    backing.initialized = true;
-    let identity = kernel_interface::MountIdentity::directory(&view).unwrap();
-    let local_identity = Root::open(&view).unwrap().storage_identity().unwrap();
-    let session = RamSession {
-        id: id.clone(),
-        drive: "part:large".into(),
-        path: view.clone(),
-        identity,
-        ready: true,
-        connected: false,
-        status: "Retained owned image".into(),
-        backing: Some(backing.clone()),
-        last_saved: None,
-        save_status: None,
-        last_flushed: Some(1),
-        pending: None,
-    };
-    let pair = SyncPair {
-        id: id.clone(),
-        drive: session.drive.clone(),
-        evidence: "large".into(),
-        relative: PathBuf::new(),
-        local: view.clone(),
-        local_identity: Some(local_identity),
-        paused: true,
-        deletions: false,
-        ram: true,
-        last_success: Some(1),
-        status: "Paused".into(),
-    };
-    drop(native);
+    let Retained {
+        backing,
+        id,
+        view,
+        session,
+        pair,
+    } = Retained::new(&fixture);
     let mut output = (outcome == "stalled").then(|| fixture.native_source("export-base"));
     if outcome == "sync" {
         fixture.drives.lock().unwrap()[1].mount = Some(fixture.temp.path().join("large"));
@@ -311,4 +345,107 @@ fn held_ram_recovery_keeps_controls_and_sync_live() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn run_startup_case(control: &Path, outcome: &str) {
+    let fixture = TestDrives::new(0);
+    let Retained {
+        backing,
+        id,
+        view,
+        session,
+        pair,
+    } = Retained::new(&fixture);
+    fixture
+        .drives
+        .lock()
+        .unwrap()
+        .retain(|drive| drive.id == "part:small");
+    let state = Root::create(&fixture.temp.path().join("state")).unwrap();
+    let db = Store::open(&state.path.join("drives.sqlite")).unwrap();
+    db.put("ram", &id, &session).unwrap();
+    if outcome != "startup-orphan" {
+        db.put("pair", &id, &pair).unwrap();
+    }
+    if outcome == "startup-policy" {
+        db.put("catalog-mount", "missing-header", &1_u64).unwrap();
+    }
+    let _ = fs::remove_file(control.join("release"));
+    let _ = fs::remove_file(control.join("entered"));
+    fs::write(control.join("armed"), b"arm").unwrap();
+    let release = Release(control.join("release"));
+    let started = Instant::now();
+    let service = fixture.start_configured(
+        DriveConfig {
+            ram_min_available: 0,
+            sync_interval_seconds: 3600,
+            ..Default::default()
+        },
+        None,
+        fixture.image_authority(),
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "Startup waited for filesystem recovery"
+    );
+    wait_contents(&control.join("entered"), b"ready");
+    eprintln!("STARTUP_RAM_RECOVERY_HELD outcome={outcome}");
+    assert!(!status(&service).ram[0].browsable());
+    assert_configuration_responsive(&service);
+    if outcome != "startup-policy" {
+        let small = fixture.pair(&service, "small", "");
+        fs::write(
+            small.join("independent"),
+            b"sync during startup RAM recovery",
+        )
+        .unwrap();
+        wait_contents(
+            &fixture.temp.path().join("small/independent"),
+            b"sync during startup RAM recovery",
+        );
+    } else {
+        assert!(
+            published_policy(&service)
+                .excluded
+                .contains(&PathBuf::from("/"))
+        );
+    }
+    let closing = (outcome == "startup-shutdown").then(|| shutdown_while_held(&service));
+    drop(release);
+    if let Some(closing) = closing {
+        finish_held_shutdown(closing);
+    }
+    if outcome != "startup-shutdown" {
+        let started = Instant::now();
+        let retained = loop {
+            let retained = status(&service)
+                .ram
+                .into_iter()
+                .find(|session| session.id == id)
+                .unwrap();
+            if retained.browsable() {
+                break retained;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "{retained:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(retained.last_flushed, Some(1));
+        assert!(!retained.connected);
+        assert_eq!(
+            fs::read(view.join("edit")).unwrap(),
+            b"original portable content"
+        );
+        if outcome == "startup-orphan" {
+            assert!(db.get::<SyncPair>("pair", &id).unwrap().is_none());
+        }
+    }
+    service.shutdown().unwrap();
+    let helper = crate::ram::Mounted::start(&backing, &id, false, None).unwrap();
+    assert_eq!(
+        fs::read(view.join("edit")).unwrap(),
+        b"original portable content"
+    );
+    drop(helper);
+    crate::ram::discard(&backing, &id).unwrap();
+    fs::remove_file(control.join("armed")).unwrap();
 }

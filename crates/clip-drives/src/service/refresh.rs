@@ -1,5 +1,6 @@
 //! One retained status observer; fresh execution admission remains independent.
 use super::*;
+pub(super) const INITIAL_DISCOVERY: &str = "Checking mounted drives";
 use little_clip_core::jobs::task::Task;
 
 pub(super) struct Observation {
@@ -21,6 +22,7 @@ pub(super) struct Refresh {
     desired: Option<DriveConfig>,
     pending: Option<(DriveConfig, Task<Result<Observation>>)>,
     again: bool,
+    observed: bool,
 }
 impl Refresh {
     pub(super) fn new(inventory: Inventory) -> Self {
@@ -30,6 +32,7 @@ impl Refresh {
             desired: None,
             pending: None,
             again: false,
+            observed: false,
         }
     }
     pub(super) fn busy(&self) -> bool {
@@ -58,13 +61,6 @@ impl Refresh {
 }
 
 impl Owner {
-    // Initial startup still establishes the original inventory before returning.
-    // Recovery/startup scheduling is a separate remaining admission stage.
-    pub(super) fn discover(&mut self) {
-        self.refresh.desired = Some(self.config.clone());
-        let result = observe(&self.inventory, &self.config);
-        self.accept_refresh(&self.config.clone(), Ok(result));
-    }
     pub(super) fn request_refresh(&mut self, fresh: bool) {
         if self.closing.load(Ordering::Acquire) && !fresh {
             return;
@@ -82,9 +78,14 @@ impl Owner {
         let Some((config, result)) = self.refresh.poll() else {
             return;
         };
+        let observed = std::mem::replace(&mut self.refresh.observed, true);
         if self.accept_refresh(&config, result) {
-            self.sync_roots.clear();
-            self.sync_epoch = self.sync_epoch.wrapping_add(1);
+            // The first status observation establishes no prior cache lifetime.
+            // Concurrent preparation has already verified its own fresh source.
+            if observed {
+                self.sync_roots.clear();
+                self.sync_epoch = self.sync_epoch.wrapping_add(1);
+            }
             if !self.closing.load(Ordering::Acquire) {
                 self.automatic();
             }

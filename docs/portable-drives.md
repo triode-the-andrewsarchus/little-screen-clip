@@ -31,6 +31,17 @@ their independent validation and confirmation flows.
 
 Source inventory, quota admission, formatting and initial mounting run on one retained preparation worker. Independent partitions can continue reconciling during preparation. Quota reloads and further RAM admissions wait for that worker, so they cannot invalidate its reservation. Cancellation retains ownership until preparation actually exits; an already running formatter finishes under its existing process limit before empty setup can be retired. The daemon journals the metadata inventory and private allocation before formatting, then publishes the RAM session and sync enrollment together. Restart cleans only unpublished, identity-checked setup artifacts; published RAM data is retained. Every image is filesystem-checked before exposing its view, including recovery from a crash before the first ready record was committed.
 
+Startup RAM cleanup and view recovery share that retained preparation worker.
+The coordinator visits saved allocation/session keys in bounded pages; a slow
+filesystem check leaves controls and an independent sync pair responsive.
+Shutdown waits for an active recovery to exit, adopts any server it started and
+then retires that server. Unvisited sessions remain saved for the next startup.
+A retained image can recover its view even if its sync enrollment is missing or
+optional catalog metadata needs repair; recovery does not invent enrollment or
+permit writeback without the ordinary safety checks. Unpublished allocation paths
+remain protected while cleanup waits. Cleanup refuses any backing referenced by
+a published session, including a reference stored under another session key.
+
 Each RAM view uses a fixed-size image on verified tmpfs, served by the separately packaged `fuse2fs` helper. This bounds allocated bytes and inodes even when an external editor writes to it. The image grows sparsely within its reservation; session admission reserves future growth across existing sessions. Default ceilings are 6 GB and two million inodes per session, 16 GB and four million inodes in total, and eight sessions. Small cards reserve less. Expanded contents and formatting overhead must fit as well. Memory admission additionally reserves each native helper’s 512 MiB address-space limit. Reload refuses quota reductions below retained session reservations.
 
 The default RAM location is `/tmp`. If it is not a usable tmpfs, the daemon tries
@@ -542,7 +553,7 @@ The report remains in job history after restart. Cancel stops an active query;
 SQL work also has a 30-second measurement budget and does not publish a partial
 successful report.
 
-Routine drive discovery and RAM-storage availability checks run on one retained
+Initial and routine drive discovery and RAM-storage availability checks run on one retained
 worker. A slow filesystem observation leaves settings and independent sync jobs
 responsive; repeated refreshes coalesce to the latest settings. Changing the RAM
 directory or minimum available memory shows **Checking RAM storage availability**
@@ -550,7 +561,9 @@ until the matching check completes. Drive status can follow a completed mount or
 unmount operation asynchronously; it is observational and never authorizes a
 write. Policy publication obtains its own fresh inventory and verifies that the
 mount inventory stayed unchanged. Shutdown retains probes until they actually
-exit. Initial startup/recovery and some operation-admission checks still perform
+exit. Startup initially reports **Checking mounted drives** until its first
+observation completes. Catalog mount cleanup during startup, measurement and
+image/catalog mount controls, and some operation-admission checks still perform
 synchronous filesystem work.
 
 Scheduling probes also run on a separate four-slot retained pool. They resolve
