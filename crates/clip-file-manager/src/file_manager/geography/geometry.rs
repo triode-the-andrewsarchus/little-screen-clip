@@ -62,7 +62,7 @@ impl Layer {
                 ([0.8, 0.85, 0.9, 0.16], 0.8, false)
             }
             Self::Lake if layers.rivers && zoom >= 2.0 => ([0.15, 0.40, 0.67, 0.85], 0.0, false),
-            Self::Coast => ([0.70, 0.84, 0.96, 0.5], 1.0, false),
+            Self::Coast if layers.countries => ([0.70, 0.84, 0.96, 0.5], 1.0, false),
             Self::GrwlLarge if layers.rivers && zoom >= 3.5 => {
                 ([0.15, 0.40, 0.67, 0.94], -1.0, false)
             }

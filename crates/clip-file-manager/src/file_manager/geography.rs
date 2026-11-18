@@ -433,7 +433,8 @@ impl Viewer {
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.show_country_borders, "Countries");
+            ui.checkbox(&mut self.show_country_borders, "Countries")
+                .on_hover_text("Show country borders and coastline outlines.");
             ui.checkbox(&mut self.show_state_borders, "States");
             ui.checkbox(&mut self.show_city_names, "City names");
             ui.checkbox(&mut self.show_rivers, "Rivers");
