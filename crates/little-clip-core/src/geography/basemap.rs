@@ -2489,8 +2489,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     {
         let width = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
         let height = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-        let expected = grid_len(width, height, 2)?.checked_add(8)?;
-        if bytes.len() == expected {
+        if grid_len(width, height, 2).and_then(|n| n.checked_add(8)) == Some(bytes.len()) {
             let heights = bytes[8..]
                 .as_chunks::<2>()
                 .0
@@ -2581,6 +2580,23 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_dem_cache_does_not_hide_a_valid_source_overview() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("gebco")).unwrap();
+        fs::write(root.path().join("gebco_overview.i16"), [0u8; 8]).unwrap();
+        let file = fs::File::create(root.path().join("gebco/source.tif")).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        encoder
+            .write_image::<tiff::encoder::colortype::GrayI16>(16, 8, &vec![123; 16 * 8])
+            .unwrap();
+        drop(encoder);
+        assert_eq!(
+            load_global_dem(root.path()).unwrap().sample(0.0, 0.0),
+            Some(123.0)
+        );
+    }
 
     #[test]
     fn fitting_a_local_walk_uses_the_available_map_area() {
