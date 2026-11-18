@@ -1477,61 +1477,29 @@ pub struct AssetStatus {
 
 impl AssetStatus {
     pub fn has_quick_start(&self) -> bool {
-        self.has_ne2 || self.has_cities
+        self.has_ne2 && self.has_cities
     }
 }
 
 impl BasemapAssets {
-    /// Inspects what offline assets are currently present on disk without loading large files.
-    pub fn probe_status(assets_dir: &Path, terrain_override_dir: Option<&Path>) -> AssetStatus {
-        let mut status = AssetStatus::default();
-        status.has_ne2 = find_first_with_ext(assets_dir, &["png", "jpg", "jpeg", "tif", "tiff"])
-            .is_some()
-            || assets_dir.join("ne2_overview.rgb").is_file();
-        status.has_cities = assets_dir.join("cities_all.json").is_file()
-            || assets_dir.join("cities_250k.json").is_file()
-            || assets_dir
-                .join("ne_10m_populated_places_simple.geojson")
-                .is_file();
-        status.has_borders = (assets_dir.join("borders_admin0.json").is_file()
-            || assets_dir
-                .join("ne_10m_admin_0_boundary_lines_land.geojson")
-                .is_file())
-            && (assets_dir.join("borders_admin1.json").is_file()
-                || assets_dir
-                    .join("ne_10m_admin_1_states_provinces_lines.geojson")
-                    .is_file());
-        status.has_roads_lakes = (assets_dir.join("roads_10m.json").is_file()
-            || assets_dir.join("ne_10m_roads.geojson").is_file())
-            && (assets_dir.join("lakes_10m_v2.json").is_file()
-                || assets_dir.join("ne_10m_lakes.geojson").is_file());
-        status.has_grwl = assets_dir.join("grwl_summary_v2.bin").is_file()
-            || find_first_with_ext(&assets_dir.join("grwl"), &["shp"]).is_some();
-        status.has_grwl_masks = assets_dir.join("grwl_masks_idx.json").is_file()
-            || find_first_with_ext(&assets_dir.join("grwl_masks"), &["tif", "tiff"]).is_some();
-        status.has_gshhg = find_gshhg_file(assets_dir).is_some();
-        status.has_gebco = assets_dir.join("gebco_overview.i16").is_file()
-            || find_first_with_ext(&assets_dir.join("gebco"), &["tif", "tiff", "nc", "i16"])
-                .is_some();
-        status.has_land_cover = assets_dir.join("land_cover.u8").is_file()
-            || assets_dir
-                .join("land_cover_lccs_class_2020_v2_1_1.nc")
-                .is_file();
-        status.has_hydrorivers = assets_dir.join("hydrorivers").is_dir();
-        if let Some(dir) = terrain_override_dir
-            && let Ok(entries) = fs::read_dir(dir)
-        {
-            status.local_hgt_count = entries
-                .flatten()
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|s| s.eq_ignore_ascii_case("hgt"))
-                })
-                .count();
+    /// Reports layers that the loaders accepted and can actually render.
+    pub fn status(&self) -> AssetStatus {
+        AssetStatus {
+            has_ne2: self.ne2.is_some() || self.ne2_full.is_some(),
+            has_cities: !self.cities.is_empty(),
+            has_borders: !self.country_borders.is_empty() && !self.state_borders.is_empty(),
+            has_roads_lakes: !self.roads.is_empty() && !self.lakes.is_empty(),
+            has_grwl: self
+                .grwl_summary
+                .as_ref()
+                .is_some_and(|r| !r.segments.is_empty()),
+            has_grwl_masks: self.grwl_masks.is_some(),
+            has_gshhg: !self.coastlines.is_empty(),
+            has_gebco: self.global_dem.is_some() || self.cog_dem.is_some(),
+            has_land_cover: self.land_cover.is_some(),
+            has_hydrorivers: self.rivers.as_ref().is_some_and(|r| !r.segments.is_empty()),
+            local_hgt_count: self.terrain_tiles.sources.len(),
         }
-        status
     }
 
     /// Loads available offline basemap assets from `assets_dir` and optional `terrain_override_dir`.
@@ -1572,7 +1540,7 @@ impl BasemapAssets {
         let rivers = HydroRiversIndex::load_or_build(assets_dir);
         let grwl_summary = GrwlSummaryIndex::load_or_build(assets_dir);
         let grwl_masks = GrwlMaskStore::load_or_index(assets_dir);
-        let has_hydrorivers = rivers.is_some() || assets_dir.join("hydrorivers").is_dir();
+        let has_hydrorivers = rivers.as_ref().is_some_and(|r| !r.segments.is_empty());
 
         Self {
             assets_dir: root
@@ -2563,6 +2531,35 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_status_requires_usable_data_and_both_quick_start_layers() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("hydrorivers")).unwrap();
+        fs::create_dir(root.path().join("gebco")).unwrap();
+        for name in [
+            "land_cover_lccs_class_2020_v2_1_1.nc",
+            "land_cover.u8",
+            "gebco/broken.tif",
+            "ne2_overview.rgb",
+        ] {
+            fs::write(root.path().join(name), b"broken").unwrap();
+        }
+        let status = BasemapAssets::load(root.path(), None).status();
+        assert!(
+            !status.has_hydrorivers
+                && !status.has_gebco
+                && !status.has_land_cover
+                && !status.has_ne2
+        );
+        let mut status = AssetStatus {
+            has_ne2: true,
+            ..AssetStatus::default()
+        };
+        assert!(!status.has_quick_start());
+        status.has_cities = true;
+        assert!(status.has_quick_start());
+    }
 
     #[test]
     fn plain_dem_without_an_overview_is_sampled_by_chunks() {

@@ -80,7 +80,7 @@ impl AssetDownloader {
     pub fn new(config: &AppConfig) -> Self {
         let assets_dir = config.geo_assets_dir();
         let terrain_override_dir = config.geography.terrain_override_dir.clone();
-        let status = BasemapAssets::probe_status(&assets_dir, terrain_override_dir.as_deref());
+        let status = AssetStatus::default();
         let disk_usage_bytes = dir_size(&assets_dir);
         Self {
             assets_dir,
@@ -386,11 +386,11 @@ impl AssetDownloader {
                                             base + 0.92 * span,
                                             "Extracting GEBCO terrain files…",
                                         );
-                                        let _ = extract_matching_from_zip(
+                                        extract_matching_from_zip(
                                             &downloaded,
                                             &cancelled,
                                             &[".tif", ".tiff", ".nc"],
-                                        );
+                                        )?;
                                     }
                                     ok = true;
                                     break;
@@ -433,11 +433,7 @@ impl AssetDownloader {
                             |f, m| report(base + (0.02 + f * 0.88) * span, m),
                         )?;
                         report(base + 0.92 * span, "Extracting HydroRIVERS…");
-                        let _ = extract_matching_from_zip(
-                            &archive,
-                            &cancelled,
-                            &[".shp", ".dbf", ".shx"],
-                        );
+                        extract_matching_from_zip(&archive, &cancelled, &[".shp", ".dbf", ".shx"])?;
                     }
                     DownloadPack::All => {}
                 }
@@ -482,10 +478,37 @@ impl AssetDownloader {
                     run_pack(pack, 0.0, 0.95)?;
                 }
                 report(0.96, "Loading offline basemap assets…");
-                Ok(Arc::new(BasemapAssets::load(
+                let assets = Arc::new(BasemapAssets::load(
                     &assets_dir,
                     terrain_override_dir.as_deref(),
-                )))
+                ));
+                let status = assets.status();
+                let installed = |p| match p {
+                    DownloadPack::QuickStart => status.has_quick_start(),
+                    DownloadPack::Borders => status.has_borders,
+                    DownloadPack::RoadsAndLakes => status.has_roads_lakes,
+                    DownloadPack::GrwlSummary => status.has_grwl,
+                    DownloadPack::GrwlMasks => status.has_grwl_masks,
+                    DownloadPack::WaterOutlines => status.has_gshhg,
+                    DownloadPack::TerrainGebco => status.has_gebco,
+                    DownloadPack::LandCover => status.has_land_cover,
+                    DownloadPack::HydroRivers => status.has_hydrorivers,
+                    DownloadPack::All => {
+                        status.has_quick_start()
+                            && status.has_borders
+                            && status.has_roads_lakes
+                            && status.has_grwl
+                            && status.has_grwl_masks
+                            && status.has_gshhg
+                            && status.has_gebco
+                            && status.has_land_cover
+                            && status.has_hydrorivers
+                    }
+                };
+                if !installed(pack) {
+                    return Err(format!("{} did not produce usable map data", pack.label()));
+                }
+                Ok(assets)
             })();
             let _ = tx.send(result);
         });
@@ -501,10 +524,7 @@ impl AssetDownloader {
                 self.active = None;
                 self.rx = None;
                 self.disk_usage_bytes = dir_size(&self.assets_dir);
-                self.status = BasemapAssets::probe_status(
-                    &self.assets_dir,
-                    self.terrain_override_dir.as_deref(),
-                );
+                self.status = assets.status();
                 Some(assets)
             }
             Ok(Err(err)) => {
@@ -669,6 +689,7 @@ fn extract_matching_from_zip(
     }
     let mut remaining = zip_path.expansion_budget;
     let mut buffer = [0u8; 64 * 1024];
+    let mut extracted = 0;
     for i in 0..archive.len() {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Extraction cancelled".into());
@@ -708,11 +729,15 @@ fn extract_matching_from_zip(
             if cancelled.load(Ordering::Relaxed) {
                 return Err("Extraction cancelled".into());
             }
+            extracted += 1;
             zip_path
                 .directory
                 .install(staged, std::ffi::OsStr::new(&name))
                 .map_err(|e| e.to_string())?;
         }
+    }
+    if extracted == 0 {
+        return Err("Archive contains no supported map assets".into());
     }
     Ok(())
 }
@@ -794,7 +819,13 @@ mod tests {
             _staging: Some(staged),
             directory,
         };
-        let cancelled = AtomicBool::new(true);
+        let cancelled = AtomicBool::new(false);
+        assert!(
+            extract_matching_from_zip(&downloaded, &cancelled, &[".geojson"])
+                .unwrap_err()
+                .contains("no supported")
+        );
+        cancelled.store(true, Ordering::Relaxed);
         assert!(
             extract_matching_from_zip(&downloaded, &cancelled, &[".tif"])
                 .unwrap_err()

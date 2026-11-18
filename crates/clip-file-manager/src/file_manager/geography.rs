@@ -193,6 +193,7 @@ impl Viewer {
         if let Some(rx) = &self.assets_rx
             && let Ok(loaded) = rx.try_recv()
         {
+            self.downloader.status = loaded.status();
             self.assets = Some(loaded);
             self.assets_rx = None;
             ctx.request_repaint();
@@ -321,11 +322,9 @@ impl Viewer {
             } else {
                 "3D → 2D Transition"
             };
-            let dem_source = if self
-                .assets
-                .as_ref()
-                .is_some_and(|a| !a.terrain_tiles.is_empty() || a.global_dem.is_some())
-            {
+            let dem_source = if self.assets.as_ref().is_some_and(|a| {
+                !a.terrain_tiles.is_empty() || a.global_dem.is_some() || a.cog_dem.is_some()
+            }) {
                 "DEM loaded"
             } else {
                 "Terrain unavailable"
