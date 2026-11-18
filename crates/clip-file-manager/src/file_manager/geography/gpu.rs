@@ -1,7 +1,7 @@
 //! GPU map resources owned by the desktop's current OpenGL context.
 //! Workers deliver source tiles; callbacks upload each tile once and draw it with
 //! camera uniforms. No framebuffer readback or per-camera CPU raster is involved.
-use super::geometry::{Layer, Layers, Scene};
+use super::geometry::{Batch, Layer, Layers, RiverKey, Scene};
 use eframe::{
     egui_glow,
     glow::{self, HasContext},
@@ -87,6 +87,7 @@ pub(super) struct Frame {
     pub range: [f32; 2],
     pub tiles: Vec<Arc<SourceTile>>,
     pub scene: Option<Arc<Scene>>,
+    pub rivers: Vec<(RiverKey, Arc<Scene>)>,
     pub layers: Layers,
 }
 
@@ -137,7 +138,7 @@ struct Renderer {
     tiles: HashMap<(u64, TileId), TextureTile>,
     bytes: usize,
     frame: u64,
-    vectors: HashMap<(u64, usize), VectorBatch>,
+    vectors: HashMap<(u64, VectorKey), VectorBatch>,
     vector_bytes: usize,
     error: Option<String>,
 }
@@ -163,6 +164,7 @@ impl Renderer {
     ) -> Result<bool, String> {
         // SAFETY: all calls use the owning current GL context; buffers contain
         // initialized floats and draw counts are bounded by the static grid.
+        let missing_vectors;
         unsafe {
             if self.resources.is_none() {
                 self.resources = Some(Resources::new(gl)?);
@@ -269,7 +271,7 @@ impl Renderer {
                     gl.draw_arrays(glow::TRIANGLES, 0, resources.vertices);
                 }
             }
-            self.paint_vectors(gl, frame, width, height)?;
+            missing_vectors = self.paint_vectors(gl, frame, width, height)?;
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);
         }
@@ -277,11 +279,6 @@ impl Renderer {
             .tiles
             .iter()
             .any(|tile| !self.tiles.contains_key(&(frame.source, tile.id)));
-        let missing_vectors = frame.scene.as_ref().is_some_and(|scene| {
-            visible_batches(frame, scene)
-                .into_iter()
-                .any(|i| !self.vectors.contains_key(&(frame.source, i)))
-        });
         Ok(missing_tiles || missing_vectors)
     }
     unsafe fn evict(&mut self, gl: &glow::Context, incoming: usize) {
@@ -570,26 +567,45 @@ impl VectorBatch {
         }
     }
 }
-fn visible_batches(frame: &Frame, scene: &Scene) -> Vec<usize> {
-    let mut indices: Vec<_> = little_clip_core::geography::basemap::tiles::surface_tiles(
-        &frame.camera,
-        frame.size[0],
-        frame.size[1],
-        4,
-    )
-    .iter()
-    .filter_map(|id| scene.index.get(id))
-    .flatten()
-    .copied()
-    .filter(|&i| {
-        scene.batches[i]
-            .layer
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum VectorKey {
+    Base(usize),
+    River(RiverKey, usize),
+}
+fn visible_batches(frame: &Frame) -> Vec<(VectorKey, &Batch)> {
+    let mut batches = Vec::new();
+    if let Some(scene) = &frame.scene {
+        for tile in little_clip_core::geography::basemap::tiles::surface_tiles(
+            &frame.camera,
+            frame.size[0],
+            frame.size[1],
+            4,
+        ) {
+            if let Some(indices) = scene.index.get(&tile) {
+                batches.extend(
+                    indices
+                        .iter()
+                        .map(|&i| (VectorKey::Base(i), &scene.batches[i])),
+                );
+            }
+        }
+    }
+    for (key, scene) in &frame.rivers {
+        batches.extend(
+            scene
+                .batches
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (VectorKey::River(*key, i), b)),
+        );
+    }
+    batches.retain(|(_, b)| {
+        b.layer
             .appearance(frame.camera.zoom, frame.layers)
             .is_some()
-    })
-    .collect();
-    indices.sort_by_key(|&i| scene.batches[i].layer);
-    indices
+    });
+    batches.sort_by_key(|(_, b)| b.layer);
+    batches
 }
 
 impl Renderer {
@@ -599,16 +615,13 @@ impl Renderer {
         frame: &Frame,
         width: f32,
         height: f32,
-    ) -> Result<(), String> {
-        let Some(scene) = &frame.scene else {
-            return Ok(());
-        };
-        let indices = visible_batches(frame, scene);
+    ) -> Result<bool, String> {
+        let batches = visible_batches(frame);
         let mut uploads = 0;
         // SAFETY: this method runs inside the owning current-context callback.
         unsafe {
-            for &i in &indices {
-                let key = (frame.source, i);
+            for &(id, source) in &batches {
+                let key = (frame.source, id);
                 if let Some(batch) = self.vectors.get_mut(&key) {
                     batch.used = self.frame;
                     continue;
@@ -616,7 +629,7 @@ impl Renderer {
                 if uploads >= 8 {
                     continue;
                 }
-                let data = &scene.batches[i].data;
+                let data = &source.data;
                 while self.vector_bytes + data.len() * 4 > 192 * 1024 * 1024 {
                     let Some(old) = self
                         .vectors
@@ -654,11 +667,11 @@ impl Renderer {
                 gl.get_uniform_location(p, "u_blend").as_ref(),
                 frame.camera.globe_blend() as f32,
             );
-            for i in indices {
-                let Some(batch) = self.vectors.get(&(frame.source, i)) else {
+            for &(id, source) in &batches {
+                let Some(batch) = self.vectors.get(&(frame.source, id)) else {
                     continue;
                 };
-                let layer = scene.batches[i].layer;
+                let layer = source.layer;
                 let Some((color, line_width, dash)) =
                     layer.appearance(frame.camera.zoom, frame.layers)
                 else {
@@ -682,7 +695,9 @@ impl Renderer {
                 }
             }
         }
-        Ok(())
+        Ok(batches
+            .iter()
+            .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
     }
 }
 

@@ -136,6 +136,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         range: [1000., 1000.],
         tiles: vec![tile],
         scene: None,
+        rivers: Vec::new(),
         layers: Layers {
             countries: true,
             states: true,
@@ -178,6 +179,37 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             assert_eq!(renderer.tiles.values().next().unwrap().textures, textures);
             assert_eq!(renderer.bytes, bytes);
         }
+        frame.camera.zoom = 6.0;
+        let key = *RiverKey::visible(&frame.camera, frame.size, true)
+            .first()
+            .unwrap();
+        frame.rivers.push((
+            key,
+            Arc::new(Scene {
+                batches: vec![Batch {
+                    tile: key.tile,
+                    layer: Layer::RiverLarge,
+                    data: vec![44., -1., 46., 1., 100., 0.],
+                }],
+                index: Default::default(),
+            }),
+        ));
+        assert!(!renderer.paint(&gl, &info, &frame).unwrap());
+        assert_eq!(renderer.vectors.len(), 1);
+        let buffer = renderer.vectors.values().next().unwrap().buffer;
+        frame.camera.center_lon += 0.0049;
+        renderer.paint(&gl, &info, &frame).unwrap();
+        assert_eq!(renderer.vectors.values().next().unwrap().buffer, buffer);
+        frame.camera.zoom = 10.0;
+        frame.rivers[0].0 = *RiverKey::visible(&frame.camera, frame.size, true)
+            .first()
+            .unwrap();
+        renderer.paint(&gl, &info, &frame).unwrap();
+        assert_eq!(
+            renderer.vectors.len(),
+            2,
+            "River detail bands need distinct GPU identities"
+        );
         frame.source = 2;
         renderer.paint(&gl, &info, &frame).unwrap();
         assert_eq!(

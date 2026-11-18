@@ -1,6 +1,6 @@
 //! Viewer-owned, cancellable tile preparation with a fixed CPU memory budget.
 use super::{
-    geometry::{Layers, Scene},
+    geometry::{Layers, RiverKey, Scene},
     gpu,
 };
 use little_clip_core::{
@@ -15,7 +15,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -29,10 +29,8 @@ fn workers() -> &'static BackgroundJobs {
 pub(super) struct Tiles {
     source: u64,
     assets: Option<Arc<BasemapAssets>>,
-    ready: BTreeMap<TileId, Arc<SourceTile>>,
-    pending: BTreeMap<TileId, Task<Option<SourceTile>>>,
-    order: VecDeque<TileId>,
-    bytes: usize,
+    raster: TileCache<TileId, SourceTile>,
+    rivers: TileCache<RiverKey, Scene>,
     scene_job: Option<Task<Result<Scene, String>>>,
     scene: Option<Arc<Scene>>,
     error: Option<String>,
@@ -44,10 +42,8 @@ impl Default for Tiles {
         Self {
             source: 0,
             assets: None,
-            ready: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            order: VecDeque::new(),
-            bytes: 0,
+            raster: TileCache::default(),
+            rivers: TileCache::default(),
             scene_job: None,
             scene: None,
             error: None,
@@ -112,52 +108,30 @@ impl Tiles {
         )
         .into_iter()
         .collect();
-        self.pending.retain(|id, _| wanted.contains(id));
-        let mut finished = Vec::new();
-        self.pending.retain(|id, job| {
-            if let Some(result) = job.poll() {
-                if let Ok(Some(tile)) = result {
-                    finished.push((*id, Arc::new(tile)));
-                }
-                false
-            } else {
-                true
-            }
-        });
-        for (id, tile) in finished {
-            self.bytes += tile.bytes();
-            self.ready.insert(id, tile);
-            self.order.push_back(id);
-        }
-        while self.bytes > CPU_BUDGET {
-            let Some(old) = self.order.pop_front() else {
-                break;
-            };
-            if let Some(tile) = self.ready.remove(&old) {
-                self.bytes -= tile.bytes();
-            }
-        }
-        for &id in &wanted {
-            if self.pending.len() >= 4 {
-                break;
-            }
-            if self.ready.contains_key(&id) || self.pending.contains_key(&id) {
-                continue;
-            }
-            let assets = assets.clone();
-            self.pending.insert(
-                id,
-                Task::start(workers(), Duration::from_secs(60), move |cancel| {
-                    SourceTile::prepare(&assets, id, cancel)
-                }),
-            );
-        }
-        if !self.pending.is_empty() || self.scene_job.is_some() {
+        let source = assets.clone();
+        let raster_error =
+            self.raster
+                .update(&wanted, CPU_BUDGET, SourceTile::bytes, move |id, cancel| {
+                    SourceTile::prepare(&source, id, cancel)
+                        .ok_or_else(|| "Map tile preparation cancelled".into())
+                });
+        let river_keys = RiverKey::visible(&camera, [rect.width(), rect.height()], layers.rivers);
+        let source = assets.clone();
+        let river_error = self.rivers.update(
+            &river_keys,
+            64 * 1024 * 1024,
+            Scene::bytes,
+            move |key, cancel| key.prepare(&source, cancel),
+        );
+        if !self.raster.pending.is_empty()
+            || !self.rivers.pending.is_empty()
+            || self.scene_job.is_some()
+        {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
         let tiles: Vec<_> = wanted
             .iter()
-            .filter_map(|id| self.ready.get(id).cloned())
+            .filter_map(|id| self.raster.ready.get(id).cloned())
             .collect();
         let finest = tiles.iter().map(|tile| tile.id.level).max().unwrap_or(0);
         let ranges: Vec<_> = tiles
@@ -188,8 +162,143 @@ impl Tiles {
                 range: self.range,
                 tiles,
                 scene: self.scene.clone(),
+                rivers: river_keys
+                    .iter()
+                    .filter_map(|key| {
+                        self.rivers
+                            .ready
+                            .get(key)
+                            .map(|scene| (*key, scene.clone()))
+                    })
+                    .collect(),
                 layers,
             },
-        )
+        )?;
+        match raster_error.or(river_error) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Raster and river tiles share admission, cancellation and byte-bounded retention.
+struct TileCache<K, T> {
+    ready: BTreeMap<K, Arc<T>>,
+    pending: BTreeMap<K, Task<Result<T, String>>>,
+    failed: BTreeMap<K, String>,
+    order: VecDeque<K>,
+    bytes: usize,
+}
+impl<K, T> Default for TileCache<K, T> {
+    fn default() -> Self {
+        Self {
+            ready: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+}
+impl<K: Copy + Ord + Send + 'static, T: Send + 'static> TileCache<K, T> {
+    fn update(
+        &mut self,
+        wanted: &BTreeSet<K>,
+        budget: usize,
+        bytes: fn(&T) -> usize,
+        prepare: impl Fn(K, &AtomicBool) -> Result<T, String> + Clone + Send + 'static,
+    ) -> Option<String> {
+        self.pending.retain(|id, _| wanted.contains(id));
+        self.failed.retain(|id, _| wanted.contains(id));
+        self.pending.retain(|id, job| {
+            match job.poll() {
+                None => return true,
+                Some(Ok(Ok(tile))) => {
+                    let size = bytes(&tile);
+                    if size > budget {
+                        self.failed
+                            .insert(*id, "Map tile exceeds the preparation memory budget".into());
+                    } else {
+                        self.bytes += size;
+                        self.ready.insert(*id, Arc::new(tile));
+                        self.order.push_back(*id);
+                    }
+                }
+                Some(Err(little_clip_core::JobError::QueueFull)) => {}
+                Some(Ok(Err(error))) => {
+                    self.failed.insert(*id, error);
+                }
+                Some(Err(error)) => {
+                    self.failed.insert(*id, error.to_string());
+                }
+            }
+            false
+        });
+        self.order.retain(|id| !wanted.contains(id));
+        self.order
+            .extend(wanted.iter().filter(|id| self.ready.contains_key(id)));
+        while self.bytes > budget {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(tile) = self.ready.remove(&old) {
+                self.bytes -= bytes(&tile);
+            }
+        }
+        for &id in wanted {
+            if self.pending.len() >= 4 {
+                break;
+            }
+            if self.ready.contains_key(&id)
+                || self.pending.contains_key(&id)
+                || self.failed.contains_key(&id)
+            {
+                continue;
+            }
+            let prepare = prepare.clone();
+            self.pending.insert(
+                id,
+                Task::start(workers(), Duration::from_secs(60), move |cancel| {
+                    prepare(id, cancel)
+                }),
+            );
+        }
+        self.failed.values().next().cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn oversized_tiles_are_reported_once_without_blocking_the_next_view() {
+        let mut cache = TileCache::<u8, Vec<u8>>::default();
+        let wanted = BTreeSet::from([1]);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let error = cache.update(&wanted, 8, Vec::len, |_, _| Ok(vec![0; 16]));
+            if error.is_some() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(cache.bytes, 0);
+        assert!(cache.ready.is_empty() && cache.pending.is_empty());
+        let next = BTreeSet::from([2]);
+        loop {
+            assert!(
+                cache
+                    .update(&next, 8, Vec::len, |_, _| Ok(vec![1; 4]))
+                    .is_none()
+            );
+            if cache.ready.contains_key(&2) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(cache.bytes, 4);
+        assert!(!cache.ready.contains_key(&1));
     }
 }

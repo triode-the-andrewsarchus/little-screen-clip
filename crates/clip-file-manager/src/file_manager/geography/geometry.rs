@@ -1,7 +1,11 @@
 //! Geographic vector batches prepared once on a worker, projected by the GPU.
-use little_clip_core::geography::basemap::{BasemapAssets, tiles::TileId, wrap_lon_delta};
+use little_clip_core::geography::basemap::{
+    BasemapAssets, GlobeCamera,
+    tiles::{TileId, surface_tiles},
+    wrap_lon_delta,
+};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -102,15 +106,24 @@ impl Layer {
 struct Builder {
     batches: BTreeMap<(TileId, Layer), Vec<f32>>,
     floats: usize,
+    target: Option<TileId>,
 }
 impl Builder {
     fn push(&mut self, layer: Layer, position: [f32; 2], data: &[f32]) -> Result<(), String> {
+        let tile = TileId::at(
+            self.target.map_or(4, |t| t.level),
+            position[1] as f64,
+            position[0] as f64,
+        );
+        if self.target.is_some_and(|target| target != tile) {
+            return Ok(());
+        }
         self.floats += data.len();
         if self.floats * 4 > 192 * 1024 * 1024 {
             return Err("Map vector geometry exceeds the 192 MiB preparation limit".into());
         }
         self.batches
-            .entry((TileId::at(4, position[1] as f64, position[0] as f64), layer))
+            .entry((tile, layer))
             .or_default()
             .extend_from_slice(data);
         Ok(())
@@ -175,6 +188,7 @@ impl Scene {
         let mut b = Builder {
             batches: BTreeMap::new(),
             floats: 0,
+            target: None,
         };
         for (step, layer) in [
             (30, Layer::Grid30),
@@ -230,41 +244,6 @@ impl Scene {
                 cancel,
             )?;
         }
-        if let Some(grwl) = &assets.grwl_summary {
-            for seg in grwl.segments() {
-                if seg.width_med_m < 20.0 {
-                    continue;
-                }
-                b.line(
-                    if seg.width_med_m >= 90.0 {
-                        Layer::GrwlLarge
-                    } else {
-                        Layer::GrwlSmall
-                    },
-                    &seg.points,
-                    seg.width_med_m,
-                    cancel,
-                )?;
-            }
-        }
-        if let Some(rivers) = &assets.rivers {
-            for seg in rivers.segments() {
-                if seg.ord_stra >= 3 {
-                    b.line(
-                        if seg.ord_stra >= 6 {
-                            Layer::RiverLarge
-                        } else if seg.ord_stra >= 4 {
-                            Layer::RiverMedium
-                        } else {
-                            Layer::RiverSmall
-                        },
-                        &seg.points,
-                        (7.2 * seg.dis_cms.max(1.0).sqrt()).clamp(50.0, 2400.0),
-                        cancel,
-                    )?;
-                }
-            }
-        }
         for lake in &assets.lakes {
             if cancel.load(Ordering::Relaxed) {
                 return Err("Map preparation cancelled".into());
@@ -273,8 +252,16 @@ impl Scene {
                 b.triangle(triangle)?;
             }
         }
+        Ok(b.finish())
+    }
+    pub fn bytes(&self) -> usize {
+        self.batches.iter().map(|b| b.data.len() * 4).sum()
+    }
+}
+impl Builder {
+    fn finish(self) -> Scene {
         // Each upload is bounded independently; hidden parts never reach the GPU.
-        let batches: Vec<Batch> = b
+        let batches: Vec<Batch> = self
             .batches
             .into_iter()
             .flat_map(|((tile, layer), data)| {
@@ -291,9 +278,112 @@ impl Scene {
         for (i, batch) in batches.iter().enumerate() {
             index.entry(batch.tile).or_default().push(i);
         }
-        Ok(Self { batches, index })
+        Scene { batches, index }
     }
 }
+/// A river tile is reusable throughout one detail band and one geographic region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) struct RiverKey {
+    pub tile: TileId,
+    detail: u8,
+}
+impl RiverKey {
+    pub fn visible(camera: &GlobeCamera, size: [f32; 2], enabled: bool) -> BTreeSet<Self> {
+        if !enabled || camera.zoom < 2.5 {
+            return BTreeSet::new();
+        }
+        let detail = if camera.zoom < 3.5 {
+            0
+        } else if camera.zoom < 4.5 {
+            1
+        } else if camera.zoom < 6.0 {
+            2
+        } else if camera.zoom < 9.0 {
+            3
+        } else {
+            4
+        };
+        let level = if detail < 2 {
+            3
+        } else if detail < 4 {
+            4
+        } else {
+            5
+        };
+        surface_tiles(camera, size[0], size[1], level)
+            .into_iter()
+            .map(|tile| Self { tile, detail })
+            .collect()
+    }
+    pub fn prepare(self, assets: &BasemapAssets, cancel: &AtomicBool) -> Result<Scene, String> {
+        let [west, north, side] = self.tile.bounds();
+        let min_order = if self.detail < 2 {
+            6
+        } else if self.detail < 4 {
+            4
+        } else {
+            3
+        };
+        let min_width = if self.detail == 0 {
+            f32::INFINITY
+        } else if self.detail < 3 {
+            90.0
+        } else {
+            20.0
+        };
+        let mut b = Builder {
+            batches: BTreeMap::new(),
+            floats: 0,
+            target: Some(self.tile),
+        };
+        if let Some(grwl) = &assets.grwl_summary {
+            for seg in grwl.query_bbox(
+                west,
+                north - side,
+                west + side,
+                north,
+                min_width,
+                usize::MAX,
+            ) {
+                b.line(
+                    if seg.width_med_m >= 90.0 {
+                        Layer::GrwlLarge
+                    } else {
+                        Layer::GrwlSmall
+                    },
+                    &seg.points,
+                    seg.width_med_m,
+                    cancel,
+                )?;
+            }
+        }
+        if let Some(rivers) = &assets.rivers {
+            for seg in rivers.query_bbox(
+                west,
+                north - side,
+                west + side,
+                north,
+                min_order,
+                usize::MAX,
+            ) {
+                b.line(
+                    if seg.ord_stra >= 6 {
+                        Layer::RiverLarge
+                    } else if seg.ord_stra >= 4 {
+                        Layer::RiverMedium
+                    } else {
+                        Layer::RiverSmall
+                    },
+                    &seg.points,
+                    (7.2 * seg.dis_cms.max(1.0).sqrt()).clamp(50.0, 2400.0),
+                    cancel,
+                )?;
+            }
+        }
+        Ok(b.finish())
+    }
+}
+
 fn triangulate(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<[[f32; 2]; 3]>, String> {
     use lyon_tessellation::{
         BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, VertexBuffers,
@@ -344,6 +434,78 @@ fn triangulate(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<[[f32;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn river_buckets_partition_crossing_lines_and_wrap_the_dateline() {
+        let cancel = AtomicBool::new(false);
+        for points in [vec![[-15., 0.], [15., 0.]], vec![[178., 1.], [-178., 1.]]] {
+            let mut all = Builder {
+                batches: BTreeMap::new(),
+                floats: 0,
+                target: None,
+            };
+            all.line(Layer::RiverLarge, &points, 100., &cancel).unwrap();
+            let records: Vec<_> = all
+                .batches
+                .values()
+                .flat_map(|v| v.chunks_exact(6))
+                .collect();
+            let targets: BTreeSet<_> = records
+                .iter()
+                .map(|p| {
+                    TileId::at(
+                        5,
+                        ((p[1] + p[3]) * 0.5) as f64,
+                        ((p[0] + p[2]) * 0.5) as f64,
+                    )
+                })
+                .collect();
+            let mut actual = Vec::new();
+            for target in targets {
+                let mut tile = Builder {
+                    batches: BTreeMap::new(),
+                    floats: 0,
+                    target: Some(target),
+                };
+                tile.line(Layer::RiverLarge, &points, 100., &cancel)
+                    .unwrap();
+                actual.extend(
+                    tile.batches
+                        .values()
+                        .flat_map(|v| v.chunks_exact(6))
+                        .map(|p| p.iter().map(|f| f.to_bits()).collect::<Vec<_>>()),
+                );
+            }
+            let expected: BTreeSet<_> = records
+                .iter()
+                .map(|p| p.iter().map(|f| f.to_bits()).collect::<Vec<_>>())
+                .collect();
+            assert_eq!(
+                actual.len(),
+                records.len(),
+                "River segments were duplicated or dropped at tile boundaries"
+            );
+            assert_eq!(actual.into_iter().collect::<BTreeSet<_>>(), expected);
+        }
+    }
+    #[test]
+    fn river_detail_keys_follow_visibility_and_reuse_small_camera_moves() {
+        let mut camera = GlobeCamera {
+            zoom: 32.,
+            center_lat: 12.3,
+            center_lon: 21.3,
+            ..GlobeCamera::default()
+        };
+        let before = RiverKey::visible(&camera, [1000., 700.], true);
+        camera.center_lon += 0.00001;
+        assert_eq!(before, RiverKey::visible(&camera, [1000., 700.], true));
+        assert!(RiverKey::visible(&camera, [1000., 700.], false).is_empty());
+        for (zoom, detail) in [(3., 0), (4., 1), (5., 2), (7., 3), (10., 4)] {
+            camera.zoom = zoom;
+            let keys = RiverKey::visible(&camera, [1000., 700.], true);
+            assert!(!keys.is_empty());
+            assert!(keys.iter().all(|key| key.detail == detail));
+        }
+    }
     #[test]
     fn lake_tessellation_preserves_concavity_and_islands() {
         let outer = vec![
