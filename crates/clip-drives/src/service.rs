@@ -868,7 +868,7 @@ impl Owner {
                 Ok(if catalog {
                     "Catalog and indexing policy updated; saved catalogs retain their capture date"
                 } else {
-                    "Catalog exclusion saved; saved descendant metadata will be removed after mounted views are unmounted"
+                    "Catalog exclusion saved; catalog status shows metadata cleanup progress and errors. Existing views retain their snapshot until unmounted"
                 }.into())
             }
             DriveRequest::SaveRam { .. } => {

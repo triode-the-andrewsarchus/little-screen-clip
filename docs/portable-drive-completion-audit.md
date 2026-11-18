@@ -113,6 +113,31 @@ and the bounded fallback removes the initially measured CCN 23 resolver hotspot.
 The replay assertion reuses one full-header invariant. No new clone group, cycle
 or redaction hotspot remains; whole-branch REGRESSION is still open.
 
+The UI follow-up shows an unmount suggestion only while a catalog actually has
+a mounted view. Unmounted cleanup failures retain their reason. The settings
+completion notice now directs people to catalog status instead of implying
+unmounting alone guarantees cleanup. Fifteen Files drive/policy presentation
+tests pass (`/tmp/portable-drive-redaction-alias-files-tests.log`); the final
+backend rerun passes the same 214 tests
+(`/tmp/portable-drive-redaction-alias-backend-notice-final.log`). Four-package
+all-target Clippy passes with warnings denied
+(`/tmp/portable-drive-redaction-alias-clippy-notice-final.log`), and the final
+runtime build succeeds (`/tmp/portable-drive-redaction-alias-runtime-notice-final.log`).
+
+The extended private redaction scenario passes in dark and light appearances:
+`/tmp/portable-drive-redaction-alias-ui-extended-dark/report.json` and
+`/tmp/portable-drive-redaction-alias-ui-final-light/report.json`. It retains a real
+FUSE reader through a refused unmount, reopens the redacted view, physically moves
+the owned source offline, observes the unresolved alias and unchanged entry/date
+counts, and shows its actual error without an unmount instruction. An explicit
+whole-drive exclusion then clears all pending intents and displays zero entries;
+the source's original bytes survive restoration. The light run includes the final
+completion-notice wording; the dark run precedes that wording-only adjustment.
+Pending and cleared screenshots were inspected in both appearances, with the
+cleared light view explicitly checked for the absence of the pending message.
+Targeted Rust formatting, Python syntax and diff checks pass. No new clone group,
+cycle or UI-harness hotspot is introduced by this follow-up.
+
 ## Retained policy-observation checkpoint
 
 Policy publication no longer resolves removable-media metadata on the coordinator.

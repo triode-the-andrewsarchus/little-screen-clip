@@ -445,13 +445,15 @@ def exercise_catalog_types(session, root):
         completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
 
 
-def catalog_context_menu(session, name, expected):
+def catalog_context_menu(session, name, expected, *, mounted=True):
     # Status notices and ancestor inventories move Mounts after navigation.
     # Refresh and retry only this read-only menu opening if the row moved.
     target = name + '-target'
     def visible():
         text = session.capture_text(name, session.output / (name + '.png'), [])
-        if 'opensavedcatalog' not in ''.join(text.lower().split()):
+        action = 'opensavedcatalog' if mounted else 'mountsavedcatalog'
+        normalized = ''.join(text.lower().split())
+        if action not in normalized or (not mounted and 'unmountsavedcatalog' in normalized):
             return False
         session.observe(name, expected)
         return True
@@ -575,6 +577,43 @@ def exercise_catalog_redaction(session, root):
         session.observe('catalog-cleanup-source', ['many', 'readme.txt'])
         if any(item['id'] == catalog['id'] and item['mount'] for item in status(env)['catalogs']):
             completed(env, request(env, {'UnmountCatalog': {'catalog': catalog['id']}}))
+    exercise_catalog_alias_pending(session, root, catalog)
+
+
+def exercise_catalog_alias_pending(session, root, catalog):
+    """Unknown offline spellings retain their rows and disclose why cleanup waits."""
+    env = session.env
+    source = root / 'portable'
+    offline = root / 'offline-portable'
+    source.rename(offline)
+    try:
+        session.address(root)
+        wait_for(lambda: not status(env)['drives'], 'offline source for uncertain catalog alias')
+        before = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+        completed(env, request(env, {'Rule': {'drive': catalog['drive'], 'relative': 'MANY', 'catalog': False, 'index': True}}))
+        def failed_cleanup():
+            current = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+            return current['pending_redactions'] > 0 and 'cleanup remains pending' in (current['redaction_error'] or '')
+        wait_for(failed_cleanup, 'explicit uncertain-alias cleanup error')
+        current = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+        assert current['entries'] == before['entries'] and current['captured'] == catalog['captured'], current
+        catalog_context_menu(session, 'catalog-alias-pending', ['Metadata cleanup pending', 'original source is unavailable or changed'], mounted=False)
+        text = (session.output / 'catalog-alias-pending.txt').read_text().lower()
+        assert 'unmount this catalog' not in text, text
+        session.key('Escape')
+        completed(env, request(env, {'Rule': {'drive': catalog['drive'], 'relative': '', 'catalog': False, 'index': True}}))
+        wait_for(lambda: any(item['id'] == catalog['id'] and item['root_excluded'] and item['pending_redactions'] == 0 for item in status(env)['catalogs']), 'explicit offline root cleanup including uncertain intents')
+        current = next(item for item in status(env)['catalogs'] if item['id'] == catalog['id'])
+        assert current['entries'] == 0 and current['captured'] == catalog['captured'], current
+        catalog_context_menu(session, 'catalog-alias-cleared', ['0 entries', 'Redacted'], mounted=False)
+        text = (session.output / 'catalog-alias-cleared.txt').read_text().lower()
+        assert 'metadata cleanup pending' not in text, text
+        session.key('Escape')
+        assert (offline / 'many/hidden.txt').read_text() == 'Back up and sync this; exclude catalog/index traversal.\n'
+    finally:
+        offline.rename(source)
+        session.address(source)
+        session.observe('catalog-alias-source-restored', ['many', 'readme.txt'])
 
 
 def exercise_storage(session, root):
@@ -725,7 +764,7 @@ def main():
     elif args.policy_editor_only:
         scenario, scope = exercise_policy_editor, 'Whole-drive and folder policy lookup beyond status pagination without resetting saved flags'
     elif args.catalog_redaction_only:
-        scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, durable exclusion, redaction dates and reopened FUSE view'
+        scenario, scope = exercise_catalog_redaction, 'Catalog reader retention, redaction dates, offline alias errors and explicit whole-drive cleanup'
     elif args.catalog_coverage_only:
         scenario, scope = exercise_catalog_coverage, 'Offline partial catalog labels, typed directory coverage and incomplete-folder navigation errors'
     elif args.catalog_types_only:

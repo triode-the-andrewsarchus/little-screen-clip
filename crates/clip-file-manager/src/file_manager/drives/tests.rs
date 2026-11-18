@@ -173,8 +173,10 @@ fn catalog_descriptions_disclose_original_capture_pending_cleanup_and_explicit_r
     catalog.redaction_error = Some("Free space is needed".into());
     let pending = catalog_description(&catalog);
     assert!(pending.contains("Metadata cleanup pending"));
-    assert!(pending.contains("Unmount this catalog's existing view"));
+    assert!(!pending.contains("Unmount this catalog's existing view"));
     assert!(pending.contains("Cleanup will retry: Free space is needed"));
+    catalog.mount = Some("/fixture/catalog".into());
+    assert!(catalog_description(&catalog).contains("Unmount this catalog's existing view"));
     catalog.redacted = Some(456);
     assert!(catalog_description(&catalog).contains("\nRedacted "));
     assert_eq!(catalog.captured, 123);

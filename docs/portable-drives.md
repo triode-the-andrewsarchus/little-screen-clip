@@ -613,6 +613,9 @@ volume cannot reuse an earlier mount lifetime. Exact saved-name exclusions still
 work offline; an explicitly selected whole-drive catalog exclusion removes all
 saved entries and lets uncertain pending cleanup finish. Offline arbitrary-alias
 resolution, broader relocation and consumer matrices remain acceptance work.
+Catalog status shows the retained error. Its unmount suggestion appears only
+while that catalog has a mounted view; the settings notice does not imply that
+unmounting alone resolves every cleanup failure.
 
 Legacy development records naming only a device node have no persistent identity
 evidence. They remain retained without being attached to a potentially reused

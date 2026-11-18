@@ -57,7 +57,10 @@ fn catalog_description(catalog: &Catalog) -> String {
         text.push_str(&format!("\nRedacted {}", recorded_time(redacted)));
     }
     if catalog.pending_redactions != 0 {
-        text.push_str("\nMetadata cleanup pending. Unmount this catalog's existing view to release its saved snapshot.");
+        text.push_str("\nMetadata cleanup pending.");
+        if catalog.mount.is_some() {
+            text.push_str(" Unmount this catalog's existing view to release its saved snapshot.");
+        }
     }
     if let Some(error) = &catalog.redaction_error {
         text.push_str(&format!("\nCleanup will retry: {error}"));
