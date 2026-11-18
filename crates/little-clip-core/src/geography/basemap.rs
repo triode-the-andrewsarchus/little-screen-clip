@@ -1,6 +1,8 @@
 //! Offline 3D-globe / 2D-map projection, Oilslick elevation shading, and basemap data loaders.
 
+pub mod storage;
 pub mod tiles;
+use storage::AssetDirectory;
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -262,7 +264,7 @@ impl GrwlSummaryIndex {
 
     pub fn load_or_build(dir: &Path) -> Option<Self> {
         let cache_path = dir.join("grwl_summary_v2.bin");
-        if let Ok(bytes) = fs::read(&cache_path)
+        if let Ok(bytes) = storage::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
         {
             return Some(idx);
@@ -272,7 +274,7 @@ impl GrwlSummaryIndex {
         let dbf_path = shp_path.with_extension("dbf");
         let built = Self::build_from_shp(&shp_path, &dbf_path)?;
         if let Ok(encoded) = built.encode_bin() {
-            let _ = fs::write(&cache_path, encoded);
+            let _ = storage::write(&cache_path, encoded);
         }
         Some(built)
     }
@@ -310,7 +312,7 @@ impl GrwlSummaryIndex {
 
     fn build_from_shp(shp_path: &Path, dbf_path: &Path) -> Option<Self> {
         let mut dbf_widths: Vec<f32> = Vec::new();
-        if let Ok(dbf_file) = fs::File::open(dbf_path) {
+        if let Ok(dbf_file) = crate::kernel_interface::open_content(dbf_path, true) {
             let mut rdr = BufReader::new(dbf_file);
             let mut hdr = [0u8; 32];
             if rdr.read_exact(&mut hdr).is_ok() {
@@ -352,7 +354,7 @@ impl GrwlSummaryIndex {
             }
         }
 
-        let shp_file = fs::File::open(shp_path).ok()?;
+        let shp_file = crate::kernel_interface::open_content(shp_path, true).ok()?;
         let mut rdr = BufReader::new(shp_file);
         let mut hdr = [0u8; 100];
         rdr.read_exact(&mut hdr).ok()?;
@@ -534,19 +536,16 @@ struct GrwlMaskEntry {
 
 /// On-demand 30 m GRWL GeoTIFF water-mask store (`GRWL_mask_V01.01`).
 pub struct GrwlMaskStore {
-    mask_dir: PathBuf,
+    mask_dir: AssetDirectory,
     entries: Vec<GrwlMaskEntry>,
     cache: Mutex<(HashMap<usize, Arc<Vec<u8>>>, VecDeque<usize>)>,
 }
 
 impl GrwlMaskStore {
     pub fn load_or_index(dir: &Path) -> Option<Self> {
-        let mask_dir = dir.join("grwl_masks");
-        if !mask_dir.is_dir() {
-            return None;
-        }
+        let mask_dir = AssetDirectory::open(&dir.join("grwl_masks")).ok()?;
         let idx_path = dir.join("grwl_masks_idx.json");
-        if let Ok(bytes) = fs::read(&idx_path)
+        if let Ok(bytes) = storage::read(&idx_path)
             && let Ok(entries) = serde_json::from_slice::<Vec<GrwlMaskEntry>>(&bytes)
             && !entries.is_empty()
         {
@@ -557,7 +556,7 @@ impl GrwlMaskStore {
             });
         }
         let mut entries = Vec::new();
-        for entry in fs::read_dir(&mask_dir).ok()?.flatten() {
+        for entry in fs::read_dir(mask_dir.path()).ok()?.flatten() {
             let p = entry.path();
             if !p
                 .extension()
@@ -566,7 +565,7 @@ impl GrwlMaskStore {
             {
                 continue;
             }
-            let Ok(file) = fs::File::open(&p) else {
+            let Ok(file) = crate::kernel_interface::open_content(&p, true) else {
                 continue;
             };
             let Ok(mut dec) = tiff::decoder::Decoder::new(BufReader::new(file)) else {
@@ -606,7 +605,7 @@ impl GrwlMaskStore {
             return None;
         }
         if let Ok(encoded) = serde_json::to_vec(&entries) {
-            let _ = fs::write(&idx_path, encoded);
+            let _ = storage::write(&idx_path, encoded);
         }
         Some(Self {
             mask_dir,
@@ -627,7 +626,10 @@ impl GrwlMaskStore {
                 hit.clone()
             } else {
                 drop(guard);
-                let file = fs::File::open(self.mask_dir.join(&entry.file)).ok()?;
+                let file = self
+                    .mask_dir
+                    .open_file(std::ffi::OsStr::new(&entry.file))
+                    .ok()?;
                 let mut dec = tiff::decoder::Decoder::new(BufReader::new(file))
                     .ok()?
                     .with_limits(tiff::decoder::Limits::unlimited());
@@ -679,12 +681,8 @@ impl HydroRiversIndex {
     }
 
     pub fn load_or_build(dir: &Path) -> Option<Self> {
-        let legacy = dir.join("rivers_stra3.bin");
-        if legacy.is_file() {
-            let _ = fs::remove_file(&legacy);
-        }
         let cache_path = dir.join("rivers_stra3_v3.bin");
-        if let Ok(bytes) = fs::read(&cache_path)
+        if let Ok(bytes) = storage::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
         {
             return Some(idx);
@@ -694,7 +692,7 @@ impl HydroRiversIndex {
         let dbf_path = shp_path.with_extension("dbf");
         let built = Self::build_from_shp(&shp_path, &dbf_path)?;
         if let Ok(encoded) = built.encode_bin() {
-            let _ = fs::write(&cache_path, encoded);
+            let _ = storage::write(&cache_path, encoded);
         }
         Some(built)
     }
@@ -732,7 +730,7 @@ impl HydroRiversIndex {
 
     fn build_from_shp(shp_path: &Path, dbf_path: &Path) -> Option<Self> {
         let mut dbf_ord: Vec<(u8, f32)> = Vec::new();
-        if let Ok(dbf_file) = fs::File::open(dbf_path) {
+        if let Ok(dbf_file) = crate::kernel_interface::open_content(dbf_path, true) {
             let mut rdr = BufReader::new(dbf_file);
             let mut hdr = [0u8; 32];
             if rdr.read_exact(&mut hdr).is_ok() {
@@ -783,7 +781,7 @@ impl HydroRiversIndex {
             }
         }
 
-        let shp_file = fs::File::open(shp_path).ok()?;
+        let shp_file = crate::kernel_interface::open_content(shp_path, true).ok()?;
         let mut rdr = BufReader::new(shp_file);
         let mut hdr = [0u8; 100];
         rdr.read_exact(&mut hdr).ok()?;
@@ -912,7 +910,7 @@ pub struct CogDemPyramid {
 
 impl CogDemPyramid {
     pub fn open(tif_path: &Path) -> Option<Self> {
-        let file = fs::File::open(tif_path).ok()?;
+        let file = crate::kernel_interface::open_content(tif_path, true).ok()?;
         let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
             .ok()?
             .with_limits(tiff::decoder::Limits::unlimited());
@@ -1039,7 +1037,7 @@ pub struct Ne2FullSampler {
 
 impl Ne2FullSampler {
     pub fn open(tif_path: &Path) -> Option<Self> {
-        let file = fs::File::open(tif_path).ok()?;
+        let file = crate::kernel_interface::open_content(tif_path, true).ok()?;
         let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
             .ok()?
             .with_limits(tiff::decoder::Limits::unlimited());
@@ -1243,6 +1241,9 @@ impl BasemapAssets {
 
     /// Loads available offline basemap assets from `assets_dir` and optional `terrain_override_dir`.
     pub fn load(assets_dir: &Path, terrain_override_dir: Option<&Path>) -> Self {
+        let root = AssetDirectory::open(assets_dir).ok();
+        let anchor = root.as_ref().map(AssetDirectory::path);
+        let assets_dir = anchor.as_deref().unwrap_or(assets_dir);
         let ne2 = load_ne2_overview(assets_dir);
         let ne2_full = find_first_with_ext(assets_dir, &["tif", "tiff"])
             .and_then(|p| Ne2FullSampler::open(&p));
@@ -1260,7 +1261,7 @@ impl BasemapAssets {
         let roads = load_roads_from_dir(assets_dir);
         let lakes = load_lakes_from_dir(assets_dir);
         let coastlines = find_gshhg_file(assets_dir)
-            .and_then(|p| fs::read(p).ok())
+            .and_then(|p| storage::read(p).ok())
             .map(|bytes| parse_gshhg_b(&bytes, 12_000))
             .unwrap_or_default();
         let mut terrain_tiles = HashMap::new();
@@ -1279,7 +1280,10 @@ impl BasemapAssets {
         let has_hydrorivers = rivers.is_some() || assets_dir.join("hydrorivers").is_dir();
 
         Self {
-            assets_dir: assets_dir.to_path_buf(),
+            assets_dir: root
+                .as_ref()
+                .map(|root| root.display_path().to_path_buf())
+                .unwrap_or_else(|| assets_dir.to_path_buf()),
             ne2,
             ne2_full,
             cities,
@@ -1740,9 +1744,10 @@ pub fn parse_gshhg_b(bytes: &[u8], max_polygons: usize) -> Vec<WaterPolygon> {
 }
 
 fn find_first_with_ext(dir: &Path, exts: &[&str]) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
+    let directory = AssetDirectory::open(dir).ok()?;
+    let entries = fs::read_dir(directory.path()).ok()?;
     for entry in entries.flatten() {
-        let p = entry.path();
+        let p = dir.join(entry.file_name());
         if p.is_file()
             && let Some(ext) = p.extension().and_then(|e| e.to_str())
             && exts.iter().any(|want| ext.eq_ignore_ascii_case(want))
@@ -1772,22 +1777,22 @@ fn find_gshhg_file(dir: &Path) -> Option<PathBuf> {
 
 fn load_cities_from_dir(dir: &Path) -> Vec<CityPoint> {
     let compact = dir.join("cities_all.json");
-    if let Ok(bytes) = fs::read(&compact)
+    if let Ok(bytes) = storage::read(&compact)
         && let Ok(cities) = serde_json::from_slice::<Vec<CityPoint>>(&bytes)
     {
         return cities;
     }
     let raw = dir.join("ne_10m_populated_places_simple.geojson");
-    if let Ok(bytes) = fs::read(&raw)
+    if let Ok(bytes) = storage::read(&raw)
         && let Ok(cities) = parse_cities_geojson(&bytes)
     {
         if let Ok(encoded) = serde_json::to_vec(&cities) {
-            let _ = fs::write(&compact, encoded);
+            let _ = storage::write(&compact, encoded);
         }
         return cities;
     }
     let legacy = dir.join("cities_250k.json");
-    if let Ok(bytes) = fs::read(&legacy)
+    if let Ok(bytes) = storage::read(&legacy)
         && let Ok(cities) = serde_json::from_slice::<Vec<CityPoint>>(&bytes)
     {
         return cities;
@@ -1859,17 +1864,17 @@ pub fn parse_borders_geojson(bytes: &[u8]) -> Result<Vec<BorderLine>, String> {
 
 fn load_borders_from_dir(dir: &Path, compact_name: &str, raw_name: &str) -> Vec<BorderLine> {
     let compact = dir.join(compact_name);
-    if let Ok(bytes) = fs::read(&compact)
+    if let Ok(bytes) = storage::read(&compact)
         && let Ok(lines) = serde_json::from_slice::<Vec<BorderLine>>(&bytes)
     {
         return lines;
     }
     let raw = dir.join(raw_name);
-    if let Ok(bytes) = fs::read(&raw)
+    if let Ok(bytes) = storage::read(&raw)
         && let Ok(lines) = parse_borders_geojson(&bytes)
     {
         if let Ok(encoded) = serde_json::to_vec(&lines) {
-            let _ = fs::write(&compact, encoded);
+            let _ = storage::write(&compact, encoded);
         }
         return lines;
     }
@@ -1943,17 +1948,17 @@ pub fn parse_roads_geojson(bytes: &[u8]) -> Result<Vec<RoadLine>, String> {
 
 fn load_roads_from_dir(dir: &Path) -> Vec<RoadLine> {
     let compact = dir.join("roads_10m.json");
-    if let Ok(bytes) = fs::read(&compact)
+    if let Ok(bytes) = storage::read(&compact)
         && let Ok(lines) = serde_json::from_slice::<Vec<RoadLine>>(&bytes)
     {
         return lines;
     }
     let raw = dir.join("ne_10m_roads.geojson");
-    if let Ok(bytes) = fs::read(&raw)
+    if let Ok(bytes) = storage::read(&raw)
         && let Ok(lines) = parse_roads_geojson(&bytes)
     {
         if let Ok(encoded) = serde_json::to_vec(&lines) {
-            let _ = fs::write(&compact, encoded);
+            let _ = storage::write(&compact, encoded);
         }
         return lines;
     }
@@ -2037,17 +2042,17 @@ pub fn parse_lakes_geojson(bytes: &[u8]) -> Result<Vec<LakePolygon>, String> {
 
 fn load_lakes_from_dir(dir: &Path) -> Vec<LakePolygon> {
     let compact = dir.join("lakes_10m_v2.json");
-    if let Ok(bytes) = fs::read(&compact)
+    if let Ok(bytes) = storage::read(&compact)
         && let Ok(polys) = serde_json::from_slice::<Vec<LakePolygon>>(&bytes)
     {
         return polys;
     }
     let raw = dir.join("ne_10m_lakes.geojson");
-    if let Ok(bytes) = fs::read(&raw)
+    if let Ok(bytes) = storage::read(&raw)
         && let Ok(polys) = parse_lakes_geojson(&bytes)
     {
         if let Ok(encoded) = serde_json::to_vec(&polys) {
-            let _ = fs::write(&compact, encoded);
+            let _ = storage::write(&compact, encoded);
         }
         return polys;
     }
@@ -2056,7 +2061,7 @@ fn load_lakes_from_dir(dir: &Path) -> Vec<LakePolygon> {
 
 fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     let cached = dir.join("ne2_overview.rgb");
-    if let Ok(bytes) = fs::read(&cached)
+    if let Ok(bytes) = storage::read(&cached)
         && bytes.len() >= 8
     {
         let w = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
@@ -2070,7 +2075,10 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
         }
     }
     let img_path = find_first_with_ext(dir, &["png", "jpg", "jpeg", "tif", "tiff"])?;
-    let mut reader = image::ImageReader::open(&img_path).ok()?;
+    let file = crate::kernel_interface::open_content(&img_path, true).ok()?;
+    let mut reader = image::ImageReader::new(BufReader::new(file))
+        .with_guessed_format()
+        .ok()?;
     reader.limits(image::Limits::no_limits());
     let decoded = reader.decode().ok()?;
     let resized = decoded.resize_exact(4096, 2048, image::imageops::FilterType::Triangle);
@@ -2079,7 +2087,7 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     blob.extend_from_slice(&4096u32.to_le_bytes());
     blob.extend_from_slice(&2048u32.to_le_bytes());
     blob.extend_from_slice(&rgb);
-    let _ = fs::write(&cached, &blob);
+    let _ = storage::write(&cached, &blob);
     Some(EquirectTexture {
         width: 4096,
         height: 2048,
@@ -2088,7 +2096,10 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
 }
 
 fn load_hgt_dir(dir: &Path, out: &mut HashMap<(i32, i32), SrtmTile>) {
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Ok(directory) = AssetDirectory::open(dir) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(directory.path()) else {
         return;
     };
     for entry in entries.flatten() {
@@ -2104,7 +2115,7 @@ fn load_hgt_dir(dir: &Path, out: &mut HashMap<(i32, i32), SrtmTile>) {
             continue;
         }
         if let Some((lat, lon)) = parse_hgt_name(stem)
-            && let Ok(bytes) = fs::read(&p)
+            && let Ok(bytes) = storage::read(&p)
             && let Some(tile) = SrtmTile::from_hgt_bytes(lat, lon, &bytes)
         {
             out.insert((lat, lon), tile);
@@ -2136,7 +2147,7 @@ fn parse_hgt_name(stem: &str) -> Option<(i32, i32)> {
 
 fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     let path = dir.join("gebco_overview.i16");
-    if let Ok(bytes) = fs::read(&path)
+    if let Ok(bytes) = storage::read(&path)
         && bytes.len() >= 8
     {
         let width = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
@@ -2159,7 +2170,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
 
     // Extract an overview IFD (around 2400..=6000 px wide) from downloaded GEBCO GeoTIFF.
     let tif_path = find_first_with_ext(&dir.join("gebco"), &["tif", "tiff"])?;
-    let file = fs::File::open(&tif_path).ok()?;
+    let file = crate::kernel_interface::open_content(&tif_path, true).ok()?;
     let mut decoder = tiff::decoder::Decoder::new(file)
         .ok()?
         .with_limits(tiff::decoder::Limits::unlimited());
@@ -2202,7 +2213,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     for h in &heights {
         blob.extend_from_slice(&h.to_le_bytes());
     }
-    let _ = fs::write(&path, &blob);
+    let _ = storage::write(&path, &blob);
     Some(GlobalDemGrid {
         width,
         height,
@@ -2212,7 +2223,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
 
 fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
     let path = dir.join("land_cover.u8");
-    let bytes = fs::read(path).ok()?;
+    let bytes = storage::read(path).ok()?;
     if bytes.len() < 8 {
         return None;
     }

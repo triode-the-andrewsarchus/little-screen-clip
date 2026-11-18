@@ -3,8 +3,10 @@
 use little_clip_core::{
     CommandRequest,
     config::AppConfig,
-    geography::basemap::{AssetStatus, BasemapAssets},
-    kernel_interface::create_content_directory,
+    geography::basemap::{
+        AssetStatus, BasemapAssets,
+        storage::{self, AssetDirectory},
+    },
 };
 use std::{
     fs,
@@ -154,6 +156,14 @@ impl AssetDownloader {
         self.rx = Some(rx);
 
         std::thread::spawn(move || {
+            let root = match AssetDirectory::create(&assets_dir) {
+                Ok(root) => root,
+                Err(error) => {
+                    let _ = tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let assets_dir = root.path();
             let report = |fraction: f32, msg: &str| {
                 if let Ok(mut p) = progress.lock() {
                     p.fraction = fraction.clamp(0.0, 1.0);
@@ -179,12 +189,12 @@ impl AssetDownloader {
                             &cancelled,
                             |f, m| report(base + (0.02 + f * 0.13) * span, m),
                         )?;
-                        if let Ok(bytes) = fs::read(&cities_path)
+                        if let Ok(bytes) = storage::read(&cities_path)
                             && let Ok(parsed) =
                                 little_clip_core::geography::basemap::parse_cities_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("cities_all.json"), encoded);
+                            let _ = storage::write(assets_dir.join("cities_all.json"), encoded);
                         }
                         let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
                         report(base + 0.16 * span, "Downloading Natural Earth II texture…");
@@ -199,10 +209,8 @@ impl AssetDownloader {
                         report(base + 0.91 * span, "Extracting Natural Earth II texture…");
                         extract_matching_from_zip(
                             &zip_path,
-                            &assets_dir,
                             &[".tif", ".tiff", ".png", ".jpg", ".jpeg"],
                         )?;
-                        let _ = fs::remove_file(&zip_path);
                     }
                     DownloadPack::Borders => {
                         report(
@@ -217,12 +225,12 @@ impl AssetDownloader {
                             &cancelled,
                             |f, m| report(base + (0.02 + f * 0.25) * span, m),
                         )?;
-                        if let Ok(bytes) = fs::read(&c_path)
+                        if let Ok(bytes) = storage::read(&c_path)
                             && let Ok(parsed) =
                                 little_clip_core::geography::basemap::parse_borders_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("borders_admin0.json"), encoded);
+                            let _ = storage::write(assets_dir.join("borders_admin0.json"), encoded);
                         }
                         let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
                         report(
@@ -237,12 +245,12 @@ impl AssetDownloader {
                             &cancelled,
                             |f, m| report(base + (0.30 + f * 0.60) * span, m),
                         )?;
-                        if let Ok(bytes) = fs::read(&s_path)
+                        if let Ok(bytes) = storage::read(&s_path)
                             && let Ok(parsed) =
                                 little_clip_core::geography::basemap::parse_borders_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("borders_admin1.json"), encoded);
+                            let _ = storage::write(assets_dir.join("borders_admin1.json"), encoded);
                         }
                     }
                     DownloadPack::RoadsAndLakes => {
@@ -255,12 +263,12 @@ impl AssetDownloader {
                             &cancelled,
                             |f, m| report(base + (0.02 + f * 0.16) * span, m),
                         )?;
-                        if let Ok(bytes) = fs::read(&l_path)
+                        if let Ok(bytes) = storage::read(&l_path)
                             && let Ok(parsed) =
                                 little_clip_core::geography::basemap::parse_lakes_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("lakes_10m_v2.json"), encoded);
+                            let _ = storage::write(assets_dir.join("lakes_10m_v2.json"), encoded);
                         }
                         let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
                         report(base + 0.20 * span, "Downloading Natural Earth 10m roads…");
@@ -272,12 +280,12 @@ impl AssetDownloader {
                             &cancelled,
                             |f, m| report(base + (0.20 + f * 0.70) * span, m),
                         )?;
-                        if let Ok(bytes) = fs::read(&r_path)
+                        if let Ok(bytes) = storage::read(&r_path)
                             && let Ok(parsed) =
                                 little_clip_core::geography::basemap::parse_roads_geojson(&bytes)
                             && let Ok(encoded) = serde_json::to_vec(&parsed)
                         {
-                            let _ = fs::write(assets_dir.join("roads_10m.json"), encoded);
+                            let _ = storage::write(assets_dir.join("roads_10m.json"), encoded);
                         }
                     }
                     DownloadPack::GrwlSummary => {
@@ -295,8 +303,7 @@ impl AssetDownloader {
                             |f, m| report(base + (0.02 + f * 0.85) * span, m),
                         )?;
                         report(base + 0.88 * span, "Extracting GRWL centerlines…");
-                        extract_matching_from_zip(&zip_path, &grwl_dir, &[".shp", ".dbf", ".shx"])?;
-                        let _ = fs::remove_file(&zip_path);
+                        extract_matching_from_zip(&zip_path, &[".shp", ".dbf", ".shx"])?;
                     }
                     DownloadPack::GrwlMasks => {
                         let mask_dir = assets_dir.join("grwl_masks");
@@ -313,8 +320,7 @@ impl AssetDownloader {
                             |f, m| report(base + (0.02 + f * 0.85) * span, m),
                         )?;
                         report(base + 0.88 * span, "Extracting GRWL 30m water masks…");
-                        extract_matching_from_zip(&zip_path, &mask_dir, &[".tif", ".tiff"])?;
-                        let _ = fs::remove_file(&zip_path);
+                        extract_matching_from_zip(&zip_path, &[".tif", ".tiff"])?;
                     }
                     DownloadPack::WaterOutlines => {
                         report(base + 0.02 * span, "Downloading GSHHG coastlines & lakes…");
@@ -329,10 +335,8 @@ impl AssetDownloader {
                         report(base + 0.88 * span, "Extracting GSHHG binary shorelines…");
                         extract_matching_from_zip(
                             &zip_path,
-                            &assets_dir,
                             &["gshhs_c.b", "gshhs_l.b", "gshhs_i.b"],
                         )?;
-                        let _ = fs::remove_file(&zip_path);
                     }
                     DownloadPack::TerrainGebco => {
                         let terrain_dir = assets_dir.join("gebco");
@@ -378,10 +382,8 @@ impl AssetDownloader {
                                         );
                                         let _ = extract_matching_from_zip(
                                             &downloaded,
-                                            &terrain_dir,
                                             &[".tif", ".tiff", ".nc"],
                                         );
-                                        let _ = fs::remove_file(&downloaded);
                                     }
                                     ok = true;
                                     break;
@@ -426,10 +428,8 @@ impl AssetDownloader {
                         report(base + 0.92 * span, "Extracting HydroRIVERS…");
                         let _ = extract_matching_from_zip(
                             &archive,
-                            &rivers_dir,
                             &[".shp", ".dbf", ".shx"],
                         );
-                        let _ = fs::remove_file(&archive);
                     }
                     DownloadPack::All => {}
                 }
@@ -523,13 +523,12 @@ fn download_to_file(
     max_bytes: u64,
     cancelled: &AtomicBool,
     on_progress: impl Fn(f32, &str),
-) -> Result<PathBuf, String> {
+) -> Result<Downloaded, String> {
     if cancelled.load(Ordering::Relaxed) {
         return Err("Download cancelled".into());
     }
-    let directory = create_content_directory(dir).map_err(|e| e.to_string())?;
-    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let staged = tempfile::NamedTempFile::new_in(&anchor).map_err(|e| e.to_string())?;
+    let directory = AssetDirectory::create(dir).map_err(|e| e.to_string())?;
+    let staged = directory.stage().map_err(|e| e.to_string())?;
     let (request, fd) = CommandRequest::new("curl")
         .args([
             "--disable",
@@ -604,20 +603,43 @@ fn download_to_file(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("curl failed for {filename}: {}", stderr.trim()));
     }
-    let target = anchor.join(filename);
-    if target.exists() {
-        let _ = fs::remove_file(&target);
-    }
-    staged.persist(&target).map_err(|e| e.error.to_string())?;
-    Ok(dir.join(filename))
+    let (file, staging) = if filename.to_ascii_lowercase().ends_with(".zip") {
+        (
+            staged.as_file().try_clone().map_err(|e| e.to_string())?,
+            Some(staged),
+        )
+    } else {
+        (
+            directory
+                .install(staged, std::ffi::OsStr::new(filename))
+                .map_err(|e| e.to_string())?,
+            None,
+        )
+    };
+    let path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    Ok(Downloaded {
+        _staging: staging,
+        file,
+        directory,
+        path,
+    })
 }
 
-fn extract_matching_from_zip(
-    zip_path: &Path,
-    dest_dir: &Path,
-    suffixes: &[&str],
-) -> Result<(), String> {
-    let file = fs::File::open(zip_path).map_err(|e| e.to_string())?;
+// Declaration order keeps the parent descriptor alive through temporary cleanup.
+struct Downloaded {
+    _staging: Option<tempfile::NamedTempFile>,
+    file: fs::File,
+    directory: AssetDirectory,
+    path: PathBuf,
+}
+impl AsRef<Path> for Downloaded {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn extract_matching_from_zip(zip_path: &Downloaded, suffixes: &[&str]) -> Result<(), String> {
+    let file = zip_path.file.try_clone().map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -635,7 +657,10 @@ fn extract_matching_from_zip(
         if suffixes.iter().any(|s| lower.ends_with(s)) {
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            fs::write(dest_dir.join(&name), &buf).map_err(|e| e.to_string())?;
+            zip_path
+                .directory
+                .write(std::ffi::OsStr::new(&name), &buf)
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -655,4 +680,50 @@ fn dir_size(dir: &Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{ffi::OsStr, io::Write, os::unix::fs::symlink};
+
+    #[test]
+    fn extraction_retains_its_directory_and_rejects_symlink_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("assets");
+        let directory = AssetDirectory::create(&original).unwrap();
+        let mut staged = directory.stage().unwrap();
+        {
+            let mut zip = zip::ZipWriter::new(staged.as_file_mut());
+            zip.start_file("nested/tile.tif", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"fixture raster").unwrap();
+            zip.finish().unwrap();
+        }
+        let file = staged.as_file().try_clone().unwrap();
+        let downloaded = Downloaded {
+            path: PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())),
+            file,
+            _staging: Some(staged),
+            directory,
+        };
+        let moved = root.path().join("moved");
+        fs::rename(&original, &moved).unwrap();
+        fs::create_dir(&original).unwrap();
+        let outside = root.path().join("outside");
+        fs::write(&outside, b"keep original").unwrap();
+        symlink(&outside, moved.join("tile.tif")).unwrap();
+        assert!(extract_matching_from_zip(&downloaded, &[".tif"]).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"keep original");
+        fs::remove_file(moved.join("tile.tif")).unwrap();
+        extract_matching_from_zip(&downloaded, &[".tif"]).unwrap();
+        assert_eq!(fs::read(moved.join("tile.tif")).unwrap(), b"fixture raster");
+        assert!(!original.join("tile.tif").exists());
+        // Raw installation uses the same held parent and atomically replaces a file.
+        downloaded
+            .directory
+            .write(OsStr::new("tile.tif"), b"next revision")
+            .unwrap();
+        assert_eq!(fs::read(moved.join("tile.tif")).unwrap(), b"next revision");
+    }
 }
