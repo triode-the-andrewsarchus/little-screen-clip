@@ -56,6 +56,7 @@ pub(in crate::file_manager) enum Source {
     Database(PathBuf),
     Geography(PathBuf),
     Toolpath(PathBuf),
+    VcvPatch(PathBuf),
     Multisample(PathBuf),
     Mail(PathBuf),
     Subtitle(PathBuf),
@@ -115,6 +116,7 @@ impl Source {
             super::super::document_format::Format::Database => Source::Database(path),
             super::super::document_format::Format::Geography => Source::Geography(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
+            super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
             super::super::document_format::Format::Multisample => Source::Multisample(path),
             super::super::document_format::Format::Subtitle => Source::Subtitle(path),
         }
@@ -141,6 +143,7 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
+            | Self::VcvPatch(_)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -256,6 +259,7 @@ impl Source {
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
+            Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),

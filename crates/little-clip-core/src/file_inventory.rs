@@ -57,6 +57,10 @@ impl Entry {
     pub fn is_subtitles(&self) -> bool {
         self.regular_file && crate::subtitles::is_subtitle_path(&self.path)
     }
+    pub fn is_vcv_patch(&self) -> bool {
+        self.regular_file
+            && file_format::Format::for_path(&self.path) == Some(file_format::Format::VcvPatch)
+    }
     pub fn is_multisample(&self) -> bool {
         self.regular_file
             && file_format::Format::for_path(&self.path) == Some(file_format::Format::Multisample)

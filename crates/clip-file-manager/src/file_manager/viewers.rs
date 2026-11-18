@@ -37,6 +37,7 @@ enum Loaded {
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
+    VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(Box<super::multisample::Viewer>),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
@@ -65,6 +66,7 @@ enum ViewerSession {
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
+    VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(super::multisample::Viewer),
     Image(Box<ImagePreviewState>),
     Text(super::text_editor::TextSession),
@@ -702,6 +704,9 @@ fn load(
         Kind::Document(Format::Multisample) => super::multisample::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::Multisample(Box::new(viewer))),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
+        Kind::Document(Format::VcvPatch) => {
+            super::vcv_strip::Viewer::load(path).map(|viewer| Loaded::VcvPatch(Box::new(viewer)))
+        }
         Kind::Document(Format::Geography) => {
             super::geography::Viewer::load(path).map(Loaded::Geography)
         }
@@ -781,6 +786,7 @@ fn session(
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
+        Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
@@ -851,6 +857,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Book(state) => state.ui(ui, close, palette),
         ViewerSession::Multisample(state) => state.ui(ui, close, palette),
         ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
+        ViewerSession::VcvPatch(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),
         ViewerSession::Database(state) => state.ui(ui, close, palette),
         ViewerSession::Calendar(state) => state.ui(ui, close, palette),
@@ -944,6 +951,7 @@ mod tests {
             ("missing.NKI", Format::Multisample),
             ("missing.IPYNB", Format::Notebook),
             ("missing.GCODE", Format::Toolpath),
+            ("missing.VCV", Format::VcvPatch),
             ("missing.OTF", Format::Font),
         ] {
             let path = Path::new(name);

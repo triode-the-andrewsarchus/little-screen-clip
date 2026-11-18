@@ -109,6 +109,7 @@ fn format_family(entry: &Entry) -> Category {
     if little_clip_core::audio::is_audio_path(&entry.path)
         || super::midi_strip::is_midi(&entry.path)
         || entry.is_multisample()
+        || entry.is_vcv_patch()
     {
         Category::Audio
     } else if entry.is_photo() {

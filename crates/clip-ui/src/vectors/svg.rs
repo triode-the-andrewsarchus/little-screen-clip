@@ -1,7 +1,7 @@
 //! Retained canonical SVG paths painted directly at the current camera scale.
 use super::{Canvas, OpenGl, femtovg as vg};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
@@ -19,6 +19,9 @@ pub struct Scene {
     tree: usvg::Tree,
     images: HashMap<usize, Arc<image::RgbaImage>>,
     clips: HashMap<usize, ClipPaths>,
+    /// Groups with `opacity != 1.0` whose children have pairwise-disjoint bounds
+    /// and no filters/images, so alpha multiplies cleanly without an FBO layer.
+    foldable_opacity: HashSet<usize>,
 }
 
 /// Worker-derived source-space geometry for named SVG groups.
@@ -119,11 +122,14 @@ impl Scene {
                 Ok((clip.as_ref() as *const usvg::ClipPath as usize, paths))
             })
             .collect::<Result<HashMap<_, _>, String>>()?;
+        let mut foldable_opacity = HashSet::new();
+        collect_foldable_opacity(tree.root(), &mut foldable_opacity);
         Ok(Arc::new(Self {
             id: NEXT_SCENE.fetch_add(1, Ordering::Relaxed),
             tree,
             images,
             clips,
+            foldable_opacity,
         }))
     }
 
@@ -161,7 +167,7 @@ impl Scene {
                 image_rect.width() / scene.tree.size().width(),
                 image_rect.height() / scene.tree.size().height(),
             );
-            let result = cached.group(canvas, scene.tree.root(), &scene, &motion);
+            let result = cached.group(canvas, scene.tree.root(), &scene, &motion, 1.0);
             canvas.restore();
             result
         })
@@ -276,12 +282,162 @@ fn compile_clip(group: &usvg::Group, output: &mut ClipPaths) -> Result<(), Strin
     Ok(())
 }
 
+fn collect_foldable_opacity(group: &usvg::Group, foldable: &mut HashSet<usize>) {
+    if group.opacity().get() != 1.0 && group.filters().is_empty() {
+        let mut leaves = Vec::new();
+        if collect_non_overlapping_leaves(group, &mut leaves) && rects_pairwise_disjoint(&leaves) {
+            foldable.insert(group as *const usvg::Group as usize);
+        }
+    }
+    for node in group.children() {
+        if let usvg::Node::Group(child) = node {
+            collect_foldable_opacity(child, foldable);
+        }
+    }
+}
+
+fn collect_non_overlapping_leaves(group: &usvg::Group, leaves: &mut Vec<usvg::Rect>) -> bool {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => {
+                if !child.filters().is_empty() || !collect_non_overlapping_leaves(child, leaves) {
+                    return false;
+                }
+            }
+            usvg::Node::Path(path) => {
+                if !path.is_visible() {
+                    continue;
+                }
+                if path.fill().is_some() && path.stroke().is_some() {
+                    return false;
+                }
+                if leaves.len() >= 64 {
+                    return false;
+                }
+                leaves.push(path.abs_stroke_bounding_box());
+            }
+            usvg::Node::Image(_) | usvg::Node::Text(_) => return false,
+        }
+    }
+    true
+}
+
+fn rects_pairwise_disjoint(rects: &[usvg::Rect]) -> bool {
+    for (i, a) in rects.iter().enumerate() {
+        for b in &rects[i + 1..] {
+            if a.left() < b.right()
+                && b.left() < a.right()
+                && a.top() < b.bottom()
+                && b.top() < a.bottom()
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn tighten_layer_scissor(canvas: &mut Canvas<OpenGl>, local_rect: usvg::Rect, padding_px: f32) {
+    let xf = canvas.transform();
+    let corners = [
+        (local_rect.left(), local_rect.top()),
+        (local_rect.right(), local_rect.top()),
+        (local_rect.left(), local_rect.bottom()),
+        (local_rect.right(), local_rect.bottom()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (x, y) in corners {
+        let (dx, dy) = xf.transform_point(x, y);
+        if !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
+        min_x = min_x.min(dx);
+        min_y = min_y.min(dy);
+        max_x = max_x.max(dx);
+        max_y = max_y.max(dy);
+    }
+    // Reset to device identity while intersecting so rotated subtrees keep an
+    // axis-aligned scissor rect that femtovg's Scissor::device_bounds accepts.
+    canvas.reset_transform();
+    canvas.intersect_scissor(
+        min_x - padding_px,
+        min_y - padding_px,
+        (max_x - min_x + padding_px * 2.0).max(1.0),
+        (max_y - min_y + padding_px * 2.0).max(1.0),
+    );
+    canvas.set_transform(&xf);
+}
+
+struct CachedPath {
+    path: Path,
+    fill: Option<Paint>,
+    stroke: Option<Paint>,
+    paint_order: usvg::PaintOrder,
+}
+
+impl CachedPath {
+    fn from_usvg(path: &usvg::Path) -> Self {
+        let fill = path.fill().map(|fill| {
+            brush(fill.paint(), fill.opacity().get()).with_fill_rule(rule(fill.rule()))
+        });
+        let stroke = path.stroke().map(|stroke| {
+            brush(stroke.paint(), stroke.opacity().get())
+                .with_line_width(stroke.width().get())
+                .with_miter_limit(stroke.miterlimit().get())
+                .with_line_cap(match stroke.linecap() {
+                    usvg::LineCap::Butt => vg::LineCap::Butt,
+                    usvg::LineCap::Round => vg::LineCap::Round,
+                    usvg::LineCap::Square => vg::LineCap::Square,
+                })
+                .with_line_join(match stroke.linejoin() {
+                    usvg::LineJoin::Round => vg::LineJoin::Round,
+                    usvg::LineJoin::Bevel => vg::LineJoin::Bevel,
+                    _ => vg::LineJoin::Miter,
+                })
+                .with_line_dash(stroke.dasharray().unwrap_or_default())
+                .with_line_dash_offset(stroke.dashoffset())
+        });
+        Self {
+            path: path_data(path.data()),
+            fill,
+            stroke,
+            paint_order: path.paint_order(),
+        }
+    }
+
+    fn paint(&self, canvas: &mut Canvas<OpenGl>) {
+        let fill_path = |canvas: &mut Canvas<OpenGl>| {
+            if let Some(fill) = &self.fill {
+                canvas.fill_path(&self.path, fill);
+            }
+        };
+        let stroke_path = |canvas: &mut Canvas<OpenGl>| {
+            if let Some(stroke) = &self.stroke {
+                canvas.stroke_path(&self.path, stroke);
+            }
+        };
+        match self.paint_order {
+            usvg::PaintOrder::FillAndStroke => {
+                fill_path(canvas);
+                stroke_path(canvas);
+            }
+            usvg::PaintOrder::StrokeAndFill => {
+                stroke_path(canvas);
+                fill_path(canvas);
+            }
+        }
+    }
+}
+
 pub(super) struct Cached {
     scene: Weak<Scene>,
-    paths: HashMap<usize, Path>,
+    paths: HashMap<usize, CachedPath>,
     textures: HashMap<usize, vg::ImageId>,
     clips: HashMap<usize, Vec<(Path, FillRule)>>,
-    replacements: HashMap<u64, Cached>,
+    replacements: HashMap<(usize, u64), Cached>,
 }
 impl Cached {
     fn new(scene: &Arc<Scene>) -> Self {
@@ -312,6 +468,7 @@ impl Cached {
         group: &usvg::Group,
         scene: &Scene,
         motion: &Changes,
+        alpha: f32,
     ) -> Result<(), String> {
         canvas.save();
         apply_transform(canvas, group.transform());
@@ -324,11 +481,35 @@ impl Cached {
         if let Some(clip) = group.clip_path() {
             self.clip(canvas, clip, scene);
         }
-        let layer = group.opacity().get() != 1.0 || group.isolate();
-        let captured = !layer
-            || canvas.begin_layer(&vg::LayerEffects::new().with_opacity(group.opacity().get()));
+        let has_replacement = motion.replacements.contains_key(group.id());
+        let opacity = group.opacity().get();
+        let has_opacity = opacity != 1.0;
+        let single_leaf =
+            group.children().len() == 1 && matches!(group.children()[0], usvg::Node::Path(_));
+        let can_fold = has_opacity
+            && !has_replacement
+            && scene
+                .foldable_opacity
+                .contains(&(group as *const usvg::Group as usize))
+            && (single_leaf || (motion.transforms.is_empty() && motion.translations.is_empty()));
+        // Skip isolation-only groups when opacity == 1.0 because validate_group
+        // already rejects all non-Normal blend modes.
+        let layer = has_opacity && !can_fold;
+        let child_alpha = if layer {
+            if !has_replacement {
+                tighten_layer_scissor(canvas, group.layer_bounding_box().to_rect(), 2.0);
+            }
+            1.0
+        } else if can_fold {
+            let next_alpha = alpha * opacity;
+            canvas.set_global_alpha(next_alpha);
+            next_alpha
+        } else {
+            alpha
+        };
+        let captured = !layer || canvas.begin_layer(&vg::LayerEffects::new().with_opacity(opacity));
         let result = if captured {
-            self.filtered_contents(canvas, group, scene, motion)
+            self.filtered_contents(canvas, group, scene, motion, child_alpha)
         } else {
             Err("Native SVG opacity layer allocation failed.".into())
         };
@@ -345,11 +526,17 @@ impl Cached {
         group: &usvg::Group,
         scene: &Scene,
         motion: &Changes,
+        alpha: f32,
     ) -> Result<(), String> {
         if let Some(replacement) = motion.replacements.get(group.id()) {
-            self.replacement(canvas, replacement)
+            self.replacement(
+                canvas,
+                group as *const usvg::Group as usize,
+                replacement,
+                alpha,
+            )
         } else {
-            self.children(canvas, group, scene, motion)
+            self.children(canvas, group, scene, motion, alpha)
         }
     }
 
@@ -359,6 +546,7 @@ impl Cached {
         group: &usvg::Group,
         scene: &Scene,
         motion: &Changes,
+        alpha: f32,
     ) -> Result<(), String> {
         if let Some(shadow) = shadow(group)? {
             let bounds = group.filters()[0].rect();
@@ -392,9 +580,12 @@ impl Cached {
             };
             canvas.save();
             canvas.translate(shadow.dx(), shadow.dy());
+            if !motion.replacements.contains_key(group.id()) {
+                tighten_layer_scissor(canvas, group.layer_bounding_box().to_rect(), 2.0);
+            }
             let captured = canvas.begin_layer(&vg::LayerEffects::new().with_filters(&[matrix]));
             let result = if captured {
-                self.contents(canvas, group, scene, motion)
+                self.contents(canvas, group, scene, motion, 1.0)
             } else {
                 Err("Native SVG shadow layer allocation failed.".into())
             };
@@ -402,13 +593,15 @@ impl Cached {
             canvas.restore();
             result?;
         }
-        self.contents(canvas, group, scene, motion)
+        self.contents(canvas, group, scene, motion, alpha)
     }
 
     fn replacement(
         &mut self,
         canvas: &mut Canvas<OpenGl>,
+        slot_key: usize,
         replacement: &Replacement,
+        alpha: f32,
     ) -> Result<(), String> {
         self.replacements.retain(|_, cached| {
             if cached.alive() {
@@ -420,7 +613,7 @@ impl Cached {
         });
         let cached = self
             .replacements
-            .entry(replacement.scene.id)
+            .entry((slot_key, replacement.scene.id))
             .or_insert_with(|| Cached::new(&replacement.scene));
         canvas.translate(replacement.offset[0], replacement.offset[1]);
         cached.group(
@@ -428,6 +621,7 @@ impl Cached {
             replacement.scene.tree.root(),
             &replacement.scene,
             &Changes::default(),
+            alpha,
         )
     }
 
@@ -437,10 +631,11 @@ impl Cached {
         group: &usvg::Group,
         scene: &Scene,
         motion: &Changes,
+        alpha: f32,
     ) -> Result<(), String> {
         for node in group.children() {
             match node {
-                usvg::Node::Group(group) => self.group(canvas, group, scene, motion)?,
+                usvg::Node::Group(group) => self.group(canvas, group, scene, motion, alpha)?,
                 usvg::Node::Path(path) => self.path(canvas, path),
                 usvg::Node::Image(image) => {
                     canvas.save();
@@ -466,50 +661,11 @@ impl Cached {
         if !path.is_visible() {
             return;
         }
-        let native = self
+        let cached = self
             .paths
             .entry(path as *const usvg::Path as usize)
-            .or_insert_with(|| path_data(path.data()));
-        let fill = path.fill().map(|fill| {
-            brush(fill.paint(), fill.opacity().get()).with_fill_rule(rule(fill.rule()))
-        });
-        let stroke = path.stroke().map(|stroke| {
-            brush(stroke.paint(), stroke.opacity().get())
-                .with_line_width(stroke.width().get())
-                .with_miter_limit(stroke.miterlimit().get())
-                .with_line_cap(match stroke.linecap() {
-                    usvg::LineCap::Butt => vg::LineCap::Butt,
-                    usvg::LineCap::Round => vg::LineCap::Round,
-                    usvg::LineCap::Square => vg::LineCap::Square,
-                })
-                .with_line_join(match stroke.linejoin() {
-                    usvg::LineJoin::Round => vg::LineJoin::Round,
-                    usvg::LineJoin::Bevel => vg::LineJoin::Bevel,
-                    _ => vg::LineJoin::Miter,
-                })
-                .with_line_dash(stroke.dasharray().unwrap_or_default())
-                .with_line_dash_offset(stroke.dashoffset())
-        });
-        let fill_path = |canvas: &mut Canvas<OpenGl>| {
-            if let Some(fill) = &fill {
-                canvas.fill_path(native, fill);
-            }
-        };
-        let stroke_path = |canvas: &mut Canvas<OpenGl>| {
-            if let Some(stroke) = &stroke {
-                canvas.stroke_path(native, stroke);
-            }
-        };
-        match path.paint_order() {
-            usvg::PaintOrder::FillAndStroke => {
-                fill_path(canvas);
-                stroke_path(canvas);
-            }
-            usvg::PaintOrder::StrokeAndFill => {
-                stroke_path(canvas);
-                fill_path(canvas);
-            }
-        }
+            .or_insert_with(|| CachedPath::from_usvg(path));
+        cached.paint(canvas);
     }
 
     fn clip(&mut self, canvas: &mut Canvas<OpenGl>, clip: &usvg::ClipPath, scene: &Scene) {
@@ -528,8 +684,12 @@ impl Cached {
         });
         let before = canvas.transform();
         apply_transform(canvas, clip.transform());
-        let refs: Vec<_> = paths.iter().map(|(path, fill)| (path, *fill)).collect();
-        canvas.clip_paths(&refs);
+        if let [(only_path, only_fill)] = paths.as_slice() {
+            canvas.clip_paths(&[(only_path, *only_fill)]);
+        } else {
+            let refs: Vec<_> = paths.iter().map(|(path, fill)| (path, *fill)).collect();
+            canvas.clip_paths(&refs);
+        }
         canvas.reset_transform();
         canvas.set_transform(&before);
     }
@@ -745,5 +905,32 @@ mod tests {
             scene.tree.node_by_id("live").is_some(),
             "group opacity retains its own compositing boundary"
         );
+    }
+
+    #[test]
+    fn foldable_opacity_eliminates_non_overlapping_layers_while_preserving_overlapping_groups() {
+        let overlap = usvg::Tree::from_str(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><g id="ov" opacity="0.4"><path d="M0 0h8v8h-8Z"/><path d="M2 2h8v8h-8Z"/></g></svg>"#,
+            &usvg::Options::default(),
+        )
+        .unwrap();
+        let overlap_scene = Scene::new(overlap, HashMap::new()).unwrap();
+        assert!(overlap_scene.foldable_opacity.is_empty());
+
+        let single = usvg::Tree::from_str(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><g id="s" opacity="0.4"><path d="M0 0h8v8h-8Z"/></g></svg>"#,
+            &usvg::Options::default(),
+        )
+        .unwrap();
+        let single_scene = Scene::new(single, HashMap::new()).unwrap();
+        assert_eq!(single_scene.foldable_opacity.len(), 1);
+
+        let disjoint = usvg::Tree::from_str(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><g id="d" opacity="0.4"><path d="M0 0h8v8h-8Z"/><path d="M12 0h8v8h-8Z"/></g></svg>"#,
+            &usvg::Options::default(),
+        )
+        .unwrap();
+        let disjoint_scene = Scene::new(disjoint, HashMap::new()).unwrap();
+        assert_eq!(disjoint_scene.foldable_opacity.len(), 1);
     }
 }
