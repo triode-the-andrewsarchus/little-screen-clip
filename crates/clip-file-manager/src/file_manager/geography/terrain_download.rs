@@ -67,7 +67,8 @@ impl Regional {
                     plan.already_installed
                 ));
             } else {
-                ui.label(format!("{} archives: {} download; {} HGT data; up to {} additional space during installation.",count,bytes(plan.download_bytes),bytes(plan.installed_bytes),bytes(plan.peak_bytes)));
+                ui.label(format!("{} archives: {} download; {} uncompressed terrain; up to {} additional space during installation.",count,bytes(plan.download_bytes),bytes(plan.installed_bytes),bytes(plan.peak_bytes)));
+                ui.label("Terrain is stored compressed; disk estimates use its uncompressed upper bound.");
                 ui.label("Archives include surrounding terrain beyond the current view. Sizes come from server ZIP metadata; estimates are cached.");
                 ui.label(format!(
                     "Archives: {}",
