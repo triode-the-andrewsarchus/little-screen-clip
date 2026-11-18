@@ -1,4 +1,5 @@
 //! Background downloader and extractor for offline 3D globe / 2D map basemap assets.
+pub(crate) mod nasadem;
 pub(super) mod viewfinder;
 
 use little_clip_core::{
@@ -439,10 +440,7 @@ impl AssetDownloader {
         let override_dir = self.terrain_override_dir.clone();
         let job = Task::start_unbounded(asset_workers(), move |cancelled| {
             let root = AssetDirectory::create(&assets_dir).map_err(|e| e.to_string())?;
-            let owner = fs::File::open(root.path()).map_err(|e| e.to_string())?;
-            owner
-                .try_lock()
-                .map_err(|_| "Another geography download owns this asset directory".to_string())?;
+            let _owner = download_owner(&root)?;
             let session = DownloadSession {
                 root: &root,
                 config: &config,
@@ -491,6 +489,68 @@ impl AssetDownloader {
     }
 }
 
+// GUI packs and bulk CLI runs share one exclusive writer for the entire asset
+// tree. The caller retains this guard until all accepted workers have drained.
+fn download_owner(root: &AssetDirectory) -> Result<fs::File, String> {
+    let owner = fs::File::open(root.path()).map_err(|e| e.to_string())?;
+    owner
+        .try_lock()
+        .map_err(|_| "Another geography download owns this asset directory".to_string())?;
+    Ok(owner)
+}
+
+fn cached_json<T: serde::de::DeserializeOwned>(
+    directory: &AssetDirectory,
+    name: &str,
+    limit: usize,
+) -> Option<T> {
+    let file = directory.open_file(std::ffi::OsStr::new(name)).ok()?;
+    if file.metadata().ok()?.len() > limit as u64 {
+        return None;
+    }
+    serde_json::from_reader(file.take(limit as u64)).ok()
+}
+
+fn read_url(
+    url: &str,
+    args: &[String],
+    limit: usize,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let output = CommandRequest::new("curl")
+        .args([
+            "--disable",
+            "--location",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--proto",
+            "=https",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            "45",
+        ])
+        .args(args)
+        .args(["--", url])
+        .max_output_bytes(limit)
+        .timeout(Duration::from_secs(50))
+        .own_process_group()
+        .die_with_parent()
+        .run_cancellable(cancel)
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "Map metadata: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if output.stdout.len() >= limit {
+        return Err("Map metadata exceeds its limit".into());
+    }
+    Ok(output.stdout)
+}
+
 fn download_to_file(
     dir: &Path,
     filename: &str,
@@ -499,12 +559,36 @@ fn download_to_file(
     cancelled: &AtomicBool,
     on_progress: impl Fn(f32, &str),
 ) -> Result<Downloaded, String> {
+    download_with_request(
+        &dir.join(filename),
+        url,
+        max_bytes,
+        cancelled,
+        on_progress,
+        CommandRequest::new("curl"),
+    )
+}
+
+fn download_with_request(
+    destination: &Path,
+    url: &str,
+    max_bytes: u64,
+    cancelled: &AtomicBool,
+    on_progress: impl Fn(f32, &str),
+    request: CommandRequest,
+) -> Result<Downloaded, String> {
+    let dir = destination.parent().ok_or("Missing asset directory")?;
+    let filename = destination
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid asset filename")?;
+
     if cancelled.load(Ordering::Relaxed) {
         return Err("Download cancelled".into());
     }
     let directory = AssetDirectory::create(dir).map_err(|e| e.to_string())?;
     let staged = directory.stage().map_err(|e| e.to_string())?;
-    let (request, fd) = CommandRequest::new("curl")
+    let (request, fd) = request
         .args([
             "--disable",
             "--location",

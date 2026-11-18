@@ -35,6 +35,7 @@ pub fn run() -> bool {
         return true;
     }
     let expected = match flag {
+        "--download-nasadem" => args.len(),
         "--internal-file-search-reader" | "--internal-file-extraction-plan" => 1,
         "--internal-system-console-snapshot" | "--internal-system-processes" => 2,
         "--internal-system-inspector" => 3,
@@ -46,7 +47,12 @@ pub fn run() -> bool {
         Err("Invalid internal worker arguments".into())
     };
     if let Err(error) = result {
-        eprintln!("Internal worker: {error}");
+        let context = if flag == "--download-nasadem" {
+            "NASADEM"
+        } else {
+            "Internal worker"
+        };
+        eprintln!("{context}: {error}");
         std::process::exit(2);
     }
     true
@@ -55,6 +61,7 @@ pub fn run() -> bool {
 fn dispatch(flag: &str, args: &[std::ffi::OsString]) -> Result<(), String> {
     use std::path::Path;
     match flag {
+        "--download-nasadem" => crate::file_manager::geography_downloader::nasadem::cli(args),
         "--internal-file-search-reader" => crate::file_manager::search::run_reader(),
         "--internal-file-extraction-plan" => crate::file_manager::search::run_extraction(),
         "--internal-system-console-snapshot" => args[0]

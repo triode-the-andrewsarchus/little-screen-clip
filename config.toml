@@ -201,8 +201,14 @@ prompt_on_open = true
 # Copernicus NetCDF import requires GDAL 3.7+ (gdalwarp) with NetCDF support.
 # land_cover_url = "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content"
 
-# Optional NASADEM downloads (about 377 GB of elevation grids) use Earthdata Login.
+# Optional NASADEM downloads use Earthdata Login (about 109 GB transferred,
+# 377 GB of elevation grids). Raise geography.max_assets_bytes above the selected
+# data size plus existing assets, e.g. 500000000000 for the complete dataset.
 # Run scripts/download_nasadem.sh --plan to inspect the catalog and required space.
+# Run scripts/download_nasadem.sh to download, or --config FILE for another config.
+# Four transfers run at once. Ctrl+C stops safely; rerunning skips complete tiles.
+# ZIPs and auxiliary NASA files are discarded; HGTs stay in assets_dir/nasadem/terrain.
+# Optional NASADEM is excluded from Get all in the Offline Assets dialog.
 # Store real values locally; do not commit credentials.
 # [geography.earthdata]
 # username = "your-earthdata-username"

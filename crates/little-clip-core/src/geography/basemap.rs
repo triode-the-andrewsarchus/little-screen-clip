@@ -1707,6 +1707,7 @@ impl BasemapAssets {
             load_hgt_dir(dir, &mut terrain_tiles);
         }
         load_hgt_dir(&assets_dir.join("terrain"), &mut terrain_tiles);
+        load_hgt_dir(&assets_dir.join("nasadem/terrain"), &mut terrain_tiles);
 
         if stopped() {
             return Self::default();
@@ -2682,7 +2683,8 @@ fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
     }
 }
 
-fn parse_hgt_name(stem: &str) -> Option<(i32, i32)> {
+/// Returns the southwest degree origin of a standard HGT tile filename stem.
+pub fn parse_hgt_name(stem: &str) -> Option<(i32, i32)> {
     let b = stem.as_bytes();
     if b.len() != 7 || !b.is_ascii() || !b[1..3].iter().chain(&b[4..7]).all(u8::is_ascii_digit) {
         return None;
@@ -3060,6 +3062,32 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn nasadem_fills_local_coverage_without_replacing_explicit_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("terrain")).unwrap();
+        fs::create_dir_all(root.path().join("nasadem/terrain")).unwrap();
+        fs::write(
+            root.path().join("terrain/N00E000.hgt"),
+            700_i16.to_be_bytes().repeat(4),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("nasadem/terrain/n00e000.hgt"),
+            300_i16.to_be_bytes().repeat(4),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("nasadem/terrain/n00e001.hgt"),
+            500_i16.to_be_bytes().repeat(4),
+        )
+        .unwrap();
+        let assets = BasemapAssets::load(root.path(), None);
+        assert_eq!(assets.status().local_hgt_count, 2);
+        assert_eq!(assets.sample_elevation_m(0.5, 0.5), Some(700.0));
+        assert_eq!(assets.sample_elevation_m(0.5, 1.5), Some(500.0));
     }
 
     #[test]

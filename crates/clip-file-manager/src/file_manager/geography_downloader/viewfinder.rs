@@ -32,51 +32,12 @@ pub struct Plan {
     pub budget_remaining: u64,
 }
 
-fn request(
-    url: &str,
-    args: &[String],
-    limit: usize,
-    cancel: &AtomicBool,
-) -> Result<Vec<u8>, String> {
-    let output = CommandRequest::new("curl")
-        .args([
-            "--disable",
-            "--location",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--proto",
-            "=https",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "45",
-        ])
-        .args(args)
-        .args(["--", url])
-        .max_output_bytes(limit)
-        .timeout(Duration::from_secs(50))
-        .own_process_group()
-        .die_with_parent()
-        .run_cancellable(cancel)
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(format!(
-            "Viewfinder metadata: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    if output.stdout.len() >= limit {
-        return Err("Viewfinder metadata exceeds its limit".into());
-    }
-    Ok(output.stdout)
-}
 fn range(url: &str, start: u64, total: u64, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
     let count = total
         .checked_sub(start)
         .filter(|n| *n <= META_LIMIT as u64)
         .ok_or("Viewfinder ZIP directory exceeds the metadata limit")?;
-    let bytes = request(
+    let bytes = read_url(
         url,
         &[
             "--range".into(),
@@ -122,18 +83,12 @@ fn valid_archive(a: &Archive) -> bool {
             .all(|t| tile_name(&t.name) && t.bytes == HGT_BYTES)
 }
 fn cached_archive(directory: &AssetDirectory, name: &str) -> Option<Archive> {
-    let f = directory
-        .open_file(std::ffi::OsStr::new(&format!("{name}.json")))
-        .ok()?;
-    if f.metadata().ok()?.len() > META_LIMIT as u64 {
-        return None;
-    }
-    let a: Archive = serde_json::from_reader(f.take(META_LIMIT as u64)).ok()?;
+    let a: Archive = cached_json(directory, &format!("{name}.json"), META_LIMIT)?;
     (a.name == name && valid_archive(&a)).then_some(a)
 }
 fn metadata(name: &str, cancel: &AtomicBool) -> Result<Archive, String> {
     let url = format!("{HOST}{name}");
-    let headers = request(&url, &["--head".into()], 65_536, cancel)?;
+    let headers = read_url(&url, &["--head".into()], 65_536, cancel)?;
     let total = String::from_utf8_lossy(&headers)
         .lines()
         .rev()
@@ -302,7 +257,7 @@ pub fn plan(config: &AppConfig, bounds: [f64; 4], cancel: &AtomicBool) -> Result
             bytes
         }
         _ => {
-            let bytes = request(CATALOG, &[], META_LIMIT, cancel)?;
+            let bytes = read_url(CATALOG, &[], META_LIMIT, cancel)?;
             cache
                 .write(std::ffi::OsStr::new("catalog.html"), &bytes)
                 .map_err(|e| e.to_string())?;
