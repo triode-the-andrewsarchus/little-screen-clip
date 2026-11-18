@@ -242,6 +242,13 @@ def exercise_fallback_identity(session, root, restart_fixture):
     pair = status(env)['pairs'][0]
     assert pair['drive'] == 'fs:fixture'
     dismiss_completion_notice(session, 'fallback-sync-completion', 'Enroll folder sync')
+    operation = next(item for item in status(env)['operations'] if item['title'] == 'Enroll folder sync')
+    expected_bytes = sum(path.stat().st_size for path in [portable / 'readme.txt', portable / 'many/hidden.txt', local / 'local-only.txt'])
+    assert operation['sync_completion'] == {'installed': 4, 'removed': 0, 'bytes': expected_bytes}
+    session.observe('fallback-receipts-ready', ['Jobs'])
+    click_word(session, 'fallback-receipts-ready', 'Jobs', tree=True)
+    session.observe('fallback-receipts', ['Confirmed common writes', '4 installed', '0 removed', f'{expected_bytes} bytes', 'excludes scans and conflict variants'])
+    session.key('Escape')
     saved = backup_review(session, backups)
     bucket = backups / 'fs-fixture'
     assert Path(saved['path']).parent == bucket
@@ -266,8 +273,12 @@ def exercise_fallback_identity(session, root, restart_fixture):
     versions = status(env)['backups']
     assert len(versions) == 2
     assert all(Path(version['path']).parent == bucket and version['drive'] == pair['drive'] for version in versions)
+    replacement = next(version for version in versions if version['id'] != saved['id'])
+    current = json.loads((bucket / 'current-files.json').read_text())
+    assert current['id'] == replacement['id'] and current['path'] == replacement['path']
     assert (Path(saved['path']) / 'readme.txt').read_text() == 'original portable contents\n'
-    session.observe('fallback-after-restart', ['current-files.json', 'Portable test drive'])
+    # Inline manifest previews can push the reference file below the viewport.
+    session.observe('fallback-after-restart', ['Portable test drive'])
     assert_address(session, 'fallback-after-restart', bucket)
 
 

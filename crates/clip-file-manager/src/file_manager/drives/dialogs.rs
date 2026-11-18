@@ -353,9 +353,15 @@ fn operation_details(ui: &mut Ui, operation: &DriveOperation, requests: &mut Vec
             ui.small(format!("Finished {}", recorded_time(finished)));
         }
         ui.small(format!(
-            "{} files · {} bytes",
+            "Progress: {} entries · {} bytes",
             operation.files, operation.bytes
         ));
+        if let Some(completed) = &operation.sync_completion {
+            ui.small(format!(
+                "Confirmed common writes: {} installed · {} removed · {} bytes (excludes scans and conflict variants)",
+                completed.installed, completed.removed, completed.bytes
+            ));
+        }
         ui.label(&operation.message);
         if let Some(partition) = &operation.partition {
             ui.small(format!(

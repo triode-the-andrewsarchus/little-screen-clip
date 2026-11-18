@@ -921,6 +921,24 @@ without service databases or Git metadata. Catalog databases contain metadata, n
 file payloads. Btrfs snapshots/reflinks apply only at a compatible backup destination;
 the removable filesystem does not need Btrfs support.
 
+Explicit synchronization jobs retain a separate `sync_completion` summary in
+their operation record. Jobs shows **Confirmed common writes** separately from
+inventory/copy progress. Ordinary installs and confirmed removals have per-path
+SQLite receipts committed in the same transaction as their common baseline.
+Receipts retain raw path bytes, the pair, destination side, resulting fingerprint
+and installed byte count. They stay in the local drive registry; removable media
+receives no operational metadata. **Measure local metadata** reports their logical
+storage separately from optional catalog files.
+
+These are confirmed lower bounds: scans, already equal files and conflict
+variants without a common baseline are excluded. A file installed just before a
+journal failure can remain on disk without a confirmed receipt. After interruption,
+the original job retains its confirmed totals; a new synchronization compares
+both sides again before writing. It can recognize that unconfirmed file as already
+equal without replacing it or attributing its earlier installation to the new job.
+Older operation records retain unknown confirmed totals rather than treating their
+old progress counters as completed writes.
+
 Mounted catalog and partition-image boundaries remain protected independently of
 the paginated status/history display. An indexed metadata lookup combines saved
 mount headers (including legacy headers) with current mount registrations, using

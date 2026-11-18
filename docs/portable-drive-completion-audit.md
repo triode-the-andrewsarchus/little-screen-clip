@@ -9,7 +9,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.1 | Complete | Numeric parent/partition capacities, stable filesystem/PARTUUID evidence, read-only state and mount routing are covered by discovery tests and native authority fixtures. The new actual GPT reconnect fixture preserves enrollment across changed /dev/loopN partition paths, disk sequences and mount directories on FAT32/exFAT/NTFS; parent capacity matches the whole backing image while partition capacity matches the selected partition. See the native reconnect checkpoint. |
 | 1.2 | Complete | Actual duplicate GPT partition IDs suspend automatic writes, retain queued local edits and resume after the clone is detached on FAT32/exFAT/NTFS; explicit sync refuses and the clone image hash stays unchanged. Missing PARTUUID now has explicit filesystem-UUID disclosure and enrollment in Pair/backup review, stable local records and fs-UUID buckets across restart. Native whole-volume sources and dark/light IPC-driven UI checks pass. Neither-UUID enrollment refuses without creating its target. See the filesystem fallback checkpoint. |
 | 1.3 | Complete | Reloadable DriveConfig and guarded setting-preserving preference writes pass lazy selection, restart, raw-path, comment, symlink, permission and concurrent/replaced-file tests. Public invalid-field reloads preserve runtime/durable settings before destination creation. Native FAT32/exFAT/NTFS live-session tests cover all five reservation reductions, exact retained limits, future memory/capacity/directory admissions, continued writeback, catalog limits, backup destination/retention and restart from a saved configuration. Daemon IPC now names the asynchronous settings operation and reports admission refusal. See the live configuration checkpoint. |
-| 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
+| 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Ordinary sync installs/removals now have per-path receipts and separate confirmed counters, atomically committed with common baselines; cancellation, journal faults, killed-worker startup and native retry checks pass. Conflict-variant/export/backup item receipts and persistent operation coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference destination/file saves and reviewed-backup continuations now retain worker completion, claims and saved-effect receipts; real stopped-config-filesystem cancellation/shutdown and superseded-reload fixtures pass. File-backup/catalog root preparation now shares scheduling workers, retains prepared roots and rejects stale settings/root inputs before copying; host discovery-thread and five real stopped-FUSE scenarios pass. Eject/image/read-only root and sync-plan preparation now retain one existing partition-worker slot, preserve original scheduled drive facts and compare current settings/enrollment/RAM metadata before flushing; six held and nine stopped-FUSE scenarios pass. Automatic/pre-unmount iteration now includes legacy pairs beyond status pagination. Initial discovery and RAM allocation/view startup recovery now reuse retained workers, with held inventory/enrollment/fsck, orphaned-enrollment, uncertain optional-policy and actual-exit shutdown checks. Catalog startup cleanup and mount/unmount now use a retained control worker, preserving actual helper ownership, atomic publication/retirement and failed boundaries; held commands, real stopped-FUSE, orphan startup and beyond-page recovery pass. Image mount/unmount now shares the retained backup pool, with local effect journals that pause optional indexing before an unknown UDisks mount location is admitted. Held-authority, cancellation, receipt-fault and provable restart cases pass; measurement admission, retention and the broader root/loop-lifetime responsiveness matrices remain. Safety validation of configured ordinary roots can still wait on those filesystems; independent-sync checks here use one-shot reviewed destinations. Large-export responsiveness and remaining mount-control scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
@@ -46,7 +46,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 6.6 | Complete | Indexed 512-entry pages preserve raw names, stable inodes and resumable offsets without directory-wide sorts. Real FUSE verifies correct nested dot/parent inodes, the maximum signed cookie, invalid-row EOVERFLOW without server poisoning, partial-listing EIO, completed-parent ENOENT, typed metadata, signed dates, invalid-date EOVERFLOW and multi-megabyte descriptor-backed reads. Original special-file types/link bytes/device numbers remain inspectable through bounded metadata while inert entries skip content jobs. Twenty-two valid mutation calls return EROFS; descriptor access-mode errors retain Linux EINVAL/EBADF. See the inode, type and timestamp checkpoints. Provider revision policy and the broader provider-lifetime matrix remain separately tracked in 6.7/6.8. |
 | 6.7 | Partial | Provider metadata/digests validate the same retained descriptor; same-size/mtime changed bytes are rejected when a digest exists, and a stale newer backup falls back to an older match. File backups require their captured directory identity; metadata-only entries additionally require a verified matching-source manifest and retained-file checksum. Capture now reuses verified current/historical file-backup and enrolled portable sync hashes without source payload reads. Sync reuse binds full revision, subtree, source birth identity, boot/namespace/unique mount lifetime and row generation; legacy/mismatched rows require fresh hashing. Named portable observations refresh proven rows; incoming copies await observation. Native FAT32/exFAT/NTFS decline unsupported promotion and full-scan reuse. Historical candidate enrichment now uses independent transactions, bounded decoding, indexed registration order, a shared checksum allowance and early completion; explicit current pointers keep priority. Uncertain revisions and cross-driver precision handling remain. |
 | 6.8 | Partial | A real separate-process FUSE fixture proves an existing handle returns ESTALE after its provider changes while a new open selects a newer valid backup. Replaced file-backup directories and catalog self-mounts are rejected. Lookup-time mount boundaries also reject a catalog file bind-mounted into a backup without recursively opening its server. Mounted images now require an atomically published local mount observation bound to boot/namespace, original image/loop, root identity and a non-reused kernel mount ID; same-root bind replacement, missing/changed provenance, held-file staleness and restoration pass on FAT32/exFAT/NTFS images. Root aliases and the broader concurrent-provider/interrupted-cleanup matrix remain. |
-| 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Completed-item cancellation and the other migration cases remain. |
+| 7.1 | Partial | Core guarded/source and drive tests pass; Old unbound operation records are protected, and atomic idempotent admission/restart/lost-owner fixtures pass. Ordinary-sync completed-item cancellation, receipt/baseline rollback, killed-worker startup and retry now pass on FAT32/exFAT/NTFS. Additive receipt-schema migration preserves supported versions 1–3 and legacy progress without inventing completion. Other mutation types, interrupted-intent reconciliation and migration cases remain. |
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. The filesystem matrix uses whole-volume loop files with filesystem-UUID fallback; partitioned-device image/flush lifecycles also pass on FAT32/exFAT/NTFS. Wider read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE, Btrfs, authorized partition-image/loop-provider and temporary read-only file-collection tests pass. Provider concurrency, interrupted-device and capability-failure matrices remain. |
@@ -5318,3 +5318,112 @@ members do not establish new cycles. No new hotspot is introduced. Local report:
 REGRESSION for that test setup clone). This closes configuration item 1.3; the
 remaining resource-pressure, interrupted-operation, provider, UI and final
 whole-branch gates keep their existing scope.
+
+## Confirmed synchronization receipts checkpoint
+
+Operation `files`/`bytes` previously mixed scan and copying progress. Explicit
+reconciliation now retains a separate optional `sync_completion` summary and
+per-path `sync_receipts` rows. Confirmed installs/removals, their destination side,
+raw relative path, resulting fingerprint and installed bytes commit with the
+common baseline in one existing SQLite FULL-synchronous transaction. Multiple
+directory removals share that transaction. No file I/O happens while it is held.
+Inventory progress cannot overwrite the summary, and a later initialized
+catch-up pass adds to the same summary rather than resetting it. This adds no new
+mutation mechanism, worker pool or dependency.
+
+Receipts are confirmed lower bounds. A file installed before a failed baseline
+or receipt transaction is retained but remains unconfirmed. Restart retains the
+old operation and fresh reconciliation compares both sides before retrying;
+an equal unconfirmed file need not be replaced or attributed to the new job.
+Missing or finished operation owners refuse entry before the reconciliation
+starts mutating. Conflict variants without a common baseline, RAM exports and
+backup-item journals remain separate unfinished work. No receipt is promoted
+into provider-revision evidence or source payload metadata.
+
+The existing baseline interleaving fixture now tests six failures in each copy
+direction with both absent and replaced destinations: cancellation, source
+loss, source edit, destination edit, baseline transaction failure and receipt
+transaction failure. The last two occur after file B is actually installed.
+Only file A's baseline/receipt/summary are durable, B's old baseline is preserved,
+and reopening/reconciling preserves already installed descriptors. Separate
+checks cover file/directory deletion receipts and lossless non-UTF-8 path bytes.
+Four owned child workers are killed after the first confirmed installation;
+actual service startup marks their operations interrupted with the same summary
+and receipts, and retry preserves the installed file. These are storage-worker
+crash checks, not claims of physical-device power-loss testing.
+
+A public Pair/Sync fixture injects a receipt failure after B is installed, checks
+the failed paused enrollment and confirmed A, restarts the service, then verifies
+that a new job confirms only C. The original failed job keeps its total, B is
+recognized as equal and the held A descriptor keeps its FileSource revision.
+RAM population tests now create an admitted-operation fixture and verify totals
+across one-pass negative control, initialized catch-up, failure and resume.
+The explicit metadata-size report accounts for receipt payloads separately from
+optional catalogs, including raw path lengths, null deletion fields and decimal
+counter lengths, without mutating the source or registry.
+
+Native evidence is `/tmp/portable-drive-sync-receipts-native-v2/report.json`:
+success=true, timed_out=false, QEMU exit 0 and all FAT32/exFAT/NTFS results 0.
+Each filesystem runs five baseline/receipt tests, one public-job test and two
+real RAM-population tests: 24 top-level passes, 72 fault cases and 12 killed
+workers in total. The child-only probe is ignored in the ordinary test listing
+and invoked explicitly by its owning parent. Test names were verified in the
+selected Cargo binary before boot, and nonzero execution counts were checked
+afterward. No host privileged mount, raw device or attached media is used.
+
+Backend final ordinary checks pass 275 tests, with 120 environment-dependent
+tests explicitly ignored:
+`/tmp/portable-drive-sync-receipts-backend-final-v3.log`. Daemon main tests
+pass all 37: `/tmp/portable-drive-sync-receipts-daemon-check-final.log`.
+Core drive tests pass 16 (one environment-dependent ignore) and Files drive
+tests pass 15: `/tmp/portable-drive-sync-receipts-host-v1.log`. This includes the
+legacy-operation serialization check: old progress stays separate from unknown
+completion and new summaries round-trip. Runtime and fixture builds pass in
+`/tmp/portable-drive-sync-receipts-{runtime,fixture}-build-final.log`.
+Additive receipt-schema migration is tested against registry versions 1–3,
+preserving their raw baselines and legacy operation JSON without inventing
+confirmed totals. Strict core rustdoc generation passes and renders the new
+`SyncCompletion` type: `/tmp/portable-drive-sync-receipts-core-doc-final.log`.
+Final daemon and fixture builds pass in
+`/tmp/portable-drive-sync-receipts-{daemon,fixture}-runtime-final.log`.
+Named-event options retain the original forced-fresh directory fallback; the
+poisoned-cache tests now deliberately request reuse and still prove fresh scans.
+Changed Rust files pass rustfmt and the diff passes whitespace checks. The
+acceptance script passes Python compilation.
+Affected all-target Clippy, including the fixture feature and warnings denied,
+passes in `/tmp/portable-drive-sync-receipts-clippy-final-v3.log`. Its first run rejected
+one complex test tuple type; the test now directly verifies SQL null deletion
+fields instead of nesting two unnecessary Options.
+
+Private Files acceptance passes 33 observations in each appearance:
+`/tmp/portable-drive-sync-receipts-ui-dark-v1/report.json` and
+`/tmp/portable-drive-sync-receipts-ui-light-v2/report.json`. Actual Jobs captures
+show **Confirmed common writes: 4 installed · 0 removed · 112 bytes**, with its
+exclusion explanation wrapped inside the dialog and scan progress separately
+labelled. IPC checks match those counts. The scenarios continue through lazy
+backup cancellation/publication, exact filesystem-UUID bucket browsing, drive
+removal/return, service restart and a second backup. Both retained current
+references include the reconnected edit; supplementary proof is
+`/tmp/portable-drive-sync-receipts-ui-proof.json`.
+The first light run passed the receipt view but failed its final visibility
+oracle because an inline SQLite preview pushed `current-files.json` below the
+viewport. The corrected oracle checks the exact displayed address and current
+reference's new version/path on disk; it does not require an off-screen row.
+Both theme screenshots were visually inspected. The backend is committed as
+`e8a0d5fe`; the display/acceptance changes are a separate reviewable commit.
+
+The local architecture comparison against `pre-drive-sync-receipts` adds
+623 NLOC, thirteen functions and 70 aggregate CCN. Average/max CCN remain
+3.50/274; duplication changes 6.92%→6.91%, clone groups remain 4,322 and cycles 144. Existing
+`changed` and `synchronize_with` each gain one fallible operation-owner check
+(CCN 22→23 and 31→32). That required ownership validation is retained; directory
+completion instead batches effects with its baseline rather than adding
+separate per-root transaction branches. No new production hotspot, clone group
+or dependency cycle appears. Reported clones are unchanged regions in touched
+files and reordered cycle members are not new dependencies. The tool's aggregate
+classification remains REGRESSION for those two required checks. Report:
+`.fitness/portable-drives-sync-receipts-local.json`.
+
+Items 1.4, 1.5 and 7.1 remain Partial. Unconfirmed intents, conflict/export/backup
+item completion, persistent operation coverage and the other original gates
+remain open; confirmed ordinary-sync effects do not close those broader scopes.
