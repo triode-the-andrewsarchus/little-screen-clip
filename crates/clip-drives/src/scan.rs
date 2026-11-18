@@ -193,7 +193,7 @@ impl Frame {
             coverage: CatalogDirectoryCoverage::default(),
         })
     }
-    fn validate(&self, root: &Root) -> Result<()> {
+    pub(crate) fn validate(&self, root: &Root) -> Result<()> {
         let current = root.directory(&self.relative, false)?.metadata()?;
         let held = self._pin.metadata()?;
         if current.dev() != held.dev() || current.ino() != held.ino() {

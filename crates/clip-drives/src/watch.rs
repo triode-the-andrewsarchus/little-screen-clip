@@ -24,108 +24,134 @@ pub(crate) struct Changes {
     #[cfg(test)]
     kernel_overflow: bool,
 }
-struct Location {
-    root: Arc<Root>,
-    relative: PathBuf,
-}
+mod registration;
+use registration::{Location, Pending};
+
 pub(crate) struct Watch {
-    file: File,
+    file: Arc<File>,
     paths: HashMap<PathBuf, i32>,
-    locations: HashMap<i32, Location>,
+    locations: HashMap<i32, Vec<Location>>,
+    entries: HashMap<PathBuf, Location>,
     lost: bool,
     registration_incomplete: bool,
     rebuild_required: bool,
     tracked_bytes: usize,
-    pending: VecDeque<(Arc<Root>, PathBuf)>,
-    walking: Option<(Arc<Root>, crate::scan::Frame)>,
+    pending: VecDeque<Location>,
+    working: Vec<Pending>,
+    jobs: little_clip_core::jobs::BackgroundJobs,
+    serial: u64,
+    epoch: u64,
 }
 impl Watch {
     pub fn new() -> Result<Self> {
-        // SAFETY: inotify_init1 returns a fresh owned nonblocking descriptor.
-        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
         Ok(Self {
-            // SAFETY: this fresh descriptor is transferred exactly once.
-            file: unsafe { File::from_raw_fd(fd) },
+            file: Self::descriptor()?,
             paths: HashMap::new(),
+            entries: HashMap::new(),
             locations: HashMap::new(),
             lost: false,
             registration_incomplete: false,
             rebuild_required: false,
             tracked_bytes: 0,
             pending: VecDeque::new(),
-            walking: None,
+            working: Vec::new(),
+            jobs: little_clip_core::jobs::BackgroundJobs::new_named(4, 4, "drive-watch"),
+            serial: 0,
+            epoch: 0,
         })
     }
     pub fn add(&mut self, root: Arc<Root>) {
-        if let Some(wd) = self.paths.get(&root.path).copied() {
-            if self
-                .locations
-                .get(&wd)
-                .is_some_and(|l| l.root.validate().is_ok())
-            {
-                return;
-            }
-            self.forget(wd);
+        if self
+            .entries
+            .get(&root.path)
+            .is_some_and(|entry| entry.root.same_root(&root))
+        {
+            return;
         }
+        self.remove_matching(|prior| {
+            prior.root.path == root.path || prior.path().starts_with(&root.path)
+        });
+        // An ancestor registration can occupy this spelling with a different
+        // root lifetime. An explicitly prepared root supersedes that entry.
+        self.forget_path(&root.path);
         self.add_tree(root, PathBuf::new());
     }
-    /// Releases retained pins across the partition's filesystem and bind aliases.
+    /// Retires registrations; matching worker pins remain owned until actual delivery.
     pub fn remove_scope(&mut self, scope: &crate::root::Scope) {
-        self.remove_matching(|root| scope.overlap(&root.scope()));
+        self.remove_matching(|location| scope.overlap(&location.root.scope()));
     }
-    fn remove_matching(&mut self, matches: impl Fn(&Root) -> bool) {
-        self.pending.retain(|(root, _)| !matches(root));
-        if self.walking.as_ref().is_some_and(|(root, _)| matches(root)) {
-            self.walking = None;
-        }
-        let descriptors = self
-            .locations
+    pub fn busy_scope(&self, scope: &crate::root::Scope) -> bool {
+        self.working
             .iter()
-            .filter_map(|(wd, location)| matches(&location.root).then_some(*wd))
+            .any(|job| scope.overlap(&job.location.root.scope()))
+    }
+    pub fn registration_pending(&self) -> bool {
+        !self.pending.is_empty() || !self.working.is_empty()
+    }
+    fn remove_matching(&mut self, matches: impl Fn(&Location) -> bool) {
+        for job in &self.working {
+            if matches(&job.location) {
+                job.cancel();
+            }
+        }
+        self.pending.retain(|entry| !matches(entry));
+        let paths = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| matches(entry))
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
-        for wd in descriptors {
-            // SAFETY: this watch descriptor belongs to our live inotify instance.
+        for path in paths {
+            self.forget_path(&path);
+        }
+    }
+    fn forget_path(&mut self, path: &std::path::Path) {
+        let Some(entry) = self.entries.remove(path) else {
+            return;
+        };
+        self.tracked_bytes = self
+            .tracked_bytes
+            .saturating_sub(watch_bytes(path, &entry.relative));
+        self.pending
+            .retain(|pending| pending.serial != entry.serial);
+        for job in &self.working {
+            if job.location.serial == entry.serial {
+                job.cancel();
+            }
+        }
+        if let Some(wd) = self.paths.remove(path) {
+            if let Some(locations) = self.locations.get_mut(&wd) {
+                locations.retain(|location| location.serial != entry.serial);
+                if !locations.is_empty() {
+                    return;
+                }
+            }
+            self.locations.remove(&wd);
+            // SAFETY: this descriptor belongs to the current inotify instance.
             unsafe {
                 libc::inotify_rm_watch(self.file.as_raw_fd(), wd);
             }
-            self.forget(wd);
         }
     }
     fn forget(&mut self, wd: i32) {
-        if let Some(location) = self.locations.remove(&wd) {
-            let path = location.root.path.join(&location.relative);
-            self.paths.remove(&path);
-            self.tracked_bytes = self
-                .tracked_bytes
-                .saturating_sub(watch_bytes(&path, &location.relative));
-            self.pending.retain(|(root, relative)| {
-                !(root.same_root(&location.root) && *relative == location.relative)
-            });
-            if self.walking.as_ref().is_some_and(|(root, frame)| {
-                root.same_root(&location.root) && frame.relative == location.relative
-            }) {
-                self.walking = None;
+        if let Some(locations) = self.locations.remove(&wd) {
+            for location in locations {
+                self.paths.remove(&location.path());
+                self.forget_path(&location.path());
+            }
+            // SAFETY: all aliases of this current-instance descriptor retired.
+            unsafe {
+                libc::inotify_rm_watch(self.file.as_raw_fd(), wd);
             }
         }
     }
     fn add_tree(&mut self, root: Arc<Root>, relative: PathBuf) {
         let path = root.path.join(&relative);
-        if let Some(wd) = self.paths.get(&path).copied() {
-            if self
-                .locations
-                .get(&wd)
-                .is_some_and(|l| l.root.validate().is_ok())
-            {
-                return;
-            }
-            self.forget(wd);
+        if self.entries.contains_key(&path) {
+            return;
         }
         let bytes = watch_bytes(&path, &relative);
-        if self.paths.len() >= 8192
-            || self.pending.len() >= 8192
+        if self.entries.len() >= 8192
             || relative.components().count() > 256
             || self.tracked_bytes.saturating_add(bytes) > 16 * 1024 * 1024
         {
@@ -133,86 +159,108 @@ impl Watch {
             self.registration_incomplete = true;
             return;
         }
-        let Ok(pin) = root.directory(&relative, false) else {
-            self.lost = true;
-            self.registration_incomplete = true;
-            return;
+        self.serial = self
+            .serial
+            .checked_add(1)
+            .expect("watch registration identity exhausted");
+        let location = Location {
+            root,
+            relative,
+            serial: self.serial,
         };
-        let Ok(c) = CString::new(anchor(&pin).as_os_str().as_bytes()) else {
-            self.lost = true;
-            self.registration_incomplete = true;
-            return;
-        };
-        let mask = libc::IN_CLOSE_WRITE
-            | libc::IN_ATTRIB
-            | libc::IN_MOVED_TO
-            | libc::IN_MOVED_FROM
-            | libc::IN_CREATE
-            | libc::IN_DELETE
-            | libc::IN_DELETE_SELF
-            | libc::IN_MOVE_SELF
-            | libc::IN_ONLYDIR;
-        // SAFETY: the terminated descriptor path resolves to the retained directory.
-        let wd = unsafe { libc::inotify_add_watch(self.file.as_raw_fd(), c.as_ptr(), mask) };
-        if wd < 0 {
-            self.lost = true;
-            self.registration_incomplete = true;
+        self.entries.insert(path, location.clone());
+        self.tracked_bytes += bytes;
+        self.pending.push_back(location);
+        self.lost = true;
+    }
+    fn current(&self, location: &Location, epoch: u64) -> bool {
+        epoch == self.epoch
+            && self
+                .entries
+                .get(&location.path())
+                .is_some_and(|entry| entry.serial == location.serial)
+    }
+    fn acknowledge(&mut self, location: Location, epoch: u64, wd: i32) {
+        if epoch != self.epoch {
             return;
         }
-        self.tracked_bytes += bytes;
-        self.paths.insert(path, wd);
-        self.locations.insert(
-            wd,
-            Location {
-                root: root.clone(),
-                relative: relative.clone(),
-            },
-        );
-        self.pending.push_back((root, relative));
+        if !self.current(&location, epoch) {
+            // An unclaimed descriptor may alias a concurrent registration. Rebuild
+            // the instance rather than claiming complete coverage for either.
+            self.rebuild_required = true;
+            return;
+        }
+        self.paths.insert(location.path(), wd);
+        self.locations.entry(wd).or_default().push(location);
+    }
+    pub fn poll(&mut self) {
+        let acknowledgements = self
+            .working
+            .iter()
+            .filter_map(|job| {
+                job.acknowledgement()
+                    .map(|wd| (job.location.clone(), job.epoch, wd))
+            })
+            .collect::<Vec<_>>();
+        for (location, epoch, wd) in acknowledgements {
+            self.acknowledge(location, epoch, wd);
+        }
+        let mut index = 0;
+        while index < self.working.len() {
+            let Some(result) = self.working[index].task.poll() else {
+                index += 1;
+                continue;
+            };
+            let job = self.working.swap_remove(index);
+            // The registration acknowledgement precedes task completion, but it
+            // can have arrived after this poll's first nonblocking channel read.
+            if let Some(wd) = job.acknowledgement() {
+                self.acknowledge(job.location.clone(), job.epoch, wd);
+            }
+            if !self.current(&job.location, job.epoch) {
+                continue;
+            }
+            self.lost = true;
+            match result {
+                Ok(Ok(inventory)) => {
+                    self.registration_incomplete |= !inventory.complete;
+                    for relative in inventory.children {
+                        self.add_tree(job.location.root.clone(), relative);
+                    }
+                }
+                _ => self.registration_incomplete = true,
+            }
+        }
     }
     fn advance(&mut self) {
-        let started = std::time::Instant::now();
-        for _ in 0..4096 {
-            if started.elapsed() >= std::time::Duration::from_millis(5) {
+        self.poll();
+        if self.rebuild_required {
+            return;
+        }
+        for _ in 0..self.pending.len() {
+            if self.working.len() >= 4 {
                 break;
             }
-            if self.walking.is_none() {
-                let Some((root, relative)) = self.pending.pop_front() else {
-                    break;
-                };
-                if !self.paths.contains_key(&root.path.join(&relative)) {
-                    self.add_tree(root, relative);
-                    continue;
-                }
-                match crate::scan::Frame::new(&root, relative) {
-                    Ok(frame) => self.walking = Some((root, frame)),
-                    Err(_) => {
-                        self.lost = true;
-                        self.registration_incomplete = true;
-                        continue;
-                    }
-                }
+            let Some(location) = self.pending.pop_front() else {
+                break;
+            };
+            // One slow tree cannot occupy every registration slot. Keep other
+            // enrolled roots eligible while its directory reader is blocked.
+            if self
+                .working
+                .iter()
+                .any(|job| job.location.root.same_root(&location.root))
+            {
+                self.pending.push_back(location);
+                continue;
             }
-            let (root, frame) = self.walking.as_mut().expect("active bounded watch walk");
-            match frame.reader.next() {
-                None => self.walking = None,
-                Some(Err(_)) => {
-                    self.lost = true;
-                    self.registration_incomplete = true;
-                    self.walking = None;
-                }
-                Some(Ok(child)) => match child.file_type() {
-                    Ok(kind) if kind.is_dir() => {
-                        let root = root.clone();
-                        let relative = frame.relative.join(child.file_name());
-                        self.add_tree(root, relative);
-                    }
-                    Err(_) => {
-                        self.lost = true;
-                        self.registration_incomplete = true;
-                    }
-                    _ => (),
-                },
+            if self.current(&location, self.epoch) {
+                self.working.push(Pending::start(
+                    &self.jobs,
+                    self.file.clone(),
+                    location,
+                    self.epoch,
+                ));
             }
         }
     }
@@ -225,7 +273,8 @@ impl Watch {
                 changes.kernel_overflow = true;
             }
         }
-        let Some(location) = self.locations.get(&event.wd) else {
+        let Some(locations) = self.locations.get(&event.wd).cloned() else {
+            changes.full = true;
             return;
         };
         if event.mask
@@ -233,14 +282,21 @@ impl Watch {
             != 0
         {
             changes.full = true;
+            for location in &locations {
+                if location.relative.as_os_str().is_empty() {
+                    self.remove_matching(|prior| prior.root.same_root(&location.root));
+                }
+            }
             self.forget(event.wd);
             return;
         }
-        if location.root.validate().is_err() {
-            changes.full = true;
-            self.forget(event.wd);
-            return;
+        for location in locations {
+            self.named_event(&location, event.mask, name, changes);
         }
+    }
+    fn named_event(&mut self, location: &Location, mask: u32, name: &[u8], changes: &mut Changes) {
+        // Events are untrusted hints. Root identity/content authority is checked
+        // by registration and reconciliation workers, never by this event drain.
         let name = std::ffi::OsStr::from_bytes(name.split(|b| *b == 0).next().unwrap_or_default());
         let relative = location.relative.join(name);
         if !crate::valid_relative(&relative) {
@@ -253,32 +309,35 @@ impl Watch {
             if changes.paths.len() < MAX_CHANGED_PATHS
                 && changes.path_bytes.saturating_add(bytes) <= MAX_CHANGED_BYTES
             {
-                changes.paths.insert(path);
+                changes.paths.insert(path.clone());
                 changes.path_bytes += bytes;
             } else {
                 changes.full = true;
             }
         }
-        if event.mask & libc::IN_ISDIR != 0
-            && event.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
-        {
-            self.add_tree(location.root.clone(), relative);
+        if mask & libc::IN_ISDIR != 0 {
+            if mask & (libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_DELETE | libc::IN_MOVED_FROM)
+                != 0
+            {
+                self.remove_matching(|prior| prior.path().starts_with(&path));
+            }
+            if mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0 {
+                self.add_tree(location.root.clone(), relative);
+            }
         }
     }
     pub fn has_complete_coverage(&self) -> bool {
         !self.registration_incomplete
             && !self.rebuild_required
             && !self.lost
-            && self.pending.is_empty()
-            && self.walking.is_none()
+            && !self.registration_pending()
     }
     pub fn changes(&mut self, retry_registration: bool) -> Changes {
         self.rebuild_required |= retry_registration && self.registration_incomplete;
-        let incomplete = self.walking.is_some() || !self.pending.is_empty();
         self.advance();
         let lost = std::mem::take(&mut self.lost);
         let mut changes = Changes {
-            full: incomplete || lost,
+            full: lost,
             ..Default::default()
         };
         let mut buffer = [0_u8; 65536];
@@ -338,29 +397,53 @@ impl Watch {
         }
         changes
     }
-    fn rebuild(&mut self) -> Result<()> {
-        // Lost directory-creation events require rewalking every retained root.
-        // A fresh instance also prevents stale watch descriptors from being
-        // interpreted against a replacement registration. Keep roots waiting
-        // for registration if another overflow interrupts this rebuild.
+    pub(crate) fn rebuild(&mut self) -> Result<()> {
         let roots = self
-            .locations
+            .entries
             .values()
-            .map(|location| &location.root)
-            .chain(self.pending.iter().map(|(root, _)| root))
-            .chain(self.walking.iter().map(|(root, _)| root))
-            .map(|root| (root.path.clone(), root.clone()))
+            .map(|entry| (entry.root.path.clone(), entry.root.clone()))
             .collect::<HashMap<_, _>>();
-        let old = std::mem::replace(self, Self::new()?);
-        drop(old); // Release old kernel watches before consuming their quota again.
-        self.pending = roots
-            .into_values()
-            .map(|root| (root, PathBuf::new()))
-            .collect();
-        // Registration and traversal stay on advance's bounded per-tick budget.
+        let replacement = Self::descriptor()?;
+        for job in &self.working {
+            job.cancel();
+        }
+        self.file = replacement;
+        self.epoch = self
+            .epoch
+            .checked_add(1)
+            .expect("watch instance identity exhausted");
+        self.paths.clear();
+        self.locations.clear();
+        self.entries.clear();
+        self.pending.clear();
+        self.tracked_bytes = 0;
+        self.registration_incomplete = false;
+        self.rebuild_required = false;
+        for root in roots.into_values() {
+            self.add_tree(root, PathBuf::new());
+        }
         Ok(())
     }
+    fn descriptor() -> Result<Arc<File>> {
+        // SAFETY: a successful inotify_init1 returns a fresh owned descriptor.
+        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: transfer this descriptor exactly once.
+        Ok(Arc::new(unsafe { File::from_raw_fd(fd) }))
+    }
 }
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.remove_matching(|_| true);
+        while !self.working.is_empty() {
+            self.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
 fn watch_bytes(path: &std::path::Path, relative: &std::path::Path) -> usize {
     path.as_os_str()
         .as_bytes()
@@ -371,12 +454,33 @@ fn watch_bytes(path: &std::path::Path, relative: &std::path::Path) -> usize {
 }
 
 #[cfg(test)]
-mod overflow_tests;
+pub(crate) mod overflow_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn moved_directories_and_replaced_names_keep_both_nested_event_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Arc::new(Root::open(temp.path()).unwrap());
+        fs::create_dir_all(root.path.join("child/deep")).unwrap();
+        let mut watch = Watch::new().unwrap();
+        watch.add(root.clone());
+        overflow_tests::settle(&mut watch);
+        fs::rename(root.path.join("child"), root.path.join("moved")).unwrap();
+        fs::create_dir_all(root.path.join("child/deep")).unwrap();
+        watch.changes(false);
+        overflow_tests::settle(&mut watch);
+        assert!(watch.has_complete_coverage());
+        for name in ["child/deep/edit", "moved/deep/edit"] {
+            fs::write(root.path.join(name), b"fresh nested event").unwrap();
+        }
+        let changes = watch.changes(false);
+        assert!(!changes.full);
+        assert!(changes.paths.contains(&root.path.join("child/deep/edit")));
+        assert!(changes.paths.contains(&root.path.join("moved/deep/edit")));
+    }
     #[test]
     fn retiring_a_partition_releases_queued_and_active_directory_pins() {
         let temp = tempfile::tempdir().unwrap();
@@ -387,10 +491,12 @@ mod tests {
         assert!(Arc::strong_count(&root) > 1);
         watch.changes(false);
         watch.remove_scope(&root.scope());
+        assert!(watch.busy_scope(&root.scope()));
+        overflow_tests::settle(&mut watch);
         assert_eq!(Arc::strong_count(&root), 1);
         assert_eq!(watch.tracked_bytes, 0);
         assert!(watch.pending.is_empty());
-        assert!(watch.walking.is_none());
+        assert!(watch.working.is_empty());
     }
     #[test]
     fn queue_overflow_reports_lost_coverage_even_without_a_known_watch_descriptor() {
@@ -416,8 +522,10 @@ mod tests {
         fs::create_dir(&path).unwrap();
         let mut watch = Watch::new().unwrap();
         watch.add(Arc::new(Root::open(&path).unwrap()));
+        overflow_tests::settle(&mut watch);
         fs::create_dir(path.join("child")).unwrap();
         assert!(watch.changes(false).paths.contains(&path.join("child")));
+        overflow_tests::settle(&mut watch);
         fs::write(path.join("child/file"), b"changed").unwrap();
         assert!(
             watch
@@ -429,6 +537,7 @@ mod tests {
         assert!(watch.changes(false).full);
         fs::create_dir(&path).unwrap();
         watch.add(Arc::new(Root::open(&path).unwrap()));
+        overflow_tests::settle(&mut watch);
         fs::write(path.join("new"), b"new insertion").unwrap();
         assert!(watch.changes(false).paths.contains(&path.join("new")));
     }

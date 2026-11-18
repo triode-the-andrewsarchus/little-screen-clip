@@ -6,11 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn settle(watch: &mut Watch) {
+pub(crate) fn settle(watch: &mut Watch) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let changes = watch.changes(false);
-        if !changes.full && changes.paths.is_empty() {
+        if !watch.registration_pending() && !changes.full && changes.paths.is_empty() {
             return;
         }
         assert!(
@@ -78,6 +78,7 @@ fn guest_watch_quota_recovery_retries_only_on_the_periodic_boundary() {
     fs::write(&file, b"recovered notification").unwrap();
     assert!(watch.changes(false).paths.contains(&file));
     watch.remove_scope(&root.scope());
+    settle(&mut watch);
     assert_eq!(Arc::strong_count(&root), 1);
 }
 
@@ -134,5 +135,50 @@ fn guest_queue_overflow_rebuilds_missed_nested_directory_watches() {
     assert_eq!(Arc::strong_count(&root), 1);
     assert!(watch.locations.is_empty());
     assert!(watch.pending.is_empty());
-    assert!(watch.walking.is_none());
+    assert!(watch.working.is_empty());
+}
+
+#[test]
+#[ignore = "requires the disposable native-filesystem guest and a real bind mount"]
+fn guest_shared_descriptor_routes_every_alias_and_retains_the_remaining_registration() {
+    crate::require_disposable_guest();
+    let media = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").unwrap();
+    assert_eq!(Path::new(&media), Path::new("/work/media"));
+    let source = tempfile::tempdir_in(media).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    let bind = crate::sync_edge_tests::native_fs::GuestMount::attach(source.path(), alias.path());
+    let original = Arc::new(Root::open(source.path()).unwrap());
+    let alternate = Arc::new(Root::open(alias.path()).unwrap());
+    let mut watch = Watch::new().unwrap();
+    watch.add(original.clone());
+    watch.add(alternate.clone());
+    settle(&mut watch);
+    assert!(watch.has_complete_coverage());
+    assert_eq!(
+        watch.paths[&original.path], watch.paths[&alternate.path],
+        "The kernel must actually share this inode's watch descriptor"
+    );
+    fs::write(
+        original.path.join("both"),
+        b"notify every observed spelling",
+    )
+    .unwrap();
+    let changes = watch.changes(false);
+    assert!(changes.paths.contains(&original.path.join("both")));
+    assert!(changes.paths.contains(&alternate.path.join("both")));
+    watch.forget_path(&original.path);
+    fs::write(
+        alternate.path.join("remaining"),
+        b"retain the other registration",
+    )
+    .unwrap();
+    let changes = watch.changes(false);
+    assert!(!changes.full);
+    assert!(changes.paths.contains(&alternate.path.join("remaining")));
+    assert!(!changes.paths.contains(&original.path.join("remaining")));
+    watch.remove_scope(&alternate.scope());
+    drop(watch);
+    drop(original);
+    drop(alternate);
+    drop(bind);
 }

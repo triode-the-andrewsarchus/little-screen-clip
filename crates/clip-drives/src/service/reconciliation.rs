@@ -387,7 +387,7 @@ impl Owner {
         }
         self.launch_sync(intent, plan);
     }
-    fn launch_sync(&mut self, intent: Intent, plan: Plan) {
+    fn launch_sync(&mut self, intent: Intent, mut plan: Plan) {
         // Watch before population, retaining/coalescing notifications while the task runs.
         if let Some(watch) = &mut self.watch
             && intent.save.is_none()
@@ -395,6 +395,10 @@ impl Owner {
             watch.add(plan.portable.clone());
             watch.add(plan.local.clone());
         }
+        plan.observed &= self
+            .watch
+            .as_ref()
+            .is_some_and(Watch::has_complete_coverage);
         if let Some(id) = &intent.operation
             && let Ok(Some(mut op)) = self.db.get::<DriveOperation>("operation", id)
         {

@@ -74,11 +74,7 @@ fn stopped_registered_ram_view_does_not_stall_policy_or_an_unrelated_pair() {
     }));
     service.shutdown().unwrap();
     drop(ram);
-    drop(native);
-    crate::ram::discard(&backing, &id).unwrap();
-    if let Err(error) = result {
-        std::panic::resume_unwind(error);
-    }
+    finish_native_fixture(backing, id, native, result);
 }
 
 #[test]

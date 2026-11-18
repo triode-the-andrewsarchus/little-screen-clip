@@ -183,18 +183,7 @@ fn stall_export(
     let mut closing = None;
     native.with_suspended(|| {
         drop(release);
-        let (tid, wait) = wait_fuse_request(|| {
-            fs::read_dir("/proc/self/task")
-                .unwrap()
-                .filter_map(|entry| {
-                    let entry = entry.ok()?;
-                    (fs::read_to_string(entry.path().join("comm")).ok()?.trim()
-                        == "drive-ram-setup")
-                        .then(|| entry.file_name().to_string_lossy().parse().ok())
-                        .flatten()
-                })
-                .collect()
-        });
+        let (tid, wait) = wait_fuse_request(|| worker_threads("drive-ram-setup"));
         eprintln!("RAM_EXPORT_PREPARATION_FUSE_BLOCKED tid={tid} wchan={wait}");
         assert_configuration_responsive(service);
         fs::write(

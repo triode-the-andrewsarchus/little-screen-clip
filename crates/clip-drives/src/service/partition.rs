@@ -168,12 +168,14 @@ pub(super) struct Pending {
     stage: Stage,
 }
 enum Stage {
+    Retiring(Scope),
     Flush(Task<Result<()>>),
     Unmount(Task<Result<Drive>>),
     Restore(Task<Result<String>>),
     ReadOnly(Task<Result<Box<read_only::Prepared>>>, Box<BackupContext>),
 }
 enum Completion {
+    Retired,
     Flush(Result<()>),
     Unmount(Result<Drive>),
     Restored(Result<String>),
@@ -196,6 +198,7 @@ impl Pending {
     }
     fn poll(&self) -> Option<Completion> {
         match &self.stage {
+            Stage::Retiring(_) => None,
             Stage::Flush(task) => task
                 .poll()
                 .map(|result| Completion::Flush(write_result(result))),
@@ -387,7 +390,18 @@ impl Owner {
     }
 
     pub(super) fn poll_partition(&mut self) {
-        let Some(completion) = self.partition.as_ref().and_then(Pending::poll) else {
+        if let Some(watch) = &mut self.watch {
+            watch.poll();
+        }
+        let completion = self.partition.as_ref().and_then(|job| match &job.stage {
+            Stage::Retiring(scope) => (!self
+                .watch
+                .as_ref()
+                .is_some_and(|watch| watch.busy_scope(scope)))
+            .then_some(Completion::Retired),
+            _ => job.poll(),
+        });
+        let Some(completion) = completion else {
             return;
         };
         let mut job = self
@@ -414,35 +428,30 @@ impl Owner {
                     self.partition_ready(job, Ok(None));
                     return;
                 }
-                let retirement = self.retire_partition(&job.snapshot);
-                if let Err(error) = retirement {
-                    self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
-                    return;
+                let retirement = (|| {
+                    let scope = job
+                        .claims
+                        .first()
+                        .ok_or("Missing partition watch-retirement scope")?
+                        .clone();
+                    self.retire_partition(&scope)?;
+                    Ok::<_, Error>(scope)
+                })();
+                match retirement {
+                    Err(error) => self.finish_operation(&job.envelope.id, &job.cancel, Err(error)),
+                    Ok(scope)
+                        if self
+                            .watch
+                            .as_ref()
+                            .is_some_and(|watch| watch.busy_scope(&scope)) =>
+                    {
+                        job.stage = Stage::Retiring(scope);
+                        self.partition = Some(job);
+                    }
+                    Ok(_) => self.unmount_partition(job),
                 }
-                let drive = job.snapshot.clone();
-                let selector = selector(&job.envelope.request)
-                    .expect("validated partition request")
-                    .to_owned();
-                let inventory = self.inventory.clone();
-                let unmount = self.authority.unmount.clone();
-                let cancel = job.cancel.clone();
-                let state = self.state.clone();
-                let operation = job.envelope.id.clone();
-                let source = job.source.clone();
-                job.stage = Stage::Unmount(write_task(&self.partition_jobs, move || {
-                    let db = Store::existing(&state.join("drives.sqlite"), false)?;
-                    phase(&db, &operation, PartitionPhase::Unmounting, None)?;
-                    unmount_checked(
-                        &drive,
-                        &selector,
-                        &inventory,
-                        &unmount,
-                        &cancel,
-                        source.as_deref(),
-                    )
-                }));
-                self.partition = Some(job);
             }
+            Completion::Retired => self.unmount_partition(job),
             Completion::Flush(Err(error)) => {
                 self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
             }
@@ -453,6 +462,32 @@ impl Owner {
                 self.automatic();
             }
         }
+    }
+
+    fn unmount_partition(&mut self, mut job: Pending) {
+        let drive = job.snapshot.clone();
+        let selector = selector(&job.envelope.request)
+            .expect("validated partition request")
+            .to_owned();
+        let inventory = self.inventory.clone();
+        let unmount = self.authority.unmount.clone();
+        let cancel = job.cancel.clone();
+        let state = self.state.clone();
+        let operation = job.envelope.id.clone();
+        let source = job.source.clone();
+        job.stage = Stage::Unmount(write_task(&self.partition_jobs, move || {
+            let db = Store::existing(&state.join("drives.sqlite"), false)?;
+            phase(&db, &operation, PartitionPhase::Unmounting, None)?;
+            unmount_checked(
+                &drive,
+                &selector,
+                &inventory,
+                &unmount,
+                &cancel,
+                source.as_deref(),
+            )
+        }));
+        self.partition = Some(job);
     }
 
     fn partition_ready(&mut self, job: Pending, result: Result<Option<Drive>>) {
@@ -540,26 +575,23 @@ impl Owner {
         self.partition = Some(job);
     }
 
-    fn retire_partition(&mut self, drive: &Drive) -> Result<()> {
-        if let Some(path) = &drive.mount {
-            let scope = Root::open(path)?.scope();
-            self.previews
-                .lock()
-                .map_err(|_| "Backup review storage unavailable")?
-                .retain(|_, review| {
-                    !scope.overlap(&review.destination.scope())
-                        && !review
-                            .source
-                            .as_ref()
-                            .is_some_and(|root| scope.overlap(&root.scope()))
-                });
-            self.sync_roots
-                .retain(|_, (a, b)| !scope.overlap(&a.scope()) && !scope.overlap(&b.scope()));
-            self.unidentified_ram
-                .retain(|_, root| !scope.overlap(&root.scope()));
-            if let Some(watch) = &mut self.watch {
-                watch.remove_scope(&scope);
-            }
+    fn retire_partition(&mut self, scope: &Scope) -> Result<()> {
+        self.previews
+            .lock()
+            .map_err(|_| "Backup review storage unavailable")?
+            .retain(|_, review| {
+                !scope.overlap(&review.destination.scope())
+                    && !review
+                        .source
+                        .as_ref()
+                        .is_some_and(|root| scope.overlap(&root.scope()))
+            });
+        self.sync_roots
+            .retain(|_, (a, b)| !scope.overlap(&a.scope()) && !scope.overlap(&b.scope()));
+        self.unidentified_ram
+            .retain(|_, root| !scope.overlap(&root.scope()));
+        if let Some(watch) = &mut self.watch {
+            watch.remove_scope(scope);
         }
         Ok(())
     }

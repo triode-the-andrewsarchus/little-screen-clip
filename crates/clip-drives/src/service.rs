@@ -454,6 +454,7 @@ impl Owner {
             let poll_ms = if self.sync_preparing.is_empty()
                 && self.scheduling.pending.is_empty()
                 && self.ram_access.is_none()
+                && !self.watch.as_ref().is_some_and(Watch::registration_pending)
             {
                 200
             } else {
@@ -535,6 +536,7 @@ impl Owner {
         self.drain_scopes();
         self.drain_ram_preparation();
         self.drain_sync();
+        drop(self.watch.take()); // Drain actual watch-worker pins before unmount/helper retirement.
         while let Some(job) = &self.partition {
             job.cancel.store(true, Ordering::Release);
             self.poll_partition();
@@ -1197,6 +1199,7 @@ mod tests {
     mod status_refresh;
     mod storage;
     mod sync_preparation;
+    mod watch_responsiveness;
     use super::*;
     #[test]
     fn backup_preference_is_lazy_preserves_settings_and_survives_restart() {
@@ -1392,6 +1395,32 @@ mod tests {
                 "Owned worker did not enter a kernel FUSE wait"
             );
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn worker_threads(prefix: &str) -> Vec<libc::c_long> {
+        fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                fs::read_to_string(entry.path().join("comm"))
+                    .ok()?
+                    .trim()
+                    .starts_with(prefix)
+                    .then(|| entry.file_name().to_string_lossy().parse().ok())
+                    .flatten()
+            })
+            .collect()
+    }
+    fn finish_native_fixture(
+        backing: RamBacking,
+        id: String,
+        native: crate::ram::Mounted,
+        result: std::thread::Result<()>,
+    ) {
+        drop(native);
+        crate::ram::discard(&backing, &id).unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
         }
     }
     fn shutdown_while_held(
