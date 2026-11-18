@@ -717,7 +717,26 @@ mod tests {
 
         std::fs::write(folder.path().join("sparse.vcv"), make_patch(2, 12, 1)).unwrap();
         std::fs::write(folder.path().join("dense.vcv"), make_patch(10, 3, 2)).unwrap();
-        std::fs::write(folder.path().join("empty.vcv"), make_patch(0, 0, 0)).unwrap();
+        std::fs::write(
+            folder.path().join("chain.vcvss"),
+            serde_json::to_vec(&serde_json::json!({
+                "stripVersion": 1,
+                "leftModules": [
+                    { "id": 1, "plugin": "Fundamental", "model": "VCO" }
+                ],
+                "rightModules": [
+                    { "id": 2, "plugin": "Fundamental", "model": "VCF" },
+                    { "id": 3, "plugin": "Fundamental", "model": "VCA-1" }
+                ],
+                "cables": [
+                    { "outputModuleId": 1, "outputId": 0, "inputModuleId": 2, "inputId": 0 },
+                    { "outputModuleId": 2, "outputId": 0, "inputModuleId": 3, "inputId": 0 }
+                ],
+                "version": "2.6.0"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         std::fs::write(folder.path().join("broken.vcv"), b"not json").unwrap();
 
         let directory =
@@ -743,9 +762,9 @@ mod tests {
         assert_eq!(state.cell(by_name("dense.vcv"), Field::Modules), "10");
         assert_eq!(state.cell(by_name("dense.vcv"), Field::Cables), "3");
         assert_eq!(state.cell(by_name("dense.vcv"), Field::Rows), "2");
-        assert_eq!(state.cell(by_name("empty.vcv"), Field::Modules), "0");
-        assert_eq!(state.cell(by_name("empty.vcv"), Field::Cables), "0");
-        assert_eq!(state.cell(by_name("empty.vcv"), Field::Rows), "0");
+        assert_eq!(state.cell(by_name("chain.vcvss"), Field::Modules), "3");
+        assert_eq!(state.cell(by_name("chain.vcvss"), Field::Cables), "2");
+        assert_eq!(state.cell(by_name("chain.vcvss"), Field::Rows), "0");
         assert_eq!(
             state.cell(by_name("broken.vcv"), Field::Modules),
             "Unavailable"
@@ -777,27 +796,27 @@ mod tests {
 
         assert_eq!(
             ordered(&mut state, Field::Modules, false),
-            ["empty.vcv", "sparse.vcv", "dense.vcv", "broken.vcv"]
+            ["sparse.vcv", "chain.vcvss", "dense.vcv", "broken.vcv"]
         );
         assert_eq!(
             ordered(&mut state, Field::Modules, true),
-            ["dense.vcv", "sparse.vcv", "empty.vcv", "broken.vcv"]
+            ["dense.vcv", "chain.vcvss", "sparse.vcv", "broken.vcv"]
         );
         assert_eq!(
             ordered(&mut state, Field::Cables, false),
-            ["empty.vcv", "dense.vcv", "sparse.vcv", "broken.vcv"]
+            ["chain.vcvss", "dense.vcv", "sparse.vcv", "broken.vcv"]
         );
         assert_eq!(
             ordered(&mut state, Field::Cables, true),
-            ["sparse.vcv", "dense.vcv", "empty.vcv", "broken.vcv"]
+            ["sparse.vcv", "dense.vcv", "chain.vcvss", "broken.vcv"]
         );
         assert_eq!(
             ordered(&mut state, Field::Rows, false),
-            ["empty.vcv", "sparse.vcv", "dense.vcv", "broken.vcv"]
+            ["chain.vcvss", "sparse.vcv", "dense.vcv", "broken.vcv"]
         );
         assert_eq!(
             ordered(&mut state, Field::Rows, true),
-            ["dense.vcv", "sparse.vcv", "empty.vcv", "broken.vcv"]
+            ["dense.vcv", "sparse.vcv", "chain.vcvss", "broken.vcv"]
         );
     }
 

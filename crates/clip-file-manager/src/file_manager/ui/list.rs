@@ -869,6 +869,7 @@ mod tests {
             "movie.mp4",
             "book.pdf",
             "patch.vcv",
+            "strip.vcvss",
         ] {
             std::fs::write(root.path().join(name), "fixture").unwrap();
         }
@@ -992,6 +993,23 @@ mod tests {
         write_patch("alpha.vcv", 8, 2, 1);
         write_patch("beta.vcv", 2, 12, 2);
         write_patch("gamma.vcv", 5, 6, 3);
+        std::fs::write(
+            root.path().join("delta.vcvss"),
+            serde_json::to_vec(&serde_json::json!({
+                "stripVersion": 1,
+                "leftModules": [{ "id": 1, "plugin": "Fundamental", "model": "VCO" }],
+                "rightModules": [
+                    { "id": 2, "plugin": "Fundamental", "model": "VCF" },
+                    { "id": 3, "plugin": "Fundamental", "model": "VCA-1" }
+                ],
+                "cables": [
+                    { "outputModuleId": 1, "outputId": 0, "inputModuleId": 2, "inputId": 0 }
+                ],
+                "version": "2.6.0"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         let directory =
             filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
@@ -1005,13 +1023,13 @@ mod tests {
 
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while manager.metadata.status(Category::VcvRack) != "Metadata 3/3"
+        while manager.metadata.status(Category::VcvRack) != "Metadata 4/4"
             && std::time::Instant::now() < deadline
         {
             manager.tick_metadata(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(manager.metadata.status(Category::VcvRack), "Metadata 3/3");
+        assert_eq!(manager.metadata.status(Category::VcvRack), "Metadata 4/4");
 
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -1029,7 +1047,7 @@ mod tests {
                 );
             });
         });
-        for expected in ["VCV Rack · Metadata 3/3", "Modules", "Cables", "Rows"] {
+        for expected in ["VCV Rack · Metadata 4/4", "Modules", "Cables", "Rows"] {
             assert!(
                 output.shapes.iter().any(|shape| matches!(
                     &shape.shape,
@@ -1051,35 +1069,35 @@ mod tests {
         GroupSort::Metadata(Category::VcvRack, Field::Modules).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["beta.vcv", "gamma.vcv", "alpha.vcv"]
+            ["beta.vcv", "delta.vcvss", "gamma.vcv", "alpha.vcv"]
         );
         GroupSort::Metadata(Category::VcvRack, Field::Modules).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["alpha.vcv", "gamma.vcv", "beta.vcv"]
+            ["alpha.vcv", "gamma.vcv", "delta.vcvss", "beta.vcv"]
         );
 
         GroupSort::Metadata(Category::VcvRack, Field::Cables).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["alpha.vcv", "gamma.vcv", "beta.vcv"]
+            ["delta.vcvss", "alpha.vcv", "gamma.vcv", "beta.vcv"]
         );
 
         GroupSort::Metadata(Category::VcvRack, Field::Rows).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["alpha.vcv", "beta.vcv", "gamma.vcv"]
+            ["delta.vcvss", "alpha.vcv", "beta.vcv", "gamma.vcv"]
         );
         GroupSort::Metadata(Category::VcvRack, Field::Rows).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["gamma.vcv", "beta.vcv", "alpha.vcv"]
+            ["gamma.vcv", "beta.vcv", "alpha.vcv", "delta.vcvss"]
         );
 
         GroupSort::Metadata(Category::VcvRack, Field::Filename).apply(&mut manager);
         assert_eq!(
             visible_names(&manager),
-            ["alpha.vcv", "beta.vcv", "gamma.vcv"]
+            ["alpha.vcv", "beta.vcv", "delta.vcvss", "gamma.vcv"]
         );
     }
 }

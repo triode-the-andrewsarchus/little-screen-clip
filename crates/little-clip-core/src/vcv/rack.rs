@@ -66,14 +66,26 @@ pub struct RackRailLayout {
     pub modules: Vec<PlacedRackModule>,
 }
 
-/// Builds the compact deduplicated strip ordered by musical importance.
-pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup {
-    const STRIP_H: f64 = 128.0;
-    const PANEL_H: f64 = 120.0;
-    const PANEL_Y: f64 = 4.0;
-    const GAP: f64 = 4.0;
-    const MARGIN_X: f64 = 4.0;
+const STRIP_H: f64 = 128.0;
+const STRIP_PANEL_H: f64 = 120.0;
+const STRIP_PANEL_Y: f64 = 4.0;
+const STRIP_GAP: f64 = 4.0;
+const STRIP_MARGIN_X: f64 = 4.0;
 
+struct StripEntry {
+    plugin: String,
+    model: String,
+    title: String,
+    role: Role,
+    function: ModuleFunction,
+    count: usize,
+    cable_degree: usize,
+    importance_tier: u8,
+    first_pos: (i32, i32, i64),
+    hp_est: u32,
+}
+
+fn collect_strip_entries(analysis: &PatchAnalysis) -> Vec<StripEntry> {
     let mut cable_deg: HashMap<i64, usize> = HashMap::new();
     let mut has_outputs: HashMap<i64, bool> = HashMap::new();
     for c in &analysis.document.cables {
@@ -82,94 +94,64 @@ pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup 
         has_outputs.insert(c.from.module_id, true);
     }
 
-    struct Agg {
-        plugin: String,
-        model: String,
-        title: String,
-        role: Role,
-        function: ModuleFunction,
-        count: usize,
-        total_degree: usize,
-        min_tier: u8,
-        first_pos: (i32, i32, i64),
-        hp_est: u32,
-    }
-
     let catalog = VcvCatalog::embedded();
-    let mut grouped: HashMap<(String, String), Agg> = HashMap::new();
+    analysis
+        .document
+        .modules
+        .iter()
+        .map(|m| {
+            let analyzed = analysis.module(m.id);
+            let deg = cable_deg.get(&m.id).copied().unwrap_or(0);
+            let outputs = has_outputs.get(&m.id).copied().unwrap_or(false);
 
-    for m in &analysis.document.modules {
-        let analyzed = analysis.module(m.id);
-        let deg = cable_deg.get(&m.id).copied().unwrap_or(0);
-        let outputs = has_outputs.get(&m.id).copied().unwrap_or(false);
+            let info = catalog.module_info(&m.plugin, &m.model);
+            let (role, function, title) = if let Some(am) = analyzed {
+                (am.role, am.function, am.title.clone())
+            } else {
+                let (r, _) = catalog.resolve_role(&m.plugin, &m.model, info);
+                let tags = info.map(|i| i.tags.as_slice()).unwrap_or(&[]);
+                let name = info.and_then(|i| i.name.as_deref());
+                let f = ModuleFunction::classify(r, tags, &m.model, name);
+                (r, f, name.unwrap_or(&m.model).to_string())
+            };
 
-        let info = catalog.module_info(&m.plugin, &m.model);
-        let (role, function, title) = if let Some(am) = analyzed {
-            (am.role, am.function, am.title.clone())
-        } else {
-            let (r, _) = catalog.resolve_role(&m.plugin, &m.model, info);
-            let tags = info.map(|i| i.tags.as_slice()).unwrap_or(&[]);
-            let name = info.and_then(|i| i.name.as_deref());
-            let f = ModuleFunction::classify(r, tags, &m.model, name);
-            (r, f, name.unwrap_or(&m.model).to_string())
-        };
+            let is_blank = info
+                .is_some_and(|i| i.tags.iter().any(|t| t.eq_ignore_ascii_case("Blank")))
+                || m.model.to_ascii_lowercase().contains("blank");
+            let tier = if is_blank {
+                8
+            } else if deg == 0 && analyzed.is_none() {
+                7
+            } else {
+                importance_tier(role, function, outputs, analyzed.map(|a| a.band))
+            };
 
-        let is_blank = info.is_some_and(|i| i.tags.iter().any(|t| t.eq_ignore_ascii_case("Blank")))
-            || m.model.to_ascii_lowercase().contains("blank");
-        let tier = if is_blank {
-            8
-        } else if deg == 0 && analyzed.is_none() {
-            7
-        } else {
-            importance_tier(role, function, outputs, analyzed.map(|a| a.band))
-        };
+            let port_total = info.map_or(4, |i| i.inputs.len() + i.outputs.len());
+            let hp_est = ((port_total.max(3) + 2).min(24) as u32).max(4);
+            StripEntry {
+                plugin: m.plugin.clone(),
+                model: m.model.clone(),
+                title,
+                role,
+                function,
+                count: 1,
+                cable_degree: deg,
+                importance_tier: tier,
+                first_pos: (m.row, m.column, m.id),
+                hp_est,
+            }
+        })
+        .collect()
+}
 
-        let port_total = info.map_or(4, |i| i.inputs.len() + i.outputs.len());
-        let hp_est = ((port_total.max(3) + 2).min(24) as u32).max(4);
-        let key = (m.plugin.clone(), m.model.clone());
-
-        if let Some(entry) = grouped.get_mut(&key) {
-            entry.count += 1;
-            entry.total_degree += deg;
-            entry.min_tier = entry.min_tier.min(tier);
-        } else {
-            grouped.insert(
-                key,
-                Agg {
-                    plugin: m.plugin.clone(),
-                    model: m.model.clone(),
-                    title,
-                    role,
-                    function,
-                    count: 1,
-                    total_degree: deg,
-                    min_tier: tier,
-                    first_pos: (m.row, m.column, m.id),
-                    hp_est,
-                },
-            );
-        }
-    }
-
-    // Retain every distinct module sorted by musical priority so all modules render
-    // whenever horizontal space permits, while narrow rows crop lower tiers on the right.
-    let mut list: Vec<Agg> = grouped.into_values().collect();
-    list.sort_by_key(|item| {
-        (
-            item.min_tier,
-            std::cmp::Reverse(item.total_degree),
-            std::cmp::Reverse(item.count),
-            item.first_pos,
-        )
-    });
-
-    let mut x = MARGIN_X;
-    let mut modules = Vec::with_capacity(list.len());
-    for item in list {
+fn pack_strip_lineup(entries: Vec<StripEntry>) -> StripLineup {
+    let mut x = STRIP_MARGIN_X;
+    let mut modules = Vec::with_capacity(entries.len());
+    for item in entries {
         let aspect = resolve_panel(&item.plugin, &item.model)
             .map(|p| p.aspect)
             .unwrap_or_else(|| (f64::from(item.hp_est) * RACK_HP_WIDTH) / RACK_ROW_HEIGHT);
-        let width = (PANEL_H * aspect).round().clamp(18.0, 220.0);
+        let width = (STRIP_PANEL_H * aspect).round().clamp(18.0, 220.0);
         let hp = ((aspect * RACK_ROW_HEIGHT) / RACK_HP_WIDTH)
             .round()
             .clamp(2.0, 48.0) as u32;
@@ -180,27 +162,70 @@ pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup 
             role: item.role,
             function: item.function,
             count: item.count,
-            cable_degree: item.total_degree,
-            importance_tier: item.min_tier,
+            cable_degree: item.cable_degree,
+            importance_tier: item.importance_tier,
             hp,
             x,
-            y: PANEL_Y,
+            y: STRIP_PANEL_Y,
             width,
-            height: PANEL_H,
+            height: STRIP_PANEL_H,
         });
-        x += width + GAP;
+        x += width + STRIP_GAP;
     }
 
     let total_w = if modules.is_empty() {
         160.0
     } else {
-        (x - GAP + MARGIN_X).max(64.0)
+        (x - STRIP_GAP + STRIP_MARGIN_X).max(64.0)
     };
     StripLineup {
         width: total_w,
         height: STRIP_H,
         modules,
     }
+}
+
+/// Builds the full left-to-right ordered strip (preserving duplicates) when every
+/// module resides on a single Eurorack row.
+pub fn build_full_single_row_strip(analysis: &PatchAnalysis, _dark: bool) -> Option<StripLineup> {
+    let first_row = analysis.document.modules.first()?.row;
+    if !analysis
+        .document
+        .modules
+        .iter()
+        .all(|module| module.row == first_row)
+    {
+        return None;
+    }
+    Some(pack_strip_lineup(collect_strip_entries(analysis)))
+}
+
+/// Builds the compact deduplicated strip ordered by musical importance.
+pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup {
+    let mut grouped: HashMap<(String, String), StripEntry> = HashMap::new();
+    for item in collect_strip_entries(analysis) {
+        let key = (item.plugin.clone(), item.model.clone());
+        if let Some(existing) = grouped.get_mut(&key) {
+            existing.count += item.count;
+            existing.cable_degree += item.cable_degree;
+            existing.importance_tier = existing.importance_tier.min(item.importance_tier);
+        } else {
+            grouped.insert(key, item);
+        }
+    }
+
+    // Retain every distinct module sorted by musical priority so all modules render
+    // whenever horizontal space permits, while narrow rows crop lower tiers on the right.
+    let mut list: Vec<StripEntry> = grouped.into_values().collect();
+    list.sort_by_key(|item| {
+        (
+            item.importance_tier,
+            std::cmp::Reverse(item.cable_degree),
+            std::cmp::Reverse(item.count),
+            item.first_pos,
+        )
+    });
+    pack_strip_lineup(list)
 }
 
 fn importance_tier(

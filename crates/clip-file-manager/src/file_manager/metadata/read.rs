@@ -70,7 +70,7 @@ fn vcv_patch(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
     if cancel.load(Ordering::Relaxed) {
         return Err("Metadata read cancelled".into());
     }
-    let document = little_clip_core::vcv::read_patch_bytes(&bytes)?;
+    let document = little_clip_core::vcv::read_patch_bytes_for_path(&entry.path, &bytes)?;
     Ok(Summary {
         modules: document.modules.len().try_into().ok(),
         cables: document.cables.len().try_into().ok(),
@@ -246,5 +246,36 @@ mod tests {
             assert_eq!(summary.value(Field::Rows), Some(Value::Number(3)));
             assert!(load(&file, &AtomicBool::new(true)).is_err());
         }
+
+        let strip_path = directory.path().join("chain.vcvss");
+        std::fs::write(
+            &strip_path,
+            serde_json::to_vec(&serde_json::json!({
+                "stripVersion": 1,
+                "leftModules": [
+                    { "id": 1, "plugin": "Fundamental", "model": "VCO" }
+                ],
+                "leftWidth": 150.0,
+                "rightModules": [
+                    { "id": 2, "plugin": "Fundamental", "model": "VCF" },
+                    { "id": 3, "plugin": "Fundamental", "model": "VCA-1" }
+                ],
+                "rightWidth": 240.0,
+                "cables": [
+                    { "outputModuleId": 1, "outputId": 0, "inputModuleId": 2, "inputId": 0 }
+                ],
+                "version": "2.6.0"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let strip_file = entry(&strip_path);
+        assert!(supported(&strip_file));
+        assert_eq!(sorting::family(&strip_file), Category::VcvRack);
+        let strip_summary = load(&strip_file, &AtomicBool::new(false)).unwrap();
+        assert_eq!(strip_summary.value(Field::Modules), Some(Value::Number(3)));
+        assert_eq!(strip_summary.value(Field::Cables), Some(Value::Number(1)));
+        assert_eq!(strip_summary.value(Field::Rows), Some(Value::Number(0)));
+        assert!(load(&strip_file, &AtomicBool::new(true)).is_err());
     }
 }

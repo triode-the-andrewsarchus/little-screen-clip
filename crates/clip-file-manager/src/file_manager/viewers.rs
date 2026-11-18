@@ -952,6 +952,7 @@ mod tests {
             ("missing.IPYNB", Format::Notebook),
             ("missing.GCODE", Format::Toolpath),
             ("missing.VCV", Format::VcvPatch),
+            ("missing.VCVSS", Format::VcvPatch),
             ("missing.OTF", Format::Font),
         ] {
             let path = Path::new(name);
