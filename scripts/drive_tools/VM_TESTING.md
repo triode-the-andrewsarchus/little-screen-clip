@@ -2,7 +2,7 @@
 
 `../portable_drive_vm.py` boots a disposable Linux guest for drive tests. Host code
 and `/usr` are exported read-only; the guest has no network or host block devices.
-Writable images, loop devices, mounts and daemon state live in guest RAM. The runner
+By default, writable images, loop devices, mounts and daemon state live in guest RAM. The runner
 uses no host mount or elevation operations.
 
 Provide QEMU, a static BusyBox with mount/insmod/poweroff, and an installed kernel
@@ -71,6 +71,56 @@ Verified on this host:
 
 These establish a usable isolated test environment. The application-level removable
 filesystem matrix remains a separate acceptance gate.
+
+## Owned virtual USB removal
+
+`--removable-disk /path/to/new-owned.raw` exposes a dedicated regular fixture file
+through an emulated USB mass-storage device. The runner reuses the owned-file
+pinning checks: one link, current owner, ordinary file, 64 MiB–8 GiB, no symlink.
+State and removable disks must be distinct inodes. QEMU receives the retained
+descriptor, so replacing the pathname cannot redirect writes. A short private
+Unix socket carries QMP control; no host USB device or block node is attached.
+
+Create a fresh 256 MiB image for the probe below. The probe formats it as FAT32.
+
+```bash
+python3 - <<'PY'
+import os
+disk = os.open('/tmp/portable-drive-owned-usb.raw', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    os.ftruncate(disk, 256 * 1024**2)
+finally:
+    os.close(disk)
+PY
+python3 scripts/portable_drive_vm.py \
+  --kernel /path/to/matching/vmlinuz \
+  --busybox /path/to/static/busybox \
+  --removable-disk /tmp/portable-drive-owned-usb.raw \
+  --guest-script scripts/drive_tools/vm_usb_probe.sh \
+  --output-dir /tmp/new-owned-usb-probe
+```
+
+The guest can emit the exact lines `LITTLE_CLIP_USB_UNPLUG=1` and
+`LITTLE_CLIP_USB_REPLUG=1`. They control only this emulated device. Each replug
+gets a new frontend identity while retaining the original block backend. The
+controller matches replies and requires the owned device's deletion event;
+an acknowledgement alone is insufficient. Message/event budgets, command
+timeouts and the VM deadline retain failed attempts and actual process exit.
+Reports include `usb_control.enabled`, `complete`, `actions` and `error`; a failed
+or unconfirmed control cannot become successful VM evidence.
+
+Setup follows QEMU's [QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html)
+and [USB device guide](https://www.qemu.org/docs/master/system/devices/usb.html).
+The installed QEMU's `usb-storage,help` also supplies the actual device properties.
+
+The probe performs two clean unmount/unplug/replug cycles. It requires kernel
+block-node disappearance, a new disk sequence, unchanged capacity/UUID and
+matching retained payload bytes. Check both the guest evidence and all four
+completed controls. It deliberately unmounts before removal and does not prove
+RAM-writeback interruption safety. Append `-- duplicate` for the negative control:
+a repeated unplug must fail the report. Protocol, failed-controller/process and
+owned-file admission tests run without a VM via `test_drive_hotplug.py` and
+`test_portable_drive_vm.py`.
 
 ## Directory-bind durability regression control
 

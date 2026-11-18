@@ -5492,3 +5492,75 @@ failure mode. Report: `.fitness/portable-drives-native-writeback-local.json`.
 Items 3.5, 3.6 and 7.3 retain their remaining interrupted-I/O/transport, cancellation
 and mount-option requirements. Full/read-only native proof does not substitute
 for removal during an active native write or final whole-branch acceptance.
+
+## Owned USB transport fixture checkpoint
+
+The VM runner now accepts a separate `--removable-disk` owned regular artifact,
+exposed through an emulated USB mass-storage controller. It reuses the existing
+64 MiB–8 GiB, owner, regular-file, no-symlink and single-link admission and keeps
+the descriptor inherited until actual VM exit. State/removable aliases are
+refused by retained inode identity. A short mode-private socket carries QMP;
+no host USB device, block node, network or elevated operation is admitted.
+Explicit guest markers can remove/reinsert only the fixture frontend. The block
+backend remains owned and each replug creates a fresh frontend identity.
+
+The controller negotiates capabilities, matches reply IDs, bounds messages and
+event retention, and requires the selected frontend's deletion event separately
+from command acknowledgement. Consumed or older-generation events cannot confirm
+a later removal. Reports retain every control attempt, its frontend, completion
+and controller error. Failed or incomplete controls fail the overall report even
+if the process/guest markers otherwise appear successful. Ordinary execution
+still retains nonzero exit and timeout outcomes; isolating process execution
+keeps disk admission and report assembly separate from owned process lifetime.
+Protocol/setup references are the
+[QMP specification](https://www.qemu.org/docs/master/interop/qmp-spec.html) and
+[USB device guide](https://www.qemu.org/docs/master/system/devices/usb.html).
+Installed QEMU 11.1.3 device help and actual runtime replies supply the local
+property/event evidence.
+
+`vm_usb_probe.sh` formats only the explicit owned artifact as FAT32 and checks
+two clean unmount/unplug/replug cycles. Kernel block nodes actually disappear;
+the reused `/dev/sda` spelling has disk sequences 1, 2 and 3. UUID, capacity and
+payload survive both returns. Four control receipts bind the initial frontend
+and two fresh generations. Final proof:
+`/tmp/portable-drive-usb-hotplug-generation-final/report.json` and
+`/tmp/portable-drive-usb-hotplug-proof.json`. Success=true, timed_out=false,
+QEMU exit 0 and all four controls complete.
+
+Negative controls are rejected:
+`/tmp/portable-drive-usb-hotplug-duplicate-generation-final/report.json` records
+the completed first unplug and refused duplicate, reports its error and reaps the
+VM. `/tmp/portable-drive-usb-hotplug-noop-generation-final/report.json` uses an
+uncommitted mock that suppresses the mutation; the guest fails its actual-node
+disappearance check despite QEMU exiting 0, and the pending control remains
+incomplete. Disabling the action therefore cannot produce accepted evidence.
+The earlier oversized serial prototype failed before boot and was corrected to
+the locally supported serial length; it is rejected as evidence.
+
+Thirteen Python checks pass: eight protocol/controller cases and five
+owned-disk/execution cases. They cover event-before-reply ordering, wrong device
+and generation, stale consumption, missing completion, foreign replies, explicit
+errors, repeated state, controller failure, actual process retirement, timeout,
+pinning across pathname replacement and state/removable alias refusal. Logs:
+`/tmp/portable-drive-usb-test_drive_hotplug.py-final-v2.log` and
+`/tmp/portable-drive-usb-test_portable_drive_vm.py-final-v2.log`. The unchanged
+non-USB formatter/remount route also passes all three filesystems:
+`/tmp/portable-drive-usb-hotplug-legacy-final/report.json`. An earlier compatibility
+command chose `/bin/true`, which is not an initrd applet; its three command
+failures were correctly rejected. The corrected `/usr/bin/true` route passes.
+Python compilation, shell syntax and whitespace checks pass.
+
+Local architecture comparison against `pre-drive-usb-hotplug-fixture` adds
+350 NLOC, thirty functions and 93 aggregate CCN in development tooling/tests.
+Average/max CCN remain 3.50/274, duplication 6.91%, clones 4,322 and cycles 144.
+There is no newly reported local hotspot or clone. Earlier report-assembly
+growth was removed by giving process execution its own tested responsibility;
+the final targeted maximum CCN is below the hotspot limit. The tool's aggregate
+REGRESSION includes reordered members of unchanged cycles and a recalculated
+score for an unchanged vendor chokepoint, outside the modified implementation.
+Report: `.fitness/portable-drives-usb-hotplug-local.json`.
+
+This establishes controlled real guest device disappearance/reappearance. The
+probe unmounts cleanly before removal; it does not close the active native-write
+or application recovery requirements in 3.5/3.6/7.3. Those are the next users of
+the fixture, alongside the original unfinished coverage/provider/UI gates.

@@ -15,6 +15,8 @@ import shlex
 import shutil
 import subprocess
 import stat
+import tempfile
+from drive_tools.hotplug import UsbHotplug
 
 MODULES = (
     'virtio_pci', 'virtio_blk', '9pnet_virtio', '9p', 'loop', 'vfat',
@@ -62,6 +64,8 @@ def make_initrd(output, args, repo):
     (root / 'etc/mtab').symlink_to('/proc/mounts')
     shutil.copyfile(args.guest_script, root / 'guest-test')
     selected_modules = MODULES + (('btrfs',) if args.btrfs else ())
+    if args.removable_disk:
+        selected_modules += ('xhci_pci', 'usb_storage', 'sd_mod')
     modules = copy_modules(root, args.kernel_release or args.kernel.parent.name, selected_modules)
     host_boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     init = [
@@ -119,6 +123,44 @@ def owned_state_disk(path):
         os.close(pin)
 
 
+def attach_disks(args, resources, command, log_path):
+    """Keep distinct regular-file pins and private control paths until VM exit."""
+    handles = {}
+    identities = set()
+    for name, path in [('state', args.state_disk), ('usb', args.removable_disk)]:
+        if path is not None:
+            descriptor = owned_state_disk(path)
+            resources.callback(os.close, descriptor)
+            metadata = os.fstat(descriptor)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity in identities:
+                raise ValueError('State and removable fixtures must be distinct files')
+            identities.add(identity)
+            handles[name] = descriptor
+    if 'state' in handles:
+        command.extend(['-drive', f'file=/proc/self/fd/{handles["state"]},format=raw,if=virtio'])
+    usb = None
+    if 'usb' in handles:
+        # Keep the Unix address short and independent of a long/custom TMPDIR.
+        directory = resources.enter_context(tempfile.TemporaryDirectory(prefix='little-clip-qmp-', dir='/tmp'))
+        usb = resources.enter_context(UsbHotplug(Path(directory) / 'control.sock', log_path))
+        command.extend(usb.arguments(handles['usb']))
+    return tuple(handles.values()), usb
+
+
+def execute_guest(args, command, log_path, pass_fds, usb):
+    """Retire the process before returning its actual exit or timeout outcome."""
+    with log_path.open('w') as log:
+        if usb is not None:
+            return usb.run(command, log, args.timeout, pass_fds)
+        try:
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                                    timeout=args.timeout, pass_fds=pass_fds)
+            return result.returncode, False
+        except subprocess.TimeoutExpired:
+            return None, True
+
+
 def run_guest(args):
     repo = Path(__file__).resolve().parent.parent
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -136,29 +178,18 @@ def run_guest(args):
     if args.firmware:
         command.extend(['-L', str(args.firmware)])
     log_path = args.output_dir / 'guest.log'
-    timed_out = False
     with contextlib.ExitStack() as resources:
-        pass_fds = ()
-        if args.state_disk:
-            disk = owned_state_disk(args.state_disk)
-            resources.callback(os.close, disk)
-            command.extend(['-drive', f'file=/proc/self/fd/{disk},format=raw,if=virtio'])
-            pass_fds = (disk,)
+        pass_fds, usb = attach_disks(args, resources, command, log_path)
         (args.output_dir / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
-        with log_path.open('w') as log:
-            try:
-                result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                                        timeout=args.timeout, pass_fds=pass_fds)
-                return_code = result.returncode
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                return_code = None
+        return_code, timed_out = execute_guest(args, command, log_path, pass_fds, usb)
     log = log_path.read_text(errors='replace')
     markers = [line.strip() for line in log.splitlines() if line.startswith('LITTLE_CLIP_VM_RESULT=')]
-    success = not timed_out and return_code == 0 and markers == ['LITTLE_CLIP_VM_RESULT=0']
+    control = usb.report() if usb is not None else dict(enabled=False, complete=True, actions=[], error=None)
+    success = not timed_out and return_code == 0 and markers == ['LITTLE_CLIP_VM_RESULT=0'] and control['complete']
     report = dict(success=success, timed_out=timed_out, qemu_return_code=return_code,
                   guest_results=markers, log=str(log_path), guest_script=str(args.guest_script),
-                  guest_args=args.guest_args, state_disk=str(args.state_disk) if args.state_disk else None)
+                  guest_args=args.guest_args, state_disk=str(args.state_disk) if args.state_disk else None,
+                  removable_disk=str(args.removable_disk) if args.removable_disk else None, usb_control=control)
     (args.output_dir / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return 0 if success else 1
@@ -175,6 +206,7 @@ def main():
     parser.add_argument('--tools', type=Path, help='Additional read-only usr tree for guest formatters')
     parser.add_argument('--btrfs', action='store_true', help='Include Btrfs for owned guest backup destinations')
     parser.add_argument('--state-disk', type=Path, help='Owned regular fixture disk retained across guest boots')
+    parser.add_argument('--removable-disk', type=Path, help='Owned regular fixture exposed only as emulated USB storage; enables explicit guest unplug/replug markers')
     parser.add_argument('--guest-script', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--accel', choices=['kvm', 'tcg'], default='kvm')
