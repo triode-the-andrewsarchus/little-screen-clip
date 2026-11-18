@@ -24,6 +24,42 @@ fn grid_len(width: u32, height: u32, channels: usize) -> Option<usize> {
     (length <= 128 * 1024 * 1024).then_some(length)
 }
 
+fn tiff_limits(bytes: usize) -> tiff::decoder::Limits {
+    let mut limits = tiff::decoder::Limits::default();
+    limits.decoding_buffer_size = bytes;
+    limits.intermediate_buffer_size = bytes;
+    limits
+}
+
+// Shared byte accounting for decoded TIFF chunks. Large chunks are rejected by
+// decoder limits before allocation; eviction accounts for retained capacities.
+fn cache_chunk<K: Copy + Eq + std::hash::Hash, T>(
+    cache: &mut HashMap<K, Arc<Vec<T>>>,
+    order: &mut VecDeque<K>,
+    key: K,
+    values: Vec<T>,
+    budget: usize,
+) -> Option<Arc<Vec<T>>> {
+    let bytes = values.capacity().checked_mul(std::mem::size_of::<T>())?;
+    if bytes > budget {
+        return None;
+    }
+    let mut used: usize = cache
+        .values()
+        .map(|v| v.capacity() * std::mem::size_of::<T>())
+        .sum();
+    while used + bytes > budget {
+        let old = order.pop_front()?;
+        if let Some(v) = cache.remove(&old) {
+            used -= v.capacity() * std::mem::size_of::<T>();
+        }
+    }
+    let values = Arc::new(values);
+    order.push_back(key);
+    cache.insert(key, values.clone());
+    Some(values)
+}
+
 /// Projection mode for the geography viewer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ProjectionMode {
@@ -192,7 +228,7 @@ pub struct SrtmTile {
     pub lat_floor: i32,
     pub lon_floor: i32,
     pub samples: usize,
-    pub heights: Vec<i16>,
+    pub heights: Arc<Vec<i16>>,
 }
 
 impl SrtmTile {
@@ -217,7 +253,7 @@ impl SrtmTile {
             lat_floor,
             lon_floor,
             samples,
-            heights,
+            heights: Arc::new(heights),
         })
     }
 
@@ -253,6 +289,53 @@ impl SrtmTile {
     }
 }
 
+/// Lazy local HGT inventory with a byte-bounded decoded tile cache.
+#[derive(Default)]
+pub struct HgtStore {
+    sources: HashMap<(i32, i32), (Arc<AssetDirectory>, std::ffi::OsString)>,
+    cache: Mutex<(HashMap<(i32, i32), Arc<Vec<i16>>>, VecDeque<(i32, i32)>)>,
+}
+impl HgtStore {
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+    fn sample(&self, lat: f64, lon: f64) -> Option<f32> {
+        let key = (lat.floor() as i32, lon.floor() as i32);
+        let (directory, name) = self.sources.get(&key)?;
+        let mut cache = self.cache.lock().ok()?;
+        let heights = if let Some(hit) = cache.0.get(&key) {
+            hit.clone()
+        } else {
+            let file = directory.open_file(name).ok()?;
+            if file.metadata().ok()?.len() > 3601 * 3601 * 2 {
+                return None;
+            }
+            let bytes = storage::read(format!(
+                "/proc/self/fd/{}",
+                std::os::fd::AsRawFd::as_raw_fd(&file)
+            ))
+            .ok()?;
+            let parsed = SrtmTile::from_hgt_bytes(key.0, key.1, &bytes)?;
+            let (values, order) = &mut *cache;
+            cache_chunk(
+                values,
+                order,
+                key,
+                Arc::unwrap_or_clone(parsed.heights),
+                128 * 1024 * 1024,
+            )?
+        };
+        let samples = (heights.len() as f64).sqrt() as usize;
+        SrtmTile {
+            lat_floor: key.0,
+            lon_floor: key.1,
+            samples,
+            heights,
+        }
+        .sample(lat, lon)
+    }
+}
+
 /// Optional global/local elevation & land-cover store.
 pub struct BasemapAssets {
     pub assets_dir: PathBuf,
@@ -264,7 +347,7 @@ pub struct BasemapAssets {
     pub roads: Vec<RoadLine>,
     pub lakes: Vec<LakePolygon>,
     pub coastlines: Vec<WaterPolygon>,
-    pub terrain_tiles: HashMap<(i32, i32), SrtmTile>,
+    pub terrain_tiles: HgtStore,
     pub global_dem: Option<GlobalDemGrid>,
     pub cog_dem: Option<CogDemPyramid>,
     pub land_cover: Option<GlobalLandCoverGrid>,
@@ -626,7 +709,14 @@ struct GrwlMaskEntry {
 pub struct GrwlMaskStore {
     mask_dir: AssetDirectory,
     entries: Vec<GrwlMaskEntry>,
-    cache: Mutex<(HashMap<usize, Arc<Vec<u8>>>, VecDeque<usize>)>,
+    cells: Vec<Vec<u32>>,
+    inner: Mutex<MaskInner>,
+}
+
+struct MaskInner {
+    decoders: HashMap<usize, tiff::decoder::Decoder<BufReader<fs::File>>>,
+    cache: HashMap<(usize, u32), Arc<Vec<u8>>>,
+    order: VecDeque<(usize, u32)>,
 }
 
 impl GrwlMaskStore {
@@ -649,11 +739,7 @@ impl GrwlMaskStore {
                     && Path::new(&e.file).file_name() == Some(std::ffi::OsStr::new(&e.file))
             })
         {
-            return Some(Self {
-                mask_dir,
-                entries,
-                cache: Mutex::new((HashMap::new(), VecDeque::new())),
-            });
+            return Self::from_entries(mask_dir, entries);
         }
         let mut entries = Vec::new();
         for entry in fs::read_dir(mask_dir.path()).ok()?.flatten() {
@@ -707,56 +793,96 @@ impl GrwlMaskStore {
         if let Ok(encoded) = serde_json::to_vec(&entries) {
             let _ = storage::write(&idx_path, encoded);
         }
+        Self::from_entries(mask_dir, entries)
+    }
+
+    fn from_entries(mask_dir: AssetDirectory, entries: Vec<GrwlMaskEntry>) -> Option<Self> {
+        let mut cells = vec![Vec::new(); 180 * 90];
+        let mut memberships = 0;
+        for (i, e) in entries.iter().enumerate() {
+            memberships += index_points(
+                &mut cells,
+                i as u32,
+                &[
+                    [e.min_lon as f32, e.min_lat as f32],
+                    [e.max_lon as f32, e.max_lat as f32],
+                ],
+                1_000_000 - memberships,
+            )?;
+        }
         Some(Self {
             mask_dir,
             entries,
-            cache: Mutex::new((HashMap::new(), VecDeque::new())),
+            cells,
+            inner: Mutex::new(MaskInner {
+                decoders: HashMap::new(),
+                cache: HashMap::new(),
+                order: VecDeque::new(),
+            }),
         })
     }
 
     /// Returns `Some(true)` for water, `Some(false)` for land/island inside a 30 m mask tile,
     /// or `None` if no mask tile covers `(lat, lon)`.
     pub fn sample_water(&self, lat: f64, lon: f64) -> Option<bool> {
-        let (idx, entry) = self.entries.iter().enumerate().find(|(_, e)| {
-            lon >= e.min_lon && lon <= e.max_lon && lat >= e.min_lat && lat <= e.max_lat
-        })?;
-        let data = {
-            let mut guard = self.cache.lock().ok()?;
-            if let Some(hit) = guard.0.get(&idx) {
-                hit.clone()
-            } else {
-                drop(guard);
-                let file = self
-                    .mask_dir
-                    .open_file(std::ffi::OsStr::new(&entry.file))
-                    .ok()?;
-                let mut dec = tiff::decoder::Decoder::new(BufReader::new(file))
-                    .ok()?
-                    .with_limits(tiff::decoder::Limits::unlimited());
-                let tiff::decoder::DecodingResult::U8(bytes) = dec.read_image().ok()? else {
-                    return None;
-                };
-                let arc = Arc::new(bytes);
-                let mut guard = self.cache.lock().ok()?;
-                if guard.1.len() >= 6
-                    && let Some(old) = guard.1.pop_front()
-                {
-                    guard.0.remove(&old);
-                }
-                guard.1.push_back(idx);
-                guard.0.insert(idx, arc.clone());
-                arc
-            }
-        };
-        let px = (((lon - entry.min_lon) / (entry.max_lon - entry.min_lon)) * entry.width as f64)
-            .floor() as usize;
-        let py = (((entry.max_lat - lat) / (entry.max_lat - entry.min_lat)) * entry.height as f64)
-            .floor() as usize;
-        if px < entry.width as usize && py < entry.height as usize {
-            data.get(py * entry.width as usize + px).map(|&v| v > 0)
-        } else {
-            None
+        if !lat.is_finite() || !lon.is_finite() {
+            return None;
         }
+        let cell = (((lat + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize * 180
+            + (((lon + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
+        let idx = *self.cells[cell].iter().find(|&&i| {
+            let e = &self.entries[i as usize];
+            lon >= e.min_lon && lon < e.max_lon && lat >= e.min_lat && lat < e.max_lat
+        })? as usize;
+        let entry = &self.entries[idx];
+        let px = (((lon - entry.min_lon) / (entry.max_lon - entry.min_lon)) * entry.width as f64)
+            .floor() as u32;
+        let py = (((entry.max_lat - lat) / (entry.max_lat - entry.min_lat)) * entry.height as f64)
+            .floor() as u32;
+        if px >= entry.width || py >= entry.height {
+            return None;
+        }
+        let mut inner = self.inner.lock().ok()?;
+        if !inner.decoders.contains_key(&idx) {
+            let file = self
+                .mask_dir
+                .open_file(std::ffi::OsStr::new(&entry.file))
+                .ok()?;
+            let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
+                .ok()?
+                .with_limits(tiff_limits(16 * 1024 * 1024));
+            if decoder.dimensions().ok()? != (entry.width, entry.height)
+                || decoder.colortype().ok()? != tiff::ColorType::Gray(8)
+            {
+                return None;
+            }
+            if inner.decoders.len() >= 8 {
+                inner.decoders.clear();
+            }
+            inner.decoders.insert(idx, decoder);
+        }
+        let (cw, ch) = inner.decoders.get(&idx)?.chunk_dimensions();
+        if cw == 0 || ch == 0 || (cw as u64) * (ch as u64) > 16 * 1024 * 1024 {
+            return None;
+        }
+        let chunk_id = (py / ch)
+            .checked_mul(entry.width.div_ceil(cw))?
+            .checked_add(px / cw)?;
+        let key = (idx, chunk_id);
+        let data = if let Some(hit) = inner.cache.get(&key) {
+            hit.clone()
+        } else {
+            let tiff::decoder::DecodingResult::U8(bytes) =
+                inner.decoders.get_mut(&idx)?.read_chunk(chunk_id).ok()?
+            else {
+                return None;
+            };
+            let MaskInner { cache, order, .. } = &mut *inner;
+            cache_chunk(cache, order, key, bytes, 32 * 1024 * 1024)?
+        };
+        let actual_w = (entry.width - (px / cw) * cw).min(cw);
+        data.get(((py % ch) as usize) * (actual_w as usize) + (px % cw) as usize)
+            .map(|&v| v > 0)
     }
 }
 
@@ -1061,7 +1187,7 @@ impl CogDemPyramid {
         let file = crate::kernel_interface::open_content(tif_path, true).ok()?;
         let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
             .ok()?
-            .with_limits(tiff::decoder::Limits::unlimited());
+            .with_limits(tiff_limits(16 * 1024 * 1024));
         let mut levels = Vec::new();
         for idx in 0..16usize {
             if idx > 0 && decoder.seek_to_image(idx).is_err() {
@@ -1069,7 +1195,17 @@ impl CogDemPyramid {
             }
             if let Ok((width, height)) = decoder.dimensions() {
                 let (chunk_w, chunk_h) = decoder.chunk_dimensions();
-                if width > 0 && height > 0 && chunk_w > 0 && chunk_h > 0 {
+                if width > 0
+                    && width <= 1_000_000
+                    && height > 0
+                    && height <= 1_000_000
+                    && chunk_w > 0
+                    && chunk_h > 0
+                    && (chunk_w as u64) * (chunk_h as u64) <= 4 * 1024 * 1024
+                    && (width.div_ceil(chunk_w) as u64) * (height.div_ceil(chunk_h) as u64)
+                        <= u32::MAX as u64
+                    && matches!(decoder.colortype().ok(), Some(tiff::ColorType::Gray(_)))
+                {
                     levels.push(CogLevel {
                         ifd_index: idx,
                         width,
@@ -1099,6 +1235,9 @@ impl CogDemPyramid {
     }
 
     pub fn sample_at(&self, lat: f64, lon: f64, target_global_width: f64) -> Option<f32> {
+        if !lat.is_finite() || !lon.is_finite() || !target_global_width.is_finite() {
+            return None;
+        }
         let level = self
             .levels
             .iter()
@@ -1142,15 +1281,8 @@ impl CogDemPyramid {
                         .collect(),
                     _ => return None,
                 };
-                let arc = Arc::new(vals);
-                if guard.order.len() >= 128
-                    && let Some(old) = guard.order.pop_front()
-                {
-                    guard.cache.remove(&old);
-                }
-                guard.order.push_back(key);
-                guard.cache.insert(key, arc.clone());
-                arc
+                let CogDemInner { cache, order, .. } = &mut *guard;
+                cache_chunk(cache, order, key, vals, 64 * 1024 * 1024)?
             };
             let lx = x % level.chunk_w;
             let ly = y % level.chunk_h;
@@ -1188,10 +1320,20 @@ impl Ne2FullSampler {
         let file = crate::kernel_interface::open_content(tif_path, true).ok()?;
         let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
             .ok()?
-            .with_limits(tiff::decoder::Limits::unlimited());
+            .with_limits(tiff_limits(16 * 1024 * 1024));
         let (width, height) = decoder.dimensions().ok()?;
-        let (_chunk_w, chunk_h) = decoder.chunk_dimensions();
-        if width < 8192 || chunk_h == 0 {
+        if decoder.colortype().ok()? != tiff::ColorType::RGB(8) {
+            return None;
+        }
+        let (chunk_w, chunk_h) = decoder.chunk_dimensions();
+        if width < 8192
+            || width > 1_000_000
+            || height == 0
+            || height > 1_000_000
+            || chunk_w != width
+            || chunk_h == 0
+            || (width as u64) * (chunk_h as u64) * 3 > 16 * 1024 * 1024
+        {
             return None;
         }
         Some(Self {
@@ -1226,15 +1368,8 @@ impl Ne2FullSampler {
                 let tiff::decoder::DecodingResult::U8(bytes) = decoded else {
                     return None;
                 };
-                let arc = Arc::new(bytes);
-                if guard.order.len() >= 1024
-                    && let Some(old) = guard.order.pop_front()
-                {
-                    guard.cache.remove(&old);
-                }
-                guard.order.push_back(chunk_idx);
-                guard.cache.insert(chunk_idx, arc.clone());
-                arc
+                let Ne2FullInner { cache, order, .. } = &mut *guard;
+                cache_chunk(cache, order, chunk_idx, bytes, 64 * 1024 * 1024)?
             };
             let ly = y % self.chunk_h;
             let idx = ((ly * self.width + x) as usize) * 3;
@@ -1424,7 +1559,7 @@ impl BasemapAssets {
             .and_then(|p| storage::read(p).ok())
             .map(|bytes| parse_gshhg_b(&bytes, 12_000))
             .unwrap_or_default();
-        let mut terrain_tiles = HashMap::new();
+        let mut terrain_tiles = HgtStore::default();
         if let Some(dir) = terrain_override_dir {
             load_hgt_dir(dir, &mut terrain_tiles);
         }
@@ -1466,14 +1601,10 @@ impl BasemapAssets {
     /// Samples terrain elevation in meters at `(lat, lon)` from local overrides, COG pyramid, or
     /// overview DEM, returning `None` when no DEM is loaded.
     pub fn sample_elevation_at(&self, lat: f64, lon: f64, target_global_width: f64) -> Option<f32> {
-        let lat_f = lat.floor() as i32;
-        let lon_f = lon.floor() as i32;
-        if let Some(tile) = self.terrain_tiles.get(&(lat_f, lon_f))
-            && let Some(h) = tile.sample(lat, lon)
-        {
+        if let Some(h) = self.terrain_tiles.sample(lat, lon) {
             return Some(h);
         }
-        if target_global_width > 5400.0
+        if (target_global_width > 5400.0 || self.global_dem.is_none())
             && let Some(cog) = &self.cog_dem
             && let Some(h) = cog.sample_at(lat, lon, target_global_width)
         {
@@ -2236,13 +2367,32 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     }
     let img_path = find_first_with_ext(dir, &["png", "jpg", "jpeg", "tif", "tiff"])?;
     let file = crate::kernel_interface::open_content(&img_path, true).ok()?;
-    let mut reader = image::ImageReader::new(BufReader::new(file))
-        .with_guessed_format()
-        .ok()?;
-    reader.limits(image::Limits::no_limits());
-    let decoded = reader.decode().ok()?;
-    let resized = decoded.resize_exact(4096, 2048, image::imageops::FilterType::Triangle);
-    let rgb = resized.to_rgb8().into_raw();
+    let rgb = if let Some(sampler) = Ne2FullSampler::open(&img_path) {
+        let mut rgb = Vec::with_capacity(4096 * 2048 * 3);
+        for y in 0..2048 {
+            for x in 0..4096 {
+                rgb.extend_from_slice(&sampler.sample_rgb(
+                    90.0 - (y as f64 + 0.5) * 180.0 / 2048.0,
+                    (x as f64 + 0.5) * 360.0 / 4096.0 - 180.0,
+                )?);
+            }
+        }
+        rgb
+    } else {
+        let mut reader = image::ImageReader::new(BufReader::new(file))
+            .with_guessed_format()
+            .ok()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(32768);
+        limits.max_image_height = Some(16384);
+        limits.max_alloc = Some(128 * 1024 * 1024);
+        reader.limits(limits);
+        let decoded = reader.decode().ok()?;
+        decoded
+            .resize_exact(4096, 2048, image::imageops::FilterType::Triangle)
+            .to_rgb8()
+            .into_raw()
+    };
     let mut blob = Vec::with_capacity(8 + rgb.len());
     blob.extend_from_slice(&4096u32.to_le_bytes());
     blob.extend_from_slice(&2048u32.to_le_bytes());
@@ -2255,30 +2405,39 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     })
 }
 
-fn load_hgt_dir(dir: &Path, out: &mut HashMap<(i32, i32), SrtmTile>) {
-    let Ok(directory) = AssetDirectory::open(dir) else {
+fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
+    let Ok(directory) = AssetDirectory::open(dir).map(Arc::new) else {
         return;
     };
     let Ok(entries) = fs::read_dir(directory.path()) else {
         return;
     };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if !p
+    for entry in entries.take(65_536).flatten() {
+        let path = entry.path();
+        if !path
             .extension()
             .and_then(|s| s.to_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("hgt"))
         {
             continue;
         }
-        if let Some((lat, lon)) = parse_hgt_name(stem)
-            && let Ok(bytes) = storage::read(&p)
-            && let Some(tile) = SrtmTile::from_hgt_bytes(lat, lon, &bytes)
-        {
-            out.insert((lat, lon), tile);
+        let Some(key) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(parse_hgt_name)
+        else {
+            continue;
+        };
+        let Ok(file) = directory.open_file(&entry.file_name()) else {
+            continue;
+        };
+        let Ok(metadata) = file.metadata() else {
+            continue;
+        };
+        if metadata.len() <= 3601 * 3601 * 2 {
+            out.sources
+                .entry(key)
+                .or_insert_with(|| (directory.clone(), entry.file_name()));
         }
     }
 }
@@ -2333,22 +2492,24 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     let file = crate::kernel_interface::open_content(&tif_path, true).ok()?;
     let mut decoder = tiff::decoder::Decoder::new(file)
         .ok()?
-        .with_limits(tiff::decoder::Limits::unlimited());
-    let mut best_ifd = 0usize;
+        .with_limits(tiff_limits(128 * 1024 * 1024));
+    let mut best_ifd = None;
     let mut best_diff = u32::MAX;
     for idx in 0..16usize {
         if idx > 0 && decoder.seek_to_image(idx).is_err() {
             break;
         }
-        if let Ok((w, _h)) = decoder.dimensions() {
+        if let Ok((w, h)) = decoder.dimensions() {
             let diff = w.abs_diff(5400);
-            if w <= 6000 && diff < best_diff {
+            if w <= 6000 && grid_len(w, h, 4).is_some() && diff < best_diff {
                 best_diff = diff;
-                best_ifd = idx;
+                best_ifd = Some(idx);
             }
         }
     }
-    decoder.seek_to_image(best_ifd).ok()?;
+    // A plain global TIFF without an overview is sampled by chunks on demand.
+    // Never fall back to allocating its full-resolution image.
+    decoder.seek_to_image(best_ifd?).ok()?;
     let (width, height) = decoder.dimensions().ok()?;
     let decoded = decoder.read_image().ok()?;
     let heights: Vec<i16> = match decoded {
@@ -2404,6 +2565,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plain_dem_without_an_overview_is_sampled_by_chunks() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("gebco")).unwrap();
+        let path = root.path().join("gebco/plain.tif");
+        let file = fs::File::create(&path).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        let mut image = encoder
+            .new_image::<tiff::encoder::colortype::GrayI16>(6001, 4)
+            .unwrap();
+        image.rows_per_strip(1).unwrap();
+        image.write_data(&vec![123i16; 6001 * 4]).unwrap();
+        drop(encoder);
+        assert!(load_global_dem(root.path()).is_none());
+        let pyramid = CogDemPyramid::open(&path).unwrap();
+        assert_eq!(pyramid.sample_at(0.0, 0.0, 5400.0), Some(123.0));
+        assert!(
+            pyramid
+                .inner
+                .lock()
+                .unwrap()
+                .cache
+                .values()
+                .map(|v| v.capacity() * 2)
+                .sum::<usize>()
+                <= 64 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn masks_decode_only_requested_strips_and_index_coverage() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("mask.tif");
+        let file = fs::File::create(&path).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        let mut image = encoder
+            .new_image::<tiff::encoder::colortype::Gray8>(8, 8)
+            .unwrap();
+        image.rows_per_strip(2).unwrap();
+        let pixels: Vec<_> = (0..64).map(|i| if i % 8 < 4 { 255 } else { 0 }).collect();
+        image.write_data(&pixels).unwrap();
+        drop(encoder);
+        let store = GrwlMaskStore::from_entries(
+            AssetDirectory::open(root.path()).unwrap(),
+            vec![GrwlMaskEntry {
+                file: "mask.tif".into(),
+                width: 8,
+                height: 8,
+                min_lon: 0.0,
+                max_lon: 8.0,
+                min_lat: 0.0,
+                max_lat: 8.0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(store.sample_water(7.5, 0.5), Some(true));
+        assert_eq!(store.sample_water(7.5, 5.5), Some(false));
+        assert_eq!(store.sample_water(0.5, 0.5), Some(true));
+        assert_eq!(store.sample_water(30.0, 30.0), None);
+        assert_eq!(
+            store
+                .inner
+                .lock()
+                .unwrap()
+                .cache
+                .values()
+                .map(|v| v.len())
+                .sum::<usize>(),
+            32
+        );
+    }
+
+    #[test]
+    fn local_hgt_inventory_is_lazy_and_cache_eviction_accounts_for_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("N00E000.hgt"),
+            [0, 10, 0, 10, 0, 10, 0, 10],
+        )
+        .unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        assert_eq!(store.sources.len(), 1);
+        assert!(store.cache.lock().unwrap().0.is_empty());
+        assert_eq!(store.sample(0.5, 0.5), Some(10.0));
+        let mut cache = HashMap::new();
+        let mut order = VecDeque::new();
+        for key in 0..10 {
+            cache_chunk(&mut cache, &mut order, key, vec![0u8; 6], 10).unwrap();
+        }
+        assert_eq!(cache.len(), 1);
+        assert_eq!(order.len(), 1);
+        assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
     fn malformed_grids_and_unicode_tile_names_are_rejected() {
         for name in [
             "é12E123",
@@ -2441,7 +2697,7 @@ mod tests {
                 lat_floor: 0,
                 lon_floor: 0,
                 samples: 0,
-                heights: vec![]
+                heights: Arc::new(vec![])
             }
             .sample(0.0, 0.0)
             .is_none()
