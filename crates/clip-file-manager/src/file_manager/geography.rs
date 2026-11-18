@@ -341,13 +341,12 @@ impl Viewer {
             } else {
                 "3D → 2D Transition"
             };
-            let dem_source = if self.assets.as_ref().is_some_and(|a| {
-                !a.terrain_tiles.is_empty() || a.global_dem.is_some() || a.cog_dem.is_some()
-            }) {
-                "DEM loaded"
-            } else {
-                "Terrain unavailable"
-            };
+            let dem_source =
+                if self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0 {
+                    "DEM loaded"
+                } else {
+                    "Terrain unavailable"
+                };
             ui.label(format!(
                 "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
                 self.camera.zoom
@@ -370,6 +369,8 @@ impl Viewer {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let terrain_available =
+            self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0;
         ui.horizontal_wrapped(|ui| {
             ui.label("View:");
             for (label, mode) in [
@@ -392,7 +393,15 @@ impl Viewer {
                 ("Oilslick", BasemapStyle::Oilslick),
                 ("Hillshade", BasemapStyle::Hillshade),
             ] {
-                if ui.selectable_label(self.style == style, label).clicked() {
+                let enabled = style == BasemapStyle::Natural || terrain_available;
+                let button = egui::SelectableLabel::new(self.style == style, label);
+                if ui
+                    .add_enabled(enabled, button)
+                    .on_disabled_hover_text(
+                        "Load elevation data in Offline Assets to enable terrain shading.",
+                    )
+                    .clicked()
+                {
                     self.style = style;
                 }
             }
@@ -401,7 +410,11 @@ impl Viewer {
             ui.checkbox(&mut self.show_state_borders, "States");
             ui.checkbox(&mut self.show_rivers, "Rivers");
             ui.checkbox(&mut self.show_roads, "Roads");
-            ui.checkbox(&mut self.show_contours, "Contours");
+            ui.add_enabled(
+                terrain_available,
+                egui::Checkbox::new(&mut self.show_contours, "Contours"),
+            )
+            .on_disabled_hover_text("Contours require GEBCO elevation or local HGT terrain.");
             ui.separator();
             if ui
                 .add(
