@@ -10,7 +10,7 @@ use little_clip_core::{
 };
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::{
@@ -209,6 +209,7 @@ impl AssetDownloader {
                         report(base + 0.91 * span, "Extracting Natural Earth II texture…");
                         extract_matching_from_zip(
                             &zip_path,
+                            &cancelled,
                             &[".tif", ".tiff", ".png", ".jpg", ".jpeg"],
                         )?;
                     }
@@ -303,7 +304,11 @@ impl AssetDownloader {
                             |f, m| report(base + (0.02 + f * 0.85) * span, m),
                         )?;
                         report(base + 0.88 * span, "Extracting GRWL centerlines…");
-                        extract_matching_from_zip(&zip_path, &[".shp", ".dbf", ".shx"])?;
+                        extract_matching_from_zip(
+                            &zip_path,
+                            &cancelled,
+                            &[".shp", ".dbf", ".shx"],
+                        )?;
                     }
                     DownloadPack::GrwlMasks => {
                         let mask_dir = assets_dir.join("grwl_masks");
@@ -320,7 +325,7 @@ impl AssetDownloader {
                             |f, m| report(base + (0.02 + f * 0.85) * span, m),
                         )?;
                         report(base + 0.88 * span, "Extracting GRWL 30m water masks…");
-                        extract_matching_from_zip(&zip_path, &[".tif", ".tiff"])?;
+                        extract_matching_from_zip(&zip_path, &cancelled, &[".tif", ".tiff"])?;
                     }
                     DownloadPack::WaterOutlines => {
                         report(base + 0.02 * span, "Downloading GSHHG coastlines & lakes…");
@@ -335,6 +340,7 @@ impl AssetDownloader {
                         report(base + 0.88 * span, "Extracting GSHHG binary shorelines…");
                         extract_matching_from_zip(
                             &zip_path,
+                            &cancelled,
                             &["gshhs_c.b", "gshhs_l.b", "gshhs_i.b"],
                         )?;
                     }
@@ -382,6 +388,7 @@ impl AssetDownloader {
                                         );
                                         let _ = extract_matching_from_zip(
                                             &downloaded,
+                                            &cancelled,
                                             &[".tif", ".tiff", ".nc"],
                                         );
                                     }
@@ -428,6 +435,7 @@ impl AssetDownloader {
                         report(base + 0.92 * span, "Extracting HydroRIVERS…");
                         let _ = extract_matching_from_zip(
                             &archive,
+                            &cancelled,
                             &[".shp", ".dbf", ".shx"],
                         );
                     }
@@ -543,6 +551,7 @@ fn download_to_file(
             "--speed-time",
             "20",
         ])
+        .resource_limit(rustix::process::Resource::Fsize, max_bytes)
         .timeout(Duration::from_secs(3600))
         .own_process_group()
         .die_with_parent()
@@ -603,6 +612,14 @@ fn download_to_file(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("curl failed for {filename}: {}", stderr.trim()));
     }
+    let downloaded_bytes = staged
+        .as_file()
+        .metadata()
+        .map_err(|e| e.to_string())?
+        .len();
+    if downloaded_bytes > max_bytes {
+        return Err("Download exceeded the geography disk budget".into());
+    }
     let (file, staging) = if filename.to_ascii_lowercase().ends_with(".zip") {
         (
             staged.as_file().try_clone().map_err(|e| e.to_string())?,
@@ -618,6 +635,7 @@ fn download_to_file(
     };
     let path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
     Ok(Downloaded {
+        expansion_budget: max_bytes - downloaded_bytes,
         _staging: staging,
         file,
         directory,
@@ -627,6 +645,7 @@ fn download_to_file(
 
 // Declaration order keeps the parent descriptor alive through temporary cleanup.
 struct Downloaded {
+    expansion_budget: u64,
     _staging: Option<tempfile::NamedTempFile>,
     file: fs::File,
     directory: AssetDirectory,
@@ -638,10 +657,22 @@ impl AsRef<Path> for Downloaded {
     }
 }
 
-fn extract_matching_from_zip(zip_path: &Downloaded, suffixes: &[&str]) -> Result<(), String> {
+fn extract_matching_from_zip(
+    zip_path: &Downloaded,
+    cancelled: &AtomicBool,
+    suffixes: &[&str],
+) -> Result<(), String> {
     let file = zip_path.file.try_clone().map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    if archive.len() > 65_536 {
+        return Err("Archive has too many entries".into());
+    }
+    let mut remaining = zip_path.expansion_budget;
+    let mut buffer = [0u8; 64 * 1024];
     for i in 0..archive.len() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Extraction cancelled".into());
+        }
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         if entry.is_dir() {
             continue;
@@ -655,28 +686,83 @@ fn extract_matching_from_zip(zip_path: &Downloaded, suffixes: &[&str]) -> Result
         };
         let lower = name.to_ascii_lowercase();
         if suffixes.iter().any(|s| lower.ends_with(s)) {
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            if entry.size() > remaining {
+                return Err("Expanded archive exceeds the geography disk budget".into());
+            }
+            let mut staged = zip_path.directory.stage().map_err(|e| e.to_string())?;
+            loop {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Extraction cancelled".into());
+                }
+                let count = entry.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                remaining = remaining
+                    .checked_sub(count as u64)
+                    .ok_or("Expanded archive exceeds the geography disk budget")?;
+                staged
+                    .write_all(&buffer[..count])
+                    .map_err(|e| e.to_string())?;
+            }
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Extraction cancelled".into());
+            }
             zip_path
                 .directory
-                .write(std::ffi::OsStr::new(&name), &buf)
+                .install(staged, std::ffi::OsStr::new(&name))
                 .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
 
+// Conservative accounting: incomplete or protected inventories disable admission.
+// Symlinks are never traversed and depth/entry limits prevent cycles or huge scans.
 fn dir_size(dir: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(dir) else {
+    if !dir.exists() {
         return 0;
+    }
+    let Ok(root) = AssetDirectory::open(dir) else {
+        return u64::MAX;
     };
+    let mut pending = vec![(root, 0)];
     let mut total = 0u64;
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            total = total.saturating_add(dir_size(&p));
-        } else if let Ok(meta) = entry.metadata() {
-            total = total.saturating_add(meta.len());
+    let mut visited = 0;
+    while let Some((directory, depth)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(directory.path()) else {
+            return u64::MAX;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return u64::MAX;
+            };
+            visited += 1;
+            if visited > 100_000 {
+                return u64::MAX;
+            }
+            let Ok(kind) = entry.file_type() else {
+                return u64::MAX;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                if depth >= 16 {
+                    return u64::MAX;
+                }
+                // Keep a pin alive for each queued child, rather than an fd pathname
+                // whose parent would be dropped at the end of this iteration.
+                let Ok(child) = AssetDirectory::open(&entry.path()) else {
+                    return u64::MAX;
+                };
+                pending.push((child, depth + 1));
+            } else {
+                let Ok(meta) = entry.metadata() else {
+                    return u64::MAX;
+                };
+                total = total.saturating_add(meta.len());
+            }
         }
     }
     total
@@ -701,22 +787,38 @@ mod tests {
             zip.finish().unwrap();
         }
         let file = staged.as_file().try_clone().unwrap();
-        let downloaded = Downloaded {
+        let mut downloaded = Downloaded {
             path: PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())),
             file,
+            expansion_budget: 1024,
             _staging: Some(staged),
             directory,
         };
+        let cancelled = AtomicBool::new(true);
+        assert!(
+            extract_matching_from_zip(&downloaded, &cancelled, &[".tif"])
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        cancelled.store(false, Ordering::Relaxed);
+        downloaded.expansion_budget = 5;
+        assert!(
+            extract_matching_from_zip(&downloaded, &cancelled, &[".tif"])
+                .unwrap_err()
+                .contains("budget")
+        );
+        assert!(!original.join("tile.tif").exists());
+        downloaded.expansion_budget = 1024;
         let moved = root.path().join("moved");
         fs::rename(&original, &moved).unwrap();
         fs::create_dir(&original).unwrap();
         let outside = root.path().join("outside");
         fs::write(&outside, b"keep original").unwrap();
         symlink(&outside, moved.join("tile.tif")).unwrap();
-        assert!(extract_matching_from_zip(&downloaded, &[".tif"]).is_err());
+        assert!(extract_matching_from_zip(&downloaded, &cancelled, &[".tif"]).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"keep original");
         fs::remove_file(moved.join("tile.tif")).unwrap();
-        extract_matching_from_zip(&downloaded, &[".tif"]).unwrap();
+        extract_matching_from_zip(&downloaded, &cancelled, &[".tif"]).unwrap();
         assert_eq!(fs::read(moved.join("tile.tif")).unwrap(), b"fixture raster");
         assert!(!original.join("tile.tif").exists());
         // Raw installation uses the same held parent and atomically replaces a file.
@@ -726,4 +828,13 @@ mod tests {
             .unwrap();
         assert_eq!(fs::read(moved.join("tile.tif")).unwrap(), b"next revision");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn disk_accounting_does_not_follow_directory_symlink_cycles() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("asset"), b"12345").unwrap();
+    std::os::unix::fs::symlink(root.path(), root.path().join("cycle")).unwrap();
+    assert_eq!(dir_size(root.path()), 5);
 }
