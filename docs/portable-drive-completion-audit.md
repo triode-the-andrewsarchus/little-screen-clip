@@ -113,6 +113,22 @@ pass in `/tmp/portable-drive-image-controls-clippy-final.log` and
 also succeeds. Changed-source rustfmt and diff whitespace checks pass. Privileged
 partition and UDisks operations remain confined to the disposable guest.
 
+The private Files light-theme acceptance flow passes all 51 observations in
+`/tmp/portable-drive-image-controls-v1-ui-light/report.json`. The offline catalog
+and conflict-review screenshots were inspected: the excluded folder remains
+visibly Not catalogued, and the persistent conflict shows both preserved variants
+alongside separate drive-confirmation and RAM-export status.
+
+The broader source-filesystem regression also passes on FAT32/exFAT/NTFS in
+`/tmp/portable-drive-image-controls-v1-vm-filesystems/report.json`: 225 main tests
+plus nine owned-process probes, 234 raw passing counts, no failures or timeout,
+and successful results for each format. It retains the existing catalog, startup,
+RAM recovery, partition/bulk/preference/configuration preparation, watch/overflow,
+managed-policy, sync preparation, population and native filesystem checks, and
+adds the ordinary image-admission and uncertain-journal retention cases. These
+ordinary image cases repeat coordinator policy/lifecycle checks; actual UDisks
+effects are covered by the separate partitioned lifecycle guest above.
+
 The combined native mount/retirement functions initially had CCN 28/21 and the
 journal constructor CCN 25. Separating native effect stages from atomic journal
 admission removes all new production hotspots. Native calls share the existing
