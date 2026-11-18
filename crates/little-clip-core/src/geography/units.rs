@@ -30,7 +30,7 @@ impl Units {
             Self::Metric => (1.0, "m"),
             Self::Imperial => (0.3048, "ft"),
         };
-        format!("{:.0} {suffix}", meters / factor)
+        format!("{:.1} {suffix}", meters / factor)
     }
 
     pub fn elevation_range(self, low: f64, high: f64) -> String {
@@ -55,11 +55,33 @@ impl Units {
 mod tests {
     use super::*;
     #[test]
+    fn config_preserves_old_metric_default_and_round_trips_imperial() {
+        let metric: crate::config::AppConfig = toml::from_str("[geography]").unwrap();
+        assert_eq!(metric.geography.units, Units::Metric);
+        let imperial: crate::config::AppConfig = toml::from_str(
+            r#"[geography]
+units = "imperial""#,
+        )
+        .unwrap();
+        assert_eq!(imperial.geography.units, Units::Imperial);
+        let saved = toml::to_string(&imperial).unwrap();
+        let loaded: crate::config::AppConfig = toml::from_str(&saved).unwrap();
+        assert_eq!(loaded.geography.units, Units::Imperial);
+        assert!(
+            toml::from_str::<crate::config::AppConfig>(
+                r#"[geography]
+units = "unknown""#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn imperial_distances_and_elevations_preserve_physical_lengths() {
         assert_eq!(Units::Imperial.distance(1609.344), "1.00 mi");
         assert_eq!(Units::Imperial.distance(91.44), "100.00 yd");
         assert_eq!(Units::Imperial.distance(0.3048), "1.00 ft");
-        assert_eq!(Units::Imperial.elevation(-30.48), "-100 ft");
+        assert_eq!(Units::Imperial.elevation(-30.48), "-100.0 ft");
         assert_eq!(Units::Metric.distance(1609.344), "1.61 km");
         for units in [Units::Metric, Units::Imperial] {
             for target in [0.1, 50.0, 500.0, 5000.0, 5e6] {

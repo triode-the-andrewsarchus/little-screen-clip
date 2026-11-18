@@ -1,7 +1,7 @@
 //! Bounded WGS84 geometry and offline map/profile preparation.
 pub mod basemap;
-pub mod units;
 mod geojson;
+pub mod units;
 use chrono::DateTime;
 use roxmltree::{Document as Xml, Node};
 
