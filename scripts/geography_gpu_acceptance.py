@@ -100,6 +100,7 @@ def main():
             GL.glUniform4f(uniform("u_camera"), lat, lon, min(width, height) * 0.43 * zoom, blend)
             GL.glUniform1f(uniform("u_blend"), blend)
             GL.glUniform1i(uniform("u_style"), style)
+            GL.glUniform1f(uniform("u_natural_detail"), max(0, min(1, (zoom - 5) / 4)))
             GL.glUniform1f(uniform("u_contour"), 100 if zoom >= 3.5 else 0)
             for west in [-180, 0]:
                 relative = (west + 90 - lon + 180) % 360 - 180 - 90
@@ -113,6 +114,7 @@ def main():
         for name, style, lat, lon, blend, zoom in [
             ("natural-globe", 0, 0, 0, 1, 1), ("panned-globe", 0, 35, -105, 1, 1),
             ("transition", 0, 35, -105, 0.5, 3.15), ("flat-contours", 1, 35, -105, 0, 6),
+            ("natural-detail", 0, 35, -105, 0, 12),
             ("oilslick", 2, 35, -105, 0, 6), ("hillshade", 3, 35, -105, 0, 6)]:
             draw(style, lat, lon, blend, zoom)
             pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)

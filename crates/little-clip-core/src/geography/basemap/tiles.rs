@@ -84,11 +84,12 @@ impl SourceTile {
             for x in 0..PADDED_EDGE {
                 let lon = super::wrap_lon(west + (x as f64 - 0.5) * side / EDGE as f64);
                 let rgb = assets.sample_ne2_at(lat, lon, target);
-                let color = assets
-                    .land_cover
-                    .as_ref()
-                    .map(|lc| lc.sample(lat, lon).rgb())
-                    .or(rgb);
+                let color = rgb.or_else(|| {
+                    assets
+                        .land_cover
+                        .as_ref()
+                        .map(|lc| lc.sample(lat, lon).rgb())
+                });
                 tile.color.extend_from_slice(&color.unwrap_or([60, 78, 90]));
                 tile.color.push(if color.is_some() { 255 } else { 0 });
                 let height = assets
@@ -191,6 +192,37 @@ pub fn surface_tiles(camera: &GlobeCamera, width: f32, height: f32, level: u8) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn natural_earth_detail_is_not_replaced_by_coarse_land_cover() {
+        use crate::geography::basemap::{EquirectTexture, GlobalLandCoverGrid, LandCoverClass};
+        let mut assets = BasemapAssets::default();
+        assets.ne2 = Some(EquirectTexture {
+            width: 1,
+            height: 1,
+            rgb: std::sync::Arc::new(vec![45, 95, 155]),
+        });
+        assets.land_cover = Some(GlobalLandCoverGrid {
+            width: 1,
+            height: 1,
+            classes: vec![LandCoverClass::Forest as u8],
+        });
+        let cancel = AtomicBool::new(false);
+        let id = TileId::at(0, 0., 0.);
+        let tile = SourceTile::prepare(&assets, id, &cancel).unwrap();
+        assert!(
+            tile.color
+                .chunks_exact(4)
+                .all(|pixel| pixel == [45, 95, 155, 255])
+        );
+        assets.ne2 = None;
+        let tile = SourceTile::prepare(&assets, id, &cancel).unwrap();
+        let [r, g, b] = LandCoverClass::Forest.rgb();
+        assert!(
+            tile.color
+                .chunks_exact(4)
+                .all(|pixel| pixel == [r, g, b, 255])
+        );
+    }
     #[test]
     fn wrapped_tiles_have_bounded_coordinates_and_parents() {
         assert_eq!(TileId::at(4, 0.0, -180.0), TileId::at(4, 0.0, 180.0));

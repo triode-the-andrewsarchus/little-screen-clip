@@ -240,6 +240,10 @@ impl Renderer {
                 frame.range[0],
                 frame.range[1],
             );
+            gl.uniform_1_f32(
+                gl.get_uniform_location(p, "u_natural_detail").as_ref(),
+                ((camera.zoom - 5.0) / 4.0).clamp(0.0, 1.0) as f32,
+            );
             for (unit, name) in ["u_color", "u_height", "u_water"].into_iter().enumerate() {
                 gl.uniform_1_i32(gl.get_uniform_location(p, name).as_ref(), unit as i32);
             }

@@ -12,6 +12,7 @@ uniform float u_blend;
 uniform float u_side;
 uniform float u_contour;
 uniform vec2 u_range;
+uniform float u_natural_detail;
 vec3 hsl(float hue,float s,float l) {
     vec3 rgb=clamp(abs(mod(hue/60.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0,0.0,1.0);
     return l+(rgb-0.5)*(1.0-abs(2.0*l-1.0))*s;
@@ -26,6 +27,17 @@ vec3 elevation_color(float h) {
     const vec3 colors[7]=vec3[7](vec3(96,146,88),vec3(148,174,108),vec3(204,194,132),vec3(194,146,96),vec3(168,114,88),vec3(196,184,178),vec3(240,244,248));
     for(int i=1;i<7;i++) if(h<=stops[i]) return mix(colors[i-1],colors[i],clamp((h-stops[i-1])/(stops[i]-stops[i-1]),0.0,1.0))/255.0;
     return colors[6]/255.0;
+}
+// The original close-zoom Natural palette, evaluated on the GPU. Classifying
+// the source colours removes enlarged shading and water smudges baked into NE2.
+vec3 biome_color(vec3 rgb, float h, float lat) {
+    float luma=dot(rgb,vec3(0.299,0.587,0.114));
+    rgb*=255.0;
+    if((h>2400.0 && luma>0.78) || h>4200.0 || (abs(lat)>62.0 && luma>0.78)) return vec3(236,242,248)/255.0;
+    if(rgb.r>rgb.g+14.0 && rgb.r>rgb.b+25.0) return vec3(186,166,134)/255.0;
+    if(rgb.g>=rgb.r && rgb.g>rgb.b+10.0) return (luma<0.52?vec3(54,98,56):vec3(124,152,86))/255.0;
+    if(rgb.r>=rgb.g && rgb.g>rgb.b) return vec3(158,144,98)/255.0;
+    return vec3(124,152,86)/255.0;
 }
 void main() {
     if(abs(v_geo.x)>180.0 || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
@@ -49,7 +61,12 @@ void main() {
         rgb=elevation_color(h);
         if(u_style==3) rgb=h<=0.0?vec3(0.11,0.20,0.32):vec3((48.0+170.0*shade)/255.0);
         else if(h>0.0) rgb*=u_style==2?0.66+0.34*shade:0.64+0.36*shade;
-    } else if(dem.g>0.99 && h>0.0) rgb*=0.76+0.36*(shade-0.5);
+    } else if(dem.g>0.99 && h>0.0) {
+        rgb=mix(rgb,biome_color(rgb,h,v_geo.y),u_natural_detail);
+        float local_norm=clamp((h-u_range.x)/max(u_range.y-u_range.x,1.0),0.0,1.0);
+        float gradient=1.0-0.14*u_natural_detail+0.24*u_natural_detail*local_norm;
+        rgb*=(0.76+0.36*(shade-0.5))*gradient;
+    }
     if(u_contour>0.0 && dem.g>0.99 && h>0.0) {
         float phase=fract(h/u_contour);
         float distance_m=min(phase,1.0-phase)*u_contour;

@@ -210,6 +210,20 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             2,
             "River detail bands need distinct GPU identities"
         );
+        let mut detail_pixel = [0u8; 4];
+        gl.read_pixels(
+            450,
+            300,
+            1,
+            1,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(&mut detail_pixel),
+        );
+        assert!(
+            (35..45).contains(&detail_pixel[0]) && (65..76).contains(&detail_pixel[1]),
+            "Natural detail did not use the original close-zoom biome palette: {detail_pixel:?}"
+        );
         frame.source = 2;
         renderer.paint(&gl, &info, &frame).unwrap();
         assert_eq!(
