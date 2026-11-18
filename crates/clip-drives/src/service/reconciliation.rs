@@ -222,9 +222,6 @@ impl Owner {
             ),
         }
     }
-    pub(super) fn prepare_sync_pair(&self, pair: SyncPair, drive: &Drive) -> Result<Plan> {
-        preparation::Input::capture(self, pair, None)?.prepare_pair(drive)
-    }
     pub(super) fn queue_sync(&mut self, intent: Intent) {
         if intent.operation.is_some() {
             if self.sync_waiting.len() >= 16 {

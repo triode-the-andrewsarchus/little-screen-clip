@@ -2,7 +2,7 @@
 use super::*;
 use little_clip_core::mount_inventory::Snapshot;
 
-pub(super) struct Input {
+pub(in crate::service) struct Input {
     pub pair: SyncPair,
     storage: policy::Storage,
     ram: ram_sessions::Reconciliation,
@@ -11,7 +11,10 @@ pub(super) struct Input {
     enrollment: Option<enrollment::Input>,
 }
 impl Input {
-    pub fn capture(
+    pub(in crate::service) fn existing(owner: &Owner, pair: SyncPair) -> Result<Self> {
+        Self::capture(owner, pair, None)
+    }
+    pub(super) fn capture(
         owner: &Owner,
         pair: SyncPair,
         enrollment: Option<enrollment::Input>,
@@ -32,7 +35,7 @@ impl Input {
             enrollment,
         })
     }
-    fn current(&self, owner: &Owner) -> Result<bool> {
+    pub(in crate::service) fn current(&self, owner: &Owner) -> Result<bool> {
         let pair = owner.db.get::<SyncPair>("pair", &self.pair.id)?;
         let current = if let Some(enrollment) = &self.enrollment {
             pair.is_none() && enrollment.current(&owner.db)?

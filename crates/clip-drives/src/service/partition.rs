@@ -2,6 +2,7 @@
 use super::*;
 use crate::root::Scope;
 use little_clip_core::jobs::task::Task;
+pub(super) mod preparation;
 mod read_only;
 
 pub(super) type FilesystemAction = Arc<dyn Fn(&Drive) -> Result<()> + Send + Sync>;
@@ -191,10 +192,7 @@ pub(super) struct Admission {
 }
 impl Pending {
     pub fn is_backup(&self) -> bool {
-        matches!(
-            self.envelope.request,
-            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
-        )
+        is_backup(&self.envelope.request)
     }
     fn poll(&self) -> Option<Completion> {
         match &self.stage {
@@ -220,10 +218,15 @@ impl Pending {
 fn flush_partition(
     state: PathBuf,
     operation: String,
-    plans: Vec<reconciliation::Plan>,
-    root: Option<Arc<Root>>,
+    admission: Admission,
     cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
+    let Admission {
+        plans,
+        flush: root,
+        source,
+        ..
+    } = admission;
     let db = Store::existing(&state.join("drives.sqlite"), false)?;
     let mut progress = job_progress(state, operation.clone());
     phase(&db, &operation, PartitionPhase::Flushing, None)?;
@@ -250,63 +253,22 @@ fn flush_partition(
         // pair is enrolled. Retire this pin before admitting unmount.
         root.flush()?;
     }
+    if let Some(source) = source {
+        source.validate()?;
+    }
     cancelled(cancel)
 }
 
 impl Owner {
-    pub(super) fn start_partition(&mut self, envelope: Envelope) {
-        if self.preference_blocked(&envelope) {
-            self.defer_operation(envelope);
-            return;
-        }
-        let backup = matches!(
-            envelope.request,
-            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
-        );
-        if self.partition.is_some()
-            || (backup && (!self.background.is_empty() || self.maintenance.busy()))
-        {
-            self.defer_operation(envelope);
-            return;
-        }
-        let prepared = self.partition_plan(&envelope);
-        let admission = match prepared {
-            Ok(value) => value,
-            Err(error) => {
-                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
-                return;
-            }
-        };
-        if envelope
-            .review
-            .as_ref()
-            .is_some_and(|review| review.remember)
-        {
-            let drive = admission.drive.id.clone();
-            let claims = admission.claims.clone();
-            self.start_preference(
-                envelope,
-                preference::Continuation::Partition(Box::new(admission)),
-                Some(drive),
-                claims,
-            );
-        } else {
-            self.continue_partition(envelope, admission);
-        }
-    }
     pub(super) fn continue_partition(&mut self, mut envelope: Envelope, admission: Admission) {
         if let Err(error) = self.validate_backup_request(&envelope) {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
         }
-        let Admission {
-            drive,
-            source,
-            flush,
-            destination,
-            plans,
-            claims,
-        } = admission;
+        let drive = admission.drive.clone();
+        let source = admission.source.clone();
+        let destination = admission.destination.clone();
+        let claims = admission.claims.clone();
         if let Err(error) = self.admit_backup_destination(&envelope, destination.as_deref()) {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
@@ -339,7 +301,7 @@ impl Owner {
         let operation = envelope.id.clone();
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.partition_jobs, move || {
-            flush_partition(state, operation, plans, flush, &cancel)
+            flush_partition(state, operation, admission, &cancel)
         });
         self.partition = Some(Pending {
             drive: drive.id.clone(),
@@ -354,87 +316,8 @@ impl Owner {
         });
     }
 
-    fn partition_plan(&self, envelope: &Envelope) -> Result<Admission> {
-        cancelled(&envelope.cancel)?;
-        let selector = selector(&envelope.request)?;
-        let drive = self.drive(selector)?;
-        self.check_busy(&drive.id)?;
-        let kind = match envelope.request {
-            DriveRequest::Backup { kind, .. } => Some(kind),
-            DriveRequest::ReadOnlyBackup { .. } => Some(BackupKind::Files),
-            _ => None,
-        };
-        if kind == Some(BackupKind::Image) && drive.capacity == 0 {
-            return Err("Partition capacity is unknown; cannot create a complete image".into());
-        }
-        if kind == Some(BackupKind::Files) && drive.mount.is_none() {
-            return Err("Mount the partition before selecting read-only file collection".into());
-        }
-        let device_source = kind
-            .is_some()
-            .then(|| crate::device::Source::capture(&drive).map(Arc::new))
-            .transpose()?;
-        let source = self.admitted_source(envelope, &drive)?;
-        let destination = kind
-            .map(|kind| {
-                let root = preflight::destination(
-                    &self.db,
-                    &self.state,
-                    self.config.backup_directory.as_deref(),
-                    envelope.review.as_ref(),
-                    source.as_deref(),
-                )?;
-                preflight::space(&root, &drive, kind)?;
-                Ok::<_, Error>(root)
-            })
-            .transpose()?;
-        let plans = if source.is_some() {
-            self.pre_unmount_sync(&drive)?
-        } else {
-            Vec::new()
-        };
-        let mut claims = Vec::new();
-        claims.extend(source.as_ref().map(|root| root.scope()));
-        claims.extend(destination.as_ref().map(|root| root.scope()));
-        for plan in &plans {
-            claims.extend(plan.scopes());
-        }
-        if self.claims_busy(&claims) {
-            return Err("Partition preparation overlaps an active storage operation; retry after it finishes".into());
-        }
-        if self.drive(selector)? != drive {
-            return Err("Drive changed while pinning pre-unmount roots".into());
-        }
-        Ok(Admission {
-            drive,
-            source: device_source,
-            flush: source,
-            destination,
-            plans,
-            claims,
-        })
-    }
-
-    fn pre_unmount_sync(&self, drive: &Drive) -> Result<Vec<reconciliation::Plan>> {
-        let mut plans = Vec::new();
-        for pair in self.db.list::<SyncPair>("pair", 0, 1000)? {
-            if pair.drive != drive.id || (pair.paused && !pair.ram) {
-                continue;
-            }
-            if pair.ram
-                && self
-                    .db
-                    .get::<RamSession>("ram", &pair.id)?
-                    .is_some_and(|session| !session.ready)
-            {
-                return Err("RAM population is incomplete; resume synchronization or explicitly discard this RAM copy before ejecting or imaging. Save it elsewhere first if you need its current contents".into());
-            }
-            plans.push(self.prepare_sync_pair(pair, drive)?);
-        }
-        Ok(plans)
-    }
-
     pub(super) fn poll_partition(&mut self) {
+        self.poll_partition_preparation();
         if let Some(watch) = &mut self.watch {
             watch.poll();
         }
@@ -455,12 +338,6 @@ impl Owner {
             .expect("polled retained partition job");
         match completion {
             Completion::Flush(Ok(())) => {
-                if let Some(source) = &job.source
-                    && let Err(error) = source.validate()
-                {
-                    self.finish_operation(&job.envelope.id, &job.cancel, Err(error));
-                    return;
-                }
                 if job.cancel.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
                     self.finish_operation(
                         &job.envelope.id,
@@ -642,7 +519,7 @@ impl Owner {
     }
 }
 
-fn selector(request: &DriveRequest) -> Result<&str> {
+pub(super) fn selector(request: &DriveRequest) -> Result<&str> {
     match request {
         DriveRequest::Eject { drive }
         | DriveRequest::Backup {
@@ -654,6 +531,13 @@ fn selector(request: &DriveRequest) -> Result<&str> {
         _ => Err("Invalid pre-unmount request".into()),
     }
 }
+fn is_backup(request: &DriveRequest) -> bool {
+    matches!(
+        request,
+        DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
+    )
+}
+
 fn file_mode(request: &DriveRequest) -> FileBackupMode {
     match request {
         DriveRequest::ReadOnlyBackup { .. } => FileBackupMode::ReadOnly,

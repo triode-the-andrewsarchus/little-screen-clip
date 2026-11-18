@@ -32,6 +32,7 @@ struct Observation {
     claims: Vec<Scope>,
     mounts: String,
     source: Option<Source>,
+    selected: Option<Drive>,
 }
 /// Retain admitted source and optional bulk destination behind scheduling claims.
 pub(super) struct Source {
@@ -45,13 +46,14 @@ struct Input {
     save: Option<(PathBuf, Option<PathBuf>)>,
     retain_source: bool,
     bulk: Option<background::Input>,
+    partition: bool,
 }
 impl Input {
     fn observe(mut self, inventory: &Inventory, cancel: &AtomicBool) -> Result<Observation> {
         cancelled(cancel)?;
         let mounts = Snapshot::capture()?.signature.clone();
         let source = self.source(inventory);
-        let source = if self.retain_source {
+        let source = if self.retain_source || self.partition {
             source?
         } else {
             source.ok().flatten()
@@ -67,16 +69,26 @@ impl Input {
                 "Mount inventory changed during storage scheduling admission; retry".into(),
             );
         }
+        let selected = self
+            .partition
+            .then(|| {
+                self.drives
+                    .iter()
+                    .find(|drive| Some(&drive.id) == self.selector.as_ref())
+                    .cloned()
+            })
+            .flatten();
         Ok(Observation {
             drive: self.selector,
             claims,
             mounts,
             source: source.filter(|_| self.retain_source),
+            selected,
         })
     }
     fn source(&mut self, inventory: &Inventory) -> Result<Option<Source>> {
         if let Some(selector) = &self.selector
-            && (selector.starts_with("/dev/") || self.retain_source)
+            && (selector.starts_with("/dev/") || self.retain_source || self.partition)
         {
             self.drives = inventory()?;
             self.selector = Some(discovery::select(self.drives.clone(), selector)?.id);
@@ -164,6 +176,15 @@ impl Owner {
                 save,
                 retain_source,
                 bulk,
+                partition: matches!(
+                    envelope.request,
+                    DriveRequest::Eject { .. }
+                        | DriveRequest::Backup {
+                            kind: BackupKind::Image,
+                            ..
+                        }
+                        | DriveRequest::ReadOnlyBackup { .. }
+                ),
             })
         })();
         let input = match input {
@@ -174,7 +195,7 @@ impl Owner {
             }
         };
         if input.selector.is_none() && input.save.is_none() {
-            self.dispatch_scoped(envelope, None, Vec::new(), None);
+            self.dispatch_scoped(envelope, None, Vec::new(), None, None);
             return;
         }
         if self.scheduling.pending.len() >= WORKERS {
@@ -252,6 +273,7 @@ impl Owner {
                             observation.drive,
                             observation.claims,
                             observation.source,
+                            observation.selected,
                         );
                     }
                 }

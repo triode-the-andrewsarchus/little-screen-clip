@@ -205,6 +205,22 @@ limitation; see the completion audit and `scripts/drive_tools/VM_TESTING.md`.
 
 Partition jobs retain their selected drive, destination and typed preparation phase. Image progress distinguishes copying from full verification. After restart, an unfinished job reports its last durable checkpoint and any confirmed unmount/completed-image facts. An interrupted authority request may already have taken effect; its message asks you to inspect current state. Restart does not replay mount actions automatically.
 
+Eject, image and read-only backup preparation uses the existing partition worker
+for fresh inventory, device pins, destination checks and pre-unmount sync roots.
+The scheduled partition observation must still match when preparation starts.
+Source claims remain reserved through preparation, cancellation and shutdown;
+backup preparation also reserves the exclusive backup slot. Before flushing,
+the coordinator checks the captured settings, enrollment and RAM ownership
+metadata against current state. Changed inputs stop the operation for a retry,
+retaining any created destination directories. Preparation does not itself
+unmount or request image-read authorization. The worker also checks the retained
+device after flushing, before unmount admission.
+
+Pre-unmount reconciliation and automatic synchronization read every saved pair
+through the paged registry visitor, including legacy entries beyond the status
+page. Paused ordinary pairs remain skipped; RAM sessions still require completed
+initial population before a mounted partition can be ejected or imaged.
+
 **Mount again after imaging** is an optional image-backup setting, off by default.
 It restores a previously mounted partition only when this job confirmed its unmount,
 including after cancellation or an imaging failure. Restoration remains owned work

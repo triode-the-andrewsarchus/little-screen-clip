@@ -73,6 +73,7 @@ struct Owner {
     settings_generation: u64,
     policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
+    partition_preparing: Option<partition::preparation::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
     authority: Arc<partition::Authority>,
     previews: preflight::Previews,
@@ -218,6 +219,7 @@ impl Service {
             settings_generation: 0,
             policy_waiting: Default::default(),
             partition: None,
+            partition_preparing: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
                 1,
                 1,
@@ -461,16 +463,7 @@ impl Owner {
             }
             // Retained admission adds a read phase before copying. Poll those
             // short phases promptly instead of adding an idle 200 ms per phase.
-            let poll_ms = if self.sync_preparing.is_empty()
-                && self.scheduling.pending.is_empty()
-                && self.ram_access.is_none()
-                && !self.settings_busy()
-                && !self.watch.as_ref().is_some_and(Watch::registration_pending)
-            {
-                200
-            } else {
-                20
-            };
+            let poll_ms = if self.preparation_pending() { 20 } else { 200 };
             match receiver.recv_timeout(Duration::from_millis(poll_ms)) {
                 Ok(envelope) => self.operation(envelope),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -492,11 +485,7 @@ impl Owner {
                 &self.db,
                 &self.state,
                 &self.closing,
-                self.background.is_empty()
-                    && !self
-                        .partition
-                        .as_ref()
-                        .is_some_and(partition::Pending::is_backup),
+                self.background.is_empty() && !self.partition_backup_pending(),
             );
             self.poll_partition();
             self.poll_ram_setup();
@@ -548,6 +537,7 @@ impl Owner {
         }
         self.drain_configuration();
         self.drain_scopes();
+        self.drain_partition_preparation();
         self.drain_ram_preparation();
         self.drain_sync();
         drop(self.watch.take()); // Drain actual watch-worker pins before unmount/helper retirement.
@@ -600,6 +590,14 @@ impl Owner {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+    fn preparation_pending(&self) -> bool {
+        !self.sync_preparing.is_empty()
+            || !self.scheduling.pending.is_empty()
+            || self.ram_access.is_some()
+            || self.partition_preparing.is_some()
+            || self.settings_busy()
+            || self.watch.as_ref().is_some_and(Watch::registration_pending)
+    }
     pub(super) fn settings_busy(&self) -> bool {
         self.configuration.busy() || self.preferences.writing()
     }
@@ -640,6 +638,7 @@ impl Owner {
         drive: Option<String>,
         claims: Vec<crate::root::Scope>,
         source: Option<scheduling::Source>,
+        selected: Option<Drive>,
     ) {
         // A probe may have started before another RAM setup acquired the slot.
         if self.ram_setup_blocks(&envelope.request) {
@@ -693,7 +692,9 @@ impl Owner {
                 kind: BackupKind::Image,
                 ..
             }
-            | DriveRequest::ReadOnlyBackup { .. } => self.start_partition(envelope),
+            | DriveRequest::ReadOnlyBackup { .. } => {
+                self.start_partition(envelope, selected, claims)
+            }
             DriveRequest::Backup { .. }
             | DriveRequest::Catalog { .. }
             | DriveRequest::CatalogWithLimits { .. } => self.start_background(envelope, source),
@@ -876,7 +877,7 @@ impl Owner {
         } else {
             Some(&changes.paths)
         };
-        let Ok(pairs) = self.db.list::<SyncPair>("pair", 0, 1000) else {
+        let Ok(pairs) = policy::records::<SyncPair>(&self.db, "pair") else {
             return;
         };
         let shared_paths = paths.cloned().map(Arc::new);
@@ -1195,6 +1196,7 @@ mod tests {
     mod managed_views;
     mod native_images;
     mod native_read_only;
+    mod partition_preparation;
     mod policy_aliases;
     mod policy_coverage;
     mod preference;

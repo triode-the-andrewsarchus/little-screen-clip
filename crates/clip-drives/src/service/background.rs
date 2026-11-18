@@ -53,6 +53,10 @@ impl Owner {
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)
             || self
+                .partition_preparing
+                .as_ref()
+                .is_some_and(|job| job.drive == drive)
+            || self
                 .background
                 .values()
                 .any(|job| job.drive.as_deref() == Some(drive))
@@ -82,13 +86,7 @@ impl Owner {
         } else {
             self.background.is_empty()
         };
-        if !available
-            || self.maintenance.busy()
-            || self
-                .partition
-                .as_ref()
-                .is_some_and(partition::Pending::is_backup)
-        {
+        if !available || self.maintenance.busy() || self.partition_backup_pending() {
             self.defer_operation(envelope);
             return;
         }

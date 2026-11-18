@@ -209,6 +209,10 @@ impl Owner {
                 .as_ref()
                 .is_some_and(|job| job.claims.iter().any(&overlaps))
             || self
+                .partition_preparing
+                .as_ref()
+                .is_some_and(|job| job.claims.iter().any(&overlaps))
+            || self
                 .ram_access
                 .as_ref()
                 .is_some_and(|job| job.claims.iter().any(&overlaps))

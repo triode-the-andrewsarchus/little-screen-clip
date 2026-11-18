@@ -60,11 +60,7 @@ impl Review {
     fn capture(drive: Drive, kind: BackupKind, path: &Path, state: &Path) -> Result<Self> {
         // A cancelled review creates neither directories nor preference writes.
         let destination = Arc::new(Root::open(path)?);
-        let source = drive
-            .mount
-            .as_ref()
-            .map(|path| Root::open(path).map(Arc::new))
-            .transpose()?;
+        let source = source(None, &drive)?;
         if kind == BackupKind::Files && source.is_none() {
             return Err("Mount the partition before reviewing a file backup".into());
         }
@@ -266,24 +262,21 @@ impl Service {
     }
 }
 
-impl Owner {
-    pub(super) fn admitted_source(
-        &self,
-        envelope: &Envelope,
-        drive: &Drive,
-    ) -> Result<Option<Arc<Root>>> {
-        match &envelope.review {
-            Some(review) => {
-                review.validate(drive)?;
-                Ok(review.source.clone())
-            }
-            None => drive
-                .mount
-                .as_ref()
-                .map(|path| Root::open(path).map(Arc::new))
-                .transpose(),
+pub(super) fn source(review: Option<&Review>, drive: &Drive) -> Result<Option<Arc<Root>>> {
+    match review {
+        Some(review) => {
+            review.validate(drive)?;
+            Ok(review.source.clone())
         }
+        None => drive
+            .mount
+            .as_ref()
+            .map(|path| Root::open(path).map(Arc::new))
+            .transpose(),
     }
+}
+
+impl Owner {
     pub(super) fn validate_backup_request(&self, envelope: &Envelope) -> Result<()> {
         if !matches!(
             envelope.request,

@@ -72,15 +72,10 @@ impl Pending {
             Continuation::Bulk { .. } => {
                 owner.background.is_empty()
                     && !owner.maintenance.busy()
-                    && !owner
-                        .partition
-                        .as_ref()
-                        .is_some_and(partition::Pending::is_backup)
+                    && !owner.partition_backup_pending()
             }
             Continuation::Partition(_) => {
-                owner.partition.is_none()
-                    && owner.background.is_empty()
-                    && !owner.maintenance.busy()
+                !owner.partition_busy() && owner.background.is_empty() && !owner.maintenance.busy()
             }
         }
     }
