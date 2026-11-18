@@ -171,6 +171,8 @@ audio_spectrum = false
 roots = []
 
 [geography]
+# Display distances/elevations in "metric" (m/km) or "imperial" (ft/yd/mi).
+units = "metric"
 # Ask to download offline basemap assets the first time a geography file is opened.
 prompt_on_open = true
 # Total on-disk budget for downloaded geography datasets in bytes (default: 18 GiB < 20 GB).

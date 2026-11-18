@@ -23,6 +23,7 @@ use little_clip_core::{
             BasemapAssets, BasemapStyle, GlobeCamera, MAX_MAP_ZOOM, MIN_MAP_ZOOM, ProjectionMode,
             oilslick_color,
         },
+        units::Units,
     },
     jobs::task::Task,
     palette::AppPalette,
@@ -302,6 +303,7 @@ impl Viewer {
                 self.assets.as_deref(),
                 self.contour_interval_m,
                 self.local_elev_range,
+                self.config.geography.units,
                 colors,
             );
             if response.clicked()
@@ -327,7 +329,7 @@ impl Viewer {
             }
 
             if self.style == BasemapStyle::Oilslick {
-                paint_oilslick_legend(ui, colors);
+                paint_oilslick_legend(ui, colors, self.config.geography.units);
             }
 
             if let Some(error) = &self.render_error {
@@ -360,7 +362,15 @@ impl Viewer {
                 egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
                 egui::Sense::hover(),
             );
-            let point = paint_profile(ui, profile, feature, self.selected, self.current, colors);
+            let point = paint_profile(
+                ui,
+                profile,
+                feature,
+                self.selected,
+                self.current,
+                colors,
+                self.config.geography.units,
+            );
             if response.hovered() && point.is_some() && point != self.current {
                 self.current = point;
                 ui.ctx().request_repaint();
@@ -767,12 +777,15 @@ impl Viewer {
                 ));
                 if matches!(feature.kind, Kind::Line | Kind::Polygon) {
                     ui.label(format!(
-                        "Spherical length {:.2} km",
-                        feature.distance_m / 1000.0
+                        "Spherical length {}",
+                        self.config.geography.units.distance(feature.distance_m)
                     ));
                 }
                 if let Some([low, high]) = feature.elevation {
-                    ui.label(format!("Supplied elevation {low:.1}–{high:.1} m"));
+                    ui.label(format!(
+                        "Supplied elevation {}",
+                        self.config.geography.units.elevation_range(low, high)
+                    ));
                 }
                 if let Some(sample) = self.current.and_then(|hit| self.sample(hit)) {
                     ui.separator();
@@ -780,12 +793,18 @@ impl Viewer {
                     ui.label(format!("Latitude {:.6}", sample.point.lat));
                     ui.label(format!("Longitude {:.6}", sample.point.lon));
                     if let Some(value) = sample.point.elevation {
-                        ui.label(format!("Elevation {value:.1} m"));
+                        ui.label(format!(
+                            "Elevation {}",
+                            self.config.geography.units.elevation(value)
+                        ));
                     }
                     if !sample.point.time.is_empty() {
                         ui.add(egui::Label::new(&sample.point.time).wrap(true));
                     }
-                    ui.label(format!("Along feature {:.1} m", sample.distance_m));
+                    ui.label(format!(
+                        "Along feature {}",
+                        self.config.geography.units.distance(sample.distance_m)
+                    ));
                 }
                 for (name, value) in &feature.properties {
                     ui.strong(name);
@@ -815,6 +834,7 @@ fn paint_globe_map(
     assets: Option<&BasemapAssets>,
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
+    units: Units,
     colors: WorkbenchColors,
 ) -> Option<Hit> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
@@ -969,6 +989,7 @@ fn paint_globe_map(
         camera,
         contour_interval_m,
         local_elev_range,
+        units,
     );
     hit
 }
@@ -980,42 +1001,21 @@ fn paint_scale_and_contour_overlay(
     camera: &GlobeCamera,
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
+    units: Units,
 ) {
     let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
     let meters_per_px = 6_371_000.0 / scale_px;
     let target_m = meters_per_px * 110.0;
-    let nice_m = [
-        500.0,
-        1_000.0,
-        2_000.0,
-        5_000.0,
-        10_000.0,
-        20_000.0,
-        50_000.0,
-        100_000.0,
-        200_000.0,
-        500_000.0,
-        1_000_000.0,
-        2_000_000.0,
-        5_000_000.0,
-    ]
-    .into_iter()
-    .rfind(|&v| v <= target_m)
-    .unwrap_or(500.0);
-    let bar_w = (nice_m / meters_per_px).clamp(32.0, 180.0) as f32;
-    let scale_label = if nice_m >= 1000.0 {
-        format!("{:.0} km", nice_m / 1000.0)
-    } else {
-        format!("{nice_m:.0} m")
-    };
+    let (nice_m, scale_label) = units.scale_bar(target_m);
+    let bar_w = (nice_m / meters_per_px) as f32;
 
     let mut text = scale_label;
     if let Some(interval) = contour_interval_m {
         text.push_str(&format!(
-            "  ·  Contour: {interval:.0} m (index {:.0} m)  ·  Elev: {:.0}–{:.0} m",
-            interval * 5.0,
-            local_elev_range[0],
-            local_elev_range[1]
+            "  ·  Contour: {} (index {})  ·  Elev: {}",
+            units.elevation(interval as f64),
+            units.elevation(interval as f64 * 5.0),
+            units.elevation_range(local_elev_range[0] as f64, local_elev_range[1] as f64)
         ));
     }
     let galley = ui.fonts(|f| {
@@ -1060,7 +1060,7 @@ fn paint_scale_and_contour_overlay(
     );
 }
 
-fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors) {
+fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors, units: Units) {
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect);
@@ -1089,7 +1089,10 @@ fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors) {
     painter.text(
         egui::pos2(bar.right() + 8.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        "Oilslick: 500m cyclic lightness + sea-level break",
+        format!(
+            "Oilslick: {} cycle + sea-level break",
+            units.elevation(500.0)
+        ),
         egui::TextStyle::Small.resolve(ui.style()),
         colors.text_secondary,
     );
@@ -1195,6 +1198,7 @@ fn paint_profile(
     feature_index: usize,
     current: Option<Hit>,
     colors: WorkbenchColors,
+    units: Units,
 ) -> Option<Hit> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, colors.recessed);
@@ -1212,8 +1216,9 @@ fn paint_profile(
         rect.left_top() + egui::vec2(5.0, 3.0),
         egui::Align2::LEFT_TOP,
         format!(
-            "Supplied elevation · {low:.1}–{high:.1} m · {:.2} km",
-            feature.distance_m / 1000.0
+            "Supplied elevation · {} · {}",
+            units.elevation_range(low, high),
+            units.distance(feature.distance_m)
         ),
         egui::TextStyle::Small.resolve(ui.style()),
         colors.text_secondary,

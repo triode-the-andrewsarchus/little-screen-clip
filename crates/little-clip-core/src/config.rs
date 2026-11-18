@@ -412,6 +412,8 @@ pub const DEFAULT_GEO_MAX_ASSETS_BYTES: u64 = 18 * 1024 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GeographyConfig {
+    /// Display units for map distances, elevations and scale bars.
+    pub units: crate::geography::units::Units,
     /// Directory where downloaded basemap assets are stored (outside git).
     /// Defaults to `$XDG_DATA_HOME/little-screen-clip/geography`.
     pub assets_dir: Option<PathBuf>,
@@ -450,6 +452,7 @@ pub struct GeographyConfig {
 impl Default for GeographyConfig {
     fn default() -> Self {
         Self {
+            units: crate::geography::units::Units::default(),
             assets_dir: None,
             terrain_override_dir: None,
             prompt_on_open: true,
