@@ -327,10 +327,14 @@ mod tests {
     fn vcv_patches_sort_as_dedicated_vcv_rack_category_with_vcv_metadata() {
         let patch = file_entry("ambient.vcv");
         let uppercase_patch = file_entry("AMBIENT.VCV");
+        let strip = file_entry("chain.vcvss");
+        let uppercase_strip = file_entry("CHAIN.VCVSS");
         let wav = file_entry("loop.wav");
 
         assert_eq!(family(&patch), Category::VcvRack);
         assert_eq!(family(&uppercase_patch), Category::VcvRack);
+        assert_eq!(family(&strip), Category::VcvRack);
+        assert_eq!(family(&uppercase_strip), Category::VcvRack);
         assert_eq!(Category::VcvRack.label(), "VCV Rack");
         assert_eq!(family(&wav), Category::Audio);
         assert_eq!(Category::Audio.label(), "Audio");

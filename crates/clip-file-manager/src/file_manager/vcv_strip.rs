@@ -9,10 +9,10 @@ use little_clip_core::{
     palette::AppPalette,
     vcv::{
         MAX_PATCH_BYTES, PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram,
-        ScreenshotBatchResult, build_rack_rail_layout, clear_downloaded_panel_cache,
+        ScreenshotBatchResult, StripLineup, build_rack_rail_layout, clear_downloaded_panel_cache,
         count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
-        generate_all_local_rack_screenshots, inspect_bytes, local_rack_available,
-        render_rack_rails_rgba, render_strip_rgba, resolve_panel,
+        generate_all_local_rack_screenshots, inspect_path_bytes, local_rack_available,
+        render_full_strip_rgba, render_rack_rails_rgba, render_strip_rgba, resolve_panel,
     },
 };
 use std::{
@@ -29,6 +29,7 @@ const MAX_VCV_BYTES: usize = MAX_PATCH_BYTES as usize;
 const VIEWER_MIN_ZOOM: f32 = 0.15;
 const VIEWER_MAX_ZOOM: f32 = 3.0;
 const STRIP_RASTER_SCALE: f32 = 2.0;
+const MAX_FULL_STRIP_WIDTH: f64 = 4096.0;
 const MAX_HOVER_CACHE: usize = 8;
 
 fn thumbnail_from_diagram(rendered: RenderedDiagram) -> ImageThumbnail {
@@ -43,22 +44,54 @@ pub(in crate::file_manager) struct Document {
     pub summary: Arc<PatchSummary>,
     strip_dark: ImageThumbnail,
     strip_light: Mutex<Option<ImageThumbnail>>,
+    full_strip_dark: Mutex<Option<ImageThumbnail>>,
+    full_strip_light: Mutex<Option<ImageThumbnail>>,
 }
 
 impl Document {
-    fn light_strip(&self) -> ImageThumbnail {
-        let mut guard = self
-            .strip_light
+    fn cached_variant(
+        &self,
+        slot: &Mutex<Option<ImageThumbnail>>,
+        render: impl FnOnce() -> Result<RenderedDiagram, String>,
+    ) -> ImageThumbnail {
+        let mut guard = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = guard.as_ref() {
             return existing.clone();
         }
-        let thumb = render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false)
+        let thumb = render()
             .map(thumbnail_from_diagram)
             .unwrap_or_else(|_| self.strip_dark.clone());
         *guard = Some(thumb.clone());
         thumb
+    }
+
+    fn light_strip(&self) -> ImageThumbnail {
+        self.cached_variant(&self.strip_light, || {
+            render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false)
+        })
+    }
+
+    fn strip_thumbnail(&self, dark: bool, full: bool) -> std::borrow::Cow<'_, ImageThumbnail> {
+        match (dark, full) {
+            (true, false) => std::borrow::Cow::Borrowed(&self.strip_dark),
+            (false, false) => std::borrow::Cow::Owned(self.light_strip()),
+            (true, true) => {
+                std::borrow::Cow::Owned(self.cached_variant(&self.full_strip_dark, || {
+                    render_full_strip_rgba(&self.summary, STRIP_RASTER_SCALE, true).unwrap_or_else(
+                        || render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, true),
+                    )
+                }))
+            }
+            (false, true) => {
+                std::borrow::Cow::Owned(self.cached_variant(&self.full_strip_light, || {
+                    render_full_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false).unwrap_or_else(
+                        || render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false),
+                    )
+                }))
+            }
+        }
     }
 }
 
@@ -197,7 +230,7 @@ pub(in crate::file_manager) struct Hover {
     entries: Vec<HoverCacheEntry>,
     in_flight: Option<(HoverKey, Arc<AtomicBool>)>,
     worker: Option<HoverWorker>,
-    strip_textures: HashMap<(uuid::Uuid, bool), (PathBuf, TextureHandle)>,
+    strip_textures: HashMap<(uuid::Uuid, bool, bool), (PathBuf, TextureHandle)>,
 }
 
 impl Hover {
@@ -263,6 +296,7 @@ impl Hover {
         Some((latest.texture.id(), latest.popup_size))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn strip_texture(
         &mut self,
         ctx: &egui::Context,
@@ -270,29 +304,31 @@ impl Hover {
         entry_path: &Path,
         doc: &Document,
         dark: bool,
+        use_full: bool,
         ready: Option<&Ready>,
     ) -> Option<TextureHandle> {
-        if dark && let Some(tex) = ready.and_then(|r| r.texture.as_ref()) {
+        if dark
+            && !use_full
+            && let Some(tex) = ready.and_then(|r| r.texture.as_ref())
+        {
             return Some(tex.clone());
         }
-        if let Some((_, tex)) = self.strip_textures.get(&(identity, dark)) {
+        if let Some((_, tex)) = self.strip_textures.get(&(identity, dark, use_full)) {
             return Some(tex.clone());
         }
-        let thumb = if dark {
-            std::borrow::Cow::Borrowed(&doc.strip_dark)
-        } else {
-            std::borrow::Cow::Owned(doc.light_strip())
-        };
+        let thumb = doc.strip_thumbnail(dark, use_full);
         let handle = ctx.load_texture(
-            format!("vcv_strip_{identity}_{dark}"),
+            format!("vcv_strip_{identity}_{dark}_{use_full}"),
             egui::ColorImage::from_rgba_premultiplied(
                 [thumb.width as usize, thumb.height as usize],
                 &thumb.premultiplied_rgba,
             ),
             TextureOptions::LINEAR,
         );
-        self.strip_textures
-            .insert((identity, dark), (entry_path.to_path_buf(), handle.clone()));
+        self.strip_textures.insert(
+            (identity, dark, use_full),
+            (entry_path.to_path_buf(), handle.clone()),
+        );
         Some(handle)
     }
 
@@ -431,11 +467,7 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
         data.detail = "Cancelled".into();
         return data;
     }
-    let title = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("VCV Patch");
-    let summary = match inspect_bytes(title, &bytes) {
+    let summary = match inspect_path_bytes(path, &bytes) {
         Ok(s) => s,
         Err(err) => {
             data.detail = err;
@@ -455,6 +487,21 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
         }
     };
     let strip_dark = thumbnail_from_diagram(dark_render);
+    let full_strip_dark = if summary
+        .full_strip
+        .as_ref()
+        .is_some_and(|full| full.width <= MAX_FULL_STRIP_WIDTH)
+    {
+        if token.load(Ordering::Relaxed) {
+            data.detail = "Cancelled".into();
+            return data;
+        }
+        render_full_strip_rgba(&summary, STRIP_RASTER_SCALE, true)
+            .and_then(Result::ok)
+            .map(thumbnail_from_diagram)
+    } else {
+        None
+    };
 
     data.detail = format_summary_detail(&summary);
     data.image = Some(strip_dark.clone());
@@ -462,6 +509,8 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
         summary: Arc::new(summary),
         strip_dark,
         strip_light: Mutex::new(None),
+        full_strip_dark: Mutex::new(full_strip_dark),
+        full_strip_light: Mutex::new(None),
     }));
     data
 }
@@ -483,6 +532,26 @@ fn format_summary_detail(summary: &PatchSummary) -> String {
         "{} {mod_word} · {} {cable_word} · {rows} {row_word}",
         summary.total_modules, summary.cable_count
     )
+}
+
+fn strip_for_preview(
+    summary: &PatchSummary,
+    body_size: egui::Vec2,
+    dark: bool,
+) -> (&StripLineup, bool) {
+    if let Some(full) = summary.full_strip.as_ref() {
+        let natural = vec2(full.width as f32, full.height as f32);
+        let scale = (body_size.y / natural.y.max(1.0)).min(1.0);
+        if natural.x * scale <= body_size.x {
+            return (full, true);
+        }
+    }
+    let ranked = if dark {
+        &summary.strip_dark
+    } else {
+        &summary.strip_light
+    };
+    (ranked, false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -524,11 +593,7 @@ pub(in crate::file_manager) fn show_list(
     };
 
     let dark = ui.visuals().dark_mode;
-    let lineup = if dark {
-        &doc.summary.strip_dark
-    } else {
-        &doc.summary.strip_light
-    };
+    let (lineup, use_full) = strip_for_preview(&doc.summary, body.size(), dark);
     let natural = vec2(lineup.width as f32, lineup.height as f32);
     let scale = (body.height() / natural.y.max(1.0)).min(1.0);
     let scaled = natural * scale;
@@ -546,7 +611,9 @@ pub(in crate::file_manager) fn show_list(
     let top = body.top() + (body.height() - scaled.y).max(0.0) * 0.5;
     let clip_rect = body.intersect(ui.clip_rect());
 
-    if let Some(tex) = hover.strip_texture(ui.ctx(), identity, &entry.path, doc, dark, ready) {
+    if let Some(tex) =
+        hover.strip_texture(ui.ctx(), identity, &entry.path, doc, dark, use_full, ready)
+    {
         let draw_rect = Rect::from_min_size(pos2(body.left(), top), vec2(visible_w, scaled.y));
         let uv = Rect::from_min_max(pos2(pan_u, 0.0), pos2((pan_u + uv_w).min(1.0), 1.0));
         ui.painter()
@@ -612,11 +679,7 @@ impl Drop for Viewer {
 impl Viewer {
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = crate::file_source::read_file_snapshot(path, MAX_VCV_BYTES)?;
-        let title = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("VCV Patch");
-        let summary = inspect_bytes(title, &bytes)?;
+        let summary = inspect_path_bytes(path, &bytes)?;
         let mut unique_modules = Vec::new();
         let mut seen = BTreeSet::new();
         for m in &summary.rack_dark.modules {
@@ -1146,10 +1209,9 @@ mod tests {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let fpath = entry.path();
-                    if fpath
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("vcv"))
-                    {
+                    if fpath.extension().is_some_and(|e| {
+                        e.eq_ignore_ascii_case("vcv") || e.eq_ignore_ascii_case("vcvss")
+                    }) {
                         let data = load(&fpath, &AtomicBool::new(false));
                         assert!(
                             data.vcv.is_some(),
@@ -1159,6 +1221,51 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn strip_preset_vcvss_renders_modules_and_zero_row_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chain.vcvss");
+        let json = serde_json::json!({
+            "stripVersion": 1,
+            "leftModules": [
+                { "id": 1, "plugin": "Fundamental", "model": "VCO" }
+            ],
+            "rightModules": [
+                { "id": 2, "plugin": "Fundamental", "model": "VCF" },
+                { "id": 3, "plugin": "Fundamental", "model": "VCA-1" }
+            ],
+            "cables": [
+                { "outputModuleId": 1, "outputId": 0, "inputModuleId": 2, "inputId": 0 },
+                { "outputModuleId": 2, "outputId": 0, "inputModuleId": 3, "inputId": 0 }
+            ],
+            "version": "2.6.0"
+        });
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let data = load(&path, &AtomicBool::new(false));
+        let doc = data.vcv.as_ref().expect("vcvss document");
+        assert_eq!(data.detail, "3 modules · 2 cables · 0 rows");
+        assert!(doc.strip_dark.width > 0);
+
+        let viewer = Viewer::load(&path).expect("viewer load vcvss");
+        assert_eq!(viewer.summary.rack_dark.modules.len(), 3);
+        assert_eq!(viewer.summary.analysis.document.row_count(), 0);
+
+        if let Ok(home) = std::env::var("HOME") {
+            let demo = Path::new(&home)
+                .join(".local/share/Rack2/plugins-lin-x64/Stoermelder-P1/presets/Strip/Demo.vcvss");
+            if demo.is_file() {
+                let demo_data = load(&demo, &AtomicBool::new(false));
+                assert!(
+                    demo_data.vcv.is_some(),
+                    "Demo.vcvss load: {}",
+                    demo_data.detail
+                );
+                assert_eq!(demo_data.detail, "1 module · 0 cables · 0 rows");
             }
         }
     }
@@ -1236,5 +1343,80 @@ mod tests {
         });
         assert_eq!(viewer.panel_rasters.len(), 8);
         assert_eq!(viewer.panel_textures.len(), 8);
+    }
+
+    #[test]
+    fn single_row_strip_shows_full_patch_order_only_when_it_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let single_path = dir.path().join("single.vcvss");
+        let multi_path = dir.path().join("multi.vcv");
+
+        let single_json = serde_json::json!({
+            "stripVersion": 1,
+            "leftModules": [
+                { "id": 2, "plugin": "Fundamental", "model": "VCO" },
+                { "id": 1, "plugin": "Fundamental", "model": "VCF" }
+            ],
+            "rightModules": [
+                { "id": 3, "plugin": "Fundamental", "model": "Scope" },
+                { "id": 4, "plugin": "Fundamental", "model": "VCO" }
+            ],
+            "cables": [],
+            "version": "2.6.0"
+        });
+        let multi_json = serde_json::json!({
+            "version": "2.6.0",
+            "modules": [
+                { "id": 1, "plugin": "Fundamental", "model": "VCO", "pos": [0, 0] },
+                { "id": 2, "plugin": "Fundamental", "model": "VCF", "pos": [10, 0] },
+                { "id": 3, "plugin": "Fundamental", "model": "Scope", "pos": [0, 1] },
+                { "id": 4, "plugin": "Fundamental", "model": "VCO", "pos": [10, 1] }
+            ],
+            "cables": []
+        });
+        std::fs::write(&single_path, serde_json::to_vec(&single_json).unwrap()).unwrap();
+        std::fs::write(&multi_path, serde_json::to_vec(&multi_json).unwrap()).unwrap();
+
+        let single_data = load(&single_path, &AtomicBool::new(false));
+        let single_doc = single_data.vcv.as_ref().expect("single document");
+        let multi_data = load(&multi_path, &AtomicBool::new(false));
+        let multi_doc = multi_data.vcv.as_ref().expect("multi document");
+
+        // When 1 row fits horizontally, full patch order (including duplicate VCOs) is chosen.
+        let (wide_lineup, wide_full) =
+            strip_for_preview(&single_doc.summary, vec2(2000.0, 66.0), true);
+        assert!(wide_full);
+        assert_eq!(
+            wide_lineup
+                .modules
+                .iter()
+                .map(|m| m.model.as_str())
+                .collect::<Vec<_>>(),
+            ["VCF", "VCO", "Scope", "VCO"]
+        );
+
+        // When too narrow, it falls back to the deduplicated ranked lineup.
+        let (narrow_lineup, narrow_full) =
+            strip_for_preview(&single_doc.summary, vec2(80.0, 66.0), true);
+        assert!(!narrow_full);
+        assert_eq!(narrow_lineup.modules.len(), 3);
+
+        // Multi-row patches always stay on the deduplicated ranked lineup regardless of width.
+        let (_multi_lineup, multi_full) =
+            strip_for_preview(&multi_doc.summary, vec2(4000.0, 66.0), true);
+        assert!(!multi_full);
+
+        // Ranked and full strip variants maintain distinct texture entries.
+        let ctx = egui::Context::default();
+        let mut hover = Hover::default();
+        let id = uuid::Uuid::new_v4();
+        let full_tex = hover
+            .strip_texture(&ctx, id, &single_path, single_doc, true, true, None)
+            .expect("full strip texture");
+        let ranked_tex = hover
+            .strip_texture(&ctx, id, &single_path, single_doc, true, false, None)
+            .expect("ranked strip texture");
+        assert_ne!(full_tex.id(), ranked_tex.id());
+        assert_eq!(hover.strip_textures.len(), 2);
     }
 }

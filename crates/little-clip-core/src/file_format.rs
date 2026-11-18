@@ -43,7 +43,7 @@ impl Format {
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
             }
-            "vcv" => Some(Self::VcvPatch),
+            "vcv" | "vcvss" => Some(Self::VcvPatch),
             _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
     }
@@ -91,6 +91,7 @@ mod tests {
             ("a.MULTISAMPLE", Format::Multisample),
             ("a.VTT", Format::Subtitle),
             ("a.VCV", Format::VcvPatch),
+            ("a.VCVSS", Format::VcvPatch),
         ] {
             assert_eq!(Format::for_path(Path::new(name)), Some(format));
         }

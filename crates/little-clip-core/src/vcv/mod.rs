@@ -14,8 +14,8 @@ pub use analyze::{
     analyze_patch, build_patch_groups,
 };
 pub use archive::{
-    MAX_PATCH_BYTES, PatchCable, PatchDocument, PatchModule, PortRef, read_patch_bytes,
-    read_patch_path,
+    MAX_PATCH_BYTES, PatchCable, PatchDocument, PatchModule, PortRef, is_vcv_strip_path,
+    read_patch_bytes, read_patch_bytes_for_path, read_patch_path,
 };
 pub use catalog::{ModuleFunction, ModuleInfo, Role, RoleSource, VcvCatalog};
 pub use layout::{
@@ -29,7 +29,8 @@ pub use panels::{
 };
 pub use rack::{
     PlacedRackModule, RACK_HP_WIDTH, RACK_ROW_GAP, RACK_ROW_HEIGHT, RackRailLayout,
-    RankedStripModule, StripLineup, build_rack_rail_layout, build_ranked_strip,
+    RankedStripModule, StripLineup, build_full_single_row_strip, build_rack_rail_layout,
+    build_ranked_strip,
 };
 pub use render::{
     DiagramTheme, RenderedDiagram, render_layout_outlined_svg, render_layout_rgba,
@@ -53,32 +54,39 @@ pub struct PatchSummary {
     pub plugins: Vec<String>,
     pub strip_dark: StripLineup,
     pub strip_light: StripLineup,
+    pub full_strip: Option<StripLineup>,
     pub rack_dark: RackRailLayout,
     pub rack_light: RackRailLayout,
     pub strip: DiagramLayout,
     pub analysis: PatchAnalysis,
 }
 
-/// Reads and analyzes a `.vcv` patch from bytes and prepares its overview strip layout.
-pub fn inspect_bytes(title: &str, bytes: &[u8]) -> Result<PatchSummary, String> {
-    let doc = read_patch_bytes(bytes)?;
+fn path_title(path: &Path) -> &str {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("VCV Patch")
+}
+
+fn inspect_document(title: &str, doc: PatchDocument) -> Result<PatchSummary, String> {
     let total_modules = doc.modules.len();
     let cable_count = doc.cables.len();
     let analysis = analyze_patch(doc)?;
     Ok(summarize(title, total_modules, cable_count, analysis))
 }
 
-/// Reads and analyzes a `.vcv` patch from disk and prepares its overview strip layout.
+/// Reads and analyzes a `.vcv` or `.vcvss` patch from bytes and prepares its overview strip layout.
+pub fn inspect_bytes(title: &str, bytes: &[u8]) -> Result<PatchSummary, String> {
+    inspect_document(title, read_patch_bytes(bytes)?)
+}
+
+/// Reads and analyzes raw `.vcv` or `.vcvss` bytes associated with `path`.
+pub fn inspect_path_bytes(path: &Path, bytes: &[u8]) -> Result<PatchSummary, String> {
+    inspect_document(path_title(path), read_patch_bytes_for_path(path, bytes)?)
+}
+
+/// Reads and analyzes a `.vcv` or `.vcvss` patch from disk and prepares its overview strip layout.
 pub fn inspect_path(path: &Path) -> Result<PatchSummary, String> {
-    let doc = read_patch_path(path)?;
-    let total_modules = doc.modules.len();
-    let cable_count = doc.cables.len();
-    let analysis = analyze_patch(doc)?;
-    let title = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("VCV Patch");
-    Ok(summarize(title, total_modules, cable_count, analysis))
+    inspect_document(path_title(path), read_patch_path(path)?)
 }
 
 fn summarize(
@@ -99,6 +107,7 @@ fn summarize(
     let plugins: Vec<String> = plugin_set.into_iter().collect();
     let strip_dark = build_ranked_strip(&analysis, true);
     let strip_light = build_ranked_strip(&analysis, false);
+    let full_strip = build_full_single_row_strip(&analysis, true);
     let rack_dark = build_rack_rail_layout(&analysis, true);
     let rack_light = build_rack_rail_layout(&analysis, false);
     let strip = build_strip_layout(&analysis, title);
@@ -114,6 +123,7 @@ fn summarize(
         plugins,
         strip_dark,
         strip_light,
+        full_strip,
         rack_dark,
         rack_light,
         strip,
@@ -133,6 +143,18 @@ pub fn render_strip_rgba(
         &summary.strip_light
     };
     render_ranked_strip_rgba(lineup, scale, dark)
+}
+
+/// Renders the full un-deduplicated single-row module strip in patch order, when applicable.
+pub fn render_full_strip_rgba(
+    summary: &PatchSummary,
+    scale: f32,
+    dark: bool,
+) -> Option<Result<RenderedDiagram, String>> {
+    summary
+        .full_strip
+        .as_ref()
+        .map(|lineup| render_ranked_strip_rgba(lineup, scale, dark))
 }
 
 /// Renders the physical Rack rail layout into RGBA pixels.
@@ -251,6 +273,71 @@ mod tests {
         )
         .expect("sparse rows patch");
         assert_eq!(sparse.row_count(), 2);
+    }
+
+    #[test]
+    fn parses_vcvss_strip_presets_in_physical_order_with_zero_rows() {
+        let vcvss = serde_json::to_vec(&serde_json::json!({
+            "stripVersion": 1,
+            "leftModules": [
+                { "id": 20, "plugin": "Fundamental", "model": "VCF" },
+                { "id": 10, "plugin": "Fundamental", "model": "VCO" }
+            ],
+            "leftWidth": 240.0,
+            "rightModules": [
+                { "id": 30, "plugin": "Fundamental", "model": "VCA-1" },
+                { "id": 40, "plugin": "Core", "model": "AudioInterface2" }
+            ],
+            "rightWidth": 240.0,
+            "cables": [
+                { "outputModuleId": 10, "outputId": 0, "inputModuleId": 20, "inputId": 0, "color": "#ff5252" },
+                { "outputModuleId": 20, "outputId": 0, "inputModuleId": 30, "inputId": 0, "color": "#ffd452" }
+            ],
+            "version": "2.6.0"
+        }))
+        .unwrap();
+
+        let doc = read_patch_bytes(&vcvss).expect("read .vcvss strip");
+        assert!(doc.is_strip);
+        assert_eq!(doc.row_count(), 0);
+        assert_eq!(doc.modules.len(), 4);
+        assert_eq!(doc.cables.len(), 2);
+        let ids: Vec<i64> = doc.modules.iter().map(|m| m.id).collect();
+        assert_eq!(ids, [10, 20, 30, 40]);
+
+        let summary = inspect_path_bytes(Path::new("voice.vcvss"), &vcvss).expect("analyze .vcvss");
+        assert_eq!(summary.total_modules, 4);
+        assert_eq!(summary.cable_count, 2);
+        assert_eq!(summary.analysis.document.row_count(), 0);
+        assert_eq!(
+            summary
+                .rack_dark
+                .modules
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>(),
+            [10, 20, 30, 40]
+        );
+        let strip_img = render_strip_rgba(&summary, 1.0, true).expect("render strip");
+        assert!(strip_img.width > 0 && strip_img.height > 0);
+        let rack_img = render_rack_rgba(&summary, 0.5, true).expect("render rack");
+        assert!(rack_img.width > 0 && rack_img.height > 0);
+
+        // Even a patch JSON saved under a .vcvss filename stays tagged as 0-row strip metadata.
+        let flat = inspect_path_bytes(Path::new("compat.vcvss"), &sample_patch_json())
+            .expect("inspect .vcvss extension");
+        assert_eq!(flat.analysis.document.row_count(), 0);
+
+        if let Ok(home) = std::env::var("HOME") {
+            let demo = Path::new(&home)
+                .join(".local/share/Rack2/plugins-lin-x64/Stoermelder-P1/presets/Strip/Demo.vcvss");
+            if demo.is_file() {
+                let demo_summary = inspect_path(&demo).expect("inspect local Demo.vcvss");
+                assert_eq!(demo_summary.total_modules, 1);
+                assert_eq!(demo_summary.cable_count, 0);
+                assert_eq!(demo_summary.analysis.document.row_count(), 0);
+            }
+        }
     }
 
     #[test]
@@ -610,5 +697,61 @@ mod tests {
             std::fs::read(shots_dir.join("NewPlugin/Osc.png")).unwrap(),
             b"png-bytes"
         );
+    }
+
+    #[test]
+    fn single_row_full_strip_preserves_duplicates_in_patch_order() {
+        // sample_patch_json spans 2 rows, so full_strip must not be built.
+        let multi = inspect_bytes("Multi", &sample_patch_json()).expect("analyze multi-row");
+        assert!(multi.full_strip.is_none());
+
+        // Single-row .vcv with duplicate VCO modules in [VCF, VCO, Scope, VCO] patch order.
+        let single_row = serde_json::to_vec(&serde_json::json!({
+            "version": "2.6.0",
+            "modules": [
+                { "id": 1, "plugin": "Fundamental", "model": "VCF", "pos": [0, 0] },
+                { "id": 2, "plugin": "Fundamental", "model": "VCO", "pos": [10, 0] },
+                { "id": 3, "plugin": "Fundamental", "model": "Scope", "pos": [20, 0] },
+                { "id": 4, "plugin": "Fundamental", "model": "VCO", "pos": [30, 0] }
+            ],
+            "cables": []
+        }))
+        .unwrap();
+        let single = inspect_bytes("Single", &single_row).expect("analyze single-row");
+        let full = single.full_strip.as_ref().expect("single-row full strip");
+        let models: Vec<&str> = full.modules.iter().map(|m| m.model.as_str()).collect();
+        assert_eq!(models, ["VCF", "VCO", "Scope", "VCO"]);
+        assert!(full.modules.iter().all(|m| m.count == 1));
+        assert!(full.width > single.strip_dark.width);
+
+        // .vcvss strip preserves [leftModules.rev(), rightModules] order with duplicates.
+        let strip_json = serde_json::to_vec(&serde_json::json!({
+            "stripVersion": 1,
+            "leftModules": [
+                { "id": 2, "plugin": "Fundamental", "model": "VCO" },
+                { "id": 1, "plugin": "Fundamental", "model": "AudioInterface2" }
+            ],
+            "rightModules": [
+                { "id": 3, "plugin": "Fundamental", "model": "VCF" },
+                { "id": 4, "plugin": "Fundamental", "model": "VCO" }
+            ],
+            "cables": [],
+            "version": "2.6.0"
+        }))
+        .unwrap();
+        let strip =
+            inspect_path_bytes(Path::new("strip.vcvss"), &strip_json).expect("analyze vcvss");
+        let strip_full = strip.full_strip.as_ref().expect("vcvss full strip");
+        let strip_models: Vec<&str> = strip_full
+            .modules
+            .iter()
+            .map(|m| m.model.as_str())
+            .collect();
+        assert_eq!(strip_models, ["AudioInterface2", "VCO", "VCF", "VCO"]);
+        assert!(strip_full.modules.iter().all(|m| m.count == 1));
+        let rendered = render_full_strip_rgba(&strip, 1.0, true)
+            .expect("full strip present")
+            .expect("render full strip");
+        assert!(rendered.width > 0 && rendered.height > 0);
     }
 }

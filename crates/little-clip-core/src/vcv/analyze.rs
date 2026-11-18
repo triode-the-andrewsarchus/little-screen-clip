@@ -814,6 +814,7 @@ pub fn bypass_wireless_links(patch: &PatchDocument) -> PatchDocument {
         version: patch.version.clone(),
         modules: patch.modules.clone(),
         cables,
+        is_strip: patch.is_strip,
     }
 }
 

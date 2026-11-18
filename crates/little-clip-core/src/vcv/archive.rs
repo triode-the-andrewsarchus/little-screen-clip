@@ -52,17 +52,22 @@ pub struct PatchCable {
     pub color: Option<String>,
 }
 
-/// Parsed contents of a `.vcv` file's `patch.json`.
+/// Parsed contents of a `.vcv` patch (`patch.json`) or stoermelder STRIP preset (`.vcvss`).
 #[derive(Clone, Debug)]
 pub struct PatchDocument {
     pub version: String,
     pub modules: Vec<PatchModule>,
     pub cables: Vec<PatchCable>,
+    pub is_strip: bool,
 }
 
 impl PatchDocument {
-    /// Returns the number of distinct Eurorack rows occupied by modules in this patch.
+    /// Returns the number of distinct Eurorack rows occupied by modules in this patch,
+    /// or `0` for stoermelder STRIP selection files (`.vcvss`).
     pub fn row_count(&self) -> usize {
+        if self.is_strip {
+            return 0;
+        }
         self.modules
             .iter()
             .map(|module| module.row)
@@ -71,7 +76,13 @@ impl PatchDocument {
     }
 }
 
-/// Reads and parses a `.vcv` patch from raw bytes (either zstd+tar archive or raw UTF-8 JSON).
+/// Returns whether `path` uses stoermelder STRIP's `.vcvss` extension.
+pub fn is_vcv_strip_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vcvss"))
+}
+
+/// Reads and parses a `.vcv` or `.vcvss` patch from raw bytes (either zstd+tar archive or raw UTF-8 JSON).
 pub fn read_patch_bytes(bytes: &[u8]) -> Result<PatchDocument, String> {
     if bytes.is_empty() {
         return Err("Patch file is empty".to_string());
@@ -90,7 +101,16 @@ pub fn read_patch_bytes(bytes: &[u8]) -> Result<PatchDocument, String> {
     parse_patch_value(&root)
 }
 
-/// Reads and parses a `.vcv` patch file from disk with a size guard.
+/// Reads and parses raw patch bytes while preserving strip semantics for `.vcvss` paths.
+pub fn read_patch_bytes_for_path(path: &Path, bytes: &[u8]) -> Result<PatchDocument, String> {
+    let mut doc = read_patch_bytes(bytes)?;
+    if is_vcv_strip_path(path) {
+        doc.is_strip = true;
+    }
+    Ok(doc)
+}
+
+/// Reads and parses a `.vcv` or `.vcvss` patch file from disk with a size guard.
 pub fn read_patch_path(path: &Path) -> Result<PatchDocument, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open patch: {e}"))?;
     let meta = file
@@ -107,7 +127,7 @@ pub fn read_patch_path(path: &Path) -> Result<PatchDocument, String> {
     if bytes.len() as u64 > MAX_PATCH_BYTES {
         return Err("Patch file exceeds 64 MiB limit".to_string());
     }
-    read_patch_bytes(&bytes)
+    read_patch_bytes_for_path(path, &bytes)
 }
 
 fn extract_patch_json_from_zst_tar(bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -150,7 +170,81 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
-/// Parses a `serde_json::Value` representing `patch.json` into a normalized `PatchDocument`.
+fn parse_optional_array<'a>(
+    obj: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<&'a [Value], String> {
+    match obj.get(key) {
+        None => Ok(&[]),
+        Some(value) => value
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(|| format!("Patch {key} is not a JSON array")),
+    }
+}
+
+fn parse_patch_module(
+    idx: usize,
+    item: &Value,
+    override_pos: Option<(i32, i32)>,
+) -> Result<PatchModule, String> {
+    let Some(m) = item.as_object() else {
+        return Err(format!("Module #{idx} is not a JSON object"));
+    };
+    let id = m
+        .get("id")
+        .and_then(json_i64)
+        .ok_or_else(|| format!("Module #{idx} is missing integer id"))?;
+    let plugin = m
+        .get("plugin")
+        .and_then(json_str)
+        .ok_or_else(|| format!("Module {id} is missing plugin"))?
+        .to_string();
+    let model = m
+        .get("model")
+        .and_then(json_str)
+        .ok_or_else(|| format!("Module {id} is missing model"))?
+        .to_string();
+    let mod_version = m.get("version").and_then(json_str).map(str::to_string);
+    let left_module_id = m.get("leftModuleId").and_then(json_i64);
+    let right_module_id = m.get("rightModuleId").and_then(json_i64);
+    let bypassed = m.get("bypass").and_then(Value::as_bool).unwrap_or(false);
+    let (column, row) = match override_pos {
+        Some(pos) => pos,
+        None => parse_position(m, id)?,
+    };
+    let params = parse_params(m.get("params"));
+
+    let data = m.get("data").cloned();
+    let linked_source_id = data
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|d| d.get("srcId"))
+        .and_then(json_i64);
+    let labels = parse_labels(data.as_ref());
+    let learned_notes = parse_learned_ints(data.as_ref(), "notes");
+    let learned_ccs = parse_learned_ints(data.as_ref(), "ccs");
+
+    Ok(PatchModule {
+        id,
+        plugin,
+        model,
+        version: mod_version,
+        params,
+        left_module_id,
+        right_module_id,
+        row,
+        column,
+        bypassed,
+        linked_source_id,
+        labels,
+        learned_notes,
+        learned_ccs,
+        raw_data: data,
+    })
+}
+
+/// Parses a `serde_json::Value` representing `patch.json` or a `.vcvss` strip preset into a normalized `PatchDocument`.
 pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
     let obj = root
         .as_object()
@@ -161,65 +255,32 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
         .unwrap_or("")
         .to_string();
 
-    let raw_modules = obj
-        .get("modules")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Patch does not contain a modules array".to_string())?;
-
-    let mut modules = Vec::with_capacity(raw_modules.len());
-    for (idx, item) in raw_modules.iter().enumerate() {
-        let Some(m) = item.as_object() else {
-            return Err(format!("Module #{idx} is not a JSON object"));
+    let (mut modules, is_strip) =
+        if let Some(raw_modules) = obj.get("modules").and_then(Value::as_array) {
+            let mut modules = Vec::with_capacity(raw_modules.len());
+            for (idx, item) in raw_modules.iter().enumerate() {
+                modules.push(parse_patch_module(idx, item, None)?);
+            }
+            (modules, false)
+        } else if obj.contains_key("rightModules") || obj.contains_key("leftModules") {
+            let left_modules = parse_optional_array(obj, "leftModules")?;
+            let right_modules = parse_optional_array(obj, "rightModules")?;
+            let mut modules = Vec::with_capacity(left_modules.len() + right_modules.len());
+            // stoermelder STRIP stores leftModules right-to-left and rightModules left-to-right;
+            // emit left-to-right across row 0 so layout order matches physical Rack placement.
+            for (slot, item) in left_modules
+                .iter()
+                .rev()
+                .chain(right_modules.iter())
+                .enumerate()
+            {
+                let col = i32::try_from(slot).unwrap_or(i32::MAX);
+                modules.push(parse_patch_module(slot, item, Some((col, 0)))?);
+            }
+            (modules, true)
+        } else {
+            return Err("Patch does not contain a modules array".to_string());
         };
-        let id = m
-            .get("id")
-            .and_then(json_i64)
-            .ok_or_else(|| format!("Module #{idx} is missing integer id"))?;
-        let plugin = m
-            .get("plugin")
-            .and_then(json_str)
-            .ok_or_else(|| format!("Module {id} is missing plugin"))?
-            .to_string();
-        let model = m
-            .get("model")
-            .and_then(json_str)
-            .ok_or_else(|| format!("Module {id} is missing model"))?
-            .to_string();
-        let mod_version = m.get("version").and_then(json_str).map(str::to_string);
-        let left_module_id = m.get("leftModuleId").and_then(json_i64);
-        let right_module_id = m.get("rightModuleId").and_then(json_i64);
-        let bypassed = m.get("bypass").and_then(Value::as_bool).unwrap_or(false);
-        let (column, row) = parse_position(m, id)?;
-        let params = parse_params(m.get("params"));
-
-        let data = m.get("data").cloned();
-        let linked_source_id = data
-            .as_ref()
-            .and_then(Value::as_object)
-            .and_then(|d| d.get("srcId"))
-            .and_then(json_i64);
-        let labels = parse_labels(data.as_ref());
-        let learned_notes = parse_learned_ints(data.as_ref(), "notes");
-        let learned_ccs = parse_learned_ints(data.as_ref(), "ccs");
-
-        modules.push(PatchModule {
-            id,
-            plugin,
-            model,
-            version: mod_version,
-            params,
-            left_module_id,
-            right_module_id,
-            row,
-            column,
-            bypassed,
-            linked_source_id,
-            labels,
-            learned_notes,
-            learned_ccs,
-            raw_data: data,
-        });
-    }
 
     // Preserve rack visual order (top-to-bottom row, then left-to-right column).
     modules.sort_by_key(|m| (m.row, m.column, m.id));
@@ -263,6 +324,7 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
         version,
         modules,
         cables,
+        is_strip,
     })
 }
 
