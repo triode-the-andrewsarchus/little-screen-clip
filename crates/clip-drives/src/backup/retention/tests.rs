@@ -17,29 +17,25 @@ fn versions() -> (FileFixture, Backup, Backup) {
 
 #[test]
 fn an_uncertain_image_control_protects_its_referenced_version_without_a_loop_record() {
-    let (fixture, old, current) = versions();
-    // Malformed/uncertain ownership cannot be treated as absence. This guard is
-    // conservative even if the journal references the wrong artifact kind.
-    fixture
-        .db
-        .put(crate::backup::IMAGE_CONTROL_KIND, &old.id, &1_u64)
-        .unwrap();
-    prune(&fixture.db, &fixture.drive.id, 1, &fixture.cancel).unwrap();
-    assert!(old.path.exists());
-    assert!(
-        fixture
-            .db
-            .get::<Backup>("backup", &old.id)
-            .unwrap()
-            .is_some()
-    );
-    fixture
-        .db
-        .remove(crate::backup::IMAGE_CONTROL_KIND, &old.id)
-        .unwrap();
-    prune(&fixture.db, &fixture.drive.id, 1, &fixture.cancel).unwrap();
-    assert!(!old.path.exists());
-    assert!(current.path.exists());
+    for kind in [crate::backup::IMAGE_CONTROL_KIND, "image-loop"] {
+        let (fixture, old, current) = versions();
+        // Malformed/uncertain ownership cannot be treated as absence. This guard is
+        // conservative even if the journal references the wrong artifact kind.
+        fixture.db.put(kind, &old.id, &1_u64).unwrap();
+        prune(&fixture.db, &fixture.drive.id, 1, &fixture.cancel).unwrap();
+        assert!(old.path.exists());
+        assert!(
+            fixture
+                .db
+                .get::<Backup>("backup", &old.id)
+                .unwrap()
+                .is_some()
+        );
+        fixture.db.remove(kind, &old.id).unwrap();
+        prune(&fixture.db, &fixture.drive.id, 1, &fixture.cancel).unwrap();
+        assert!(!old.path.exists());
+        assert!(current.path.exists());
+    }
 }
 
 #[test]

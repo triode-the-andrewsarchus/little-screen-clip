@@ -49,13 +49,21 @@ pub(crate) fn mount_image(
     let connection = system_connection()?;
     let object = setup_loop(&connection, &file, phase)?;
     backup.loop_object = Some(object.to_string());
-    let result = mount_view(db, &connection, &mut backup, &source, &file, phase);
+    let owner = image_loop::Owned::capture(&connection, &backup, &file).map_err(|error| {
+        let recorded = db.put("backup", id, &backup).err()
+            .map(|error| format!("; loop owner could not be recorded: {error}"))
+            .unwrap_or_default();
+        crate::Error::from(format!("Loop was created but descriptor admission failed: {error}{recorded}; mapping retained for recovery"))
+    })?;
+    let result = owner
+        .save(db, &backup)
+        .and_then(|()| mount_view(db, &connection, &mut backup, &source, &file, &owner, phase));
     result.or_else(|error| {
         // A failed admission may already own a mounted filesystem. Preserve
         // that fact for retry when cleanup is busy, but still attempt cleanup
         // using the retained owner if the journal itself is unavailable.
         let owner_error = db.put("backup", id, &backup).err();
-        retire_image(db, backup, true, phase).map_err(|cleanup| {
+        retire_image(db, backup, true, Some(owner), phase).map_err(|cleanup| {
             let journal = owner_error
                 .map(|error| format!("; mounted-image recovery record also failed: {error}"))
                 .unwrap_or_default();
@@ -67,7 +75,7 @@ pub(crate) fn mount_image(
     })
 }
 
-fn setup_loop(
+pub(super) fn setup_loop(
     connection: &zbus::blocking::Connection,
     file: &File,
     phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
@@ -96,10 +104,10 @@ fn mount_view(
     backup: &mut Backup,
     source: &little_clip_core::file_source::FileSource,
     file: &File,
+    owner: &image_loop::Owned,
     phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
 ) -> Result<String> {
     let id = &backup.id;
-    db.put("backup", id, &backup)?;
     phase(ImagePhase::LoopOwned)?;
     let filesystem = udisks_proxy(
         connection,
@@ -115,12 +123,14 @@ fn mount_view(
         zbus::zvariant::Value::from("ro,nosuid,nodev,noexec"),
     );
     phase(ImagePhase::Mounting)?;
+    owner.validate()?;
     let mounted: String = filesystem
         .call("Mount", &(options,))
         .map_err(|e| e.to_string())?;
     // Retain the actual successful mount even if later validation/publication
     // fails. Cleanup must use this owner, not reload an older partial record.
     backup.mount = Some(mounted.clone().into());
+    owner.validate()?;
     let root = Root::open(Path::new(&mounted))?;
     let observation = ImageMount::capture(backup, &root)?;
     source.check_file(file)?;
@@ -136,77 +146,99 @@ pub(crate) fn unmount_image(
     id: &str,
     phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
 ) -> Result<String> {
-    retire_image(
-        db,
-        db.get("backup", id)?.ok_or("Unknown backup version")?,
-        false,
-        phase,
-    )
+    let backup: Backup = db.get("backup", id)?.ok_or("Unknown backup version")?;
+    let connection = system_connection()?;
+    let owner = match image_loop::Attachment::load(db, &backup)? {
+        Some(attachment) => attachment.reopen(&connection, &backup)?,
+        None => Some(image_loop::Owned::adopt_ready(&connection, db, &backup)?),
+    };
+    retire_image(db, backup, false, owner, phase)
 }
 fn retire_image(
     db: &Store,
     mut backup: Backup,
     fresh: bool,
+    owner: Option<image_loop::Owned>,
     phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
 ) -> Result<String> {
-    let id = backup.id.clone();
-    let object = backup
-        .loop_object
-        .clone()
-        .ok_or("Image has no managed loop mapping")?;
-    if !fresh {
-        ImageMount::validate_view(db, &backup)?;
-    }
+    let object = backup.loop_object.clone();
     // Cleanup already owns an effect: journal failure must not discard its owner.
     if fresh {
         let _ = phase(ImagePhase::Retiring);
     } else {
         phase(ImagePhase::Retiring)?;
     }
-    let connection = system_connection()?;
-    unmount_view(db, &connection, &mut backup, fresh, phase)?;
-    let proxy = udisks_proxy(&connection, object.as_str(), "org.freedesktop.UDisks2.Loop")?;
-    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-    proxy
-        .call::<_, _, ()>("Delete", &(options,))
-        .map_err(|e| e.to_string())?;
+    if let Some(owner) = owner {
+        unmount_view(db, &mut backup, fresh, &owner, phase)?;
+        owner.retire()?;
+    }
+    backup.mount = None;
     backup.loop_object = None;
-    let transaction = db.0.unchecked_transaction()?;
-    db.remove("image-mount", &id)?;
-    db.put("backup", &id, &backup)?;
-    transaction.commit()?;
+    if let Err(error) = retire_metadata(db, &backup, object.as_deref()) {
+        return Ok(format!(
+            "Image loop detached; local retirement metadata needs recovery: {error}"
+        ));
+    }
     let checkpoint = completed_checkpoint(ImagePhase::Retired, phase);
     Ok(format!("Read-only backup image unmounted{checkpoint}"))
 }
 
+fn retire_metadata(db: &Store, backup: &Backup, object: Option<&str>) -> Result<()> {
+    let transaction = db.0.unchecked_transaction()?;
+    let current: Backup = db
+        .get("backup", &backup.id)?
+        .ok_or("Image version disappeared during retirement")?;
+    if current.id != backup.id
+        || current.path != backup.path
+        || current.identity != backup.identity
+        || current.kind != backup.kind
+        || (current.loop_object.is_some() && current.loop_object.as_deref() != object)
+    {
+        return Err(
+            "Image retirement record changed; native completion retained for recovery".into(),
+        );
+    }
+    db.remove("image-mount", &backup.id)?;
+    db.remove(image_loop::KIND, &backup.id)?;
+    db.put("backup", &backup.id, backup)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn unmount_view(
     db: &Store,
-    connection: &zbus::blocking::Connection,
     backup: &mut Backup,
     fresh: bool,
+    owner: &image_loop::Owned,
     phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
 ) -> Result<()> {
-    if backup.mount.is_some() {
-        let filesystem = udisks_proxy(
-            connection,
-            backup
-                .loop_object
-                .as_deref()
-                .ok_or("Missing image loop owner")?,
-            "org.freedesktop.UDisks2.Filesystem",
-        )?;
-        let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-        filesystem
-            .call::<_, _, ()>("Unmount", &(options,))
-            .map_err(|error| {
-                if !fresh && (image_permission_refusal(&error) || matches!(&error, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.UDisks2.Error.DeviceBusy")) {
-                    let _ = phase(ImagePhase::NoEffect);
-                }
-                error.to_string()
-            })?;
-        backup.mount = None;
-        db.put("backup", &backup.id, &backup)?;
+    if !owner.mounted()? {
+        return Ok(());
     }
+    if !fresh {
+        ImageMount::validate_view(db, backup)?;
+    }
+    owner.matches_mount(backup)?;
+    let connection = system_connection()?;
+    let filesystem = udisks_proxy(
+        &connection,
+        backup
+            .loop_object
+            .as_deref()
+            .ok_or("Missing image loop owner")?,
+        "org.freedesktop.UDisks2.Filesystem",
+    )?;
+    let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    filesystem
+        .call::<_, _, ()>("Unmount", &(options,))
+        .map_err(|error| {
+            if !fresh && (image_permission_refusal(&error) || matches!(&error, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.UDisks2.Error.DeviceBusy")) {
+                let _ = phase(ImagePhase::NoEffect);
+            }
+            error.to_string()
+        })?;
+    backup.mount = None;
+    db.put("backup", &backup.id, &backup)?;
     Ok(())
 }
 

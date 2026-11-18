@@ -3,6 +3,17 @@ use super::*;
 use crate::{backup::ImagePhase as Phase, service::image_controls::KIND};
 use std::sync::atomic::AtomicUsize;
 
+fn counted_image_authority(fixture: &TestDrives) -> (partition::Authority, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let mut authority = fixture.image_authority();
+    authority.images.mount = Arc::new(move |_, _, _| {
+        seen.fetch_add(1, Ordering::AcqRel);
+        Err("unexpected native admission".into())
+    });
+    (authority, calls)
+}
+
 #[test]
 fn held_image_controls_keep_policy_controls_sync_and_shutdown_owned() {
     for case in [
@@ -169,13 +180,7 @@ fn held_image_controls_keep_policy_controls_sync_and_shutdown_owned() {
 fn image_control_never_starts_when_exclusion_installation_fails() {
     let fixture = TestDrives::new(4096);
     let image = fixture.saved_image();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let seen = calls.clone();
-    let mut authority = fixture.image_authority();
-    authority.images.mount = Arc::new(move |_, _, _| {
-        seen.fetch_add(1, Ordering::AcqRel);
-        Ok("unexpected effect".into())
-    });
+    let (authority, calls) = counted_image_authority(&fixture);
     let service = fixture.start_authority(None, authority);
     finish(
         &service,
@@ -203,6 +208,52 @@ fn image_control_never_starts_when_exclusion_installation_fails() {
     assert!(policy.is_dir());
     fs::remove_dir(&policy).unwrap();
     fs::rename(&retained, &policy).unwrap();
+    service.shutdown().unwrap();
+}
+
+#[test]
+fn image_control_rechecks_its_saved_input_before_calling_authority() {
+    let fixture = TestDrives::new(4096);
+    let image = fixture.saved_image();
+    let bytes = fs::read(&image.path).unwrap();
+    let (authority, calls) = counted_image_authority(&fixture);
+    let service = fixture.start_authority(None, authority);
+    let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
+    // Replace the addressed artifact in the same transaction that admits its
+    // journal, deterministically preceding the worker's first native action.
+    db.0.execute_batch(
+        "CREATE TRIGGER change_image_input AFTER INSERT ON entities
+         WHEN NEW.kind='image-control'
+         BEGIN UPDATE entities SET json=json_set(json,'$.kind','Files')
+         WHERE kind='backup' AND id=NEW.id; END;",
+    )
+    .unwrap();
+    let result = completed(
+        &service,
+        DriveRequest::MountImage {
+            backup: image.id.clone(),
+        },
+    );
+    assert_eq!(result.state, "failed");
+    assert!(
+        result
+            .message
+            .contains("input changed before native admission"),
+        "{}",
+        result.message
+    );
+    assert_eq!(calls.load(Ordering::Acquire), 0);
+    assert!(
+        db.get::<serde_json::Value>(KIND, &image.id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        published_policy(&service)
+            .excluded
+            .contains(&PathBuf::from("/"))
+    );
+    assert_eq!(fs::read(&image.path).unwrap(), bytes);
     service.shutdown().unwrap();
 }
 
@@ -502,13 +553,30 @@ fn legacy_helper_refuses_image_control_registry_before_mounting() {
 fn native_image_checkpoints_keep_sync_live_and_preserve_actual_cancellation_results() {
     let partition = crate::sync_edge_tests::native_fs::guest_drive();
     for stage in [Phase::LoopOwned, Phase::Ready, Phase::Retiring] {
-        native_image_checkpoint(stage, &partition);
+        native_image_checkpoint(stage, &partition, "");
     }
 }
 
-fn native_image_checkpoint(stage: Phase, partition: &Drive) {
+#[test]
+#[ignore = "requires the isolated partition/authority guest"]
+fn native_partial_image_cleanup_retries_only_its_verified_attachment() {
+    let partition = crate::sync_edge_tests::native_fs::guest_drive();
+    for fault in [
+        "legacy",
+        "unmount-record",
+        "retired-record",
+        "raw-reader",
+        "reused",
+    ] {
+        native_image_checkpoint(Phase::Retiring, &partition, fault);
+    }
+}
+
+fn native_image_checkpoint(stage: Phase, partition: &Drive, fault: &str) {
     let original = native_images::selected(partition);
     let fixture = TestDrives::new(4096);
+    let backup_destination = std::env::var_os("LITTLE_CLIP_DRIVE_TEST_BACKUP_DIR")
+        .map(|base| tempfile::tempdir_in(base).unwrap());
     fs::write(
         original.mount.as_ref().unwrap().join("retained-image.txt"),
         b"real retained image source",
@@ -538,7 +606,10 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
         })
     });
     let config = DriveConfig {
-        backup_directory: Some(fixture.temp.path().join("backup")),
+        backup_directory: Some(backup_destination.as_ref().map_or_else(
+            || fixture.temp.path().join("backup"),
+            |directory| directory.path().to_path_buf(),
+        )),
         ram_min_available: u64::MAX,
         sync_interval_seconds: 3600,
         ..Default::default()
@@ -576,6 +647,7 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
     } else {
         mounting
     };
+    let mut fault_fixture = NativeImageFault::prepare(fault, &db, &image, fixture.temp.path());
     let operation = accept(&service, request);
     let mut closing = None;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -621,7 +693,7 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
     let completed = wait_operation(&service, &operation, |op| op.finished.is_some());
     assert_eq!(
         completed.state,
-        if stage == Phase::LoopOwned {
+        if stage == Phase::LoopOwned || matches!(fault, "unmount-record" | "raw-reader") {
             "cancelled"
         } else {
             "complete"
@@ -633,31 +705,40 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
         db.get::<serde_json::Value>(KIND, &image.id)
             .unwrap()
             .is_some(),
-        stage == Phase::Ready,
+        stage == Phase::Ready || (!fault.is_empty() && fault != "legacy"),
     );
     assert_eq!(
         native_images::digest(File::open(&image.path).unwrap()),
         expected
     );
     let saved: DriveBackup = db.get("backup", &image.id).unwrap().unwrap();
-    if stage == Phase::Ready {
-        assert!(
-            completed.message.contains("retain completed native image"),
-            "{}",
-            completed.message
-        );
+    if stage == Phase::Ready || (!fault.is_empty() && fault != "legacy") {
         assert!(
             published_policy(&service)
                 .excluded
                 .contains(&PathBuf::from("/"))
         );
-        db.0.execute_batch("DROP TRIGGER retain_ready_image_control")
-            .unwrap();
-        backup::ImageMount::validate_view(&db, &saved).unwrap();
-        assert_eq!(
-            fs::read(saved.mount.as_ref().unwrap().join("retained-image.txt")).unwrap(),
-            b"real retained image source"
-        );
+        if stage == Phase::Ready {
+            assert!(
+                completed.message.contains("retain completed native image"),
+                "{}",
+                completed.message
+            );
+            assert!(
+                published_policy(&service)
+                    .excluded
+                    .contains(&PathBuf::from("/"))
+            );
+            db.0.execute_batch("DROP TRIGGER retain_ready_image_control")
+                .unwrap();
+            backup::ImageMount::validate_view(&db, &saved).unwrap();
+            assert_eq!(
+                fs::read(saved.mount.as_ref().unwrap().join("retained-image.txt")).unwrap(),
+                b"real retained image source"
+            );
+        } else {
+            fault_fixture.after_operation(&db, &completed);
+        }
         let mut authority = partition::Authority::default();
         authority.images.mount = Arc::new(|_, _, _| panic!("Recovery must not replay LoopSetup"));
         let restarted = Service::start_with_authority(
@@ -669,8 +750,21 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
             Default::default(),
         )
         .unwrap();
-        wait_image_recovery(&db, &image.id);
+        if stage == Phase::Ready {
+            wait_image_recovery(&db, &image.id);
+        }
+        fault_fixture.verify_reused(&restarted, unmounting.clone());
         finish(&restarted, unmounting);
+        assert!(
+            db.get::<serde_json::Value>("image-loop", &image.id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            db.get::<serde_json::Value>(KIND, &image.id)
+                .unwrap()
+                .is_none()
+        );
         restarted.shutdown().unwrap();
     } else {
         assert!(saved.mount.is_none() && saved.loop_object.is_none());
@@ -682,5 +776,119 @@ fn native_image_checkpoint(stage: Phase, partition: &Drive) {
         .unwrap();
     assert!(loops.status.success());
     assert!(loops.stdout.is_empty(), "{}", loops.stdout_lossy());
-    eprintln!("Native image checkpoint {stage:?}: {}", completed.state);
+    eprintln!(
+        "Native image checkpoint {stage:?}/{fault}: {}",
+        completed.state
+    );
+}
+
+struct NativeImageFault<'a> {
+    kind: &'a str,
+    reader: Option<File>,
+    device: Option<PathBuf>,
+    foreign: PathBuf,
+}
+impl<'a> NativeImageFault<'a> {
+    fn prepare(kind: &'a str, db: &Store, image: &DriveBackup, temp: &Path) -> Self {
+        let mut fault = Self {
+            kind,
+            reader: None,
+            device: None,
+            foreign: temp.join("foreign.img"),
+        };
+        if kind.is_empty() {
+            return fault;
+        }
+        let mounted: DriveBackup = db.get("backup", &image.id).unwrap().unwrap();
+        let name = mounted
+            .loop_object
+            .as_ref()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(
+            name.strip_prefix("loop")
+                .unwrap()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        let device = PathBuf::from("/dev").join(name);
+        if kind == "legacy" {
+            db.remove("image-loop", &image.id).unwrap();
+        } else if kind == "raw-reader" {
+            fault.reader = Some(File::open(&device).unwrap());
+        } else {
+            let condition = if kind == "unmount-record" {
+                "json_extract(NEW.json,'$.loop_object') IS NOT NULL AND json_extract(NEW.json,'$.mount') IS NULL"
+            } else {
+                "json_extract(NEW.json,'$.loop_object') IS NULL"
+            };
+            db.0.execute_batch(&format!("CREATE TRIGGER partial_image_record_fault BEFORE UPDATE ON entities WHEN NEW.kind='backup' AND ({condition}) BEGIN SELECT RAISE(FAIL,'partial image record fault'); END;")).unwrap();
+        }
+        fault.device = Some(device);
+        fault
+    }
+    fn after_operation(&mut self, db: &Store, operation: &DriveOperation) {
+        if self.kind == "raw-reader" {
+            assert!(
+                operation
+                    .message
+                    .contains("deferred by open device readers"),
+                "{}",
+                operation.message
+            );
+        } else {
+            db.0.execute_batch("DROP TRIGGER partial_image_record_fault")
+                .unwrap();
+            assert!(
+                operation.message.contains("partial image record fault"),
+                "{}",
+                operation.message
+            );
+        }
+        drop(self.reader.take());
+        if self.kind == "reused" {
+            fs::write(&self.foreign, b"foreign owned fixture").unwrap();
+            File::options()
+                .write(true)
+                .open(&self.foreign)
+                .unwrap()
+                .set_len(256 * 1024 * 1024)
+                .unwrap();
+            let result = CommandRequest::new("losetup")
+                .arg("--read-only")
+                .arg(self.device.as_ref().unwrap())
+                .arg(&self.foreign)
+                .run()
+                .unwrap();
+            assert!(result.status.success(), "{}", result.stderr_lossy());
+        }
+    }
+    fn verify_reused(&self, service: &Service, unmount: DriveRequest) {
+        if self.kind != "reused" {
+            return;
+        }
+        failed(service, unmount, "attachment changed");
+        let foreign_loop = CommandRequest::new("losetup")
+            .arg("-j")
+            .arg(&self.foreign)
+            .run()
+            .unwrap();
+        assert!(foreign_loop.status.success() && !foreign_loop.stdout.is_empty());
+        let mut prefix = [0_u8; 21];
+        std::os::unix::fs::FileExt::read_exact_at(
+            &File::open(&self.foreign).unwrap(),
+            &mut prefix,
+            0,
+        )
+        .unwrap();
+        assert_eq!(&prefix, b"foreign owned fixture");
+        let detached = CommandRequest::new("losetup")
+            .arg("--detach")
+            .arg(self.device.as_ref().unwrap())
+            .run()
+            .unwrap();
+        assert!(detached.status.success(), "{}", detached.stderr_lossy());
+    }
 }

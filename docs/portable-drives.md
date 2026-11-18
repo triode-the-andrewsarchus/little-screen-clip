@@ -257,9 +257,25 @@ call, the daemon saves a local image-control journal and pauses optional content
 indexing globally until it can establish the final location or confirm cleanup.
 An uncertain reply keeps that exclusion, protects the backup from retention and
 adds a recovery notice in Jobs. Restart reconciles provable checkpoints without
-replaying UDisks calls. Explicit unmount requires current mount-lifetime evidence;
-an unknown or replaced mapping remains protected for recovery rather than being
-deleted using an old loop-object name.
+replaying UDisks calls. Image controls retain their local authority call until its
+actual reply or connection failure, without a post-effect method deadline.
+
+New image mappings save a local `image-loop` attachment record containing the
+boot/namespace, device-node mount lifetime, kernel disk sequence and exact backing
+file identity. Native cleanup uses an authorized read-only device descriptor and
+Linux's loop-control ioctl. It checks the attachment before effects instead of
+deleting through a potentially reused object name. An interrupted unmount can be
+retried even when its filesystem view is already gone. If the old mapping has
+ended, retry retires only its local records; a replacement mapping is refused and
+left intact. A legacy ready mapping can be adopted only through its current
+read-only mount evidence and verified backing descriptor.
+
+Other raw-device readers can defer kernel loop retirement. Jobs keeps that
+outcome unresolved and protected; close those readers and retry **Unmount
+image**. A completed native detach remains completed if local metadata recording
+fails, with a warning and retained recovery state. A loop setup whose reply or
+attachment identity was never recorded still requires explicit recovery; restart
+does not guess which mapping to delete.
 
 These journals live only in the local `drives.sqlite` registry. Its version advances
 to 3 on first use of an image control, so older daemons/helpers refuse it instead

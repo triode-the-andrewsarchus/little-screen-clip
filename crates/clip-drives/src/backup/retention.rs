@@ -125,7 +125,7 @@ fn protected(db: &Store, backup: &Backup) -> Result<bool> {
         128,
     )?;
     let publishing: bool = db.0.query_row(
-        "SELECT EXISTS(SELECT 1 FROM entities WHERE kind IN ('backup-publication','image-control') AND id=?1)",
+        "SELECT EXISTS(SELECT 1 FROM entities WHERE kind IN ('backup-publication','image-control','image-loop') AND id=?1)",
         [&backup.id],
         |row| row.get(0),
     )?;

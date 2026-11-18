@@ -21,6 +21,7 @@ use std::{
 
 mod collection;
 mod image_control;
+mod image_loop;
 mod image_mount;
 pub(crate) use image_control::{
     ImageAction, ImageAuthority, ImagePhase, KIND as IMAGE_CONTROL_KIND,
@@ -392,9 +393,10 @@ pub(crate) fn time(seconds: i64, nanos: i64) -> Option<std::time::SystemTime> {
     }
 }
 fn system_connection() -> Result<zbus::blocking::Connection> {
+    // zbus defaults to no method timeout. Accepted authority requests retain
+    // their real reply lifetime; a post-effect deadline can lose a created loop.
     zbus::blocking::connection::Builder::system()
         .map_err(|e| e.to_string())?
-        .method_timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string().into())
 }

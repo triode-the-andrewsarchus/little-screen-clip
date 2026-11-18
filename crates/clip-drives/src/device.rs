@@ -83,25 +83,32 @@ impl Source {
                 "Authorized descriptor does not match the admitted partition device".into(),
             );
         }
-        let mut sequence = 0_u64;
-        // SAFETY: Linux BLKGETDISKSEQ writes one u64 to this live stack value.
-        if unsafe {
-            libc::ioctl(
-                input.as_raw_fd(),
-                0x80081280_u64 as libc::c_ulong,
-                &mut sequence,
-            )
-        } != 0
-        {
-            return Err(format!(
-                "Cannot verify authorized disk lifetime: {}",
-                std::io::Error::last_os_error()
-            )
-            .into());
-        }
-        if sequence != self.sequence {
+        if disk_sequence(input)? != self.sequence {
             return Err("Disk lifetime changed before image publication".into());
         }
         Ok(())
     }
+}
+
+pub(crate) fn disk_sequence(input: &File) -> Result<u64> {
+    let mut sequence = 0_u64;
+    // SAFETY: Linux BLKGETDISKSEQ writes one u64 to this live stack value.
+    if unsafe {
+        libc::ioctl(
+            input.as_raw_fd(),
+            0x80081280_u64 as libc::c_ulong,
+            &mut sequence,
+        )
+    } != 0
+    {
+        return Err(format!(
+            "Cannot verify authorized disk lifetime: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    if sequence == 0 {
+        return Err("Kernel disk lifetime is unknown".into());
+    }
+    Ok(sequence)
 }

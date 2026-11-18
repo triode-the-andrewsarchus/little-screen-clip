@@ -114,10 +114,18 @@ impl Intent {
             }
             Phase::Retired => Ok(evidence.version.mount.is_none()
                 && evidence.version.loop_object.is_none()
-                && evidence.observation.is_none()),
+                && evidence.observation.is_none()
+                && evidence.attachment.is_none()),
             Phase::Ready => backup::ImageMount::validate_view(db, &evidence.version).map(|()| true),
             _ => Ok(false),
         }
+    }
+    fn check_input(&self, db: &Store) -> Result<()> {
+        self.check_owner(db)?;
+        if Evidence::capture(db, &self.backup)?.header != self.original {
+            return Err("Image control input changed before native admission; retry with the current version".into());
+        }
+        Ok(())
     }
     fn settle(&self, db: &Store) -> Result<bool> {
         let evidence = Evidence::capture(db, &self.backup)?;
@@ -139,6 +147,7 @@ impl Intent {
     fn run(mut self, state: PathBuf, action: Action, cancel: Arc<AtomicBool>) -> Result<String> {
         let db = Store::existing(&state.join("drives.sqlite"), false)?;
         let result = cancelled(&cancel).and_then(|()| {
+            self.check_input(&db)?;
             action(&db, &self.backup.clone(), &mut |phase| {
                 if matches!(phase, Phase::StartingLoop | Phase::Mounting)
                     || (!self.mounting && phase == Phase::Retiring)
@@ -188,6 +197,7 @@ struct Evidence {
     version: DriveBackup,
     header: serde_json::Value,
     observation: Option<serde_json::Value>,
+    attachment: Option<serde_json::Value>,
 }
 impl Evidence {
     fn capture(db: &Store, id: &str) -> Result<Self> {
@@ -198,6 +208,7 @@ impl Evidence {
             version: serde_json::from_value(header.clone())?,
             header,
             observation: db.get_bounded("image-mount", id, LIMIT)?,
+            attachment: db.get_bounded("image-loop", id, LIMIT)?,
         })
     }
     fn current(&self, db: &Store, id: &str) -> Result<bool> {
@@ -205,7 +216,8 @@ impl Evidence {
             .get_bounded::<serde_json::Value>("backup", id, LIMIT)?
             .as_ref()
             == Some(&self.header)
-            && db.get_bounded::<serde_json::Value>("image-mount", id, LIMIT)? == self.observation)
+            && db.get_bounded::<serde_json::Value>("image-mount", id, LIMIT)? == self.observation
+            && db.get_bounded::<serde_json::Value>("image-loop", id, LIMIT)? == self.attachment)
     }
 }
 

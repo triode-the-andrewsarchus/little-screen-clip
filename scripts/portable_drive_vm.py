@@ -19,11 +19,11 @@ MODULES = (
 APPLETS = ('sh', 'mount', 'mkdir', 'insmod', 'cat', 'poweroff')
 
 
-def copy_modules(root, release):
+def copy_modules(root, release, selected_modules=MODULES):
     """Copy ordered module dependencies without loading anything on the host."""
     copied = set()
     names = []
-    for module in MODULES:
+    for module in selected_modules:
         result = subprocess.run(
             ['modprobe', '--show-depends', '--set-version', release, module],
             check=True, capture_output=True, text=True,
@@ -57,7 +57,8 @@ def make_initrd(output, args, repo):
     (root / 'lib64').symlink_to('usr/lib64')
     (root / 'etc/mtab').symlink_to('/proc/mounts')
     shutil.copyfile(args.guest_script, root / 'guest-test')
-    modules = copy_modules(root, args.kernel_release or args.kernel.parent.name)
+    selected_modules = MODULES + (('btrfs',) if args.btrfs else ())
+    modules = copy_modules(root, args.kernel_release or args.kernel.parent.name, selected_modules)
     host_boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     init = [
         '#!/bin/sh', '/bin/mount -t devtmpfs devtmpfs /dev',
@@ -147,6 +148,7 @@ def main():
                         help='Static BusyBox including mount, insmod and poweroff')
     parser.add_argument('--firmware', type=Path)
     parser.add_argument('--tools', type=Path, help='Additional read-only usr tree for guest formatters')
+    parser.add_argument('--btrfs', action='store_true', help='Include Btrfs for owned guest backup destinations')
     parser.add_argument('--guest-script', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--accel', choices=['kvm', 'tcg'], default='kvm')
