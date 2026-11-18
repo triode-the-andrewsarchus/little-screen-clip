@@ -261,7 +261,7 @@ impl GrwlSummaryIndex {
     }
 
     pub fn load_or_build(dir: &Path) -> Option<Self> {
-        let cache_path = dir.join("grwl_summary.bin");
+        let cache_path = dir.join("grwl_summary_v2.bin");
         if let Ok(bytes) = fs::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
         {
@@ -379,46 +379,14 @@ impl GrwlSummaryIndex {
             if shape_type != 3 && shape_type != 13 && shape_type != 23 {
                 continue;
             }
-            let num_parts = i32::from_le_bytes(buf[36..40].try_into().ok()?) as usize;
-            let num_points = i32::from_le_bytes(buf[40..44].try_into().ok()?) as usize;
-            let pts_off = 44 + num_parts.saturating_mul(4);
-            if num_parts == 0 || num_points < 2 || pts_off + num_points * 16 > buf.len() {
-                continue;
+            let parts = shp_polyline_parts(&buf, 32)?;
+            for points in parts {
+                index_points(&mut cells, segments.len() as u32, &points);
+                segments.push(GrwlSegment {
+                    width_med_m,
+                    points,
+                });
             }
-            let step = (num_points / 32).max(1);
-            let mut points = Vec::with_capacity((num_points / step).min(32) + 1);
-            for i in (0..num_points).step_by(step) {
-                let p = pts_off + i * 16;
-                let lon = f64::from_le_bytes(buf[p..p + 8].try_into().ok()?) as f32;
-                let lat = f64::from_le_bytes(buf[p + 8..p + 16].try_into().ok()?) as f32;
-                points.push([lon, lat]);
-            }
-            if let Some(last) = num_points.checked_sub(1) {
-                let p = pts_off + last * 16;
-                let lon = f64::from_le_bytes(buf[p..p + 8].try_into().ok()?) as f32;
-                let lat = f64::from_le_bytes(buf[p + 8..p + 16].try_into().ok()?) as f32;
-                if points.last().copied() != Some([lon, lat]) {
-                    points.push([lon, lat]);
-                }
-            }
-            let seg_id = segments.len() as u32;
-            let xmin = f64::from_le_bytes(buf[4..12].try_into().ok()?);
-            let ymin = f64::from_le_bytes(buf[12..20].try_into().ok()?);
-            let xmax = f64::from_le_bytes(buf[20..28].try_into().ok()?);
-            let ymax = f64::from_le_bytes(buf[28..36].try_into().ok()?);
-            let gx0 = (((xmin + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-            let gx1 = (((xmax + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-            let gy0 = (((ymin + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
-            let gy1 = (((ymax + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
-            for gy in gy0..=gy1 {
-                for gx in gx0..=gx1 {
-                    cells[gy * 180 + gx].push(seg_id);
-                }
-            }
-            segments.push(GrwlSegment {
-                width_med_m,
-                points,
-            });
         }
         Some(Self { segments, cells })
     }
@@ -480,6 +448,76 @@ impl GrwlSummaryIndex {
             cells.push(cell);
         }
         Some(Self { segments, cells })
+    }
+}
+
+/// SHP PolyLine/PolyLineZ/PolyLineM share the same XY part table. Sampling
+/// restarts inside each part and always retains its original final endpoint.
+fn shp_polyline_parts(bytes: &[u8], limit: usize) -> Option<Vec<Vec<[f32; 2]>>> {
+    let integer = |offset| {
+        usize::try_from(i32::from_le_bytes(
+            bytes.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+        .ok()
+    };
+    let part_count = integer(36)?;
+    let point_count = integer(40)?;
+    let points_offset = 44usize.checked_add(part_count.checked_mul(4)?)?;
+    bytes.get(..points_offset.checked_add(point_count.checked_mul(16)?)?)?;
+    if part_count == 0 || point_count < 2 {
+        return None;
+    }
+    let mut starts: Vec<_> = (0..part_count)
+        .map(|i| integer(44 + i * 4))
+        .collect::<Option<_>>()?;
+    if starts.first().copied() != Some(0)
+        || starts.windows(2).any(|w| w[0] >= w[1])
+        || *starts.last()? >= point_count
+    {
+        return None;
+    }
+    starts.push(point_count);
+    let mut parts = Vec::new();
+    for span in starts.windows(2) {
+        if span[1] - span[0] < 2 {
+            continue;
+        }
+        let length = span[1] - span[0];
+        let count = length.min(limit.max(2));
+        let indices = (0..count)
+            .map(|i| span[0] + ((i as u64 * (length - 1) as u64) / (count - 1) as u64) as usize);
+        let mut points = Vec::new();
+        for i in indices {
+            let p = points_offset + i * 16;
+            let lon = f64::from_le_bytes(bytes[p..p + 8].try_into().ok()?) as f32;
+            let lat = f64::from_le_bytes(bytes[p + 8..p + 16].try_into().ok()?) as f32;
+            if !lon.is_finite() || !lat.is_finite() {
+                return None;
+            }
+            points.push([lon, lat]);
+        }
+        parts.push(points);
+    }
+    Some(parts)
+}
+
+fn index_points(cells: &mut [Vec<u32>], id: u32, points: &[[f32; 2]]) {
+    let bounds = points
+        .iter()
+        .fold([180.0_f32, 90.0, -180.0, -90.0], |b, p| {
+            [
+                b[0].min(p[0]),
+                b[1].min(p[1]),
+                b[2].max(p[0]),
+                b[3].max(p[1]),
+            ]
+        });
+    let x = |lon: f32| (((lon + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
+    let y = |lat: f32| (((lat + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
+    for gy in y(bounds[1])..=y(bounds[3]) {
+        for gx in x(bounds[0])..=x(bounds[2]) {
+            cells[gy * 180 + gx].push(id);
+        }
     }
 }
 
@@ -645,7 +683,7 @@ impl HydroRiversIndex {
         if legacy.is_file() {
             let _ = fs::remove_file(&legacy);
         }
-        let cache_path = dir.join("rivers_stra3_v2.bin");
+        let cache_path = dir.join("rivers_stra3_v3.bin");
         if let Ok(bytes) = fs::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
         {
@@ -772,47 +810,15 @@ impl HydroRiversIndex {
             if shape_type != 3 && shape_type != 13 && shape_type != 23 {
                 continue;
             }
-            let num_parts = i32::from_le_bytes(buf[36..40].try_into().ok()?) as usize;
-            let num_points = i32::from_le_bytes(buf[40..44].try_into().ok()?) as usize;
-            let pts_off = 44 + num_parts.saturating_mul(4);
-            if num_parts == 0 || num_points < 2 || pts_off + num_points * 16 > buf.len() {
-                continue;
+            let parts = shp_polyline_parts(&buf, 24)?;
+            for points in parts {
+                index_points(&mut cells, segments.len() as u32, &points);
+                segments.push(RiverSegment {
+                    ord_stra: ord,
+                    dis_cms: dis,
+                    points,
+                });
             }
-            let step = (num_points / 24).max(1);
-            let mut points = Vec::with_capacity((num_points / step).min(24) + 1);
-            for i in (0..num_points).step_by(step) {
-                let p = pts_off + i * 16;
-                let lon = f64::from_le_bytes(buf[p..p + 8].try_into().ok()?) as f32;
-                let lat = f64::from_le_bytes(buf[p + 8..p + 16].try_into().ok()?) as f32;
-                points.push([lon, lat]);
-            }
-            if let Some(last) = num_points.checked_sub(1) {
-                let p = pts_off + last * 16;
-                let lon = f64::from_le_bytes(buf[p..p + 8].try_into().ok()?) as f32;
-                let lat = f64::from_le_bytes(buf[p + 8..p + 16].try_into().ok()?) as f32;
-                if points.last().copied() != Some([lon, lat]) {
-                    points.push([lon, lat]);
-                }
-            }
-            let seg_id = segments.len() as u32;
-            let xmin = f64::from_le_bytes(buf[4..12].try_into().ok()?);
-            let ymin = f64::from_le_bytes(buf[12..20].try_into().ok()?);
-            let xmax = f64::from_le_bytes(buf[20..28].try_into().ok()?);
-            let ymax = f64::from_le_bytes(buf[28..36].try_into().ok()?);
-            let gx0 = (((xmin + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-            let gx1 = (((xmax + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-            let gy0 = (((ymin + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
-            let gy1 = (((ymax + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
-            for gy in gy0..=gy1 {
-                for gx in gx0..=gx1 {
-                    cells[gy * 180 + gx].push(seg_id);
-                }
-            }
-            segments.push(RiverSegment {
-                ord_stra: ord,
-                dis_cms: dis,
-                points,
-            });
         }
         Some(Self { segments, cells })
     }
@@ -1206,7 +1212,7 @@ impl BasemapAssets {
             || assets_dir.join("ne_10m_roads.geojson").is_file())
             && (assets_dir.join("lakes_10m_v2.json").is_file()
                 || assets_dir.join("ne_10m_lakes.geojson").is_file());
-        status.has_grwl = assets_dir.join("grwl_summary.bin").is_file()
+        status.has_grwl = assets_dir.join("grwl_summary_v2.bin").is_file()
             || find_first_with_ext(&assets_dir.join("grwl"), &["shp"]).is_some();
         status.has_grwl_masks = assets_dir.join("grwl_masks_idx.json").is_file()
             || find_first_with_ext(&assets_dir.join("grwl_masks"), &["tif", "tiff"]).is_some();
@@ -2296,6 +2302,95 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn multipart_shp() -> Vec<u8> {
+        let mut record = Vec::new();
+        record.extend_from_slice(&3i32.to_le_bytes());
+        for value in [0.0_f64, 0.0, 10.1, 10.0] {
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        record.extend_from_slice(&2i32.to_le_bytes());
+        record.extend_from_slice(&4i32.to_le_bytes());
+        record.extend_from_slice(&0i32.to_le_bytes());
+        record.extend_from_slice(&2i32.to_le_bytes());
+        for value in [0.0_f64, 0.0, 0.1, 0.0, 10.0, 10.0, 10.1, 10.0] {
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut bytes = vec![0u8; 100];
+        bytes[..4].copy_from_slice(&9994i32.to_be_bytes());
+        bytes[24..28].copy_from_slice(&(((108 + record.len()) / 2) as i32).to_be_bytes());
+        bytes[28..32].copy_from_slice(&1000i32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&3i32.to_le_bytes());
+        bytes[36..68].copy_from_slice(&record[4..36]);
+        bytes.extend_from_slice(&1i32.to_be_bytes());
+        bytes.extend_from_slice(&((record.len() / 2) as i32).to_be_bytes());
+        bytes.extend(record);
+        bytes
+    }
+    fn test_dbf(fields: &[(&str, &str)]) -> Vec<u8> {
+        let header = 33 + fields.len() * 32;
+        let mut bytes = vec![0u8; 32];
+        bytes[0] = 3;
+        bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[8..10].copy_from_slice(&(header as u16).to_le_bytes());
+        bytes[10..12].copy_from_slice(&((1 + fields.len() * 12) as u16).to_le_bytes());
+        for (name, _) in fields {
+            let mut field = [0u8; 32];
+            field[..name.len()].copy_from_slice(name.as_bytes());
+            field[11] = b'N';
+            field[16] = 12;
+            bytes.extend_from_slice(&field);
+        }
+        bytes.push(0x0d);
+        bytes.push(b' ');
+        for (_, value) in fields {
+            bytes.extend(std::iter::repeat_n(b' ', 12 - value.len()));
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        bytes
+    }
+    #[test]
+    fn both_river_loaders_preserve_multipart_boundaries_and_cache_them() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["grwl", "hydrorivers"] {
+            fs::create_dir(root.path().join(name)).unwrap();
+            fs::write(root.path().join(name).join("test.shp"), multipart_shp()).unwrap();
+        }
+        fs::write(
+            root.path().join("grwl/test.dbf"),
+            test_dbf(&[("width_med", "120.0")]),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("hydrorivers/test.dbf"),
+            test_dbf(&[("ORD_STRA", "6"), ("DIS_AV_CMS", "100.0")]),
+        )
+        .unwrap();
+        for round in 0..2 {
+            let grwl = GrwlSummaryIndex::load_or_build(root.path()).unwrap();
+            let hydro = HydroRiversIndex::load_or_build(root.path()).unwrap();
+            assert_eq!(grwl.segments().len(), 2);
+            assert_eq!(hydro.segments().len(), 2);
+            assert_eq!(grwl.segments()[0].points, vec![[0.0, 0.0], [0.1, 0.0]]);
+            assert_eq!(grwl.segments()[1].points, vec![[10.0, 10.0], [10.1, 10.0]]);
+            assert_eq!(grwl.segments()[1].width_med_m, 120.0);
+            assert_eq!(hydro.segments()[1].ord_stra, 6);
+            assert_eq!(hydro.segments()[1].dis_cms, 100.0);
+            assert_eq!(grwl.query_bbox(-0.5, -0.5, 0.5, 0.5, 0.0, 10).len(), 1);
+            assert_eq!(hydro.query_bbox(9.5, 9.5, 10.5, 10.5, 3, 10).len(), 1);
+            if round == 0 {
+                for name in ["grwl", "hydrorivers"] {
+                    fs::remove_file(root.path().join(name).join("test.shp")).unwrap();
+                }
+            }
+        }
+    }
+    #[test]
+    fn multipart_offsets_are_checked_before_sampling() {
+        let mut file = multipart_shp();
+        file[108 + 48..108 + 52].copy_from_slice(&0i32.to_le_bytes());
+        assert!(shp_polyline_parts(&file[108..], 32).is_none());
     }
 
     #[test]
