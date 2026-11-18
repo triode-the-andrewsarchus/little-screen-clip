@@ -5,7 +5,7 @@ mod tiles;
 
 use super::{
     filesystem::Entry,
-    geography_downloader::{AssetDownloader, DownloadPack},
+    geography_downloader::{AssetDownloader, DownloadPack, asset_workers},
     media::PreviewData,
     shelf::preview::Ready,
 };
@@ -21,6 +21,7 @@ use little_clip_core::{
         Document, Feature, Kind, MAX_BYTES, Sample,
         basemap::{BasemapAssets, BasemapStyle, GlobeCamera, ProjectionMode, oilslick_color},
     },
+    jobs::task::Task,
     palette::AppPalette,
 };
 use std::{
@@ -28,7 +29,6 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
 };
 
@@ -117,7 +117,7 @@ pub(super) struct Viewer {
     config: AppConfig,
     downloader: AssetDownloader,
     assets: Option<Arc<BasemapAssets>>,
-    assets_rx: Option<mpsc::Receiver<Arc<BasemapAssets>>>,
+    assets_job: Option<Task<Arc<BasemapAssets>>>,
     prompt_dismissed: bool,
     show_assets_panel: bool,
     tiles: tiles::Tiles,
@@ -137,10 +137,12 @@ impl Viewer {
         let downloader = AssetDownloader::new(&config);
         let assets_dir = downloader.assets_dir.clone();
         let override_dir = downloader.terrain_override_dir.clone();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let loaded = BasemapAssets::load(&assets_dir, override_dir.as_deref());
-            let _ = tx.send(Arc::new(loaded));
+        let job = Task::start_unbounded(asset_workers(), move |cancel| {
+            Arc::new(BasemapAssets::load_with_cancel(
+                &assets_dir,
+                override_dir.as_deref(),
+                cancel,
+            ))
         });
 
         let mut viewer = Self {
@@ -159,7 +161,7 @@ impl Viewer {
             config,
             downloader,
             assets: None,
-            assets_rx: Some(rx),
+            assets_job: Some(job),
             prompt_dismissed: false,
             show_assets_panel: false,
             tiles: tiles::Tiles::default(),
@@ -168,6 +170,10 @@ impl Viewer {
         viewer.fit_document();
         viewer.select(selected);
         Ok(viewer)
+    }
+
+    pub fn writes_pending(&self) -> bool {
+        self.downloader.active.is_some()
     }
 
     pub fn select(&mut self, index: usize) {
@@ -190,13 +196,22 @@ impl Viewer {
     }
 
     fn poll_background(&mut self, ctx: &egui::Context) {
-        if let Some(rx) = &self.assets_rx
-            && let Ok(loaded) = rx.try_recv()
-        {
-            self.downloader.status = loaded.status();
-            self.assets = Some(loaded);
-            self.assets_rx = None;
-            ctx.request_repaint();
+        if let Some(job) = &self.assets_job {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+            if let Some(result) = job.poll() {
+                self.assets_job = None;
+                match result {
+                    Ok(loaded) => {
+                        self.downloader.status = loaded.status();
+                        self.assets = Some(loaded);
+                    }
+                    Err(error) => {
+                        self.downloader.last_error =
+                            Some(format!("Asset loading failed: {error:?}"))
+                    }
+                }
+                ctx.request_repaint();
+            }
         }
         if let Some(downloaded) = self.downloader.poll(ctx) {
             self.assets = Some(downloaded);
@@ -423,6 +438,10 @@ impl Viewer {
         palette: &AppPalette,
         colors: WorkbenchColors,
     ) {
+        if self.assets_job.is_some() {
+            ui.label("Loading offline map assets…");
+            return;
+        }
         let needs_prompt = self.config.geography.prompt_on_open
             && !self.downloader.status.has_quick_start()
             && !self.prompt_dismissed;

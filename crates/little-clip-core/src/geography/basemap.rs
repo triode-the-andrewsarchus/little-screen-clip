@@ -337,6 +337,7 @@ impl HgtStore {
 }
 
 /// Optional global/local elevation & land-cover store.
+#[derive(Default)]
 pub struct BasemapAssets {
     pub assets_dir: PathBuf,
     pub ne2: Option<EquirectTexture>,
@@ -1504,12 +1505,33 @@ impl BasemapAssets {
 
     /// Loads available offline basemap assets from `assets_dir` and optional `terrain_override_dir`.
     pub fn load(assets_dir: &Path, terrain_override_dir: Option<&Path>) -> Self {
+        Self::load_with_cancel(
+            assets_dir,
+            terrain_override_dir,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    }
+    pub fn load_with_cancel(
+        assets_dir: &Path,
+        terrain_override_dir: Option<&Path>,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Self {
+        let stopped = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
+        if stopped() {
+            return Self::default();
+        }
         let root = AssetDirectory::open(assets_dir).ok();
         let anchor = root.as_ref().map(AssetDirectory::path);
         let assets_dir = anchor.as_deref().unwrap_or(assets_dir);
-        let ne2 = load_ne2_overview(assets_dir);
+        let ne2 = load_ne2_overview(assets_dir, cancelled);
+        if stopped() {
+            return Self::default();
+        }
         let ne2_full = find_first_with_ext(assets_dir, &["tif", "tiff"])
             .and_then(|p| Ne2FullSampler::open(&p));
+        if stopped() {
+            return Self::default();
+        }
         let cities = load_cities_from_dir(assets_dir);
         let country_borders = load_borders_from_dir(
             assets_dir,
@@ -1521,24 +1543,42 @@ impl BasemapAssets {
             "borders_admin1.json",
             "ne_10m_admin_1_states_provinces_lines.geojson",
         );
+        if stopped() {
+            return Self::default();
+        }
         let roads = load_roads_from_dir(assets_dir);
         let lakes = load_lakes_from_dir(assets_dir);
         let coastlines = find_gshhg_file(assets_dir)
             .and_then(|p| storage::read(p).ok())
             .map(|bytes| parse_gshhg_b(&bytes, 12_000))
             .unwrap_or_default();
+        if stopped() {
+            return Self::default();
+        }
         let mut terrain_tiles = HgtStore::default();
         if let Some(dir) = terrain_override_dir {
             load_hgt_dir(dir, &mut terrain_tiles);
         }
         load_hgt_dir(&assets_dir.join("terrain"), &mut terrain_tiles);
 
+        if stopped() {
+            return Self::default();
+        }
         let global_dem = load_global_dem(assets_dir);
         let cog_dem = find_first_with_ext(&assets_dir.join("gebco"), &["tif", "tiff"])
             .and_then(|p| CogDemPyramid::open(&p));
+        if stopped() {
+            return Self::default();
+        }
         let land_cover = load_land_cover(assets_dir);
         let rivers = HydroRiversIndex::load_or_build(assets_dir);
+        if stopped() {
+            return Self::default();
+        }
         let grwl_summary = GrwlSummaryIndex::load_or_build(assets_dir);
+        if stopped() {
+            return Self::default();
+        }
         let grwl_masks = GrwlMaskStore::load_or_index(assets_dir);
         let has_hydrorivers = rivers.as_ref().is_some_and(|r| !r.segments.is_empty());
 
@@ -2318,7 +2358,10 @@ fn load_lakes_from_dir(dir: &Path) -> Vec<LakePolygon> {
     Vec::new()
 }
 
-fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
+fn load_ne2_overview(
+    dir: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Option<EquirectTexture> {
     let cached = dir.join("ne2_overview.rgb");
     if let Ok(bytes) = storage::read(&cached)
         && bytes.len() >= 8
@@ -2338,6 +2381,9 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     let rgb = if let Some(sampler) = Ne2FullSampler::open(&img_path) {
         let mut rgb = Vec::with_capacity(4096 * 2048 * 3);
         for y in 0..2048 {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
             for x in 0..4096 {
                 rgb.extend_from_slice(&sampler.sample_rgb(
                     90.0 - (y as f64 + 0.5) * 180.0 / 2048.0,
@@ -2678,7 +2724,10 @@ mod tests {
             }
             assert!(load_land_cover(root.path()).is_none());
             assert!(load_global_dem(root.path()).is_none());
-            assert!(load_ne2_overview(root.path()).is_none());
+            assert!(
+                load_ne2_overview(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                    .is_none()
+            );
         }
         assert!(
             GlobalDemGrid {

@@ -1,12 +1,13 @@
 //! Background downloader and extractor for offline 3D globe / 2D map basemap assets.
 
 use little_clip_core::{
-    CommandRequest,
+    BackgroundJobs, CommandRequest,
     config::AppConfig,
     geography::basemap::{
         AssetStatus, BasemapAssets,
         storage::{self, AssetDirectory},
     },
+    jobs::task::Task,
 };
 use std::{
     fs,
@@ -14,12 +15,16 @@ use std::{
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     time::{Duration, Instant},
 };
+
+pub(super) fn asset_workers() -> &'static BackgroundJobs {
+    static WORKERS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
+    &WORKERS
+}
 
 const GEBCO_FALLBACK_MIRRORS: &[&str] = &[
     "https://data.source.coop/ausantarctic/gebco/GEBCO_2024.tif",
@@ -73,7 +78,7 @@ pub struct AssetDownloader {
     pub last_error: Option<String>,
     progress: Arc<Mutex<DownloadProgress>>,
     cancelled: Arc<AtomicBool>,
-    rx: Option<mpsc::Receiver<Result<Arc<BasemapAssets>, String>>>,
+    job: Option<Task<Result<(Arc<BasemapAssets>, u64), String>>>,
 }
 
 impl AssetDownloader {
@@ -81,7 +86,7 @@ impl AssetDownloader {
         let assets_dir = config.geo_assets_dir();
         let terrain_override_dir = config.geography.terrain_override_dir.clone();
         let status = AssetStatus::default();
-        let disk_usage_bytes = dir_size(&assets_dir);
+        let disk_usage_bytes = 0;
         Self {
             assets_dir,
             terrain_override_dir,
@@ -95,7 +100,7 @@ impl AssetDownloader {
                 message: String::new(),
             })),
             cancelled: Arc::new(AtomicBool::new(false)),
-            rx: None,
+            job: None,
         }
     }
 
@@ -115,15 +120,6 @@ impl AssetDownloader {
 
     pub fn start(&mut self, pack: DownloadPack, config: &AppConfig) {
         if self.active.is_some() {
-            return;
-        }
-        self.disk_usage_bytes = dir_size(&self.assets_dir);
-        if self.disk_usage_bytes >= self.max_assets_bytes {
-            self.last_error = Some(format!(
-                "Offline geography disk budget reached ({:.2} GB / {:.2} GB)",
-                self.disk_usage_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-                self.max_assets_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-            ));
             return;
         }
         self.last_error = None;
@@ -150,19 +146,13 @@ impl AssetDownloader {
         let rivers_url = config.geo_hydrorivers_url().to_string();
         let status_snapshot = self.status.clone();
         let max_assets_bytes = self.max_assets_bytes;
-        let cancelled = self.cancelled.clone();
         let progress = self.progress.clone();
-        let (tx, rx) = mpsc::channel();
-        self.rx = Some(rx);
-
-        std::thread::spawn(move || {
-            let root = match AssetDirectory::create(&assets_dir) {
-                Ok(root) => root,
-                Err(error) => {
-                    let _ = tx.send(Err(error.to_string()));
-                    return;
-                }
-            };
+        let job = Task::start_unbounded(asset_workers(), move |cancelled| {
+            let root = AssetDirectory::create(&assets_dir).map_err(|error| error.to_string())?;
+            let _owner = fs::File::open(root.path()).map_err(|error| error.to_string())?;
+            _owner
+                .try_lock()
+                .map_err(|_| "Another geography download owns this asset directory".to_string())?;
             let assets_dir = root.path();
             let report = |fraction: f32, msg: &str| {
                 if let Ok(mut p) = progress.lock() {
@@ -478,10 +468,14 @@ impl AssetDownloader {
                     run_pack(pack, 0.0, 0.95)?;
                 }
                 report(0.96, "Loading offline basemap assets…");
-                let assets = Arc::new(BasemapAssets::load(
+                let assets = Arc::new(BasemapAssets::load_with_cancel(
                     &assets_dir,
                     terrain_override_dir.as_deref(),
+                    cancelled,
                 ));
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Download cancelled".into());
+                }
                 let status = assets.status();
                 let installed = |p| match p {
                     DownloadPack::QuickStart => status.has_quick_start(),
@@ -510,34 +504,31 @@ impl AssetDownloader {
                 }
                 Ok(assets)
             })();
-            let _ = tx.send(result);
+            result.map(|assets| (assets, dir_size(&assets_dir)))
         });
+        self.cancelled = job.token.clone();
+        self.job = Some(job);
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) -> Option<Arc<BasemapAssets>> {
         if self.active.is_some() {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
-        let rx = self.rx.as_ref()?;
-        match rx.try_recv() {
-            Ok(Ok(assets)) => {
-                self.active = None;
-                self.rx = None;
-                self.disk_usage_bytes = dir_size(&self.assets_dir);
+        let result = self.job.as_ref()?.poll()?;
+        self.active = None;
+        self.job = None;
+        match result {
+            Ok(Ok((assets, usage))) => {
+                self.disk_usage_bytes = usage;
                 self.status = assets.status();
                 Some(assets)
             }
-            Ok(Err(err)) => {
-                self.active = None;
-                self.rx = None;
-                self.last_error = Some(err);
+            Ok(Err(error)) => {
+                self.last_error = Some(error);
                 None
             }
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.active = None;
-                self.rx = None;
-                self.last_error = Some("Download worker terminated unexpectedly".into());
+            Err(error) => {
+                self.last_error = Some(format!("Asset worker failed: {error:?}"));
                 None
             }
         }
@@ -797,6 +788,36 @@ fn dir_size(dir: &Path) -> u64 {
 mod tests {
     use super::*;
     use std::{ffi::OsStr, io::Write, os::unix::fs::symlink};
+
+    #[test]
+    fn cancelling_an_accepted_download_retains_its_owner_until_worker_exit() {
+        let pool = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut downloader = AssetDownloader::new(&AppConfig::default());
+        let job = Task::start_unbounded(&pool, move |cancel| {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(cancel.load(Ordering::Relaxed));
+            Err("Download cancelled".to_string())
+        });
+        downloader.cancelled = job.token.clone();
+        downloader.job = Some(job);
+        downloader.active = Some(DownloadPack::QuickStart);
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        downloader.cancel();
+        let ctx = egui::Context::default();
+        assert!(downloader.poll(&ctx).is_none());
+        assert!(downloader.active.is_some());
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while downloader.active.is_some() && Instant::now() < deadline {
+            downloader.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(downloader.active.is_none());
+        assert_eq!(downloader.last_error.as_deref(), Some("Download cancelled"));
+    }
 
     #[test]
     fn extraction_retains_its_directory_and_rejects_symlink_destinations() {
