@@ -889,6 +889,11 @@ sync_interval_seconds = 30
 
 Reload the application configuration through `clipctl reload`. Removing the backup-directory setting and reloading clears the selection; older SQLite preferences cannot restore it on restart. Drive enrollment, deletion decisions, baselines, operation results, conflicts, and catalogs are operational state under the XDG user-data directory in `little-screen-clip/drives`. Paths retain their original Unix bytes. Devices need no marker files or Git repositories.
 
+The reload receipt identifies the queued drive-settings operation. Check its
+completion with `clipctl drives status`: applying the application's other settings
+does not mean asynchronous drive validation succeeded. An admission refusal is
+reported separately, and an unavailable optional drive service is disclosed.
+
 Reload validates a selected backup directory on a retained worker, so a slow
 destination leaves unrelated controls and synchronization responsive. New RAM
 allocations wait until reload retires, and quota reductions cannot undercut
@@ -897,6 +902,14 @@ configuration selected; created directories are retained. A newer preference or
 enrollment can invalidate a prepared reload, which reports a retry instead of
 overwriting that choice. Basic reloads without a backup destination remain
 available when optional catalog metadata needs repair.
+
+Accepted RAM limits govern future admissions without resizing existing copies.
+Changing the RAM directory leaves current copies at their original locations;
+new copies use the new directory. Increasing the available-memory requirement or
+lowering the drive-capacity threshold can refuse a new copy while existing
+copies remain writable and can flush. Byte, inode and session-count limits cannot
+be reduced below retained reservations. New catalog jobs use the accepted capture
+limits; backups and explicit retention use the accepted destination and count.
 
 The on-disk formats are ordinary file trees and raw partition `.img` files for
 backup payloads, SQLite for per-version manifests and local operational/catalog

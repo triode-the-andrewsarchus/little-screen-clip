@@ -3,6 +3,7 @@ use super::*;
 use std::{io::Write, os::unix::fs::MetadataExt};
 
 const MIB: u64 = 1024 * 1024;
+mod configuration;
 
 fn config() -> DriveConfig {
     crate::require_disposable_guest();

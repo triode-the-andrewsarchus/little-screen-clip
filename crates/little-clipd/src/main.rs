@@ -720,6 +720,25 @@ async fn drive_reply(
     }
 }
 
+fn reload_reply(drive_reply: IpcResponse, drive_available: bool) -> IpcResponse {
+    match drive_reply {
+        IpcResponse::Drives(little_clip_core::drives::DriveReply::Accepted(operation)) => {
+            IpcResponse::Success {
+                message: format!("Application configuration applied; drive configuration queued as operation {operation}. Check completion with clipctl drives status."),
+            }
+        }
+        IpcResponse::Error { error } if !drive_available => IpcResponse::Success {
+            message: format!("Application configuration applied; drive configuration was not applied: {error}"),
+        },
+        IpcResponse::Error { error } => IpcResponse::Error {
+            error: format!("Application configuration applied, but drive configuration was not accepted: {error}"),
+        },
+        _ => IpcResponse::Error {
+            error: "Application configuration applied, but the drive service returned an unexpected reload acknowledgement".into(),
+        },
+    }
+}
+
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
@@ -1006,7 +1025,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 let mut config = ctx.config.write().await;
                 let new_config = little_clip_core::config::AppConfig::load();
                 let new_audio_config = new_config.audio.clone();
-                let _ = drive_reply(
+                let drive_reload = drive_reply(
                     ctx.drives.as_ref(),
                     little_clip_core::drives::DriveRequest::Configure {
                         config: new_config.drives.clone(),
@@ -1036,9 +1055,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 }
                 drop(config);
                 ctx.refresh_display().await;
-                IpcResponse::Success {
-                    message: "Configuration reloaded and applied".to_string(),
-                }
+                reload_reply(drive_reload, ctx.drives.is_some())
             }
             Ok(request @ (IpcRequest::Lock | IpcRequest::Unlock | IpcRequest::SetLocked(_))) => {
                 let requested = matches!(request, IpcRequest::Lock | IpcRequest::SetLocked(true));
@@ -1831,6 +1848,7 @@ pub fn get_rolling_snapshot_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod drive_reload;
 
     #[tokio::test]
     async fn identified_drive_dispatch_reconnects_to_one_retained_operation() {

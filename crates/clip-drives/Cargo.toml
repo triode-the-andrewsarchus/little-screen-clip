@@ -29,3 +29,4 @@ zbus = { version = "5.19.0", features = ["blocking-api"] }
 
 [dev-dependencies]
 tokio.workspace = true
+toml.workspace = true

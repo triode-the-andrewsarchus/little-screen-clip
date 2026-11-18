@@ -2,6 +2,65 @@
 use super::*;
 
 #[test]
+fn invalid_reload_fields_preserve_published_settings_before_creating_a_destination() {
+    use serde_json::json;
+    let fixture = TestDrives::new(0);
+    let service = fixture.start_observed_reads(Arc::new(|| {}));
+    let previous = status(&service).config;
+    let db = Store::existing(&service.state.join("drives.sqlite"), true).unwrap();
+    let saved = db.get::<DriveConfig>("settings", "config").unwrap();
+    let target = fixture.temp.path().join("must-not-create");
+    for (field, value, message) in [
+        ("ram_directory", json!("relative"), "absolute paths"),
+        ("backup_directory", json!("relative"), "absolute paths"),
+        ("ram_max_sessions", json!(0), "RAM quotas"),
+        ("ram_max_sessions", json!(33), "RAM quotas"),
+        (
+            "ram_session_max_bytes",
+            json!(128 * 1024 * 1024 - 1),
+            "RAM quotas",
+        ),
+        ("ram_session_max_entries", json!(4095), "RAM quotas"),
+        (
+            "ram_total_max_bytes",
+            json!(previous.ram_session_max_bytes - 1),
+            "RAM quotas",
+        ),
+        (
+            "ram_total_max_entries",
+            json!(previous.ram_session_max_entries - 1),
+            "RAM quotas",
+        ),
+        ("catalog_max_bytes", json!(128 * 1024 - 1), "database bytes"),
+        ("catalog_max_depth", json!(0), "nonzero depth and time"),
+        (
+            "catalog_timeout_seconds",
+            json!(0),
+            "nonzero depth and time",
+        ),
+        ("catalog_workers", json!(0), "Catalog workers"),
+        ("catalog_workers", json!(5), "Catalog workers"),
+        ("sync_interval_seconds", json!(0), "nonzero interval"),
+        (
+            "backup_keep_versions",
+            json!(0),
+            "at least one completed version",
+        ),
+    ] {
+        let mut candidate = previous.clone();
+        candidate.backup_directory = Some(target.clone());
+        let mut payload = serde_json::to_value(candidate).unwrap();
+        payload[field] = value;
+        let config = serde_json::from_value(payload).unwrap();
+        failed(&service, DriveRequest::Configure { config }, message);
+        assert_eq!(status(&service).config, previous, "{field}");
+        assert_eq!(db.get::<DriveConfig>("settings", "config").unwrap(), saved);
+        assert!(!target.exists(), "Invalid {field} created a destination");
+    }
+    service.shutdown().unwrap();
+}
+
+#[test]
 fn configuration_backup_guard_keeps_legacy_pair_roots_beyond_the_status_page() {
     let fixture = TestDrives::new(0);
     let service = fixture.start_observed_reads(Arc::new(|| {}));

@@ -8,7 +8,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | --- | --- | --- |
 | 1.1 | Complete | Numeric parent/partition capacities, stable filesystem/PARTUUID evidence, read-only state and mount routing are covered by discovery tests and native authority fixtures. The new actual GPT reconnect fixture preserves enrollment across changed /dev/loopN partition paths, disk sequences and mount directories on FAT32/exFAT/NTFS; parent capacity matches the whole backing image while partition capacity matches the selected partition. See the native reconnect checkpoint. |
 | 1.2 | Complete | Actual duplicate GPT partition IDs suspend automatic writes, retain queued local edits and resume after the clone is detached on FAT32/exFAT/NTFS; explicit sync refuses and the clone image hash stays unchanged. Missing PARTUUID now has explicit filesystem-UUID disclosure and enrollment in Pair/backup review, stable local records and fs-UUID buckets across restart. Native whole-volume sources and dark/light IPC-driven UI checks pass. Neither-UUID enrollment refuses without creating its target. See the filesystem fallback checkpoint. |
-| 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
+| 1.3 | Complete | Reloadable DriveConfig and guarded setting-preserving preference writes pass lazy selection, restart, raw-path, comment, symlink, permission and concurrent/replaced-file tests. Public invalid-field reloads preserve runtime/durable settings before destination creation. Native FAT32/exFAT/NTFS live-session tests cover all five reservation reductions, exact retained limits, future memory/capacity/directory admissions, continued writeback, catalog limits, backup destination/retention and restart from a saved configuration. Daemon IPC now names the asynchronous settings operation and reports admission refusal. See the live configuration checkpoint. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference destination/file saves and reviewed-backup continuations now retain worker completion, claims and saved-effect receipts; real stopped-config-filesystem cancellation/shutdown and superseded-reload fixtures pass. File-backup/catalog root preparation now shares scheduling workers, retains prepared roots and rejects stale settings/root inputs before copying; host discovery-thread and five real stopped-FUSE scenarios pass. Eject/image/read-only root and sync-plan preparation now retain one existing partition-worker slot, preserve original scheduled drive facts and compare current settings/enrollment/RAM metadata before flushing; six held and nine stopped-FUSE scenarios pass. Automatic/pre-unmount iteration now includes legacy pairs beyond status pagination. Initial discovery and RAM allocation/view startup recovery now reuse retained workers, with held inventory/enrollment/fsck, orphaned-enrollment, uncertain optional-policy and actual-exit shutdown checks. Catalog startup cleanup and mount/unmount now use a retained control worker, preserving actual helper ownership, atomic publication/retirement and failed boundaries; held commands, real stopped-FUSE, orphan startup and beyond-page recovery pass. Image mount/unmount now shares the retained backup pool, with local effect journals that pause optional indexing before an unknown UDisks mount location is admitted. Held-authority, cancellation, receipt-fault and provable restart cases pass; measurement admission, retention and the broader root/loop-lifetime responsiveness matrices remain. Safety validation of configured ordinary roots can still wait on those filesystems; independent-sync checks here use one-shot reviewed destinations. Large-export responsiveness and remaining mount-control scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
@@ -5250,3 +5250,71 @@ This closes the explicit fallback-disclosure/enrollment requirement in 1.2.
 Other incomplete identity, interruption, resource, provider and UI rows retain
 their original requirements. Final workspace and whole-branch architecture gates
 remain open.
+
+## Live configuration and retained RAM checkpoint
+
+The daemon's `ReloadConfig` previously discarded the drive admission response and
+reported all configuration applied. It now names the accepted asynchronous
+operation and directs the caller to `clipctl drives status`. Admission failure
+reports that the other application settings applied while drive settings did
+not. An unavailable optional drive service is disclosed without preventing the
+other application settings from being reloaded. The wire variants remain the
+existing Success/Error responses; the IPC handler never waits for destination
+validation to finish.
+
+The new daemon test uses its actual Unix-stream IPC handler and private isolated
+configuration. A malformed RAM limit is accepted as a job, then fails without
+changing drive settings; a subsequent valid limit completes. Both receipts name
+their retained operation. Closing drive admission produces an explicit partial
+reload error while the independent history setting still applies. The optional
+unavailable-service receipt is also checked. All 37 daemon main tests pass:
+`/tmp/portable-drive-config-reload-daemon-all-v2.log`.
+
+The public configuration matrix submits fifteen invalid field values and checks
+unchanged runtime/durable settings before any new backup destination is created.
+The backend suite passes 270 ordinary tests, with 119 environment-dependent tests
+explicitly ignored: `/tmp/portable-drive-config-quota-backend-v2.log`.
+
+The bounded-RAM native fixture runs one explicit test for each FAT32, exFAT and
+NTFS source. Two dirty paused RAM copies remain readable/writable while five
+otherwise valid quota reductions are refused: per-session bytes, aggregate
+bytes, per-session inodes, aggregate inodes and session count. Saved settings,
+paths, reservations, pause/deletion decisions and an open file's identity remain
+intact. Exact retained limits are accepted. Changing the RAM directory affects a
+new third copy, while old views keep their locations. A raised available-memory
+minimum and lowered drive-capacity threshold refuse new admissions but permit
+existing copies to flush. The newly accepted catalog limit produces an explicitly
+partial one-entry catalog. Three actual file backups use the new destination;
+explicit retention leaves two versions and protects current. Restart loads the
+saved TOML configuration and reopens all three copies with their data and policy
+intact, before explicit cleanup.
+
+Accepted native evidence is
+`/tmp/portable-drive-config-quota-native-v2/report.json`: success=true,
+timed_out=false, QEMU exit 0, three executed/passed tests, fifteen named quota
+refusals, and all three filesystem results 0. The first VM run selected an older
+Cargo artifact and executed zero matching tests; it is rejected as acceptance
+evidence. The corrected invocation verifies the exact test appears in the chosen
+binary's listing before boot, and the resulting log verifies three executions.
+No host mount, block device or attached removable disk is used. The typed TOML
+fixture adds only a development dependency on the existing workspace TOML version.
+
+Affected all-target Clippy with the fixture feature and warnings denied passes:
+`/tmp/portable-drive-config-reload-clippy-v1.log`. The daemon builds successfully:
+`/tmp/portable-drive-config-reload-build-v1.log`. Changed Rust files pass rustfmt
+and the diff passes whitespace checks.
+
+Architecture comparison against `pre-drive-config-reload-evidence` adds 526 NLOC,
+13 functions and 32 aggregate CCN. Average/max CCN stay 3.50/274, duplication stays
+6.92%, and cycles stay 144. There is one new clone group: four lines of Unix-stream
+test connection setup shared with the existing history-reload test, reported
+with surrounding context as seven lines. The new test already reuses the existing
+IPC serializer/reader and isolated configuration harness; no second protocol or
+production mechanism was added. A separate wrapper solely for these four setup
+lines would expand the test interface without simplifying behavior. Other
+reported clones are unchanged regions in touched files; the reordered cycle
+members do not establish new cycles. No new hotspot is introduced. Local report:
+`.fitness/portable-drives-config-reload-local.json` (the tool classification is
+REGRESSION for that test setup clone). This closes configuration item 1.3; the
+remaining resource-pressure, interrupted-operation, provider, UI and final
+whole-branch gates keep their existing scope.
