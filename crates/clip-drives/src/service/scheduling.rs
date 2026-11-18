@@ -131,6 +131,7 @@ impl Owner {
                     self.db.get::<RamSession>("ram", session)?.map(|s| s.path),
                 )),
                 DriveRequest::Pair { local, .. } => Some((local.clone(), None)),
+                DriveRequest::BackupDirectory { path } => Some((path.clone(), None)),
                 _ => None,
             };
             Ok(Input {

@@ -96,6 +96,10 @@ require a new review. Cancel and Escape release the selection without creating a
 backup or saving a preference. Select an existing destination directory; reviewing
 a missing path does not create it. **Update the backup directory setting for future backups** is
 optional. A failed preference write stops the backup before copying or unmounting.
+Preference preparation and saving run on a retained worker. Cancelling a backup
+after its preference save has begun waits for that save to finish and reports
+the saved setting alongside the cancellation; it does not start the backup.
+A later backup failure also retains and reports the saved preference.
 Changing preferences later cannot redirect a reviewed job, including a one-time
 destination. Review pins are released before partition unmount.
 Other pending reviews that overlap an explicitly ejected/imaged partition are
@@ -720,7 +724,19 @@ versions from older service releases also supply their historical backup roots.
 
 ## Configuration
 
-Add overrides to the existing application configuration. The backup destination can also be selected through the UI or CLI; leave it unset to retain the lazy prompt. Explicit selection saves only `drives.backup_directory` to the daemon's active configuration file, preserving comments and unrelated settings. It uses a guarded, revision-checked atomic replacement and flushes the file and containing directory. Starting the daemon or browsing drives does not create or rewrite the configuration. Failed preference writes leave the previous runtime destination selected and report the error.
+Add overrides to the existing application configuration. The backup destination can also be selected through the UI or CLI; leave it unset to retain the lazy prompt. Explicit selection saves only `drives.backup_directory` to the daemon's active configuration file, preserving comments and unrelated settings. It uses a guarded, revision-checked atomic replacement and flushes the file and containing directory. Starting the daemon or browsing drives does not create or rewrite the configuration.
+
+Destination preparation and preference-file I/O use one retained worker, so a
+slow filesystem leaves unrelated controls and synchronization responsive. An
+explicit selection already saved completes even if cancellation arrived during
+the save. A known successful file save stays selected if the subsequent local
+registry update fails; the job reports both effects. File-save errors retain the
+previous runtime selection and report that installation may be incomplete,
+since a durability error can follow replacement. Reload before retrying such an
+error. Successful registry publication stores a small local receipt so a reviewed
+backup's result, including restart recovery, can disclose its saved preference.
+This adds no metadata to removable media. A crash between the file save and that
+receipt still relies on the configuration file and the interrupted-job warning.
 
 ```toml
 [drives]

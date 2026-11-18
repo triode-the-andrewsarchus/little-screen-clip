@@ -181,7 +181,7 @@ enum Completion {
     Restored(Result<String>),
     ReadOnly(Result<Box<read_only::Prepared>>, Box<BackupContext>),
 }
-struct Admission {
+pub(super) struct Admission {
     drive: Drive,
     source: Option<Arc<crate::device::Source>>,
     flush: Option<Arc<Root>>,
@@ -215,8 +215,50 @@ impl Pending {
     }
 }
 
+// Reconciliation results are persisted before flushing application writes and
+// allowing the owner to advance to unmount.
+fn flush_partition(
+    state: PathBuf,
+    operation: String,
+    plans: Vec<reconciliation::Plan>,
+    root: Option<Arc<Root>>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    let db = Store::existing(&state.join("drives.sqlite"), false)?;
+    let mut progress = job_progress(state, operation.clone());
+    phase(&db, &operation, PartitionPhase::Flushing, None)?;
+    for plan in plans {
+        cancelled(cancel)?;
+        let mut intent = reconciliation::Intent {
+            queued: Instant::now(),
+            pair: plan.pair.id.clone(),
+            operation: None,
+            cancel: cancel.clone(),
+            paths: None,
+            initialize: false,
+            save: None,
+            writeback: None,
+        };
+        intent.writeback = plan.writeback_checkpoint(&db, &intent)?;
+        let result = plan.run_with_cancel(&db, &intent, cancel, &mut progress);
+        reconciliation::persist_result(&db, &intent, &result)?;
+        result?;
+    }
+    if let Some(root) = root {
+        cancelled(cancel)?;
+        // Include writes from ordinary applications, even when no sync
+        // pair is enrolled. Retire this pin before admitting unmount.
+        root.flush()?;
+    }
+    cancelled(cancel)
+}
+
 impl Owner {
-    pub(super) fn start_partition(&mut self, mut envelope: Envelope) {
+    pub(super) fn start_partition(&mut self, envelope: Envelope) {
+        if self.preference_blocked(&envelope) {
+            self.defer_operation(envelope);
+            return;
+        }
         let backup = matches!(
             envelope.request,
             DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
@@ -228,6 +270,35 @@ impl Owner {
             return;
         }
         let prepared = self.partition_plan(&envelope);
+        let admission = match prepared {
+            Ok(value) => value,
+            Err(error) => {
+                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+                return;
+            }
+        };
+        if envelope
+            .review
+            .as_ref()
+            .is_some_and(|review| review.remember)
+        {
+            let drive = admission.drive.id.clone();
+            let claims = admission.claims.clone();
+            self.start_preference(
+                envelope,
+                preference::Continuation::Partition(Box::new(admission)),
+                Some(drive),
+                claims,
+            );
+        } else {
+            self.continue_partition(envelope, admission);
+        }
+    }
+    pub(super) fn continue_partition(&mut self, mut envelope: Envelope, admission: Admission) {
+        if let Err(error) = self.validate_backup_request(&envelope) {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+            return;
+        }
         let Admission {
             drive,
             source,
@@ -235,13 +306,7 @@ impl Owner {
             destination,
             plans,
             claims,
-        } = match prepared {
-            Ok(value) => value,
-            Err(error) => {
-                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
-                return;
-            }
-        };
+        } = admission;
         if let Err(error) = self.admit_backup_destination(&envelope, destination.as_deref()) {
             self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
@@ -274,33 +339,7 @@ impl Owner {
         let operation = envelope.id.clone();
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.partition_jobs, move || {
-            let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut progress = job_progress(state, operation.clone());
-            phase(&db, &operation, PartitionPhase::Flushing, None)?;
-            for plan in plans {
-                cancelled(&cancel)?;
-                let mut intent = reconciliation::Intent {
-                    queued: Instant::now(),
-                    pair: plan.pair.id.clone(),
-                    operation: None,
-                    cancel: cancel.clone(),
-                    paths: None,
-                    initialize: false,
-                    save: None,
-                    writeback: None,
-                };
-                intent.writeback = plan.writeback_checkpoint(&db, &intent)?;
-                let result = plan.run_with_cancel(&db, &intent, &cancel, &mut progress);
-                reconciliation::persist_result(&db, &intent, &result)?;
-                result?;
-            }
-            if let Some(root) = flush {
-                cancelled(&cancel)?;
-                // Include writes from ordinary applications, even when no sync
-                // pair is enrolled. Retire this pin before admitting unmount.
-                root.flush()?;
-            }
-            cancelled(&cancel)
+            flush_partition(state, operation, plans, flush, &cancel)
         });
         self.partition = Some(Pending {
             drive: drive.id.clone(),

@@ -10,7 +10,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 1.2 | Partial | UUID ambiguity refusal and fallback buckets exist; explicit fallback disclosure/enrollment needs end-to-end checks. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
-| 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference saves/remember, startup recovery, remaining bulk/partition preparation, image/catalog mount controls and retention still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
+| 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference destination/file saves and reviewed-backup continuations now retain worker completion, claims and saved-effect receipts; real stopped-config-filesystem cancellation/shutdown and superseded-reload fixtures pass. Startup recovery, remaining bulk/partition preparation, image/catalog mount controls and retention still need the full responsiveness matrix. Large-export responsiveness and startup-recovery scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
 | 1.6 | Partial | Pinned roots and overlap policy project bind subtrees into observed filesystem coordinates. Descriptor-free scheduling scopes retain that observation after pins retire; they cannot authorize payload access. Watch/cache retirement covers overlapping observed regions. Pure projection, real FUSE unmount and startup RAM-backing refusal pass. A final-file bind-mount payload escape is fixed; lookup now uses kernel NO_XDEV before foreign metadata/open hooks, and the retained input still must match the root's device and mount ID. Guest tests prove same-device and cross-device leaf binds cannot supply hashes or backup contents on FAT32/exFAT/NTFS. Observed directory/file bind aliases now share core mount coordinates, with stale-context refusal and native FAT32/exFAT/NTFS policy tests. Case-fold aliases, the wider mutation-admission matrix, remaining managed-root/image coverage and full authorized-device lifetimes still need the complete matrix. |
 | 2.1 | Complete | Guarded partition/subtree enrollment and persistent pair identities are tested. New bidirectional initial/replacement cases interrupt after the first durable file with cancellation, source disappearance, same-size/mtime source changes, destination changes or baseline-publication faults. Reopened registries retain only verified common baselines, preserve installed identities and recover without needless copies. Failed deletion-baseline commits cannot resurrect removed files. All 22 scenarios pass on host storage and real FAT32/exFAT/NTFS sources. See the common-baseline recovery checkpoint. |
 | 2.2 | Partial | Native FAT32/exFAT/NTFS3 union and concurrent same-timestamp edits preserve both conflict variants; FAT32/exFAT case-fold collisions explicitly fail with both local originals retained. Real overflow now recovers both-sided union and same-size/mtime conflicts through the live daemon without a GUI or periodic scan. Remaining remount and interruption matrices still need evidence. |
@@ -53,6 +53,88 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
+
+## Retained backup preference checkpoint
+
+Explicit `BackupDirectory` requests and reviewed backups with “remember” now
+prepare their destination and save preferences on one bounded `drive-preference`
+worker. The worker reuses the guarded core configuration writer; it preserves
+comments, unrelated settings and revision checks. Preparation keeps the target
+pinned and checks current storage, captured root geometry and mount observations
+before saving. A shared settings revision rejects older preparation after a new
+choice. The preference worker is independent of configuration reload preparation,
+so an older reload stalled on another filesystem cannot prevent a newer choice.
+Reload publication waits while an accepted preference save is committing.
+
+Accepted saves retain the worker until actual exit. Cancellation is checked
+before writing; once a file save begins, its actual outcome is delivered through
+cancellation and shutdown. A known successful file save becomes the runtime
+selection even if subsequent SQLite publication fails, with both outcomes in the
+error. A file-writer failure reports uncertain installation and keeps the previous
+runtime selection; a durability error may occur after replacement. No stronger
+file/registry atomicity is claimed.
+
+A successful settings transaction also stores a small local SQLite `preference`
+receipt keyed by operation ID. Reviewed-backup completion, failure, cancellation
+and interruption messages disclose that the setting was saved. Removable media
+receive no service metadata. A crash between the file save and receipt publication
+still relies on loading the authoritative configuration file and the generic
+interrupted-effects message; per-item crash consistency remains unfinished.
+
+Reviewed bulk and partition continuations retain their original roots/device
+source and scheduling claims through preference saving and subsequent capacity
+waits. Fresh review validation precedes copying or partition preparation.
+Cancellation after saving finishes the backup without starting payload work;
+later image-authorization refusal retains the saved preference. Successful file
+backup, image refusal, registry-publication faults, restart/replay and malformed
+preference tests cover the handoff. Existing preparation outside this preference
+handoff still requires the remaining responsiveness work.
+
+The backend passes 244 tests (105 explicit fixtures ignored) in
+`/tmp/portable-drive-preference-backend-final.log`. Seven targeted cases including
+real stopped-FUSE configuration-file saves, independent synchronization,
+cancellation/shutdown and four concurrent reload outcomes pass in
+`/tmp/portable-drive-preference-targeted-final.log`. Both explicit and remembered
+saves wait on `drive-preference`, then report the installed preference after
+cancellation. The remembered continuation copies no payload. Against `f887817d`,
+the same stopped-file control times out after 15 seconds:
+`/tmp/portable-drive-preference-before.log`.
+
+Affected all-target Clippy and the runtime build pass in
+`/tmp/portable-drive-preference-clippy-final.log` and
+`/tmp/portable-drive-preference-build.log`. The updated native-filesystem matrix
+passes 168 main cases plus six owned-process probes (174 raw passing counts)
+across FAT32/exFAT/NTFS in
+`/tmp/portable-drive-preference-vm-filesystems/report.json`. This includes all
+three new preference cases on each format and reruns configuration, watcher,
+scope, enrollment, RAM, native backup/name and event-loss checks. The guest exits
+successfully without timing out.
+The rebuilt source also passes 42 partitioned image/provider/maintenance cases
+in `/tmp/portable-drive-preference-vm-lifecycle/report.json`, including authorized
+image success, read-only collection, mounted-state restoration and real catalog
+reads through images. That guest also exits successfully without timing out.
+The full private light UI flow passes drive menus, RAM writeback, union
+enrollment, lazy file backup, image review, subtree exclusions, offline catalog
+reads and preserved conflicts in
+`/tmp/portable-drive-preference-ui-light/report.json`. Reconnected-catalog and
+conflict-review screenshots were inspected. Changed-source rustfmt and diff checks
+pass. These are checkpoint checks; the final workspace gates remain open.
+
+The local comparison against `pre-retained-drive-preferences` remains REGRESSION:
++694 NLOC, +23 functions and +111 total CCN. Destination selection and validation
+are distinct phases, and partition flushing is separated from owner admission;
+no new function exceeds the threshold. The prior partition-admission hotspot
+falls from 22 to 8. Average/max CCN remain 3.49/274. Duplication falls 6.96%→6.95%,
+with two additional short clones: shared inputs-error handling in the two settings
+admission paths and a fixture-service constructor. They contain no duplicate
+payload algorithm; adding a generic wrapper solely for these small call sites
+would obscure ownership. Cycles remain 144; reordered pre-existing cycle members
+are not new dependencies. Report:
+`.fitness/portable-drives-preference-local.json`.
+
+Items 1.3, 1.5 and 1.6 stay Partial. Startup recovery, remaining bulk/partition and
+mount preparation, retention, broader interruption/resource acceptance and final
+workspace/architecture gates remain open.
 
 ## Retained configuration reload checkpoint
 
@@ -131,12 +213,12 @@ twelve net clone groups and cycles 143→144. Reports:
 `.fitness/portable-drives-settings-local.json` and
 `.fitness/portable-drives-settings-branch.json`.
 
-This finishes filesystem preparation for explicit configuration reloads.
-Explicit backup-directory preference saves and the reviewed-backup “remember”
-path still perform their preference work on the coordinator. Their handoff,
-startup recovery, remaining bulk/partition/mount preparation, broader interruption/
-resource acceptance and final workspace/architecture gates remain open. Items
-1.3, 1.5 and 1.6 stay Partial.
+This checkpoint finished filesystem preparation for explicit configuration
+reloads. Explicit backup-directory saves and the reviewed-backup “remember”
+handoff were still on the coordinator then; the later retained backup preference
+checkpoint above covers that work. Startup recovery, remaining bulk/partition/
+mount preparation, broader interruption/resource acceptance and final workspace/
+architecture gates remain open. Items 1.3, 1.5 and 1.6 stay Partial.
 
 ## Retained watch registration and traversal checkpoint
 

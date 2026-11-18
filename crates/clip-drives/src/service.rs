@@ -41,6 +41,7 @@ mod lifetime;
 mod maintenance;
 mod partition;
 mod policy;
+mod preference;
 mod preflight;
 mod publication;
 mod ram_access;
@@ -68,6 +69,8 @@ struct Owner {
     refresh: refresh::Refresh,
     scheduling: scheduling::Probes,
     configuration: configuration::Configuration,
+    preferences: preference::Preferences,
+    settings_generation: u64,
     policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
@@ -211,6 +214,8 @@ impl Service {
             refresh: refresh::Refresh::new(inventory.clone()),
             scheduling: scheduling::Probes::default(),
             configuration: Default::default(),
+            preferences: Default::default(),
+            settings_generation: 0,
             policy_waiting: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
@@ -413,6 +418,8 @@ impl Owner {
                     op.state = "interrupted".into();
                     op.message = op.partition.as_ref().map(PartitionPreparation::interruption_message)
                         .unwrap_or_else(|| "Daemon restarted; completed writes retained. Reconcile before retrying.".into());
+                    op.message = preference::annotate(&self.db, &op.id, Ok(op.message))
+                        .unwrap_or_else(|error| error.to_string());
                     op.finished = Some(now());
                     self.db.put("operation", &op.id, &op)?;
                 }
@@ -457,7 +464,7 @@ impl Owner {
             let poll_ms = if self.sync_preparing.is_empty()
                 && self.scheduling.pending.is_empty()
                 && self.ram_access.is_none()
-                && !self.configuration.busy()
+                && !self.settings_busy()
                 && !self.watch.as_ref().is_some_and(Watch::registration_pending)
             {
                 200
@@ -470,6 +477,7 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
             self.poll_configuration();
+            self.poll_preference();
             self.poll_scopes();
             self.poll_refresh();
             self.poll_policy();
@@ -592,6 +600,9 @@ impl Owner {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+    pub(super) fn settings_busy(&self) -> bool {
+        self.configuration.busy() || self.preferences.writing()
+    }
     fn operation(&mut self, envelope: Envelope) {
         if envelope.cancel.load(Ordering::Acquire) {
             self.finish_operation(
@@ -669,6 +680,9 @@ impl Owner {
         }
         match &envelope.request {
             DriveRequest::Configure { .. } => self.start_configuration(envelope),
+            DriveRequest::BackupDirectory { .. } => {
+                self.start_preference(envelope, preference::Continuation::Explicit, None, claims)
+            }
             DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope, source),
             DriveRequest::Pair { .. } => self.start_enrollment(envelope, source, claims),
             DriveRequest::Sync { .. }
@@ -739,10 +753,8 @@ impl Owner {
             DriveRequest::Configure { .. } => {
                 Err("Configuration requires retained settings preparation".into())
             }
-            DriveRequest::BackupDirectory { path } => {
-                let root = Root::create(&path)?;
-                self.set_backup_directory(&root)?;
-                Ok("Backup directory configured".into())
+            DriveRequest::BackupDirectory { .. } => {
+                Err("Backup preferences require retained write admission".into())
             }
             DriveRequest::CopyToRam { .. } => {
                 Err("RAM setup must use retained reconciliation admission".into())
@@ -1184,6 +1196,7 @@ mod tests {
     mod native_read_only;
     mod policy_aliases;
     mod policy_coverage;
+    mod preference;
     mod ram_access;
     mod ram_writeback;
     mod read_only;

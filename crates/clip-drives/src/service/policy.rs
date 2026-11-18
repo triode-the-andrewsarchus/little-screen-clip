@@ -213,9 +213,14 @@ impl Owner {
     /// Every worker uses the same captured-root scheduling policy, including unmount.
     pub(super) fn claims_busy(&self, claims: &[crate::root::Scope]) -> bool {
         let overlaps = |scope: &crate::root::Scope| claims.iter().any(|claim| claim.overlap(scope));
-        self.partition
+        self.preferences
+            .pending
             .as_ref()
             .is_some_and(|job| job.claims.iter().any(&overlaps))
+            || self
+                .partition
+                .as_ref()
+                .is_some_and(|job| job.claims.iter().any(&overlaps))
             || self
                 .ram_access
                 .as_ref()

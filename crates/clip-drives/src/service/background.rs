@@ -32,9 +32,14 @@ impl Pending {
 impl Owner {
     pub(super) fn check_busy(&self, drive: &str) -> Result<()> {
         if self
-            .ram_setup
+            .preferences
+            .pending
             .as_ref()
-            .is_some_and(|job| job.drive.id == drive)
+            .is_some_and(|job| job.drive.as_deref() == Some(drive))
+            || self
+                .ram_setup
+                .as_ref()
+                .is_some_and(|job| job.drive.id == drive)
             || self
                 .ram_access
                 .as_ref()
@@ -54,7 +59,11 @@ impl Owner {
         }
         Ok(())
     }
-    pub(super) fn start_background(&mut self, mut envelope: Envelope) {
+    pub(super) fn start_background(&mut self, envelope: Envelope) {
+        if self.preference_blocked(&envelope) {
+            self.defer_operation(envelope);
+            return;
+        }
         let catalog = matches!(
             envelope.request,
             DriveRequest::Catalog { .. } | DriveRequest::CatalogWithLimits { .. }
@@ -102,6 +111,36 @@ impl Owner {
         };
         if self.claims_busy(&roots.iter().map(|root| root.scope()).collect::<Vec<_>>()) {
             self.defer_operation(envelope);
+            return;
+        }
+        if envelope
+            .review
+            .as_ref()
+            .is_some_and(|review| review.remember)
+        {
+            let claims = roots.iter().map(|root| root.scope()).collect();
+            let selected = drive.id.clone();
+            self.start_preference(
+                envelope,
+                preference::Continuation::Bulk {
+                    drive: Box::new(drive),
+                    roots,
+                },
+                Some(selected),
+                claims,
+            );
+            return;
+        }
+        self.continue_bulk(envelope, drive, roots);
+    }
+    pub(super) fn continue_bulk(
+        &mut self,
+        mut envelope: Envelope,
+        drive: Drive,
+        roots: Vec<Arc<Root>>,
+    ) {
+        if let Err(error) = self.validate_backup_request(&envelope) {
+            self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
             return;
         }
         let destination = matches!(
@@ -310,6 +349,7 @@ pub(super) fn finish_record(
     cancel: &AtomicBool,
     result: Result<String>,
 ) -> Result<()> {
+    let result = preference::annotate(db, id, result);
     if let Some(mut operation) = db.get::<DriveOperation>("operation", id)? {
         operation.finished = Some(now());
         match result {

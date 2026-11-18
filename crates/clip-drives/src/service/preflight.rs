@@ -48,12 +48,13 @@ pub(super) fn managed_backup_paths(db: &Store) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+#[derive(Clone)]
 pub(super) struct Review {
     pub info: BackupPreview,
     pub source: Option<Arc<Root>>,
     pub destination: Arc<Root>,
     pub(super) created: Instant,
-    remember: bool,
+    pub(super) remember: bool,
 }
 impl Review {
     fn capture(drive: Drive, kind: BackupKind, path: &Path, state: &Path) -> Result<Self> {
@@ -293,29 +294,17 @@ impl Owner {
         envelope: &Envelope,
         destination: Option<&Root>,
     ) -> Result<()> {
-        if let Some(review) = &envelope.review
-            && review.remember
+        if envelope
+            .review
+            .as_ref()
+            .is_some_and(|review| review.remember)
         {
-            self.set_backup_directory(&review.destination)?;
+            return Err("Remembered destinations require retained preference admission".into());
         }
         if let Some(destination) = destination {
             backup::remember_destination(&self.db, &destination.path)?;
             self.publish_policy(false)?;
         }
-        Ok(())
-    }
-
-    pub(super) fn set_backup_directory(&mut self, root: &Root) -> Result<()> {
-        root.validate()?;
-        self.validate_backup_directory(root)?;
-        if let Some(path) = &self.config_path {
-            little_clip_core::config::save_drive_backup_directory_at(path, &root.path)
-                .map_err(|error| format!("Could not save backup directory preference: {error}"))?;
-        }
-        let mut config = self.config.clone();
-        config.backup_directory = Some(root.path.clone());
-        self.db.put("settings", "config", &config)?;
-        self.config = config;
         Ok(())
     }
 }

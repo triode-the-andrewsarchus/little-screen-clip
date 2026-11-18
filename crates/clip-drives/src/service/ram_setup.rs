@@ -21,7 +21,7 @@ pub(super) struct Allocation {
 
 impl Owner {
     pub(super) fn ram_setup_blocks(&self, request: &DriveRequest) -> bool {
-        ((self.ram_access.is_some() || self.configuration.busy())
+        ((self.ram_access.is_some() || self.settings_busy())
             && matches!(request, DriveRequest::CopyToRam { .. }))
             || self.ram_setup.is_some()
                 && matches!(

@@ -16,9 +16,13 @@ impl Default for Configuration {
 }
 struct Pending {
     envelope: Envelope,
-    previous: DriveConfig,
-    roots: Option<(policy::Storage, Vec<SyncPair>)>,
+    inputs: Inputs,
     task: Task<Result<Prepared>>,
+}
+pub(super) struct Inputs {
+    previous: DriveConfig,
+    generation: u64,
+    roots: Option<(policy::Storage, Vec<SyncPair>)>,
 }
 struct Prepared {
     config: DriveConfig,
@@ -60,9 +64,33 @@ impl Prepared {
         })
     }
 }
-impl Pending {
-    fn current(&self, owner: &Owner, mounts: Option<&str>) -> Result<bool> {
-        if owner.config != self.previous {
+impl Inputs {
+    pub fn begin(owner: &mut Owner, roots: bool) -> Result<Self> {
+        owner.settings_generation = owner
+            .settings_generation
+            .checked_add(1)
+            .expect("settings revision exhausted");
+        let roots = roots
+            .then(|| {
+                Ok::<_, Error>((
+                    policy::Storage::capture(
+                        &owner.db,
+                        &owner.state,
+                        owner.config.backup_directory.as_deref(),
+                    )?,
+                    policy::records::<SyncPair>(&owner.db, "pair")?,
+                ))
+            })
+            .transpose()?;
+        Ok(Self {
+            previous: owner.config.clone(),
+            generation: owner.settings_generation,
+            roots,
+        })
+    }
+
+    pub fn current(&self, owner: &Owner, mounts: Option<&str>) -> Result<bool> {
+        if owner.config != self.previous || owner.settings_generation != self.generation {
             return Ok(false);
         }
         if let Some((storage, targets)) = &self.roots
@@ -89,7 +117,7 @@ impl Prepared {
             return Err("Daemon stopping; prepared configuration was not applied".into());
         }
         let transaction = owner.db.0.unchecked_transaction()?;
-        if !pending.current(owner, self.mounts.as_deref())? {
+        if !pending.inputs.current(owner, self.mounts.as_deref())? {
             return Err("Configuration inputs changed during preparation; created directories are retained, retry".into());
         }
         validate_quotas(&owner.db, &self.config)?;
@@ -120,44 +148,29 @@ impl Configuration {
 }
 impl Owner {
     pub(super) fn start_configuration(&mut self, envelope: Envelope) {
-        if self.configuration.busy() {
+        if self.configuration.busy() || self.preferences.committing() {
             self.defer_operation(envelope);
             return;
         }
         let DriveRequest::Configure { config } = &envelope.request else {
             unreachable!("configuration request");
         };
-        let metadata = config
-            .backup_directory
-            .as_ref()
-            .map(|_| {
-                Ok::<_, Error>((
-                    policy::Storage::capture(
-                        &self.db,
-                        &self.state,
-                        self.config.backup_directory.as_deref(),
-                    )?,
-                    policy::records::<SyncPair>(&self.db, "pair")?,
-                ))
-            })
-            .transpose();
-        let roots = match metadata {
-            Ok(roots) => roots,
+        let config = config.clone();
+        let inputs = match Inputs::begin(self, config.backup_directory.is_some()) {
+            Ok(inputs) => inputs,
             Err(error) => {
                 self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
                 return;
             }
         };
         let state = self.state.clone();
-        let config = config.clone();
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.configuration.jobs, move || {
             Prepared::prepare(&state, config, &cancel)
         });
         self.configuration.pending = Some(Pending {
             envelope,
-            previous: self.config.clone(),
-            roots,
+            inputs,
             task,
         });
     }
@@ -179,9 +192,15 @@ impl Owner {
         self.finish_operation(&pending.envelope.id, &pending.envelope.cancel, result);
     }
     pub(super) fn drain_configuration(&mut self) {
-        while let Some(pending) = &self.configuration.pending {
-            pending.envelope.cancel.store(true, Ordering::Release);
+        while self.configuration.pending.is_some() || self.preferences.pending.is_some() {
+            if let Some(pending) = &self.configuration.pending {
+                pending.envelope.cancel.store(true, Ordering::Release);
+            }
+            if let Some(pending) = &self.preferences.pending {
+                pending.cancel();
+            }
             self.poll_configuration();
+            self.poll_preference();
             std::thread::sleep(Duration::from_millis(20));
         }
     }
