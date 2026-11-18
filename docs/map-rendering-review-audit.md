@@ -1,8 +1,8 @@
 # GPU map renderer and original review audit
 
 Audit of `feat/map-rendering` on 2026-11-18. The original review was against
-`7eefae74`; the implementation inspected here includes fixes through `8a551252`.
-This records the original findings independently of subsequent feature requests.
+`7eefae74`; the fix commits and subsequent migration follow-up are recorded below.
+This maps the original findings independently of subsequent feature requests.
 Personal runtime configuration and Cargo build-job overrides remain uncommitted.
 The `feat/portable-drive-services` worktree was not modified.
 
@@ -74,7 +74,7 @@ Run the ignored `imports_real_netcdf_with_south_to_north_coordinates_and_preserv
 test with GDAL 3.7+ and its NetCDF driver available on PATH to repeat import
 acceptance. Toolchain installation is separate from the bundled renderer.
 
-## Subsequent requests and remaining external work
+## Subsequent requests and final storage verification
 
 Units, flat-map wrapping, restored high-resolution shading, pure-black Oilslick
 water, regional Viewfinder downloads, authenticated/resumable NASADEM downloads,
@@ -84,12 +84,31 @@ implemented and covered by their scoped tests and the GPU checks above.
 and storage-format comparison and its limitations.
 
 The complete 14,520-tile NASADEM download finished before local compression
-started. New downloads already install `.hgt.zst` files. Conversion of the existing
-raw files is an independent, still-running process: four bounded workers verify
-each frame byte for byte before installing it and retiring its exact original.
-Mixed raw/compressed inventories remain usable while it runs. Completion of that
-local migration must be checked against its live process, final log, remaining
-raw files and resulting inventory; it is not claimed complete by this audit.
+started. New downloads install `.hgt.zst` files. Local migration is now complete:
+its process exited after reporting **14,520 converted tiles, zero errors** and
+**376.57 GB -> 91.08 GB**, reclaiming **285.49 GB** (decimal units). Each frame
+was compared byte for byte before atomic installation and source retirement.
+
+Final independent directory enumeration found:
+
+| Dataset | Compressed files | Compressed bytes | Remaining raw files | Other/staging entries |
+| --- | ---: | ---: | ---: | ---: |
+| NASADEM | 14,520 | 91,076,002,850 | 0 | 0 |
+| Existing Viewfinder overrides | 5 | 26,943,063 | 0 | 0 |
+
+The full NASADEM `--plan` pass recognized **14,520 installed, zero pending**
+using the cached catalog and size-tagged frame headers. The final runtime loader
+asserted **14,520 unique HGT coordinates**; the five Viewfinder files intentionally
+override coordinates also supplied by NASADEM. A post-migration Omaha source
+preparation check measured **1.39 s / 1.24 s** for its two passes, with **1.16 s**
+asset inventory. All requested source tiles prepared successfully, and every HGT
+cache miss in the region used a compressed frame. These are source-preparation
+timings, not GPU frame times.
+
+Personal Earthdata values were checked absent from the committed branch diff.
+The live configuration retains the requested asset location and imperial units,
+and the local Cargo job setting remains `-4`; neither personal configuration file
+is included in the commits.
 
 ## Concurrent migration follow-up
 
@@ -108,3 +127,27 @@ Three consecutive real-data profiles, while the converter remained active, each
 asserted the full 14,520-source inventory. Their sampled Omaha region used only
 compressed files. The opt-in profile can enforce an expected inventory with
 `LITTLE_CLIP_GEOGRAPHY_PROFILE_EXPECT_HGT=14520`.
+
+## Whole-feature architecture check
+
+The comparison was also repeated against the original `7eefae74` baseline,
+not just against the later terrain-performance work:
+
+| Measure | Original | Current |
+| --- | ---: | ---: |
+| Duplicate percentage | 7.30% | 7.25% |
+| Clone groups | 4,327 | 4,316 |
+| Dependency cycles | 143 | 143 |
+| Maximum repository complexity | 274 | 274 |
+
+The old software rasterizer and repeated global-vector repaint work are gone.
+The full feature adds explicit GPU resource/draw orchestration, provider download
+coordination and validation that the unsafe readers previously omitted. The
+analyzer still classifies higher-complexity functions as regressions: UI/layer
+case dispatch, bounded shader/draw setup, source/cache validation, NetCDF import
+and the cancellable download transaction. Reviewed count/reference, ownership,
+cancellation and budget guards are required behavior and were retained. The
+remaining large UI methods and the existing paired shapefile/cache readers are
+maintenance hotspots; no new dependency cycle or net increase in clone groups
+was accepted. The migration-race follow-up separately introduced no function
+above complexity 15 and no additional clone group.

@@ -134,3 +134,14 @@ and 1.19 s second preparation (0.27 s in reads). HGT decoding took 0.10/0.07 s.
 These are under concurrent NAS traffic, unlike the earlier quiet CPU comparison;
 after removing the CPU costs, cold storage latency is a meaningful remaining
 part of loading. Conversion is deliberately run at lower CPU priority.
+
+
+The completed local NASADEM migration verified all **14,520** frames with no
+errors and reduced actual terrain storage from **376.57 GB to 91.08 GB** (about
+**76%** saved). No raw HGT files remain in either installed terrain directory.
+This worldwide result is distinct from the six-sample format comparison above.
+The final full-catalog plan recognizes every compressed tile without scheduling
+a download. Post-migration regional source preparation measured **1.39 s / 1.24 s**,
+with the complete 14,520-coordinate inventory loaded in **1.16 s**. The migration
+race and requirement-by-requirement review are recorded in
+[the renderer audit](map-rendering-review-audit.md).
