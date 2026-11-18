@@ -17,6 +17,7 @@ const EDIT: &[u8] = b"bad payload";
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Fault {
     Journal,
+    Receipt,
     Cancel,
     SourceMissing,
     SourceChanged,
@@ -34,7 +35,7 @@ impl Fixture {
             cancel: _,
         } = self;
         drop(db);
-        let db = Store::existing(&_temp.path().join("state.sqlite"), false).unwrap();
+        let db = Store::existing(&_temp.path().join("state/drives.sqlite"), false).unwrap();
         let saved: SyncPair = db.get("pair", &pair.id).unwrap().unwrap();
         assert_eq!(saved.relative, Path::new("selected"));
         assert_eq!(saved.local, b);
@@ -48,6 +49,22 @@ impl Fixture {
             cancel: AtomicBool::new(false),
         }
     }
+}
+
+fn record_operation(db: &Store) {
+    let operation = crate::DriveOperation {
+        id: "interrupted-sync".into(),
+        title: "Test sync".into(),
+        state: "running".into(),
+        message: String::new(),
+        files: 0,
+        bytes: 0,
+        started: crate::now(),
+        finished: None,
+        partition: None,
+        sync_completion: None,
+    };
+    db.put("operation", &operation.id, &operation).unwrap();
 }
 
 struct Case {
@@ -144,7 +161,34 @@ impl Case {
             );
         }
     }
+    fn run_recorded(&self, progress: impl FnMut(u64, u64)) -> Result<sync::SyncReport> {
+        record_operation(&self.fixture.db);
+        sync::synchronize_with(
+            &self.fixture.db,
+            &self.fixture.pair,
+            (
+                &Root::open(&self.fixture.a).unwrap(),
+                &Root::open(&self.fixture.b).unwrap(),
+            ),
+            &self.fixture.cancel,
+            progress,
+            sync::Options {
+                operation: Some("interrupted-sync"),
+                ..Default::default()
+            },
+        )
+    }
     fn interrupt(&self, fault: Fault) {
+        if fault == Fault::Receipt {
+            self.fixture
+                .db
+                .0
+                .execute_batch(
+                    "CREATE TRIGGER receipt_write_fault BEFORE INSERT ON sync_receipts
+                 WHEN NEW.path=x'62' BEGIN SELECT RAISE(FAIL,'receipt publication fault'); END;",
+                )
+                .unwrap();
+        }
         if fault == Fault::Journal {
             self.fixture
                 .db
@@ -156,12 +200,12 @@ impl Case {
                 .unwrap();
         }
         let mut injected = false;
-        let result = self.fixture.run_with(|_, _| {
+        let progress = |_, _| {
             if !injected && fs::read(self.sides().1.join("a")).ok().as_deref() == Some(NEW) {
                 self.baseline("a", Some(NEW));
                 Self::file(self.sides().1, "b", self.prior());
                 match fault {
-                    Fault::Journal => (),
+                    Fault::Journal | Fault::Receipt => (),
                     Fault::Cancel => self.fixture.cancel.store(true, Ordering::Release),
                     Fault::SourceMissing => fs::remove_file(self.sides().0.join("b")).unwrap(),
                     Fault::SourceChanged => Self::edit(&self.sides().0.join("b")),
@@ -169,7 +213,8 @@ impl Case {
                 }
                 injected = true;
             }
-        });
+        };
+        let result = self.run_recorded(progress);
         assert!(injected, "The fault must follow the first committed file");
         let error = result
             .err()
@@ -177,6 +222,10 @@ impl Case {
         match fault {
             Fault::Journal => assert!(
                 error.to_string().contains("baseline publication fault"),
+                "{error}"
+            ),
+            Fault::Receipt => assert!(
+                error.to_string().contains("receipt publication fault"),
                 "{error}"
             ),
             Fault::Cancel => assert!(error.to_string().contains("Cancelled"), "{error}"),
@@ -194,13 +243,14 @@ impl Case {
             self.sides().1,
             "b",
             match fault {
-                Fault::Journal => Some(NEW),
+                Fault::Journal | Fault::Receipt => Some(NEW),
                 Fault::DestinationChanged => Some(EDIT),
                 _ => self.prior(),
             },
         );
         Self::file(self.sides().1, "c", self.prior());
         self.baseline("a", Some(NEW));
+        self.receipt();
         for name in ["b", "c"] {
             self.baseline(name, self.prior());
         }
@@ -212,11 +262,45 @@ impl Case {
                 .is_empty()
         );
     }
+    fn receipt(&self) {
+        let operation: crate::DriveOperation = self
+            .fixture
+            .db
+            .get("operation", "interrupted-sync")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            operation.sync_completion,
+            Some(crate::SyncCompletion {
+                installed: 1,
+                removed: 0,
+                bytes: NEW.len() as u64
+            })
+        );
+        let receipts: Vec<(Vec<u8>, String, String, u64)> = self.fixture.db.0
+            .prepare("SELECT path,target,hash,bytes FROM sync_receipts WHERE operation='interrupted-sync' ORDER BY id").unwrap()
+            .query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap()
+            .collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(
+            receipts,
+            vec![(
+                b"a".to_vec(),
+                if self.portable_to_local {
+                    "local"
+                } else {
+                    "portable"
+                }
+                .into(),
+                format!("{:x}", Sha256::digest(NEW)),
+                NEW.len() as u64
+            )]
+        );
+    }
     fn recover(mut self, fault: Fault) {
         let target = Root::open(self.sides().1).unwrap();
         let installed = ["a", "b"]
             .into_iter()
-            .filter(|name| *name == "a" || fault == Fault::Journal)
+            .filter(|name| *name == "a" || matches!(fault, Fault::Journal | Fault::Receipt))
             .map(|name| {
                 let file = target.input(Path::new(name)).unwrap();
                 let revision = FileSource::capture_file(&file).unwrap();
@@ -227,14 +311,16 @@ impl Case {
         self.fixture
             .db
             .0
-            .execute_batch("DROP TRIGGER IF EXISTS baseline_write_fault")
+            .execute_batch("DROP TRIGGER IF EXISTS baseline_write_fault; DROP TRIGGER IF EXISTS receipt_write_fault")
             .unwrap();
         if fault == Fault::SourceMissing {
             fs::write(self.sides().0.join("b"), NEW).unwrap();
         }
         self.fixture = self.fixture.reopened();
+        self.receipt();
         self.baseline("b", self.prior());
         self.fixture.run().unwrap();
+        self.receipt();
         for (file, revision) in installed {
             revision.check_file(&file).unwrap();
         }
@@ -287,6 +373,7 @@ fn interrupted_installs_keep_only_verified_common_baselines_and_recover_after_re
         for existing in [false, true] {
             for fault in [
                 Fault::Journal,
+                Fault::Receipt,
                 Fault::Cancel,
                 Fault::SourceMissing,
                 Fault::SourceChanged,
@@ -299,6 +386,209 @@ fn interrupted_installs_keep_only_verified_common_baselines_and_recover_after_re
                 case.interrupt(fault);
                 case.recover(fault);
             }
+        }
+    }
+}
+
+#[test]
+fn confirmed_file_and_directory_deletions_have_separate_durable_receipts() {
+    for portable_to_local in [false, true] {
+        let mut case = Case::new(portable_to_local, true);
+        fs::create_dir(case.sides().0.join("empty")).unwrap();
+        case.fixture.run().unwrap();
+        case.fixture.pair.deletions = true;
+        for name in ["b", "empty"] {
+            let path = case.sides().0.join(name);
+            if name == "empty" {
+                fs::remove_dir(path).unwrap();
+            } else {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        case.run_recorded(|_, _| {}).unwrap();
+        let operation: crate::DriveOperation = case
+            .fixture
+            .db
+            .get("operation", "interrupted-sync")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            operation.sync_completion,
+            Some(crate::SyncCompletion {
+                installed: 0,
+                removed: 2,
+                bytes: 0
+            })
+        );
+        let mut statement = case
+            .fixture
+            .db
+            .0
+            .prepare("SELECT path,target,hash IS NULL AND bytes IS NULL FROM sync_receipts ORDER BY path")
+            .unwrap();
+        let rows: Vec<(Vec<u8>, String, bool)> = statement
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let target = if portable_to_local {
+            "local"
+        } else {
+            "portable"
+        };
+        assert_eq!(
+            rows,
+            vec![
+                (b"b".to_vec(), target.into(), true),
+                (b"empty".to_vec(), target.into(), true)
+            ]
+        );
+        for name in ["b", "empty"] {
+            case.baseline(name, None);
+            for root in [&case.fixture.a, &case.fixture.b] {
+                assert!(!root.join(name).exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn installation_receipts_preserve_non_utf8_path_bytes() {
+    use std::os::unix::ffi::OsStringExt;
+    let case = Case {
+        fixture: Fixture::new(),
+        _media: None,
+        portable_to_local: true,
+        existing: false,
+    };
+    let name = std::ffi::OsString::from_vec(b"entry-\xff".to_vec());
+    fs::write(case.fixture.a.join(&name), NEW).unwrap();
+    case.run_recorded(|_, _| {}).unwrap();
+    let path: Vec<u8> = case
+        .fixture
+        .db
+        .0
+        .query_row("SELECT path FROM sync_receipts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(path, b"entry-\xff");
+    assert_eq!(fs::read(case.fixture.b.join(&name)).unwrap(), NEW);
+}
+
+#[test]
+#[ignore = "requires a parent-owned fixture; the parent kills this process after one committed file"]
+fn sync_receipt_crash_probe() {
+    let root = PathBuf::from(std::env::var_os("LITTLE_CLIP_SYNC_RECEIPT_FIXTURE").unwrap());
+    assert_eq!(
+        fs::read(root.join(".owned-sync-receipt")).unwrap(),
+        b"owned receipt fixture"
+    );
+    let (a, b): (PathBuf, PathBuf) =
+        serde_json::from_slice(&fs::read(root.join("roots.json")).unwrap()).unwrap();
+    let db = Store::existing(&root.join("state/drives.sqlite"), false).unwrap();
+    let pair: SyncPair = db.get("pair", "edge").unwrap().unwrap();
+    sync::synchronize_with(
+        &db,
+        &pair,
+        (&Root::open(&a).unwrap(), &Root::open(&b).unwrap()),
+        &AtomicBool::new(false),
+        |_, _| {
+            let operation: crate::DriveOperation =
+                db.get("operation", "interrupted-sync").unwrap().unwrap();
+            if operation
+                .sync_completion
+                .as_ref()
+                .is_some_and(|s| s.installed == 1)
+            {
+                fs::write(root.join("ready"), b"one committed receipt").unwrap();
+                loop {
+                    std::thread::park();
+                }
+            }
+        },
+        sync::Options {
+            operation: Some("interrupted-sync"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    panic!("parent must kill the held worker before its next file");
+}
+
+#[test]
+fn killed_sync_workers_retain_receipts_through_actual_service_startup() {
+    use little_clip_core::process::CommandRequest;
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    for portable_to_local in [false, true] {
+        for existing in [false, true] {
+            let case = Case::new(portable_to_local, existing);
+            let root = case.fixture._temp.path();
+            record_operation(&case.fixture.db);
+            fs::write(root.join(".owned-sync-receipt"), b"owned receipt fixture").unwrap();
+            fs::write(
+                root.join("roots.json"),
+                serde_json::to_vec(&(&case.fixture.a, &case.fixture.b)).unwrap(),
+            )
+            .unwrap();
+            let mut command = CommandRequest::new(std::env::current_exe().unwrap())
+                .args([
+                    "sync_edge_tests::baseline_tests::sync_receipt_crash_probe",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .own_process_group()
+                .die_with_parent()
+                .build_command();
+            command.env("LITTLE_CLIP_SYNC_RECEIPT_FIXTURE", root);
+            let mut worker = crate::test_child::Owned(command.spawn().unwrap());
+            let started = Instant::now();
+            while fs::read(root.join("ready")).ok().as_deref() != Some(b"one committed receipt") {
+                assert!(
+                    worker.0.try_wait().unwrap().is_none(),
+                    "fixture worker exited before its committed receipt"
+                );
+                assert!(started.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            case.receipt();
+            worker.0.kill().unwrap();
+            assert!(!worker.0.wait().unwrap().success());
+            let service = crate::Service::start_with_inventory(
+                crate::DriveConfig {
+                    ram_min_available: u64::MAX,
+                    ..Default::default()
+                },
+                root.join("state"),
+                Arc::new(|| Ok(Vec::new())),
+            )
+            .unwrap();
+            let crate::DriveReply::Status(status) = service
+                .request(crate::DriveRequest::Status { offset: 0 })
+                .unwrap()
+            else {
+                panic!("expected status");
+            };
+            let operation = status
+                .operations
+                .iter()
+                .find(|op| op.id == "interrupted-sync")
+                .unwrap();
+            assert_eq!(operation.state, "interrupted");
+            assert!(operation.finished.is_some());
+            assert_eq!(
+                operation.sync_completion,
+                Some(crate::SyncCompletion {
+                    installed: 1,
+                    removed: 0,
+                    bytes: NEW.len() as u64
+                })
+            );
+            case.receipt();
+            service.shutdown().unwrap();
+            case.recover(Fault::Cancel);
         }
     }
 }

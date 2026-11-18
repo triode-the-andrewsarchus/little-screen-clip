@@ -52,6 +52,7 @@ fn record(
         bytes: 0,
         started: now(),
         finished: None,
+        sync_completion: None,
         partition: None,
     };
     db.put("operation", id, &operation)?;

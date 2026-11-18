@@ -68,6 +68,10 @@ fn snapshot(db: &Store, state: &Root, cancel: &AtomicBool, deadline: Instant) ->
         db,
         "SELECT count(*),coalesce(sum(octet_length(scan)+length(path)+length(parent)+length(name)+octet_length(json)),0) FROM entries",
     )?;
+    let receipts = rows(
+        db,
+        "SELECT count(*),coalesce(sum(octet_length(operation)+octet_length(pair)+length(path)+octet_length(target)+coalesce(octet_length(hash),0)+coalesce(octet_length(bytes),0)),0) FROM sync_receipts",
+    )?;
     let pending = rows(db, "SELECT sum(records),sum(bytes) FROM (
         SELECT count(*) records,coalesce(sum(octet_length(pair)+length(path)+octet_length(id)),0) bytes FROM conflict_paths
         UNION ALL SELECT count(*),coalesce(sum(octet_length(pair)+length(prefix)),0) FROM sync_blocked
@@ -81,11 +85,13 @@ fn snapshot(db: &Store, state: &Root, cancel: &AtomicBool, deadline: Instant) ->
     transaction.commit()?;
     let state_bytes = state_file_bytes(state, cancel, deadline)?;
     Ok(format!(
-        "Local drive metadata\nSync baselines: {} paths · {} logical bytes\nSync/RAM inventories: {} entries · {} logical bytes\nPending paths and sync bookkeeping: {} records · {} logical bytes\nDrive registry (settings, jobs and headers): {} records · {} logical bytes\nSaved catalogs (optional): {} snapshots · {} available file bytes · {} unavailable\nRegistry database, policy snapshot and working files: {state_bytes} apparent bytes\nLogical row payloads are contained in registry storage and exclude page/index overhead. Saved catalog files are separate. File sizes can change during measurement.",
+        "Local drive metadata\nSync baselines: {} paths · {} logical bytes\nSync/RAM inventories: {} entries · {} logical bytes\nConfirmed sync receipts: {} records · {} logical bytes\nPending paths and sync bookkeeping: {} records · {} logical bytes\nDrive registry (settings, jobs and headers): {} records · {} logical bytes\nSaved catalogs (optional): {} snapshots · {} available file bytes · {} unavailable\nRegistry database, policy snapshot and working files: {state_bytes} apparent bytes\nLogical row payloads are contained in registry storage and exclude page/index overhead; receipt byte counts use their decimal text lengths. Saved catalog files are separate. File sizes can change during measurement.",
         baseline.records,
         baseline.bytes,
         inventory.records,
         inventory.bytes,
+        receipts.records,
+        receipts.bytes,
         pending.records,
         pending.bytes,
         registry.records,

@@ -100,7 +100,18 @@ impl Plan {
         let mut conflicts = 0;
         for _ in 0..passes {
             let result = if let Some(paths) = intent.paths.as_ref().filter(|_| self.cached) {
-                sync::changed(db, &self.pair, &self.portable, &self.local, paths, cancel)?
+                sync::changed(
+                    db,
+                    &self.pair,
+                    &self.portable,
+                    &self.local,
+                    paths,
+                    cancel,
+                    sync::Options {
+                        operation: intent.operation.as_deref(),
+                        ..Default::default()
+                    },
+                )?
             } else {
                 sync::synchronize_with(
                     db,
@@ -108,10 +119,13 @@ impl Plan {
                     (&self.portable, &self.local),
                     cancel,
                     &mut *progress,
-                    self.cached
-                        && self.observed
-                        && self.portable.reliable_revision_cache()?
-                        && self.local.reliable_revision_cache()?,
+                    sync::Options {
+                        operation: intent.operation.as_deref(),
+                        reuse: self.cached
+                            && self.observed
+                            && self.portable.reliable_revision_cache()?
+                            && self.local.reliable_revision_cache()?,
+                    },
                 )?
             };
             files += result.files;

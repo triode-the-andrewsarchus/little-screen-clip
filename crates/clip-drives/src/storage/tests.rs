@@ -33,6 +33,9 @@ fn accounting_preserves_raw_byte_lengths_and_paginates_optional_catalogs_without
         params![pair, path.as_slice()],
     )
     .unwrap();
+    for (hash, bytes) in [(Some(hash), Some(15)), (None, None)] {
+        db.0.execute("INSERT INTO sync_receipts(operation,pair,path,target,hash,bytes) VALUES('job',?1,?2,'local',?3,?4)", params![pair,path.as_slice(),hash,bytes]).unwrap();
+    }
     for index in 0..130 {
         let id = uuid::Uuid::new_v4().to_string();
         db.put("catalog", &id, &()).unwrap();
@@ -67,6 +70,13 @@ fn accounting_preserves_raw_byte_lengths_and_paginates_optional_catalogs_without
         report.contains(&format!(
             "Pending paths and sync bookkeeping: 1 records · {} logical bytes",
             pair.len() + path.len()
+        )),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!(
+            "Confirmed sync receipts: 2 records · {} logical bytes",
+            2 * ("job".len() + pair.len() + path.len() + "local".len()) + hash.len() + "15".len()
         )),
         "{report}"
     );

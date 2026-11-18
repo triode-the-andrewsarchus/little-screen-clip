@@ -1103,6 +1103,7 @@ mod tests {
     mod status_refresh;
     mod storage;
     mod sync_preparation;
+    mod sync_receipts;
     mod watch_responsiveness;
     use super::*;
     #[test]
@@ -1829,6 +1830,7 @@ mod tests {
             bytes: drive.capacity,
             started: now(),
             finished: None,
+            sync_completion: None,
             partition: Some(PartitionPreparation {
                 file_mode: Default::default(),
                 collection_mount: None,
@@ -2100,6 +2102,7 @@ mod tests {
                 bytes: 17,
                 started: now(),
                 finished: None,
+                sync_completion: None,
                 partition: Some(partition.clone()),
             };
             db.put("operation", &id, &operation).unwrap();

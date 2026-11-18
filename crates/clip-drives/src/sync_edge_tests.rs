@@ -17,7 +17,8 @@ impl Fixture {
         let b = temp.path().join("local");
         fs::create_dir(&a).unwrap();
         fs::create_dir(&b).unwrap();
-        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        fs::create_dir(temp.path().join("state")).unwrap();
+        let db = Store::open(&temp.path().join("state/drives.sqlite")).unwrap();
         Self {
             _temp: temp,
             db,
@@ -192,7 +193,10 @@ fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestam
         (&a, &b),
         &fixture.cancel,
         |_, _| {},
-        true,
+        sync::Options {
+            reuse: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     assert_eq!(result.conflicts, 1);
@@ -209,7 +213,16 @@ fn file_events_skip_unrelated_payloads_and_cached_scans_detect_restored_timestam
     assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     fs::write(fixture.a.join("event"), b"changed file only").unwrap();
     let paths = std::collections::HashSet::from([fixture.a.join("event")]);
-    sync::changed(&fixture.db, &fixture.pair, &a, &b, &paths, &fixture.cancel).unwrap();
+    sync::changed(
+        &fixture.db,
+        &fixture.pair,
+        &a,
+        &b,
+        &paths,
+        &fixture.cancel,
+        sync::Options::default(),
+    )
+    .unwrap();
     assert_eq!(
         fs::read(fixture.b.join("event")).unwrap(),
         b"changed file only"

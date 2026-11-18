@@ -318,7 +318,8 @@ impl Reconcile<'_> {
             use std::os::unix::ffi::OsStringExt;
             let path = PathBuf::from(std::ffi::OsString::from_vec(row?));
             let mut retained = false;
-            for root in [self.portable, self.local] {
+            let mut removed = Vec::new();
+            for (portable, root) in [(true, self.portable), (false, self.local)] {
                 if root.metadata(&path)?.is_some() {
                     let held = root.directory(&path, false)?;
                     if fs::read_dir(anchor(&held))?.next().is_none() {
@@ -326,6 +327,7 @@ impl Reconcile<'_> {
                         root.validate()?;
                         fs::remove_dir(target)?;
                         std::fs::File::open(anchor(&parent))?.sync_all()?;
+                        removed.push(portable);
                     } else {
                         retained = true;
                     }
@@ -336,7 +338,11 @@ impl Reconcile<'_> {
                 self.local.ensure_directory(&path)?;
                 save_baseline(self.db, &self.pair.id, &path, Some("directory"))?;
             } else {
-                save_baseline(self.db, &self.pair.id, &path, None)?;
+                self.commit(
+                    &path,
+                    None,
+                    removed.into_iter().map(|portable| (portable, None)),
+                )?;
             }
         }
         self.db

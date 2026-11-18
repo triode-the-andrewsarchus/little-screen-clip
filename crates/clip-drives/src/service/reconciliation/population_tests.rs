@@ -68,6 +68,23 @@ impl Population {
         let db = Store::open(&temp.path().join("population.sqlite")).unwrap();
         db.put("pair", &id, &pair).unwrap();
         db.put("ram", &id, &session).unwrap();
+        db.put(
+            "operation",
+            "owned-population",
+            &DriveOperation {
+                id: "owned-population".into(),
+                title: "Owned population".into(),
+                state: "running".into(),
+                message: String::new(),
+                files: 0,
+                bytes: 0,
+                started: now(),
+                finished: None,
+                partition: None,
+                sync_completion: None,
+            },
+        )
+        .unwrap();
         {
             let transaction = db.0.unchecked_transaction().unwrap();
             super::super::ram_pending::record(&db, &id, std::iter::empty(), true).unwrap();
@@ -211,6 +228,15 @@ fn initial_population_catches_preserved_timestamp_edits_and_new_paths_before_rea
             );
             assert!(!fixture.plan.local.path.join("c").exists());
         }
+        let operation: DriveOperation = fixture
+            .db
+            .get("operation", "owned-population")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            operation.sync_completion.unwrap().installed,
+            if initialize { 4 } else { 2 }
+        );
     }
 }
 
@@ -269,6 +295,12 @@ fn initial_population_failures_keep_completed_files_incomplete_until_a_verified_
             fs::read(fixture.plan.local.path.join("a")).unwrap(),
             b"source-before"
         );
+        let operation: DriveOperation = fixture
+            .db
+            .get("operation", "owned-population")
+            .unwrap()
+            .unwrap();
+        assert_eq!(operation.sync_completion.unwrap().installed, 1);
         fixture.intent.cancel.store(false, Ordering::Release);
         if failure == "missing-source" {
             fs::write(fixture.plan.portable.path.join("b"), b"second-original").unwrap();
@@ -277,5 +309,11 @@ fn initial_population_failures_keep_completed_files_incomplete_until_a_verified_
         assert!(resumed.is_ok(), "{failure}: {resumed:?}");
         fixture.publish_complete(&resumed);
         fixture.assert_converged(&["a", "b"]);
+        let operation: DriveOperation = fixture
+            .db
+            .get("operation", "owned-population")
+            .unwrap()
+            .unwrap();
+        assert_eq!(operation.sync_completion.unwrap().installed, 2);
     }
 }

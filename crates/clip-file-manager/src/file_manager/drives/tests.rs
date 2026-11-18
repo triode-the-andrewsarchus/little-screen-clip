@@ -12,6 +12,7 @@ fn multiline_job_notice_keeps_the_full_report_in_persistent_details() {
         bytes: 0,
         started: 1,
         finished: Some(2),
+        sync_completion: None,
         partition: None,
     };
     let mut drives = Drives {

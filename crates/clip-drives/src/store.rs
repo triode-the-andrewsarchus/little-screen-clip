@@ -24,6 +24,8 @@ impl Store {
             CREATE TABLE IF NOT EXISTS sync_blocked(pair TEXT NOT NULL,prefix BLOB NOT NULL,PRIMARY KEY(pair,prefix));
             CREATE TABLE IF NOT EXISTS sync_dirs(pair TEXT NOT NULL,path BLOB NOT NULL,PRIMARY KEY(pair,path));
             CREATE TABLE IF NOT EXISTS ram_pending(id INTEGER PRIMARY KEY AUTOINCREMENT,pair TEXT NOT NULL,path BLOB NOT NULL,UNIQUE(pair,path));
+            CREATE TABLE IF NOT EXISTS sync_receipts(id INTEGER PRIMARY KEY,operation TEXT NOT NULL,pair TEXT NOT NULL,path BLOB NOT NULL,target TEXT NOT NULL,hash TEXT,bytes INTEGER);
+            CREATE INDEX IF NOT EXISTS sync_receipt_operation ON sync_receipts(operation,id);
             CREATE TABLE IF NOT EXISTS baseline(pair TEXT NOT NULL,path BLOB NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(pair,path));")?;
         db.execute_batch(&format!("CREATE INDEX IF NOT EXISTS entity_mounted_headers ON entities(kind,id) WHERE {VIEW_FILTER}"))?;
         Self::checked(db)
@@ -171,6 +173,51 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_schema_migration_preserves_each_supported_registry_and_legacy_progress() {
+        for version in 1..=3 {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("old.sqlite");
+            let db = Store::open(&path).unwrap();
+            db.0.execute_batch("DROP TABLE sync_receipts").unwrap();
+            db.0.execute("UPDATE version SET value=?1", [version])
+                .unwrap();
+            db.0.execute(
+                "INSERT INTO baseline VALUES('pair',?1,'hash')",
+                [b"raw-\xff".as_slice()],
+            )
+            .unwrap();
+            let legacy = serde_json::json!({"id":"old", "title":"Sync", "state":"interrupted", "message":"retained", "files":7, "bytes":20, "started":1, "finished":2});
+            db.put("operation", "old", &legacy).unwrap();
+            drop(db);
+            let db = Store::open(&path).unwrap();
+            let observed: u32 =
+                db.0.query_row("SELECT value FROM version", [], |r| r.get(0))
+                    .unwrap();
+            assert_eq!(observed, version);
+            assert_eq!(
+                db.get::<serde_json::Value>("operation", "old").unwrap(),
+                Some(legacy)
+            );
+            let operation: crate::DriveOperation = db.get("operation", "old").unwrap().unwrap();
+            assert!(operation.sync_completion.is_none());
+            let saved: (Vec<u8>, String) =
+                db.0.query_row("SELECT path,hash FROM baseline", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!(saved, (b"raw-\xff".to_vec(), "hash".into()));
+            let receipts: u64 =
+                db.0.query_row(
+                    "SELECT count(*) FROM sync_receipts INDEXED BY sync_receipt_operation",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(receipts, 0);
+        }
+    }
 
     #[test]
     fn mounted_header_index_migrates_legacy_state_and_tracks_commits() {

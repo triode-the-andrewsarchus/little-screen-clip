@@ -115,6 +115,7 @@ fn save_baseline(db: &Store, pair: &str, path: &Path, hash: Option<&str>) -> Res
     }
     Ok(())
 }
+mod completion;
 mod conflicts;
 pub(crate) mod fingerprints;
 fn delete(root: &Root, entry: &Entry, cancel: &AtomicBool) -> Result<()> {
@@ -149,6 +150,7 @@ struct Reconcile<'a> {
     local: &'a Root,
     cancel: &'a AtomicBool,
     report: SyncReport,
+    operation: Option<&'a str>,
 }
 impl Reconcile<'_> {
     fn path(&mut self, path: &Path, a: Option<Entry>, b: Option<Entry>) -> Result<()> {
@@ -215,14 +217,15 @@ impl Reconcile<'_> {
                 && entry.kind != "directory"
             {
                 delete(from, entry, self.cancel)?;
-                save_baseline(self.db, &self.pair.id, path, None)?;
+                self.commit(path, None, [(portable_to_local, None)])?;
             } else {
-                self.report.bytes += install(from, to, entry, path, existing, self.cancel, false)?;
+                let bytes = install(from, to, entry, path, existing, self.cancel, false)?;
+                self.report.bytes += bytes;
                 self.report.files += 1;
                 if existing.is_none() && old.is_some() && old.as_deref() != hash {
                     self.deleted_edit(path, entry, portable_to_local)?;
                 }
-                save_baseline(self.db, &self.pair.id, path, hash)?;
+                self.commit(path, hash, [(!portable_to_local, Some(bytes))])?;
             }
         }
         Ok(())
@@ -245,7 +248,13 @@ pub(crate) fn changed(
     local: &Root,
     paths: &std::collections::HashSet<PathBuf>,
     cancel: &AtomicBool,
+    options: Options<'_>,
 ) -> Result<SyncReport> {
+    // Named event coverage cannot authorize reuse when falling back to a whole tree.
+    let options = Options {
+        reuse: false,
+        ..options
+    };
     let mut relative = std::collections::BTreeSet::new();
     for path in paths {
         for root in [portable, local] {
@@ -259,7 +268,7 @@ pub(crate) fn changed(
     let mut remaining = max_bytes.saturating_mul(2);
     for path in relative {
         if path.as_os_str().is_empty() {
-            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, false);
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, options);
         }
         let mut observe = |root: &Root| -> Result<Option<Entry>> {
             let entry = scan::observe(root, &path, true, remaining.min(max_bytes), cancel)?;
@@ -274,10 +283,11 @@ pub(crate) fn changed(
             || a.as_ref().is_some_and(|e| e.kind == "directory")
             || b.as_ref().is_some_and(|e| e.kind == "directory")
         {
-            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, false);
+            return synchronize_with(db, pair, (portable, local), cancel, |_, _| {}, options);
         }
         entries.push((path, a, b));
     }
+    completion::begin(db, options.operation)?;
     db.0.execute("DELETE FROM sync_blocked WHERE pair=?1", [&pair.id])?;
     let cache_updates = fingerprints::existing(db, pair, portable).map(|provenance| {
         (
@@ -295,6 +305,7 @@ pub(crate) fn changed(
         local,
         cancel,
         report: SyncReport::default(),
+        operation: options.operation,
     };
     for (path, a, b) in entries {
         reconcile.path(&path, a, b)?;
@@ -315,15 +326,28 @@ pub(crate) fn synchronize(
     cancel: &AtomicBool,
     progress: impl FnMut(u64, u64),
 ) -> Result<SyncReport> {
-    synchronize_with(db, pair, (portable, local), cancel, progress, false)
+    synchronize_with(
+        db,
+        pair,
+        (portable, local),
+        cancel,
+        progress,
+        Options::default(),
+    )
 }
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Options<'a> {
+    pub reuse: bool,
+    pub operation: Option<&'a str>,
+}
+
 pub(crate) fn synchronize_with(
     db: &Store,
     pair: &SyncPair,
     roots: (&Root, &Root),
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
-    reuse: bool,
+    options: Options<'_>,
 ) -> Result<SyncReport> {
     let (portable, local) = roots;
     if portable.overlap(local) {
@@ -334,7 +358,7 @@ pub(crate) fn synchronize_with(
     let provenance = fingerprints::Provenance::capture(pair, portable).ok();
     let mut limits = comparison_limits(pair, local)?;
     for (root, id) in [(portable, &a), (local, &b)] {
-        limits.reuse_scan = (reuse && root.reliable_revision_cache()?)
+        limits.reuse_scan = (options.reuse && root.reliable_revision_cache()?)
             .then(|| id.strip_suffix(":next").unwrap_or(id).to_owned());
         limits.reuse_generation = None;
         limits.capture_generation = None;
@@ -353,6 +377,7 @@ pub(crate) fn synchronize_with(
             .into());
         }
     }
+    completion::begin(db, options.operation)?;
     db.0.execute("DELETE FROM sync_blocked WHERE pair=?1", [&pair.id])?;
     db.0.execute("DELETE FROM sync_dirs WHERE pair=?1", [&pair.id])?;
     let mut after = Vec::new();
@@ -363,6 +388,7 @@ pub(crate) fn synchronize_with(
         local,
         cancel,
         report: SyncReport::default(),
+        operation: options.operation,
     };
     loop {
         let paths = {

@@ -587,7 +587,10 @@ mod tests {
                 ),
                 &AtomicBool::new(false),
                 |_, _| {},
-                reuse,
+                crate::sync::Options {
+                    reuse,
+                    ..Default::default()
+                },
             )
         }
         fn assert_metadata_only(&self, names: &[&str]) {

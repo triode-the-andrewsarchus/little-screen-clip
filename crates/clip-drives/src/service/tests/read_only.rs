@@ -162,6 +162,7 @@ fn interrupted_read_only_journals_disclose_observed_mounts_without_replaying_aut
                 bytes: 0,
                 started: now(),
                 finished: None,
+                sync_completion: None,
                 partition: Some(PartitionPreparation {
                     drive: fixture.drives.lock().unwrap()[1].clone(),
                     destination: None,

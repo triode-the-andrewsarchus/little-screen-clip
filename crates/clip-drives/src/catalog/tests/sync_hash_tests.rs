@@ -28,6 +28,10 @@ fn changed(fixture: &Fixture, pair: &SyncPair, path: PathBuf) -> Result<sync::Sy
         &Root::open(&pair.local)?,
         &std::collections::HashSet::from([path]),
         &AtomicBool::new(false),
+        sync::Options {
+            reuse: true,
+            ..Default::default()
+        },
     )
 }
 

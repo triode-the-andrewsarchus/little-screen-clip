@@ -439,9 +439,25 @@ pub struct DriveOperation {
     pub bytes: u64,
     pub started: u64,
     pub finished: Option<u64>,
+    /// Durable reconciliation effects, separate from inventory/copy progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_completion: Option<SyncCompletion>,
     /// Retained partition effects and the last durable preparation checkpoint.
     #[serde(default)]
     pub partition: Option<PartitionPreparation>,
+}
+
+/// Reconciliation changes committed together with their common baseline.
+///
+/// Counts include installed files, links and directories and confirmed removals.
+/// They exclude scans, pre-existing equal paths and conflict variants that have
+/// no common baseline. An unrecorded installation must be compared again after
+/// interruption; these counters are a lower bound on completed effects.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncCompletion {
+    pub installed: u64,
+    pub removed: u64,
+    pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -612,6 +628,27 @@ pub fn valid_relative(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_operation_progress_does_not_imply_confirmed_common_writes() {
+        let mut operation: DriveOperation = serde_json::from_value(serde_json::json!({
+            "id":"old", "title":"Sync", "state":"interrupted", "message":"restart",
+            "files":100, "bytes":1000, "started":1, "finished":2
+        }))
+        .unwrap();
+        assert!(operation.sync_completion.is_none());
+        let encoded = serde_json::to_value(&operation).unwrap();
+        assert!(encoded.get("sync_completion").is_none());
+        let completion = SyncCompletion {
+            installed: 2,
+            removed: 1,
+            bytes: 12,
+        };
+        operation.sync_completion = Some(completion.clone());
+        let recovered: DriveOperation =
+            serde_json::from_value(serde_json::to_value(operation).unwrap()).unwrap();
+        assert_eq!(recovered.sync_completion, Some(completion));
+        assert_eq!((recovered.files, recovered.bytes), (100, 1000));
+    }
     #[test]
     fn backup_commands_preserve_legacy_fingerprints_and_read_only_fails_closed_on_older_daemons() {
         #[derive(Serialize, Deserialize)]
