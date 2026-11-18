@@ -115,6 +115,7 @@ pub(super) struct Viewer {
     style: BasemapStyle,
     show_country_borders: bool,
     show_state_borders: bool,
+    show_city_names: bool,
     show_rivers: bool,
     show_roads: bool,
     show_contours: bool,
@@ -161,6 +162,7 @@ impl Viewer {
             style: BasemapStyle::Natural,
             show_country_borders: true,
             show_state_borders: true,
+            show_city_names: true,
             show_rivers: true,
             show_roads: true,
             show_contours: true,
@@ -308,7 +310,7 @@ impl Viewer {
                 &self.document,
                 Some(self.selected),
                 &self.camera,
-                self.assets.as_deref(),
+                self.assets.as_deref().filter(|_| self.show_city_names),
                 self.contour_interval_m,
                 self.local_elev_range,
                 self.config.geography.units,
@@ -433,6 +435,7 @@ impl Viewer {
             ui.separator();
             ui.checkbox(&mut self.show_country_borders, "Countries");
             ui.checkbox(&mut self.show_state_borders, "States");
+            ui.checkbox(&mut self.show_city_names, "City names");
             ui.checkbox(&mut self.show_rivers, "Rivers");
             ui.checkbox(&mut self.show_roads, "Roads");
             ui.add_enabled(
