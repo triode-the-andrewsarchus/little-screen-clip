@@ -174,7 +174,7 @@ fn assert_backup_refused(fixture: &Fixture, drive: &Drive, reason: impl std::fmt
     );
 }
 impl GuestMount {
-    fn read_only_filesystem() -> Self {
+    pub(crate) fn read_only_filesystem() -> Self {
         crate::require_disposable_guest();
         let mount = Self::capture(Path::new("/work/media"), MountCleanup::Writable);
         mount.remount("remount,ro");
@@ -194,7 +194,7 @@ impl GuestMount {
             .unwrap();
         assert!(result.status.success(), "{}", result.stderr_lossy());
     }
-    fn writable(&mut self) {
+    pub(crate) fn writable(&mut self) {
         self.remount("remount,rw");
         self.cleanup = None;
     }

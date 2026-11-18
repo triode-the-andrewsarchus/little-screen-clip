@@ -1,5 +1,6 @@
 //! Real bounded source-filesystem failures retain edits in a separate RAM mount.
 use super::*;
+mod source;
 use std::{
     io::{Read, Write},
     os::{fd::OwnedFd, unix::net::UnixStream},
@@ -19,6 +20,9 @@ fn leave_free(view: &Path, remaining: u64) -> PathBuf {
             .saturating_sub(remaining)
             .min(chunk.len() as u64) as usize;
         if amount == 0 {
+            let available = stats.f_bavail.saturating_mul(stats.f_frsize);
+            assert!(available <= remaining);
+            eprintln!("WRITEBACK_PORTABLE_FREE={available}");
             break;
         }
         fill.write_all(&chunk[..amount]).unwrap();
@@ -28,10 +32,39 @@ fn leave_free(view: &Path, remaining: u64) -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; fills only an owned bounded filesystem"]
+#[ignore = "requires tmpfs, /dev/fuse and packaged RAM helper; optionally uses bounded native guest media"]
 fn full_media_retains_ram_edits_and_paused_eject_waits_for_preflush() {
+    // The FUSE fixture reserves outside its selected subtree. A native fixture
+    // reserves inside its owned root, lexically after edit; failed installation
+    // must stop before that large filler can be unioned into RAM. It is removed
+    // before a successful retry.
+    writeback_failure(|source| {
+        source::Failure::Full(leave_free(&source.reservation_root, 1024 * 1024))
+    });
+}
+
+#[test]
+#[ignore = "requires disposable native-filesystem guest, tmpfs and packaged RAM helper"]
+fn native_read_only_media_retains_ram_and_resumes_after_writable_remount() {
+    crate::require_disposable_guest();
+    assert!(std::env::var_os("LITTLE_CLIP_DRIVE_TEST_SOURCE_DIR").is_some());
+    writeback_failure(|source| {
+        let mount = crate::sync_edge_tests::native_fs::GuestMount::read_only_filesystem();
+        let directory = File::open(&source.path).unwrap();
+        assert!(
+            rustix::fs::fstatvfs(&directory)
+                .unwrap()
+                .f_flag
+                .contains(rustix::fs::StatVfsMountFlags::RDONLY)
+        );
+        source::Failure::ReadOnly(mount)
+    });
+}
+
+fn writeback_failure(inject: impl FnOnce(&source::Portable) -> source::Failure) {
     let fixture = TestDrives::new(0);
-    let (backing, source_id, native, portable) = fixture.native_source("partition");
+    let source = source::Portable::new(&fixture);
+    let portable = &source.path;
     let unmounts = Arc::new(AtomicUsize::new(0));
     let counted = unmounts.clone();
     let allow_unmount = Arc::new(AtomicBool::new(false));
@@ -70,25 +103,33 @@ fn full_media_retains_ram_edits_and_paused_eject_waits_for_preflush() {
     seeded.last_flushed = Some(1);
     db.put("ram", &ram.id, &seeded).unwrap();
 
-    // Reserve source capacity outside the selected subtree, so it cannot be
-    // mistaken for a user file to union into the separate RAM filesystem.
-    let reservation = leave_free(&backing.directory.join("contents"), 1024 * 1024);
+    assert!(
+        !fixture.drives.lock().unwrap()[1].read_only,
+        "Keep discovery stale to test actual filesystem enforcement"
+    );
+    let failure = inject(&source);
     let edits = vec![0x5a; 8 * 1024 * 1024];
     fs::write(ram.path.join("edit"), &edits).unwrap();
     File::open(ram.path.join("edit"))
         .unwrap()
         .sync_all()
         .unwrap();
+    let ram_free = rustix::fs::fstatvfs(File::open(&ram.path).unwrap()).unwrap();
+    let available = ram_free.f_bavail.saturating_mul(ram_free.f_frsize);
+    assert!(
+        available > edits.len() as u64,
+        "The independent RAM filesystem must have room"
+    );
+    eprintln!("WRITEBACK_RAM_FREE={available} edit_bytes={}", edits.len());
     wait_ram(&service, &ram.id, |session| {
         session.pending.as_ref().unwrap().paths != 0
     });
     let confirmed = status(&service).ram[0].last_flushed;
-    failed(
+    failure.assert_refused(
         &service,
         DriveRequest::FlushRam {
             session: ram.id.clone(),
         },
-        "No space left",
     );
     let retained = status(&service).ram.remove(0);
     assert!(retained.browsable());
@@ -101,18 +142,26 @@ fn full_media_retains_ram_edits_and_paused_eject_waits_for_preflush() {
         fs::read(portable.join("edit")).unwrap(),
         b"original portable content"
     );
+    if let Some(reservation) = failure.reservation() {
+        assert!(
+            !ram.path.join(reservation.file_name().unwrap()).exists(),
+            "The portable filler must never be copied into RAM"
+        );
+    }
     assert_eq!(
-        fs::read_dir(&portable).unwrap().count(),
+        fs::read_dir(portable)
+            .unwrap()
+            .filter(|entry| Some(entry.as_ref().unwrap().path().as_path()) != failure.reservation())
+            .count(),
         1,
         "unpublished staging must be retired"
     );
 
-    failed(
+    failure.assert_refused(
         &service,
         DriveRequest::Eject {
             drive: "part:large".into(),
         },
-        "No space left",
     );
     assert_eq!(unmounts.load(Ordering::Acquire), 0);
     assert!(
@@ -126,7 +175,7 @@ fn full_media_retains_ram_edits_and_paused_eject_waits_for_preflush() {
     );
     assert_eq!(status(&service).ram[0].last_flushed, confirmed);
 
-    fs::remove_file(reservation).unwrap();
+    failure.clear();
     finish(
         &service,
         DriveRequest::FlushRam {
@@ -200,8 +249,7 @@ fn full_media_retains_ram_edits_and_paused_eject_waits_for_preflush() {
     );
     discard_ram(&service, &ram);
     service.shutdown().unwrap();
-    drop(native);
-    crate::ram::discard(&backing, &source_id).unwrap();
+    source.finish();
 }
 
 #[test]
