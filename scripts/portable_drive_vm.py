@@ -3,14 +3,18 @@
 
 Requires QEMU, KVM (or explicit --accel tcg), a kernel with matching installed
 modules, and a static BusyBox including mount/insmod. This never mounts a host
-filesystem or attaches host block devices. All writable media live in guest RAM.
+filesystem or attaches host block devices. Writable media normally live in guest
+RAM; an explicitly supplied owned regular disk file can retain reboot fixtures.
 """
 import argparse
+import contextlib
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import stat
 
 MODULES = (
     'virtio_pci', 'virtio_blk', '9pnet_virtio', '9p', 'loop', 'vfat',
@@ -102,6 +106,19 @@ def share(name, path):
             '-device', f'virtio-9p-pci,fsdev={name},mount_tag=host_{name}']
 
 
+def owned_state_disk(path):
+    """Pin a bounded owned regular artifact before permitting writable QEMU I/O."""
+    pin = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        metadata = os.fstat(pin)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1 or not 64 * 1024**2 <= metadata.st_size <= 8 * 1024**3):
+            raise ValueError('State disk must be an owned, unaliased 64 MiB–8 GiB regular fixture file')
+        return os.open(f'/proc/self/fd/{pin}', os.O_RDWR | os.O_CLOEXEC)
+    finally:
+        os.close(pin)
+
+
 def run_guest(args):
     repo = Path(__file__).resolve().parent.parent
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -118,22 +135,30 @@ def run_guest(args):
         command.extend(share('tools', args.tools))
     if args.firmware:
         command.extend(['-L', str(args.firmware)])
-    (args.output_dir / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
     log_path = args.output_dir / 'guest.log'
     timed_out = False
-    with log_path.open('w') as log:
-        try:
-            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout)
-            return_code = result.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            return_code = None
+    with contextlib.ExitStack() as resources:
+        pass_fds = ()
+        if args.state_disk:
+            disk = owned_state_disk(args.state_disk)
+            resources.callback(os.close, disk)
+            command.extend(['-drive', f'file=/proc/self/fd/{disk},format=raw,if=virtio'])
+            pass_fds = (disk,)
+        (args.output_dir / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
+        with log_path.open('w') as log:
+            try:
+                result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                                        timeout=args.timeout, pass_fds=pass_fds)
+                return_code = result.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                return_code = None
     log = log_path.read_text(errors='replace')
     markers = [line.strip() for line in log.splitlines() if line.startswith('LITTLE_CLIP_VM_RESULT=')]
     success = not timed_out and return_code == 0 and markers == ['LITTLE_CLIP_VM_RESULT=0']
     report = dict(success=success, timed_out=timed_out, qemu_return_code=return_code,
                   guest_results=markers, log=str(log_path), guest_script=str(args.guest_script),
-                  guest_args=args.guest_args)
+                  guest_args=args.guest_args, state_disk=str(args.state_disk) if args.state_disk else None)
     (args.output_dir / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return 0 if success else 1
@@ -149,6 +174,7 @@ def main():
     parser.add_argument('--firmware', type=Path)
     parser.add_argument('--tools', type=Path, help='Additional read-only usr tree for guest formatters')
     parser.add_argument('--btrfs', action='store_true', help='Include Btrfs for owned guest backup destinations')
+    parser.add_argument('--state-disk', type=Path, help='Owned regular fixture disk retained across guest boots')
     parser.add_argument('--guest-script', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--accel', choices=['kvm', 'tcg'], default='kvm')
