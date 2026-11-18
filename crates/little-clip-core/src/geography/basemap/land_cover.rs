@@ -58,7 +58,7 @@ pub fn import_netcdf(
             "-co",
             "TILED=YES",
             "-co",
-            "COMPRESS=LZW",
+            "COMPRESS=NONE",
             "--config",
             "GDAL_CACHEMAX",
             "32",
