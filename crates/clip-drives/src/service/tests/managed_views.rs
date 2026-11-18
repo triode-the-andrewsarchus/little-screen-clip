@@ -117,8 +117,13 @@ fn missing_registered_headers_pause_indexing_and_recover_after_repair() {
     let fixture = TestDrives::new(0);
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
+    let uncertain = Arc::new(AtomicUsize::new(0));
+    let uncertain_observed = uncertain.clone();
     let publisher = publication::Publication::new(Arc::new(move |input, previous| {
         observed.fetch_add(1, Ordering::AcqRel);
+        if input.metadata_error.is_some() {
+            uncertain_observed.fetch_add(1, Ordering::AcqRel);
+        }
         publication::observe(input, previous)
     }));
     let service = fixture.start_with_publication(
@@ -134,15 +139,15 @@ fn missing_registered_headers_pause_indexing_and_recover_after_repair() {
         index: false,
     };
     finish(&service, request.clone());
+    assert!(calls.load(Ordering::Acquire) > 0);
     let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
     for registry in ["catalog-mount", "image-mount"] {
         let previous = published_policy(&service);
-        let before = calls.load(Ordering::Acquire);
         db.put(registry, "missing-header", &1_u64).unwrap();
         assert_policy_paused(&service, request.clone(), &previous, "no saved header");
         assert_eq!(
-            calls.load(Ordering::Acquire),
-            before,
+            uncertain.load(Ordering::Acquire),
+            0,
             "Known uncertain metadata must not reach the filesystem observer"
         );
         db.remove(registry, "missing-header").unwrap();
