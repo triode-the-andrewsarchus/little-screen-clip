@@ -17,11 +17,11 @@ pub fn compressed_name(name: &OsStr) -> std::ffi::OsString {
     name
 }
 
-/// Reads a bounded, identity-checked snapshot through an already guarded handle.
+/// Reads a bounded snapshot and its source identity through an already guarded handle.
 ///
 /// # Errors
 /// Returns errors for protected, replaced, oversized or unreadable files.
-pub fn read_stored(file: &std::fs::File) -> io::Result<Vec<u8>> {
+pub fn read_stored(file: &std::fs::File) -> io::Result<(Vec<u8>, crate::file_source::FileSource)> {
     if file.metadata()?.len() > MAX_STORED_BYTES as u64 {
         return Err(io::Error::other("Oversized terrain input"));
     }
@@ -29,7 +29,6 @@ pub fn read_stored(file: &std::fs::File) -> io::Result<Vec<u8>> {
         std::path::Path::new(&format!("/proc/self/fd/{}", file.as_raw_fd())),
         MAX_STORED_BYTES,
     )
-    .map(|(bytes, _)| bytes)
 }
 
 /// Decodes one bounded HGT payload, preserving every original sample byte.

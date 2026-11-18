@@ -2,7 +2,7 @@
 //! cargo run -p little-clip-core --example compress_terrain -- DIRECTORY [--limit N]
 use little_clip_core::{
     file_inventory::{Identity, identity},
-    file_source::{FileSource, rename_noreplace},
+    file_source::rename_noreplace,
     geography::basemap::{hgt, parse_hgt_name, storage::AssetDirectory},
 };
 use std::{
@@ -48,7 +48,7 @@ fn retire(directory: &AssetDirectory, name: &OsStr, expected: Identity) -> io::R
 
 fn verified_existing(directory: &AssetDirectory, name: &OsStr, raw: &[u8]) -> Option<fs::File> {
     let file = directory.open_file(name).ok()?;
-    let bytes = hgt::read_stored(&file).ok()?;
+    let (bytes, _) = hgt::read_stored(&file).ok()?;
     (hgt::decode(bytes, true).ok()?.as_slice() == raw).then_some(file)
 }
 
@@ -59,7 +59,7 @@ fn encoded_stage(
 ) -> io::Result<tempfile::NamedTempFile> {
     let mut staged = directory.stage()?;
     hgt::encode(&mut &raw[..], &mut staged, raw.len() as u64, cancel)?;
-    let bytes = hgt::read_stored(staged.as_file())?;
+    let (bytes, _) = hgt::read_stored(staged.as_file())?;
     if hgt::decode(bytes, true)?.as_slice() != raw {
         return Err(io::Error::other(
             "Compressed terrain verification failed; raw source retained",
@@ -74,9 +74,9 @@ fn convert(
     cancel: &AtomicBool,
 ) -> io::Result<(u64, u64)> {
     let file = directory.open_file(name)?;
-    let source = FileSource::capture_file(&file).map_err(io::Error::other)?;
+    let (bytes, source) = hgt::read_stored(&file)?;
     let expected = identity(&file.metadata()?);
-    let raw = hgt::decode(hgt::read_stored(&file)?, false)?;
+    let raw = hgt::decode(bytes, false)?;
     let compressed_name = hgt::compressed_name(name);
     // A previous run may have installed a verified frame before interruption.
     let existing = verified_existing(directory, &compressed_name, &raw);

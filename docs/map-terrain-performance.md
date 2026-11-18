@@ -42,6 +42,7 @@ Sizes below are decimal MB. These samples do not establish total worldwide size.
 | --- | ---: | ---: |
 | Raw HGT | 155.61 | 0 |
 | Original NASA ZIP | 76.54 | 44 |
+| Original HGT member only (without quality/water entries) | 73.37 | 44 |
 | Zstandard level 3 | 69.32 | 26 |
 | Zstandard level 9 | 59.75 | 24 |
 | OpenZL v0.3.0 `be-i16`, level 6 | 54.81 | 24 |
@@ -67,7 +68,8 @@ the server or claim physical-disk cold reads. Medians across 30 measurements:
 Compressed reads transfer less, but decompression makes total load time slightly
 higher than raw on this connection. Inventory and CPU/cache work were the larger
 problems. Zstandard 9 was selected for disk savings: about 62% versus raw and
-22% versus original ZIP on these samples, with faster decoding than ZIP.
+22% versus original ZIP on these samples (19% versus just its HGT members),
+with faster decoding than ZIP.
 OpenZL saved another 8% versus Zstandard while decoding at effectively the same
 speed; the existing bundled Zstandard dependency avoids adding a native runtime
 for that modest additional saving. Terrain remains lossless; no pyramid or
@@ -106,3 +108,21 @@ LITTLE_CLIP_GEOGRAPHY_ACCEPTANCE_DIR=/path/to/assets \
 
 Set `LITTLE_CLIP_GEOGRAPHY_PROFILE_CASE` to `omaha-close`, `omaha-medium`, or
 `rockies-close` to measure one case. This test does not flush system caches.
+
+## Architecture and verification
+
+Compared with `a310c504`, duplication fell from 7.26% to 7.25%, clone groups
+remained at 4,316, maximum complexity remained 274, and dependency-cycle count
+remained 143. New functions stay at or below complexity 15. Existing ordinary
+file snapshots, source identities, directory pins, atomic installation and the
+bundled Zstandard dependency are reused. Native and byte-backed height sampling
+share one interpolation implementation. The comparison tool still flags old
+clones in the modified basemap file and differently ordered cycle descriptions;
+those do not represent additional clone groups or dependency cycles.
+
+`cargo test --workspace -- --test-threads=1` passes. The default parallel run
+saturates shared image/audio studio test worker queues; its representative failed
+image-diff test passes in isolation and all 843 studio tests pass serially.
+The migration example additionally has focused interruption/resume and replaced
+source retirement tests, and was exercised with six round-trip-verified files
+on the actual CIFS mount before conversion of the installed dataset.

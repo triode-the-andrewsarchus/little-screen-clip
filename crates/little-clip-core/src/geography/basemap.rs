@@ -367,7 +367,7 @@ fn load_hgt_tile(directory: &AssetDirectory, name: &std::ffi::OsStr) -> Option<V
         }
         Err(_) => return None,
     };
-    let bytes = hgt::read_stored(&file).ok()?;
+    let (bytes, _) = hgt::read_stored(&file).ok()?;
     #[cfg(test)]
     let profile_read = profile_start.elapsed();
     #[cfg(test)]
@@ -3172,6 +3172,18 @@ mod tests {
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
     }
 
+    fn write_hgt_frame(directory: &AssetDirectory, name: &std::ffi::OsStr, raw: &[u8]) {
+        let mut frame = Vec::new();
+        hgt::encode(
+            &mut &raw[..],
+            &mut frame,
+            raw.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        directory.write(name, &frame).unwrap();
+    }
+
     #[test]
     fn invalid_terrain_is_not_reopened_per_pixel_and_reload_can_retry_it() {
         let root = tempfile::tempdir().unwrap();
@@ -3184,15 +3196,11 @@ mod tests {
         }
         assert_eq!(store.cache.lock().unwrap().failed.len(), 1);
         let raw = 123_i16.to_be_bytes().repeat(4);
-        let mut frame = Vec::new();
-        hgt::encode(
-            &mut raw.as_slice(),
-            &mut frame,
-            8,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        fs::write(name, &frame).unwrap();
+        write_hgt_frame(
+            &AssetDirectory::open(root.path()).unwrap(),
+            name.file_name().unwrap(),
+            &raw,
+        );
         assert_eq!(store.sample(0.5, 0.5), None);
         let mut reloaded = HgtStore::default();
         load_hgt_dir(root.path(), &mut reloaded);
@@ -3208,17 +3216,7 @@ mod tests {
         directory.write(name, &raw).unwrap();
         let mut store = HgtStore::default();
         load_hgt_dir(root.path(), &mut store);
-        let mut frame = Vec::new();
-        hgt::encode(
-            &mut raw.as_slice(),
-            &mut frame,
-            8,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        directory
-            .write(&hgt::compressed_name(name), &frame)
-            .unwrap();
+        write_hgt_frame(&directory, &hgt::compressed_name(name), &raw);
         fs::remove_file(root.path().join(name)).unwrap();
         assert_eq!(store.sample(0.5, 0.5), Some(123.));
         let mut reloaded = HgtStore::default();
