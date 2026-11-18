@@ -57,6 +57,11 @@ incremental = false
 [profile.dev.package."*"]
 opt-level = 3
 
+# Workspace crates are excluded from the wildcard above. Core's terrain/media
+# sampling loops need optimization in interactive development builds too.
+[profile.dev.package.little-clip-core]
+opt-level = 3
+
 # egui 0.27 requests physical startup dimensions before Wayland knows output scale.
 [patch.crates-io]
 plantuml-core = { path = "vendor/plantuml-core" }
