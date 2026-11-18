@@ -502,7 +502,14 @@ impl Drives {
         }
     }
     fn sync_menu(&mut self, ui: &mut Ui, drive: &Drive) {
-        if ui.button("Pair with a folder…").clicked() {
+        if ui
+            .add_enabled(
+                !drive.ambiguous && (drive.part_uuid.is_some() || drive.filesystem_uuid.is_some()),
+                egui::Button::new("Pair with a folder…"),
+            )
+            .on_hover_text("Automatic sync requires an unambiguous partition or filesystem UUID.")
+            .clicked()
+        {
             self.dialog = Some(Dialog::Path {
                 error: None,
                 title: "Keep this drive in sync with a folder".into(),
@@ -663,18 +670,20 @@ impl Drives {
             ui.close_menu();
         }
         self.image_menu(ui, drive);
+        let saved_directory = self.status.backup_directory.as_ref().and_then(|root| {
+            drive
+                .backup_bucket()
+                .ok()
+                .map(|bucket| bucket.map_or(root.clone(), |key| root.join(key)))
+        });
         if ui
             .add_enabled(
-                self.status.backup_directory.is_some(),
+                saved_directory.is_some(),
                 egui::Button::new("Browse saved backups…"),
             )
             .clicked()
         {
-            *open = self
-                .status
-                .backup_directory
-                .clone()
-                .map(|p| drive.part_uuid.as_ref().map_or(p.clone(), |id| p.join(id)));
+            *open = saved_directory;
             ui.close_menu();
         }
         let images = self

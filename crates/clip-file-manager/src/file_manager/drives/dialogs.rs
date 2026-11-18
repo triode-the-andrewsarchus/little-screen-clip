@@ -51,7 +51,7 @@ impl Dialog {
                 action,
                 error,
                 ..
-            } => path_dialog(ui, current, text, action, error, requests),
+            } => path_dialog(ui, current, status, text, action, error, requests),
             Self::Discard(session) => {
                 ui.label("This removes the RAM copy, including any edits not yet written to the drive. Save it elsewhere first if you need those edits.");
                 let confirmed = ui.button("Discard RAM copy").clicked();
@@ -143,12 +143,18 @@ impl PathAction {
 fn path_dialog(
     ui: &mut Ui,
     current: &std::path::Path,
+    status: &DriveStatus,
     text: &mut String,
     action: &PathAction,
     error: &mut Option<String>,
     requests: &mut Vec<DriveRequest>,
 ) -> bool {
     ui.label(action.description());
+    if let PathAction::Pair { drive, .. } | PathAction::Backup { drive, .. } = action
+        && let Some(drive) = status.drives.iter().find(|observed| &observed.id == drive)
+    {
+        fallback_identity(ui, drive);
+    }
     ui.text_edit_singleline(text);
     if ui.button("Use current folder").clicked() {
         *text = display_path(current);
@@ -168,6 +174,18 @@ fn path_dialog(
     }
     true
 }
+
+fn fallback_identity(ui: &mut Ui, drive: &Drive) {
+    if drive.part_uuid.is_some() {
+        return;
+    }
+    if let Some(uuid) = &drive.filesystem_uuid {
+        ui.label(format!("No partition UUID. Using filesystem UUID: {uuid}"));
+        ui.small(format!("Saved identity: {}", drive.id));
+    } else {
+        ui.label("No partition or filesystem UUID. Automatic sync is unavailable; each backup uses a separate unidentified folder.");
+    }
+}
 fn backup_review(
     ui: &mut Ui,
     preview: &BackupPreview,
@@ -182,10 +200,26 @@ fn backup_review(
         display_path(&preview.drive.device)
     ));
     ui.label(format!("Partition size: {} bytes", preview.drive.capacity));
+    fallback_identity(ui, &preview.drive);
     ui.label(format!(
         "Destination: {}",
         display_path(&preview.destination)
     ));
+    let bucket = preview.drive.backup_bucket();
+    match &bucket {
+        Ok(Some(key)) => {
+            ui.label(format!(
+                "Backup folder: {}",
+                display_path(&preview.destination.join(key))
+            ));
+        }
+        Ok(None) => {
+            ui.small("Backup folder: a new unidentified folder for this backup.");
+        }
+        Err(error) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, *error);
+        }
+    }
     ui.label(format!(
         "Available: {} bytes",
         preview.space.available_bytes
@@ -227,7 +261,9 @@ fn backup_review(
         "Update the backup directory setting for future backups",
     );
     ui.small("This review expires after five minutes. Changes to the selected partition or directory require a new review.");
-    let confirmed = ui.button("Start backup").clicked();
+    let confirmed = ui
+        .add_enabled(bucket.is_ok(), egui::Button::new("Start backup"))
+        .clicked();
     if confirmed {
         requests.push(if preview.kind == BackupKind::Files && *read_only {
             DriveRequest::StartReadOnlyBackup {

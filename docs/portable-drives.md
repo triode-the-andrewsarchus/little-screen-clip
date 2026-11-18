@@ -123,7 +123,13 @@ then `clipctl drives start-backup TOKEN` with optional `--restore-mounted` and
 `--remember-destination`. `discard-backup-review TOKEN` releases an unused review.
 The direct `backup` command remains available with execution-time space checks.
 
-Partitions without a PARTUUID use an explicitly disclosed `fs-FILESYSTEM_UUID` bucket. Unidentified media receive a fresh `unidentified-…` bucket for each explicit backup rather than sharing an invented identity.
+Partitions without a PARTUUID use a `fs-FILESYSTEM_UUID` bucket. Pairing and
+backup review show the filesystem UUID and the locally saved drive identity;
+backup review also shows the exact version-parent folder. **Browse saved backups**
+opens that same bucket. The backend and file manager share its validated naming
+rule, preserving existing directory names. Neither UUID is invented. If both are
+unavailable, automatic sync cannot be enrolled; each explicit backup receives a
+fresh `unidentified-…` folder.
 
 Each completed version has a checksummed SQLite manifest retaining captured paths, hashes, source metadata and filesystem identity. Publication updates the current-version reference only after the version and manifest are durable. A prepared publication interrupted by a reference or registry failure is reconciled on restart or before the next backup; unresolved recovery issues appear in Drive jobs.
 

@@ -7,7 +7,7 @@ import socket
 import sqlite3
 import csv
 import io
-from PIL import Image
+from PIL import Image, ImageOps
 
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_search_controls_acceptance import type_text
@@ -66,7 +66,7 @@ def click_word(session, shot, word, *, tree=False):
                 break
     if position is None:
         # Rounded small buttons can disappear in full-window segmentation.
-        for bounds in [(105, 270, 225, 325), (105, 320, 240, 400), (105, 390, 300, 670), (820, 505, 888, 520), (1030, 440, 1184, 526)]:
+        for bounds in [(114, 332, 193, 359), (105, 270, 225, 325), (105, 320, 240, 400), (105, 390, 300, 670), (820, 505, 888, 520), (1030, 440, 1184, 526)]:
             crop = session.output / 'drive-button.png'
             with Image.open(session.output / (shot + '.png')) as screen:
                 region = screen.crop(bounds)
@@ -101,6 +101,22 @@ def caption(session, shot, bounds):
         interior.resize((interior.width * 6, interior.height * 6)).save(label)
     rendered = private.run_checked(['tesseract', str(label), 'stdout', '--psm', '7'], env=session.env)
     return ''.join(character for character in rendered.lower() if character.isalpha())
+
+
+
+def assert_address(session, shot, expected):
+    # Read only the address field: a filename can also appear in a child preview.
+    target = session.output / (shot + '-address.png')
+    with Image.open(session.output / (shot + '.png')) as screen:
+        crop = screen.crop((230, 95, 959, 140)).convert('L')
+        if crop.getpixel((5, 5)) < 128:
+            crop = ImageOps.invert(crop)
+        crop = ImageOps.expand(crop, border=15, fill=255)
+        crop.resize((crop.width * 3, crop.height * 3)).save(target)
+    observed = private.run_checked(['tesseract', str(target), 'stdout', '--psm', '7'], env=session.env)
+    actual = ''.join(observed.split()).strip('|[]')
+    assert actual == ''.join(str(expected).split()), (shot, actual, expected)
+    return actual
 
 
 def click_status_action(session, shot, label):
@@ -178,7 +194,8 @@ def backup_review(session, backups):
     session.click(x + 70, y - 27)
     type_text(session, str(backups))
     click_word(session, 'backup-retry-directory', 'Continue')
-    session.observe('backup-review-start', ['Review partition backup', 'Available', 'Start backup'])
+    identity = ['No partition UUID', 'filesystem UUID', 'Saved identity', 'Backup folder'] if status(env)['drives'][0]['part_uuid'] is None else []
+    session.observe('backup-review-start', ['Review partition backup', 'Available', 'Start backup'] + identity)
     click_word(session, 'backup-review-start', 'Start')
     wait_for(lambda: bool(status(env)['backups']), 'completed file backup through lazy directory prompt')
     wait_for(lambda: any(job['title'] == 'Back up files' and job['finished'] is not None and job['state'] == 'complete' for job in status(env)['operations']), 'terminal file backup completion')
@@ -201,6 +218,57 @@ def backup_review(session, backups):
     assert len(status(env)['backups']) == 1
 
     return saved
+
+
+
+def exercise_fallback_identity(session, root, restart_fixture):
+    env = session.env
+    portable, local, backups = root / 'portable', root / 'local', root / 'backups'
+    session.observe('fallback-initial', ['Portable test drive', 'portable', 'local'])
+    observed = status(env)
+    assert observed['drives'][0]['part_uuid'] is None
+    assert observed['drives'][0]['id'] == 'fs:fixture'
+    assert not observed['pairs'] and not observed['backups']
+    assert observed['backup_directory'] is None
+    session.address(local)
+    drive_menu(session, 'fallback-sync-menu')
+    click_word(session, 'fallback-sync-menu', 'Keep', tree=True)
+    session.observe('fallback-sync-actions', ['Pair with a folder'], preserve_pointer=True)
+    click_word(session, 'fallback-sync-actions', 'Pair')
+    session.observe('fallback-sync-dialog', ['No partition UUID', 'filesystem UUID', 'Saved identity', 'Both folders', 'Use current folder'])
+    click_word(session, 'fallback-sync-dialog', 'Use')
+    click_word(session, 'fallback-sync-dialog', 'Continue')
+    wait_for(lambda: (portable / 'local-only.txt').exists() and (local / 'readme.txt').exists(), 'explicit fallback enrollment union')
+    pair = status(env)['pairs'][0]
+    assert pair['drive'] == 'fs:fixture'
+    dismiss_completion_notice(session, 'fallback-sync-completion', 'Enroll folder sync')
+    saved = backup_review(session, backups)
+    bucket = backups / 'fs-fixture'
+    assert Path(saved['path']).parent == bucket
+    assert not (backups / 'portable-test').exists()
+    drive_menu(session, 'fallback-browse-menu')
+    click_word(session, 'fallback-browse-menu', 'Back', tree=True)
+    session.observe('fallback-browse-actions', ['Browse saved'], preserve_pointer=True)
+    click_word(session, 'fallback-browse-actions', 'Browse')
+    session.observe('fallback-backup-folder', ['current-files.json'])
+    assert_address(session, 'fallback-backup-folder', bucket)
+    (root / 'portable').rename(root / 'removed-portable')
+    wait_for(lambda: not status(env)['drives'], 'fallback removal')
+    (local / 'offline-fallback.txt').write_text('saved by filesystem identity')
+    (root / 'removed-portable').rename(root / 'portable')
+    wait_for(lambda: (portable / 'offline-fallback.txt').exists(), 'fallback reconnect without re-enrollment')
+    restart_fixture()
+    restored = status(env)
+    assert restored['pairs'][0]['id'] == pair['id']
+    assert restored['pairs'][0]['drive'] == pair['drive']
+    assert restored['backup_directory'] == str(backups)
+    completed(env, request(env, {'Backup': {'drive': pair['drive'], 'kind': 'Files', 'restore_mounted': False}}))
+    versions = status(env)['backups']
+    assert len(versions) == 2
+    assert all(Path(version['path']).parent == bucket and version['drive'] == pair['drive'] for version in versions)
+    assert (Path(saved['path']) / 'readme.txt').read_text() == 'original portable contents\n'
+    session.observe('fallback-after-restart', ['current-files.json', 'Portable test drive'])
+    assert_address(session, 'fallback-after-restart', bucket)
 
 
 def exercise_backup_review(session, root):
@@ -724,6 +792,7 @@ def main():
     def configure(parser):
         scenarios = parser.add_mutually_exclusive_group()
         scenarios.add_argument('--backup-review-only', action='store_true')
+        scenarios.add_argument('--fallback-identity-only', action='store_true')
         scenarios.add_argument('--catalog-boundary-only', action='store_true')
         scenarios.add_argument('--catalog-coverage-only', action='store_true')
         scenarios.add_argument('--catalog-types-only', action='store_true')
@@ -747,15 +816,31 @@ def main():
             listener.bind(str(root / 'portable/socket'))
         (root / 'portable/root-link').symlink_to('.')
     (root / 'local/local-only.txt').write_text('Union merge keeps this file.\n')
+    fixture = {}
     def prepare(env, children):
         state = output / 'drive-state'
         env['LITTLE_CLIP_DRIVE_STATE_DIR'] = str(state)
         env['LITTLE_CLIP_DRIVE_MOUNT_HELPER'] = str(repository / 'target/debug/clip-drive-mount')
-        children.start('drive-fixture', [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')], env=env, cwd=output, log_path=output / 'drive-fixture.log')
+        arguments = [str(repository / 'target/debug/examples/drive_fixture'), str(state), str(root / 'portable')]
+        if args.fallback_identity_only:
+            arguments.append('--filesystem-identity')
+        fixture['process'] = children.start('drive-fixture', arguments, env=env, cwd=output, log_path=output / 'drive-fixture.log')
+        def restart():
+            old = fixture['process']
+            old.terminate()
+            assert old.wait(timeout=20) == 0
+            endpoint = Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock'
+            endpoint.unlink()
+            fixture['process'] = children.start('drive-fixture', arguments, env=env, cwd=output, log_path=output / 'drive-fixture-restarted.log')
+            wait_for(endpoint.exists, 'restarted owned drive fixture IPC')
+        fixture['restart'] = restart
         wait_for(lambda: (Path(env['XDG_RUNTIME_DIR']) / 'little-screen-clip.sock').exists(), 'owned drive fixture IPC')
         if args.policy_editor_only:
             seed_old_policy_rules(env)
-    if args.storage_only:
+    if args.fallback_identity_only:
+        scenario = lambda session, root: exercise_fallback_identity(session, root, fixture['restart'])
+        scope = 'Filesystem UUID fallback disclosure, explicit pairing, lazy backup, exact backup browsing and persistent restart identity'
+    elif args.storage_only:
         scenario, scope = exercise_storage, 'Explicit Jobs measurement separates sync baselines from optional catalogs without enabling indexing'
     elif args.catalog_limits_only:
         scenario, scope = exercise_catalog_limits, 'Per-run catalog review, cancellation, configured-limit reset and explicit larger capture without changing defaults'

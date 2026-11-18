@@ -7,7 +7,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | Plan item | Audit status | Current evidence / remaining work |
 | --- | --- | --- |
 | 1.1 | Complete | Numeric parent/partition capacities, stable filesystem/PARTUUID evidence, read-only state and mount routing are covered by discovery tests and native authority fixtures. The new actual GPT reconnect fixture preserves enrollment across changed /dev/loopN partition paths, disk sequences and mount directories on FAT32/exFAT/NTFS; parent capacity matches the whole backing image while partition capacity matches the selected partition. See the native reconnect checkpoint. |
-| 1.2 | Partial | Actual duplicate GPT partition IDs now suspend automatic writes, retain queued local edits and resume after the clone is detached on FAT32/exFAT/NTFS. Explicit sync refuses the ambiguity and the clone image hash stays unchanged. Fallback buckets exist; explicit fallback disclosure/enrollment still needs end-to-end checks. |
+| 1.2 | Complete | Actual duplicate GPT partition IDs suspend automatic writes, retain queued local edits and resume after the clone is detached on FAT32/exFAT/NTFS; explicit sync refuses and the clone image hash stays unchanged. Missing PARTUUID now has explicit filesystem-UUID disclosure and enrollment in Pair/backup review, stable local records and fs-UUID buckets across restart. Native whole-volume sources and dark/light IPC-driven UI checks pass. Neither-UUID enrollment refuses without creating its target. See the filesystem fallback checkpoint. |
 | 1.3 | Partial | Reloadable DriveConfig exists; explicit backup selection now uses the existing setting-preserving writer with guarded atomic replacement, alongside operational SQLite state. Lazy selection, restart, raw paths, comments, symlinks, permissions and concurrent/replaced-file refusal pass targeted tests. The full quota/reload acceptance matrix remains. |
 | 1.4 | Partial | SQLite operations/baselines/conflicts and durable backup manifests now exist; ready-publication recovery is fault-tested. RAM preflight/allocation journals and atomic session/pair enrollment now recover unpublished setup without deleting published data. Copying-stage/per-item completion and coverage accounting remain. |
 | 1.5 | Partial | Bounded admission and retained operations now bind client UUIDs and serialized request fingerprints atomically. Concurrent retries, changed-parameter refusal, queue/transaction failure, completed/restarted results and orphaned-owner recovery are tested; per-item interrupted-operation reconciliation remains. Full reconciliation, RAM data population and RAM export now use four retained worker slots, coalesced per-pair events and conflicting-drive/destination deferral. A 100 GB sparse initial sync and a separate 1 GB RAM population both leave another pair responsive. RAM metadata preflight, quota admission, formatting and initial mounting now use one retained preparation worker; image preflush and unmount authorization now use a retained partition worker. Policy observation now uses one retained worker with latest-input coalescing, bounded rule waiters, fail-closed publication and actual-exit shutdown ownership. Controlled and real stopped-FUSE tests keep configuration and another pair responsive. Routine discovery/RAM-availability refreshes now use a retained coalescing worker; stale settings results are rejected, policy obtains fresh mount-bound inventory and shutdown drains actual probe lifetimes. Missing Save-RAM scheduling destinations are planned without creating them. Four retained read-only scheduling probes now move root/selector observations off the coordinator, preserve slots through cancellation and drain before shutdown; saturation, real stopped-FUSE and simultaneous RAM-setup delivery checks pass. Enrolled reconciliation root preparation now shares the four retained sync slots, compares current enrollment/RAM/managed inputs before dispatch, and repeats managed-path checks in the write worker; held and real stopped-FUSE cases pass. Explicit RAM recovery/availability and export-destination preparation now share the retained RAM worker, preserving helpers/claims through cancellation and shutdown; held recovery and stopped export targets leave other pairs live. Watch registration/traversal now use four retained slots with per-root admission and coordinator-only event routing; stopped-source, independent-registration and actual-exit retirement checks pass. Configuration reload destination preparation now has an independent retained worker and transactional metadata/quota publication; stopped-target, cancellation, stale-input and legacy-root checks pass. Explicit preference destination/file saves and reviewed-backup continuations now retain worker completion, claims and saved-effect receipts; real stopped-config-filesystem cancellation/shutdown and superseded-reload fixtures pass. File-backup/catalog root preparation now shares scheduling workers, retains prepared roots and rejects stale settings/root inputs before copying; host discovery-thread and five real stopped-FUSE scenarios pass. Eject/image/read-only root and sync-plan preparation now retain one existing partition-worker slot, preserve original scheduled drive facts and compare current settings/enrollment/RAM metadata before flushing; six held and nine stopped-FUSE scenarios pass. Automatic/pre-unmount iteration now includes legacy pairs beyond status pagination. Initial discovery and RAM allocation/view startup recovery now reuse retained workers, with held inventory/enrollment/fsck, orphaned-enrollment, uncertain optional-policy and actual-exit shutdown checks. Catalog startup cleanup and mount/unmount now use a retained control worker, preserving actual helper ownership, atomic publication/retirement and failed boundaries; held commands, real stopped-FUSE, orphan startup and beyond-page recovery pass. Image mount/unmount now shares the retained backup pool, with local effect journals that pause optional indexing before an unknown UDisks mount location is admitted. Held-authority, cancellation, receipt-fault and provable restart cases pass; measurement admission, retention and the broader root/loop-lifetime responsiveness matrices remain. Safety validation of configured ordinary roots can still wait on those filesystems; independent-sync checks here use one-shot reviewed destinations. Large-export responsiveness and remaining mount-control scheduling need further evidence. Normal daemon signal handling now closes admission under the admission lock, cooperatively cancels queued/active work and joins the owner from a blocking context. Accepted-record completion and singleton release are tested. |
@@ -50,7 +50,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.2 | Partial | Daemon/reconnect/restart fixtures pass. Real filesystem event loss now recovers union, conflicts, default restoration and later nested edits with no file-manager process. Mount-inventory loss and broader interruption state tests remain. |
 | 7.3 | Partial | Commit `6b876b69` supplies a disposable KVM guest. Real FAT32/exFAT/NTFS format/write/unmount/remount probes pass without host mount privileges or attached media; failed-command and timeout probes are rejected. Eight application tests per filesystem now pass: union/conflicts, deletion policy, versioned file backups/manifests/timestamps, catalog exclusion versus full backup/sync inclusion, case/name handling, and applicable NTFS-stream/FAT32-size checks. The filesystem matrix uses whole-volume loop files with filesystem-UUID fallback; partitioned-device image/flush lifecycles also pass on FAT32/exFAT/NTFS. Wider read-only/full-media and mount-option matrices remain. |
 | 7.4 | Partial | Real FUSE, Btrfs, authorized partition-image/loop-provider and temporary read-only file-collection tests pass. Provider concurrency, interrupted-device and capability-failure matrices remain. |
-| 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Resource, broader coverage and interrupted-recovery UI flows remain. |
+| 7.5 | Partial | Dark/light private acceptance now includes RAM pending counts, drive confirmation, offline export and reconnect, alongside catalog/policy/backup review flows. Filesystem-UUID fallback pairing, lazy backup review, exact bucket browsing, reconnect and service restart now also pass in both appearances. Resource, broader coverage and interrupted-recovery UI flows remain. |
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
@@ -5164,3 +5164,89 @@ This closes the specific changed-device-path requirement in 1.1 and strengthens
 clone and reconnect evidence in 1.2/2.2/2.7/7.2. It does not prove physical removal
 during accepted writes, fallback enrollment disclosure, failed inventory probes,
 or every remaining interruption requirement. Those items remain open.
+
+## Filesystem fallback checkpoint
+
+`Drive::backup_bucket` now owns the existing stable naming rule shared by the
+backend and file manager: an available PARTUUID takes precedence, otherwise the
+name is `fs-{filesystem UUID}`. It validates a single ASCII directory component
+without accessing a filesystem. Empty, absolute, traversal, separator, NUL and
+non-ASCII identifiers are rejected; an invalid selected PARTUUID cannot redirect
+creation outside the destination. Neither UUID returns no stable key, retaining
+the existing per-explicit-backup unidentified-directory behavior. On-disk bucket
+names, protocol representation, registry and manifest versions remain unchanged.
+The shared naming change is committed as `f48f1130`.
+
+The file manager previously browsed the overall backup root for filesystem-UUID
+media even though the backend wrote to its `fs-UUID` child. Browse now uses the
+shared rule. Pairing and backup review disclose a missing partition UUID, the
+filesystem UUID and the persistent drive identity; review shows the exact backup
+folder. Explicit Continue/Start remains the enrollment/backup action, with no
+new confirmation step or startup backup-directory prompt. Pairing is disabled
+for ambiguous identities or when both UUIDs are missing; the backend independently
+refuses the latter before creating a target directory or pair record.
+
+The native fixture uses actual whole-volume FAT32, exFAT and NTFS3 loops with no
+partition table. Its owned inventory seam supplies their observed UUID/mount
+facts to the normal headless service. It verifies that discovery alone starts
+neither enrollment nor backup; explicit enrollment performs union, and explicit
+backup-directory selection is remembered. After actual service shutdown/restart,
+the same pair and evidence remain, both backup versions share the same `fs-UUID`
+parent, old bytes remain intact and checksummed manifests keep PARTUUID absent.
+Source directory entries contain only the intended user files, with no local
+baseline, manifest or repository metadata added to the media. All three cases
+pass without a timeout in `/tmp/portable-drive-fallback-native-v1/report.json`.
+This is filesystem/identity persistence evidence, not a new physical-hotplug claim;
+the preceding native GPT reconnect/clone checkpoint supplies that distinct gate.
+
+The core drive subset passes 15 tests (one unrelated opt-in case ignored) in
+`/tmp/portable-drive-fallback-core-v1.log`. Files passes 15 drive tests in
+`/tmp/portable-drive-fallback-files-tests-v1.log`. The backend passes 269 tests,
+with 118 opt-in cases ignored, in
+`/tmp/portable-drive-fallback-backend-final.log`. Core/backend/Files/CLI/daemon
+all-target Clippy, including `clip-drives/test-support`, passes in
+`/tmp/portable-drive-fallback-clippy-v1.log`. Runtime builds pass in
+`/tmp/portable-drive-fallback-runtime-build-v1.log`. The final fixture startup
+refactor separately builds and passes Clippy in
+`/tmp/portable-drive-fallback-fixture-{build,clippy}-v2.log`.
+Core documentation builds with warnings denied in
+`/tmp/portable-drive-fallback-doc-v1.log`; the rendered API contract is checked.
+
+The test-support fixture's optional `--filesystem-identity` mode supplies an
+absent PARTUUID without changing production discovery. Both private dark/light
+Files scenarios pass with 31 captured observations each in
+`/tmp/portable-drive-fallback-ui-{dark,light}-v4/report.json`. They explicitly
+pair through the GUI, preserve the initial union, cancel a first lazy backup
+review without setting its preference, then create the file backup. The review
+shows the filesystem identity and `fs-fixture` folder. Image review also remains
+readable and cancelable. Browse enters the actual saved bucket. Source removal
+and return preserve the pairing, and a real fixture-service restart preserves
+its pair ID, selected backup directory and subsequent version parent.
+
+A filename alone could also be visible in a child folder preview. The final
+address-field oracle therefore reads only the rendered address bar. It is applied
+to both actual Browse and post-restart captures in both appearances, asserting
+exactly `.../fixture/backups/fs-fixture`; results are in
+`/tmp/portable-drive-fallback-address-proof.json`. These exact address assertions
+are now part of the scenario. Pair, review and Browse captures are also visually
+inspected in both appearances, with all actions visible. The initial UI attempts
+failed for missing OCR environment configuration, a small-button lookup and a
+wrapped-label OCR expectation respectively; `...-v1`, `...-v2` and `...-v3` are
+not counted as passing scenarios. The accepted runs use the existing local
+`/tmp/little-clip-tessdata` through `TESSDATA_PREFIX` and verify the rendered button
+and menu text rather than guessing an unobserved control location.
+
+The local architecture comparison against `pre-drive-fallback-identity` adds
+350 NLOC, ten net functions and 40 aggregate CCN. Average/max CCN remain 3.50/274;
+clone groups and cycles remain 4,321 and 144. Duplication changes from 6.93% to
+6.92%. There is no new production hotspot. Separating fixture startup arguments
+from its IPC loop reduces that existing example main from CCN 24 to 23 instead
+of increasing it to 27. The tool still labels the aggregate feature/test growth
+REGRESSION and lists unchanged clone/cycle regions in touched files. This growth
+covers the shared identity rule, disclosure, native persistence and UI navigation
+oracles. Report: `.fitness/portable-drives-fallback-identity-local.json`.
+
+This closes the explicit fallback-disclosure/enrollment requirement in 1.2.
+Other incomplete identity, interruption, resource, provider and UI rows retain
+their original requirements. Final workspace and whole-branch architecture gates
+remain open.

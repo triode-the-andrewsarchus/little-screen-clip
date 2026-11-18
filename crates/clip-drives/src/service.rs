@@ -113,6 +113,22 @@ impl Service {
     /// Starts an owned directory fixture without discovering real block devices.
     #[cfg(feature = "test-support")]
     pub fn start_fixture(config: DriveConfig, state: PathBuf, source: PathBuf) -> Result<Self> {
+        Self::start_fixture_with_part_uuid(config, state, source, Some("portable-test".into()))
+    }
+    /// Starts an owned fixture with an explicit partition-UUID availability.
+    ///
+    /// A missing partition UUID uses the fixture's filesystem UUID. This is
+    /// available only with `test-support` and never discovers block devices.
+    ///
+    /// # Errors
+    /// Returns fixture-root validation or coordinator startup failures.
+    #[cfg(feature = "test-support")]
+    pub fn start_fixture_with_part_uuid(
+        config: DriveConfig,
+        state: PathBuf,
+        source: PathBuf,
+        part_uuid: Option<String>,
+    ) -> Result<Self> {
         let source = Root::open(&source)?.path;
         Self::start_with_inventory(
             config,
@@ -122,11 +138,13 @@ impl Service {
                     return Ok(Vec::new());
                 }
                 Ok(vec![Drive {
-                    id: "part:portable-test".into(),
+                    id: part_uuid
+                        .as_ref()
+                        .map_or_else(|| "fs:fixture".into(), |uuid| format!("part:{uuid}")),
                     label: "Portable test drive".into(),
                     device: "/dev/little-clip-owned-fixture".into(),
                     mount: Some(source.clone()),
-                    part_uuid: Some("portable-test".into()),
+                    part_uuid: part_uuid.clone(),
                     filesystem_uuid: Some("fixture".into()),
                     filesystem: "vfat".into(),
                     capacity: 2 * 1024 * 1024,
@@ -1064,6 +1082,7 @@ mod tests {
     mod catalog_workers;
     mod configuration;
     mod event_loss;
+    mod fallback;
     mod guest_ram;
     mod image_controls;
     mod image_reboot;

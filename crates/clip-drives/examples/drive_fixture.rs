@@ -9,21 +9,7 @@ use std::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if args.len() != 2 {
-        return Err("Usage: drive_fixture STATE_DIRECTORY SOURCE_DIRECTORY".into());
-    }
-    let state = PathBuf::from(&args[0]);
-    let source = PathBuf::from(&args[1]);
-    let service = clip_drives::Service::start_fixture(
-        clip_drives::DriveConfig {
-            sync_interval_seconds: 1,
-            ram_min_available: 0,
-            ..Default::default()
-        },
-        state,
-        source,
-    )?;
+    let service = start_fixture()?;
     let socket = little_clip_core::ipc::socket_path();
     let listener = tokio::net::UnixListener::bind(&socket)?;
     let jobs = little_clip_core::BackgroundJobs::new(4, 16);
@@ -76,4 +62,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(listener);
     tokio::task::spawn_blocking(move || service.shutdown()).await??;
     Ok(())
+}
+
+fn start_fixture() -> Result<clip_drives::Service, Box<dyn std::error::Error>> {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let filesystem_identity = args
+        .get(2)
+        .is_some_and(|value| value == "--filesystem-identity");
+    if args.len() != 2 && !(args.len() == 3 && filesystem_identity) {
+        return Err(
+            "Usage: drive_fixture STATE_DIRECTORY SOURCE_DIRECTORY [--filesystem-identity]".into(),
+        );
+    }
+    let state = PathBuf::from(&args[0]);
+    let source = PathBuf::from(&args[1]);
+    Ok(clip_drives::Service::start_fixture_with_part_uuid(
+        clip_drives::DriveConfig {
+            sync_interval_seconds: 1,
+            ram_min_available: 0,
+            ..Default::default()
+        },
+        state,
+        source,
+        (!filesystem_identity).then(|| "portable-test".into()),
+    )?)
 }
