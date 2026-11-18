@@ -35,13 +35,24 @@ impl ImageMount {
         Ok(observation)
     }
     pub(crate) fn load(db: &Store, backup: &Backup) -> Result<Option<Self>> {
-        Ok(db.get::<Self>("image-mount", &backup.id)?.filter(|mount| {
-            mount.backup == backup.id
-                && mount.image == backup.path
-                && Some(&mount.path) == backup.mount.as_ref()
-                && Some(&mount.object) == backup.loop_object.as_ref()
-                && backup.kind == BackupKind::Image
-        }))
+        Ok(db
+            .get::<Self>("image-mount", &backup.id)?
+            .filter(|mount| mount.matches_backup(backup)))
+    }
+    pub(super) fn matches_backup(&self, backup: &Backup) -> bool {
+        self.matches_image(backup) && Some(&self.path) == backup.mount.as_ref()
+    }
+    fn matches_image(&self, backup: &Backup) -> bool {
+        self.backup == backup.id
+            && self.image == backup.path
+            && Some(&self.object) == backup.loop_object.as_ref()
+            && backup.kind == BackupKind::Image
+    }
+    pub(super) fn matches_retirement(&self, backup: &Backup, origin: &ImageOrigin) -> bool {
+        self.matches_image(backup)
+            && backup.mount.as_ref().is_none_or(|path| path == &self.path)
+            && self.lifetime.boot == origin.boot
+            && self.lifetime.namespace == origin.namespace
     }
     pub(crate) fn validate_view(db: &Store, backup: &Backup) -> Result<()> {
         let observed = Self::load(db, backup)?

@@ -20,6 +20,7 @@ fn attachment_status_rejects_other_generations_and_backing_layouts() {
     let image = tempfile::tempfile().unwrap();
     let metadata = image.metadata().unwrap();
     let attachment = Attachment {
+        host: None,
         backup: "owned".into(),
         image: temp.path().join("owned.img"),
         identity: StorageIdentity::pinned(&image).unwrap(),

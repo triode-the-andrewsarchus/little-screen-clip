@@ -1066,6 +1066,7 @@ mod tests {
     mod event_loss;
     mod guest_ram;
     mod image_controls;
+    mod image_reboot;
     mod maintenance;
     mod managed_views;
     mod native_images;

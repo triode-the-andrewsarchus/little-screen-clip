@@ -213,48 +213,50 @@ fn image_control_never_starts_when_exclusion_installation_fails() {
 
 #[test]
 fn image_control_rechecks_its_saved_input_before_calling_authority() {
-    let fixture = TestDrives::new(4096);
-    let image = fixture.saved_image();
-    let bytes = fs::read(&image.path).unwrap();
-    let (authority, calls) = counted_image_authority(&fixture);
-    let service = fixture.start_authority(None, authority);
-    let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
-    // Replace the addressed artifact in the same transaction that admits its
-    // journal, deterministically preceding the worker's first native action.
-    db.0.execute_batch(
-        "CREATE TRIGGER change_image_input AFTER INSERT ON entities
+    for event in ["INSERT", "UPDATE"] {
+        let fixture = TestDrives::new(4096);
+        let image = fixture.saved_image();
+        let bytes = fs::read(&image.path).unwrap();
+        let (authority, calls) = counted_image_authority(&fixture);
+        let service = fixture.start_authority(None, authority);
+        let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
+        // The INSERT precedes initial worker admission; the UPDATE occurs when
+        // host-origin binding completes, after the first input check.
+        db.0.execute_batch(&format!(
+            "CREATE TRIGGER change_image_input AFTER {event} ON entities
          WHEN NEW.kind='image-control'
          BEGIN UPDATE entities SET json=json_set(json,'$.kind','Files')
          WHERE kind='backup' AND id=NEW.id; END;",
-    )
-    .unwrap();
-    let result = completed(
-        &service,
-        DriveRequest::MountImage {
-            backup: image.id.clone(),
-        },
-    );
-    assert_eq!(result.state, "failed");
-    assert!(
-        result
-            .message
-            .contains("input changed before native admission"),
-        "{}",
-        result.message
-    );
-    assert_eq!(calls.load(Ordering::Acquire), 0);
-    assert!(
-        db.get::<serde_json::Value>(KIND, &image.id)
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        published_policy(&service)
-            .excluded
-            .contains(&PathBuf::from("/"))
-    );
-    assert_eq!(fs::read(&image.path).unwrap(), bytes);
-    service.shutdown().unwrap();
+        ))
+        .unwrap();
+        let result = completed(
+            &service,
+            DriveRequest::MountImage {
+                backup: image.id.clone(),
+            },
+        );
+        assert_eq!(result.state, "failed");
+        assert!(
+            result
+                .message
+                .contains("input changed before native admission"),
+            "{}",
+            result.message
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        assert!(
+            db.get::<serde_json::Value>(KIND, &image.id)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            published_policy(&service)
+                .excluded
+                .contains(&PathBuf::from("/"))
+        );
+        assert_eq!(fs::read(&image.path).unwrap(), bytes);
+        service.shutdown().unwrap();
+    }
 }
 
 #[test]
@@ -800,20 +802,7 @@ impl<'a> NativeImageFault<'a> {
             return fault;
         }
         let mounted: DriveBackup = db.get("backup", &image.id).unwrap().unwrap();
-        let name = mounted
-            .loop_object
-            .as_ref()
-            .unwrap()
-            .rsplit('/')
-            .next()
-            .unwrap();
-        assert!(
-            name.strip_prefix("loop")
-                .unwrap()
-                .bytes()
-                .all(|byte| byte.is_ascii_digit())
-        );
-        let device = PathBuf::from("/dev").join(name);
+        let device = native_images::loop_device(mounted.loop_object.as_deref().unwrap());
         if kind == "legacy" {
             db.remove("image-loop", &image.id).unwrap();
         } else if kind == "raw-reader" {
@@ -891,4 +880,54 @@ impl<'a> NativeImageFault<'a> {
             .unwrap();
         assert!(detached.status.success(), "{}", detached.stderr_lossy());
     }
+}
+
+#[test]
+fn an_explicit_retry_keeps_an_old_unidentified_origin_for_recovery() {
+    let fixture = TestDrives::new(4096);
+    let image = fixture.saved_image();
+    let mut authority = fixture.image_authority();
+    authority.images.mount = Arc::new(|_, _, phase| {
+        phase(Phase::StartingLoop)?;
+        Err("owned missing loop reply".into())
+    });
+    let service = fixture.start_authority(None, authority);
+    failed(
+        &service,
+        DriveRequest::MountImage {
+            backup: image.id.clone(),
+        },
+        "missing loop reply",
+    );
+    service.shutdown().unwrap();
+    let db = Store::existing(&service.state.join("drives.sqlite"), false).unwrap();
+    let mut intent = db
+        .get::<serde_json::Value>(KIND, &image.id)
+        .unwrap()
+        .unwrap();
+    intent["origin"]["host"] = serde_json::Value::Null;
+    intent["origin"]["boot"] = serde_json::to_value(uuid::Uuid::new_v4()).unwrap();
+    db.put(KIND, &image.id, &intent).unwrap();
+    let (authority, calls) = counted_image_authority(&fixture);
+    let service = fixture.start_authority(None, authority);
+    failed(
+        &service,
+        DriveRequest::UnmountImage {
+            backup: image.id.clone(),
+        },
+        "previous boot",
+    );
+    service.shutdown().unwrap();
+    assert_eq!(calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        db.get::<serde_json::Value>(KIND, &image.id)
+            .unwrap()
+            .unwrap(),
+        intent
+    );
+    assert!(
+        published_policy(&service)
+            .excluded
+            .contains(&PathBuf::from("/"))
+    );
 }

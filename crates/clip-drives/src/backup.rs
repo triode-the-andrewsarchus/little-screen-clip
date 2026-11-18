@@ -23,10 +23,14 @@ mod collection;
 mod image_control;
 mod image_loop;
 mod image_mount;
+mod image_origin;
+#[cfg(test)]
+pub(crate) use image_control::unrecorded_loop_for_test;
 pub(crate) use image_control::{
     ImageAction, ImageAuthority, ImagePhase, KIND as IMAGE_CONTROL_KIND,
 };
 pub(crate) use image_mount::ImageMount;
+pub(crate) use image_origin::{Evidence as ImageEvidence, Origin as ImageOrigin};
 mod metadata;
 mod publication;
 mod retention;
@@ -47,6 +51,7 @@ pub(crate) fn recover_record(
     match kind {
         "backup-publication" => publication::recover_one(db, id, cancel),
         "backup-prune" => retention::resume_one(db, id, None, cancel),
+        "image-loop" => image_loop::recover(db, id, cancel),
         _ => Err("Unknown backup maintenance record".into()),
     }
 }

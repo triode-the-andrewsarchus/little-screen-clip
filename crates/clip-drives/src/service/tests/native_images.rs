@@ -21,6 +21,14 @@ pub(super) fn selected(fixture: &Drive) -> Drive {
     actual
 }
 
+pub(super) fn loop_device(object: &str) -> PathBuf {
+    crate::require_disposable_guest();
+    let name = object.rsplit('/').next().unwrap();
+    let number = name.strip_prefix("loop").unwrap();
+    assert!(!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
+    PathBuf::from("/dev").join(name)
+}
+
 pub(super) fn digest(mut file: File) -> String {
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];

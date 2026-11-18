@@ -37,7 +37,7 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 5.3 | Complete | Exact authorized-device/image hashes, partition sizes, durable publication and checksummed source manifests pass on real FAT32/exFAT/NTFS GPT partitions. Manifests retain typed partition number/start/byte offset/logical sector size/type/label/flags and immediate containing-table type/identifier; unknown fields remain unknown. Native tests assert actual GPT layout and exact manifest retention. See the partition-layout checkpoint and its guest report. |
 | 5.4 | Partial | Real Btrfs image delta and exact nonzero sectors pass; real non-Btrfs partition images now pass on FAT32/exFAT/NTFS with exact source SHA-256 and retained earlier images. Mount-option and interrupted-device matrices remain. |
 | 5.5 | Partial | Optional mounted-state restoration now retains actual cleanup completion after imaging, failure or cancellation, refuses changed device lifetimes and reports separate restoration failures without losing completed backups. Owned authority and real FUSE fixtures pass; Real authorized image success and mounted-state restoration now pass on all three guest source formats. Final UI and interrupted-device acceptance remain. |
-| 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. Descriptor-bound cleanup now retries recorded partial unmounts, rejects a reused loop and preserves actual detach results on FAT32/exFAT/NTFS with ordinary and Btrfs destinations. Unknown loop setup/attachment outcomes, exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
+| 5.6 | Partial | Real UDisks loop setup/read-only mount/read/unmount passes for each native partition-image format; writes return EROFS. Real FUSE catalog reads through mounted images now pass, with ENOMEDIUM before/after provider availability and ESTALE for lost timestamp precision. Descriptor-bound cleanup now retries recorded partial unmounts, rejects a reused loop and preserves actual detach results on FAT32/exFAT/NTFS with ordinary and Btrfs destinations. Known-host previous-boot cleanup now also covers unrecorded setup, ready views and partial unmounts without touching reused loop numbers; see the real-reboot checkpoint. Current-boot unidentified outcomes, legacy contexts, exFAT FUSE precision compatibility and concurrent-provider matrices remain. |
 | 6.1 | Complete | Version-2 paginated SQLite catalogs preserve raw names, numeric sizes/types, original modification/ctime fields, captured Drive and pinned source mount/namespace, explicit known/unknown driver precision, per-directory coverage and typed stage/reason/errno. Host permission/replacement/raw-name tests, indexed multi-page reads, real FUSE details/errors and native FAT32/exFAT/NTFS precision/metadata checks pass. See the typed catalog coverage checkpoint. |
 | 6.2 | Partial | Independent catalog/search rules exist and full backup/sync inclusion is preserved. Exact read-only lookup now loads old whole-drive/folder settings independently of status pagination; dark/light UI acceptance verifies unchanged saves retain both flags. CLI writes require both flags, omitted subtrees work, and successful rule jobs publish exclusions before completion. Metadata observation now runs off the coordinator; fresh retries and stale-result rejection preserve that completion contract without blocking independent work. Explicit dated Jobs/CLI measurements now separate required sync baselines, inventories and pending bookkeeping from optional catalog files without touching source media or enabling indexing. Cancellation, real SQL deadline and offline persistence checks pass. Device selectors bind to persistent IDs before acceptance; lexical spelling aliases migrate transactionally with exclusions preserved. Queue-time device reuse, replay, clone refusal, offline editing, 1,100-rule migration rollback and dark/light CLI/editor checks pass. Observed bind aliases now use descriptor-free filesystem coordinates and mount-lifetime checks, including retained offline owners and first-time partial views. Filesystem case-fold/relocation aliases and legacy device-only policy review remain. |
 | 6.3 | Partial | Search exclusion routing is reused by Shelf reference summaries, recursive photo discovery/features and audio constellation discovery/cache reads. Excluded roots are rejected before descent, with rechecks before decoding and publication. Isolated fixtures cover policy changes, cached results, symlink discovery aliases and explicit browsing/reads. Observed policy changes now retire Shelf summaries, photo similarity state and audio map discovery while retaining mutation owners. Shared policy matching now covers observed symlink/directory/file bind aliases, new mount events, renamed mount targets and retained offline observations; real FAT32/exFAT/NTFS gates pass. Broader search/answer/image-order caches, case-fold/relocation aliases and the remaining consumer inventory still need verification. |
@@ -152,9 +152,10 @@ the larger native test as REGRESSION; the original-baseline gate remains open at
 `.fitness/portable-drives-image-loop-local-final.json` and
 `.fitness/portable-drives-image-loop-branch-final.json`.
 
-This does not complete the plan. Loop setup with no recorded reply or attachment,
-legacy partial mappings without a live view, changed boot/node contexts and the
-broader mounted-provider lifetime matrix still need their original evidence.
+This checkpoint did not complete the plan. The following reboot checkpoint adds
+known-host old-boot evidence. Unidentified current-boot loop setup, legacy partial
+mappings without a live view, uncertain host/node contexts and the broader
+mounted-provider lifetime matrix still need their original evidence.
 Automatic recovery does not replay native mutations or silently delete an
 unidentified mapping. Other incomplete rows above retain their original scope.
 
@@ -5016,3 +5017,88 @@ clone groups. The admission implementation introduces no reported hotspot or clo
 shared cold/live ownership-loss scenarios removed the extra test clone. The broader
 architecture gate remains open. Report:
 `.fitness/portable-drives-admission-final-architecture.json`.
+
+## Image state across real reboots
+
+New image effects persist an origin before entering native authority: a non-nil
+boot UUID, known namespace and optional application-scoped SHA-256 fingerprint
+of the configured machine ID. The origin file read runs on the retained worker,
+outside SQLite's writer. Raw machine IDs are not persisted. Attachment records
+retain the same host context. Optional fields decode older records conservatively;
+the registry stays at version 3 and catalog/backup formats do not change.
+
+A different kernel boot on the same identified host proves that the old kernel
+mapping cannot still exist. Shared image evidence validates backup identity,
+attachment origin and any recorded view before retiring only runtime metadata.
+The transaction rechecks exact header/view/attachment values and any control
+owner, clears the backup's mount/loop fields and removes its view, attachment,
+journal and associated recovery notice together. Standalone attachments defer to
+an existing journal. No old image/view/device path is opened, no native authority
+is replayed, no reused loop is detached and no payload is removed. A legitimate
+partial unmount may have a cleared header mount alongside its prior matching
+view; live provider validation remains stricter. Existing policy refresh releases
+the temporary whole-root optional-indexing barrier after recovery completes.
+
+Current-boot attachments are excluded from the maintenance SQL selection; 2,202
+such rows do not postpone an old record behind status pagination. Explicit
+controls refuse to replace a known previous-boot origin before recovery, including
+unidentified-host records which must remain protected. The worker repeats its
+admitted-input check after origin binding. INSERT/UPDATE trigger cases prove
+that both an admission-time replacement and a replacement during binding cause
+zero native calls. Other ordinary tests cover scoped host derivation, unknown or
+inconsistent origins, partial views, transactional rollback and changed evidence.
+The backend passes 268 tests with 116 opt-in cases ignored in
+`/tmp/portable-drive-image-boot-backend-final.log`. Affected backend/Files/CLI/daemon
+all-target Clippy and runtime builds pass in
+`/tmp/portable-drive-image-boot-clippy-final.log` and
+`/tmp/portable-drive-image-boot-build-final.log`.
+
+The new fixture retains its registry and images on an explicitly owned, pinned,
+bounded regular virtual disk across two actual QEMU kernel boots. Only guest
+filesystems are mounted. It creates three real states per source format: a
+LoopSetup whose reply is deliberately not recorded, a ready read-only image and
+a partial unmount blocked by another raw-device reader. After reboot it reuses
+all recorded loop numbers for unrelated fixture files, starts the daemon without
+native replay authority, waits for automatic metadata/policy recovery, checks
+all image hashes and verifies every unrelated mapping and its bytes survive.
+Both phases pass on FAT32, exFAT and NTFS in
+`/tmp/portable-drive-image-boot-reboot-v2/{prepare,recover}/report.json`.
+
+Disabling only the previous-boot retirement proof fails at the intended recovery
+check on FAT32 and NTFS in
+`/tmp/portable-drive-image-boot-negative-v1/recover/report.json`. Its exFAT attempt
+encountered an earlier failed case's still-attached test device and is not counted
+as evidence. An isolated exFAT rerun fails at the intended check in
+`/tmp/portable-drive-image-boot-negative-v1/recover-exfat/report.json`.
+These are expected failing controls, not successful acceptance runs. Restoring
+the fix recovers all three formats from that same persisted negative-control
+state in a later real boot:
+`/tmp/portable-drive-image-boot-negative-v1/recover-repaired/report.json`.
+All reports complete without a timeout. The final source additionally passes
+12 native image/control/provider test invocations with ordinary destinations and
+nine with Btrfs destinations in
+`/tmp/portable-drive-image-boot-final-vm-native/report.json` and
+`/tmp/portable-drive-image-boot-final-vm-btrfs/report.json`.
+
+The Python disk-pin tests pass for pathname replacement, symlinks, FIFOs,
+directories, short files and hardlink aliases. The pin is closed after the actual
+QEMU process exits, including command/log setup failures. Python compilation,
+shell syntax, changed-source rustfmt and whitespace checks pass. Test support is
+committed separately as `c8c1f511`.
+
+The local architecture comparison adds 823 NLOC, 32 net functions and 144
+aggregate CCN relative to `pre-image-setup-recovery`; average/max CCN remain
+3.50/274. Clone groups, cycles and duplication remain 4,321, 144 and 6.93%.
+Consolidating shared evidence checks and guest helpers removed the initially
+reported new hotspots and five net clones. No new production hotspot remains.
+The tool still labels the aggregate growth REGRESSION and lists unchanged clone
+regions in touched files; this growth implements the recovery proof and real-boot
+failure fixtures. Report: `.fitness/portable-drives-image-boot-local.json`.
+The original whole-branch architecture and final workspace gates remain open.
+
+This is progress, not plan completion. Unknown current-boot outcomes cannot be
+attributed from a same-user loop/image match alone: UDisks LoopSetup has no
+request nonce in its returned object. Legacy records, missing host context and
+inconsistent origins therefore remain protected rather than adopting or deleting
+unidentified mappings. The remaining provider, identity, interruption, UI and
+resource requirements above keep their original scope.

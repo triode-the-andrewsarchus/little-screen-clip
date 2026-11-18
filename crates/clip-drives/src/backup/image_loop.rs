@@ -8,6 +8,8 @@ pub(super) const KIND: &str = "image-loop";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Attachment {
+    #[serde(default)]
+    host: Option<[u8; 32]>,
     backup: String,
     #[serde(with = "little_clip_core::path_serde")]
     image: PathBuf,
@@ -29,7 +31,7 @@ impl Attachment {
         }
         Ok(attachment)
     }
-    fn check_backup(&self, backup: &Backup) -> Result<()> {
+    pub(super) fn check_backup(&self, backup: &Backup) -> Result<()> {
         if backup.kind != BackupKind::Image
             || self.backup != backup.id
             || self.image != backup.path
@@ -41,6 +43,13 @@ impl Attachment {
             );
         }
         Ok(())
+    }
+    pub(super) fn origin(&self) -> ImageOrigin {
+        ImageOrigin {
+            host: self.host,
+            boot: self.node.boot,
+            namespace: self.node.namespace.clone(),
+        }
     }
     pub(super) fn reopen(
         &self,
@@ -126,6 +135,7 @@ impl Owned {
         let (file, device, node) = open(connection, object)?;
         let metadata = image.metadata()?;
         let attachment = Attachment {
+            host: ImageOrigin::capture()?.host,
             backup: backup.id.clone(),
             image: backup.path.clone(),
             identity,
@@ -199,6 +209,29 @@ impl Owned {
             ),
         }
     }
+}
+
+pub(super) fn recover(db: &Store, id: &str, cancel: &AtomicBool) -> Result<bool> {
+    cancelled(cancel)?;
+    let Some(attachment) = db.get_bounded::<Attachment>(KIND, id, 64 * 1024)? else {
+        return Ok(false);
+    };
+    let evidence = ImageEvidence::capture(db, id)?;
+    if !evidence.outlived(Some(&attachment.origin()))? {
+        return Ok(false);
+    }
+    cancelled(cancel)?;
+    let transaction = db.0.unchecked_transaction()?;
+    // A journal owns its own atomic cleanup. Never retire its version underneath it.
+    if db
+        .get_bounded::<serde_json::Value>(image_control::KIND, id, 64 * 1024)?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    evidence.retire(db)?;
+    transaction.commit()?;
+    Ok(true)
 }
 
 fn open(connection: &zbus::blocking::Connection, object: &str) -> Result<(File, PathBuf, File)> {

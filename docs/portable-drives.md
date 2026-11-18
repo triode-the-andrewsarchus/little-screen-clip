@@ -342,6 +342,29 @@ failure alongside the original error. Successful retirement clears the runtime
 mount observation with the final backup state. These facts stay local; backup
 manifest/public record formats and removable filesystems are unchanged.
 
+Image controls save their boot and namespace before entering native authority on
+the retained backup worker. They also save an application-scoped SHA-256 host
+fingerprint derived from the configured machine ID; the raw machine ID is not
+stored. A missing host identity leaves ordinary controls available but disables
+automatic recovery across boots. See the [machine-id privacy guidance](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html).
+
+After a different boot on that same identified host, maintenance retires the old
+runtime mapping records using metadata transactions only. This covers completed
+mounts, partially unmounted views and a pending loop setup whose reply was never
+recorded. It does not open old device/view paths, detach a reused loop number,
+replay UDisks effects or alter the image payload. The backup header, attachment,
+view and any owning journal must still match their captured evidence before the
+transaction clears them. Optional indexing resumes through the existing policy
+refresh after unresolved controls are gone. An explicit retry cannot overwrite
+the older boot origin while recovery is pending.
+
+Uncertain current-boot outcomes, legacy state without an origin, different hosts,
+missing identities and inconsistent records remain protected for explicit
+recovery. Same-user loops pointing at an image do not, by themselves, prove which
+request created them. Restart recovery therefore does not adopt unidentified
+live mappings. The real two-boot acceptance evidence is recorded in the
+[completion audit](portable-drive-completion-audit.md#image-state-across-real-reboots).
+
 ## Folder synchronization
 
 Selected source subtrees must be actual directories within the selected partition.
@@ -600,9 +623,9 @@ unmount operation asynchronously; it is observational and never authorizes a
 write. Policy publication obtains its own fresh inventory and verifies that the
 mount inventory stayed unchanged. Shutdown retains probes until they actually
 exit. Startup initially reports **Checking mounted drives** until its first
-observation completes. Measurement, image mount controls, and some
-operation-admission checks still perform
-synchronous filesystem work.
+observation completes. Image mount/unmount controls use retained backup workers.
+Measurement and some operation-admission checks still perform synchronous
+filesystem work.
 
 Catalog mountpoint preparation, helper readiness, unmount commands and server
 retirement run on one retained catalog-control worker. Requests serialize with

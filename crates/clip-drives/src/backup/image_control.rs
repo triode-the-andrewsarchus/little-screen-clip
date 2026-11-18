@@ -98,6 +98,19 @@ pub(super) fn setup_loop(
         })?)
 }
 
+#[cfg(test)]
+pub(crate) fn unrecorded_loop_for_test(
+    db: &Store,
+    id: &str,
+    phase: &mut dyn FnMut(ImagePhase) -> Result<()>,
+) -> Result<String> {
+    crate::require_disposable_guest();
+    let backup: Backup = db.get("backup", id)?.ok_or("Missing owned image")?;
+    let file = kernel_interface::open_content(&backup.path, false)?;
+    verify_image(&backup, &file)?;
+    Ok(setup_loop(&system_connection()?, &file, phase)?.to_string())
+}
+
 fn mount_view(
     db: &Store,
     connection: &zbus::blocking::Connection,

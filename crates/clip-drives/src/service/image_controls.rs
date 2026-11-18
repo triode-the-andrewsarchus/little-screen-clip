@@ -6,9 +6,12 @@ pub(super) use crate::backup::IMAGE_CONTROL_KIND as KIND;
 const LIMIT: u64 = 64 * 1024;
 
 use crate::backup::{ImageAction as Action, ImagePhase as Phase};
+use crate::backup::{ImageEvidence as Evidence, ImageOrigin as Origin};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Intent {
+    #[serde(default)]
+    origin: Option<Origin>,
     operation: String,
     backup: String,
     original: serde_json::Value,
@@ -18,12 +21,22 @@ struct Intent {
 }
 impl Intent {
     fn begin(db: &Store, id: &str, operation: &str, mounting: bool) -> Result<Self> {
+        let boot = kernel_interface::current_boot_id()?;
         let transaction = db.0.unchecked_transaction()?;
-        let original = db
-            .get_bounded::<serde_json::Value>("backup", id, LIMIT)?
-            .ok_or("Unknown backup version")?;
+        let evidence = Evidence::capture(db, id)?;
+        evidence.check_control_boot(boot)?;
         let previous = db.get_bounded::<Self>(KIND, id, LIMIT)?;
-        let intent = Self::admit(id, operation, original, mounting, previous)?;
+        if previous
+            .as_ref()
+            .and_then(|intent| intent.origin.as_ref())
+            .is_some_and(|origin| origin.boot != boot)
+        {
+            return Err(
+                "Image control belongs to a previous boot; allow metadata recovery before retrying"
+                    .into(),
+            );
+        }
+        let intent = Self::admit(id, operation, evidence.header, mounting, previous)?;
         db.put(KIND, id, &intent)?;
         db.0.execute(
             "UPDATE version SET value=3 WHERE id=1 AND value IN (1,2)",
@@ -52,6 +65,7 @@ impl Intent {
             previous.check_retry(&version)?;
         }
         Ok(Self {
+            origin: None,
             operation: operation.into(),
             backup: id.into(),
             original,
@@ -81,9 +95,21 @@ impl Intent {
             || current.original != self.original
             || current.mounting != self.mounting
             || current.inherited != self.inherited
+            || current.origin != self.origin
         {
             return Err("Image control ownership changed; retaining exclusions".into());
         }
+        Ok(())
+    }
+    fn bind_origin(&mut self, db: &Store) -> Result<()> {
+        // Host-file reads stay on the retained worker and outside SQLite's writer.
+        let mut bound = self.clone();
+        bound.origin = Some(Origin::capture()?);
+        let transaction = db.0.unchecked_transaction()?;
+        self.check_owner(db)?;
+        db.put(KIND, &self.backup, &bound)?;
+        transaction.commit()?;
+        self.origin = bound.origin;
         Ok(())
     }
     fn phase(&mut self, db: &Store, phase: Phase) -> Result<()> {
@@ -129,15 +155,18 @@ impl Intent {
     }
     fn settle(&self, db: &Store) -> Result<bool> {
         let evidence = Evidence::capture(db, &self.backup)?;
-        if !self.proven(db, &evidence)? {
+        self.check_version(&evidence.version)?;
+        let old_boot = evidence.outlived(self.origin.as_ref())?;
+        if !old_boot && !self.proven(db, &evidence)? {
             return Ok(false);
         }
         // Filesystem proof precedes this transaction: a FUSE wait never holds
         // SQLite's writer. Publication/removal compares the saved evidence again.
         let transaction = db.0.unchecked_transaction()?;
         self.check_owner(db)?;
-        if !evidence.current(db, &self.backup)? {
-            return Err("Image control evidence changed; retaining exclusions".into());
+        evidence.check_current(db)?;
+        if old_boot {
+            evidence.retire(db)?;
         }
         db.remove(KIND, &self.backup)?;
         db.remove("recovery", &format!("image-control:{}", self.backup))?;
@@ -148,6 +177,9 @@ impl Intent {
         let db = Store::existing(&state.join("drives.sqlite"), false)?;
         let result = cancelled(&cancel).and_then(|()| {
             self.check_input(&db)?;
+            self.bind_origin(&db)?;
+            self.check_input(&db)?;
+            cancelled(&cancel)?;
             action(&db, &self.backup.clone(), &mut |phase| {
                 if matches!(phase, Phase::StartingLoop | Phase::Mounting)
                     || (!self.mounting && phase == Phase::Retiring)
@@ -190,34 +222,6 @@ impl Intent {
         )?;
         transaction.commit()?;
         Ok(())
-    }
-}
-
-struct Evidence {
-    version: DriveBackup,
-    header: serde_json::Value,
-    observation: Option<serde_json::Value>,
-    attachment: Option<serde_json::Value>,
-}
-impl Evidence {
-    fn capture(db: &Store, id: &str) -> Result<Self> {
-        let header = db
-            .get_bounded::<serde_json::Value>("backup", id, LIMIT)?
-            .ok_or("Image version disappeared during control")?;
-        Ok(Self {
-            version: serde_json::from_value(header.clone())?,
-            header,
-            observation: db.get_bounded("image-mount", id, LIMIT)?,
-            attachment: db.get_bounded("image-loop", id, LIMIT)?,
-        })
-    }
-    fn current(&self, db: &Store, id: &str) -> Result<bool> {
-        Ok(db
-            .get_bounded::<serde_json::Value>("backup", id, LIMIT)?
-            .as_ref()
-            == Some(&self.header)
-            && db.get_bounded::<serde_json::Value>("image-mount", id, LIMIT)? == self.observation
-            && db.get_bounded::<serde_json::Value>("image-loop", id, LIMIT)? == self.attachment)
     }
 }
 
