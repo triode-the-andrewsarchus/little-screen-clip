@@ -68,6 +68,7 @@ impl SourceTile {
     pub fn prepare(assets: &BasemapAssets, id: TileId, cancel: &AtomicBool) -> Option<Self> {
         let [west, north, side] = id.bounds();
         let target = (EDGE as u32 * (2u32 << id.level)) as f64;
+        let mut elevation = assets.elevation_sampler(target);
         let count = PADDED_EDGE * PADDED_EDGE;
         let mut tile = Self {
             id,
@@ -92,8 +93,8 @@ impl SourceTile {
                 });
                 tile.color.extend_from_slice(&color.unwrap_or([60, 78, 90]));
                 tile.color.push(if color.is_some() { 255 } else { 0 });
-                let height = assets
-                    .sample_elevation_at(lat, lon, target)
+                let height = elevation
+                    .sample(lat, lon)
                     .filter(|h| h.is_finite() && *h > -32000.0);
                 tile.elevation.extend_from_slice(&[
                     height.unwrap_or(0.0),

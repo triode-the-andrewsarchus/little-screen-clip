@@ -243,11 +243,8 @@ impl SrtmTile {
         {
             return None;
         }
+        let samples = hgt_samples(bytes.len())?;
         let count = bytes.len() / 2;
-        let samples = (count as f64).sqrt().round() as usize;
-        if samples < 2 || samples * samples * 2 != bytes.len() {
-            return None;
-        }
         let mut heights = Vec::with_capacity(count);
         for pair in bytes.chunks_exact(2) {
             heights.push(i16::from_be_bytes([pair[0], pair[1]]));
@@ -269,45 +266,75 @@ impl SrtmTile {
         {
             return None;
         }
-        let fx = (lon - self.lon_floor as f64).clamp(0.0, 1.0) * (self.samples - 1) as f64;
-        let fy = (1.0 - (lat - self.lat_floor as f64).clamp(0.0, 1.0)) * (self.samples - 1) as f64;
-        let x0 = (fx.floor() as usize).min(self.samples - 1);
-        let y0 = (fy.floor() as usize).min(self.samples - 1);
-        let x1 = (x0 + 1).min(self.samples - 1);
-        let y1 = (y0 + 1).min(self.samples - 1);
-        let tx = (fx - x0 as f64) as f32;
-        let ty = (fy - y0 as f64) as f32;
-
-        let get = |x: usize, y: usize| -> Option<f32> {
-            let v = self.heights[y * self.samples + x];
-            (v != -32768).then_some(v as f32)
-        };
-        let v00 = get(x0, y0)?;
-        let v10 = get(x1, y0).unwrap_or(v00);
-        let v01 = get(x0, y1).unwrap_or(v00);
-        let v11 = get(x1, y1).unwrap_or(v00);
-        let top = v00 * (1.0 - tx) + v10 * tx;
-        let bot = v01 * (1.0 - tx) + v11 * tx;
-        Some(top * (1.0 - ty) + bot * ty)
+        sample_hgt(
+            self.samples,
+            self.lat_floor,
+            self.lon_floor,
+            lat,
+            lon,
+            |i| self.heights[i],
+        )
     }
 }
 
-/// Lazy local HGT inventory with a byte-bounded decoded tile cache.
+// Shared bilinear interpolation for native samples and on-demand big-endian
+// reads. Loading a tile need not convert all 13 million heights to sample four.
+fn sample_hgt(
+    samples: usize,
+    lat_floor: i32,
+    lon_floor: i32,
+    lat: f64,
+    lon: f64,
+    height: impl Fn(usize) -> i16,
+) -> Option<f32> {
+    let fx = (lon - lon_floor as f64).clamp(0.0, 1.0) * (samples - 1) as f64;
+    let fy = (1.0 - (lat - lat_floor as f64).clamp(0.0, 1.0)) * (samples - 1) as f64;
+    let x0 = (fx.floor() as usize).min(samples - 1);
+    let y0 = (fy.floor() as usize).min(samples - 1);
+    let x1 = (x0 + 1).min(samples - 1);
+    let y1 = (y0 + 1).min(samples - 1);
+    let tx = (fx - x0 as f64) as f32;
+    let ty = (fy - y0 as f64) as f32;
+
+    let get = |x: usize, y: usize| -> Option<f32> {
+        let v = height(y * samples + x);
+        (v != -32768).then_some(v as f32)
+    };
+    let v00 = get(x0, y0)?;
+    let v10 = get(x1, y0).unwrap_or(v00);
+    let v01 = get(x0, y1).unwrap_or(v00);
+    let v11 = get(x1, y1).unwrap_or(v00);
+    let top = v00 * (1.0 - tx) + v10 * tx;
+    let bot = v01 * (1.0 - tx) + v11 * tx;
+    Some(top * (1.0 - ty) + bot * ty)
+}
+
+/// Lazy local HGT inventory with a byte-bounded tile cache.
 #[derive(Default)]
 pub struct HgtStore {
     sources: HashMap<(i32, i32), (Arc<AssetDirectory>, std::ffi::OsString)>,
-    cache: Mutex<(HashMap<(i32, i32), Arc<Vec<i16>>>, VecDeque<(i32, i32)>)>,
+    cache: Mutex<(HashMap<(i32, i32), Arc<Vec<u8>>>, VecDeque<(i32, i32)>)>,
 }
 impl HgtStore {
     pub fn is_empty(&self) -> bool {
         self.sources.is_empty()
     }
+    #[cfg(test)]
     fn sample(&self, lat: f64, lon: f64) -> Option<f32> {
-        let key = (lat.floor() as i32, lon.floor() as i32);
+        HgtSampler {
+            store: self,
+            last: None,
+        }
+        .sample(lat, lon)
+    }
+    fn tile(&self, key: (i32, i32)) -> Option<Arc<Vec<u8>>> {
         let (directory, name) = self.sources.get(&key)?;
         let mut cache = self.cache.lock().ok()?;
         let heights = if let Some(hit) = cache.0.get(&key) {
-            hit.clone()
+            let hit = hit.clone();
+            cache.1.retain(|old| *old != key);
+            cache.1.push_back(key);
+            hit
         } else {
             #[cfg(test)]
             let profile_start = std::time::Instant::now();
@@ -315,14 +342,17 @@ impl HgtStore {
             if file.metadata().ok()?.len() > 3601 * 3601 * 2 {
                 return None;
             }
-            let bytes = storage::read(format!(
+            let mut bytes = storage::read(format!(
                 "/proc/self/fd/{}",
                 std::os::fd::AsRawFd::as_raw_fd(&file)
             ))
             .ok()?;
             #[cfg(test)]
             let profile_read = profile_start.elapsed();
-            let parsed = SrtmTile::from_hgt_bytes(key.0, key.1, &bytes)?;
+            hgt_samples(bytes.len())?;
+            // The snapshot reader grows geometrically; do not let spare capacity
+            // evict another useful degree tile from the byte-bounded cache.
+            bytes.shrink_to_fit();
             #[cfg(test)]
             profile::record(
                 name,
@@ -331,22 +361,63 @@ impl HgtStore {
                 profile_start.elapsed() - profile_read,
             );
             let (values, order) = &mut *cache;
-            cache_chunk(
-                values,
-                order,
-                key,
-                Arc::unwrap_or_clone(parsed.heights),
-                128 * 1024 * 1024,
-            )?
+            cache_chunk(values, order, key, bytes, 128 * 1024 * 1024)?
         };
-        let samples = (heights.len() as f64).sqrt() as usize;
-        SrtmTile {
-            lat_floor: key.0,
-            lon_floor: key.1,
-            samples,
-            heights,
+        Some(heights)
+    }
+}
+
+fn hgt_samples(bytes: usize) -> Option<usize> {
+    let samples = ((bytes / 2) as f64).sqrt() as usize;
+    (samples >= 2 && samples <= 3601 && samples * samples * 2 == bytes).then_some(samples)
+}
+
+// A worker retains only its current degree tile. This avoids a global mutex,
+// Arc traffic and shape validation for every pixel. Two raster workers retain
+// at most 52 MB beyond the shared 128 MiB cache when their current tile is evicted.
+struct HgtSampler<'a> {
+    store: &'a HgtStore,
+    last: Option<((i32, i32), usize, Arc<Vec<u8>>)>,
+}
+impl HgtSampler<'_> {
+    fn sample(&mut self, lat: f64, lon: f64) -> Option<f32> {
+        if !lat.is_finite() || !lon.is_finite() {
+            return None;
         }
-        .sample(lat, lon)
+        let key = (lat.floor() as i32, lon.floor() as i32);
+        if self.last.as_ref().is_none_or(|(old, _, _)| *old != key) {
+            // Drop the previous lease before admitting another tile.
+            self.last = None;
+            let bytes = self.store.tile(key)?;
+            self.last = Some((key, hgt_samples(bytes.len())?, bytes));
+        }
+        let (_, samples, bytes) = self.last.as_ref()?;
+        sample_hgt(*samples, key.0, key.1, lat, lon, |i| {
+            i16::from_be_bytes([bytes[i * 2], bytes[i * 2 + 1]])
+        })
+    }
+}
+
+struct ElevationSampler<'a> {
+    assets: &'a BasemapAssets,
+    target: f64,
+    hgt: Option<HgtSampler<'a>>,
+}
+impl ElevationSampler<'_> {
+    fn sample(&mut self, lat: f64, lon: f64) -> Option<f32> {
+        if let Some(height) = self.hgt.as_mut().and_then(|hgt| hgt.sample(lat, lon)) {
+            return Some(height);
+        }
+        if (self.target > 5400.0 || self.assets.global_dem.is_none())
+            && let Some(cog) = &self.assets.cog_dem
+            && let Some(height) = cog.sample_at(lat, lon, self.target)
+        {
+            return Some(height);
+        }
+        self.assets
+            .global_dem
+            .as_ref()
+            .and_then(|grid| grid.sample(lat, lon))
     }
 }
 
@@ -1770,29 +1841,27 @@ impl BasemapAssets {
     /// Samples terrain elevation in meters at `(lat, lon)` from local overrides, COG pyramid, or
     /// overview DEM, returning `None` when no DEM is loaded.
     pub fn sample_elevation_at(&self, lat: f64, lon: f64, target_global_width: f64) -> Option<f32> {
-        // Decoding 26 MB HGT files for globe overviews would churn the cache.
-        // Use local tiles only beyond the installed global DEM's finest level.
+        self.elevation_sampler(target_global_width).sample(lat, lon)
+    }
+
+    fn elevation_sampler(&self, target_global_width: f64) -> ElevationSampler<'_> {
+        // Decide resolution once per source tile, not once per pixel.
         let global_width = self
             .cog_dem
             .as_ref()
             .and_then(|cog| cog.levels.iter().map(|l| l.width).max())
             .or_else(|| self.global_dem.as_ref().map(|g| g.width))
             .unwrap_or(0);
-        // Without a global DEM, reserve optional degree tiles for regional views.
-        // A broad overview would otherwise thrash the bounded decoded HGT cache.
-        if target_global_width > global_width as f64
-            && (global_width > 0 || target_global_width > 5400.0)
-            && let Some(h) = self.terrain_tiles.sample(lat, lon)
-        {
-            return Some(h);
+        let use_hgt = target_global_width > global_width as f64
+            && (global_width > 0 || target_global_width > 5400.0);
+        ElevationSampler {
+            assets: self,
+            target: target_global_width,
+            hgt: use_hgt.then_some(HgtSampler {
+                store: &self.terrain_tiles,
+                last: None,
+            }),
         }
-        if (target_global_width > 5400.0 || self.global_dem.is_none())
-            && let Some(cog) = &self.cog_dem
-            && let Some(h) = cog.sample_at(lat, lon, target_global_width)
-        {
-            return Some(h);
-        }
-        self.global_dem.as_ref().and_then(|g| g.sample(lat, lon))
     }
 
     /// Samples terrain elevation in meters at `(lat, lon)`.
@@ -3074,6 +3143,31 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn byte_cached_hgt_matches_native_sampling_across_degree_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let heights = [10_i16, 20, 30, i16::MIN, 50, 60, 70, 80, 90];
+        let bytes: Vec<_> = heights.into_iter().flat_map(i16::to_be_bytes).collect();
+        fs::write(root.path().join("N00E000.hgt"), &bytes).unwrap();
+        fs::write(root.path().join("N00E001.hgt"), &bytes).unwrap();
+        let native = SrtmTile::from_hgt_bytes(0, 0, &bytes).unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        let mut sampler = HgtSampler {
+            store: &store,
+            last: None,
+        };
+        for x in 0..20 {
+            for y in 0..20 {
+                let (lat, lon) = (y as f64 / 20., x as f64 / 20.);
+                let expected = native.sample(lat, lon);
+                assert_eq!(sampler.sample(lat, lon), expected);
+                assert_eq!(sampler.sample(lat, lon + 1.), expected);
+            }
+        }
+        assert_eq!(sampler.sample(f64::NAN, 0.), None);
     }
 
     #[test]
