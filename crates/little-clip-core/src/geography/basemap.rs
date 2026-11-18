@@ -1,5 +1,7 @@
 //! Offline 3D-globe / 2D-map projection, Oilslick elevation shading, and basemap data loaders.
 
+pub mod tiles;
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
