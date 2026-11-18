@@ -274,6 +274,7 @@ impl Viewer {
                 }
             }
 
+            self.camera.constrain_view(rect.width(), rect.height());
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             if let Err(error) = self.tiles.update(
                 ui,
@@ -320,11 +321,18 @@ impl Viewer {
                     rect.height(),
                 )
             {
-                let point = egui::pos2(rect.left() + px, rect.top() + py);
-                if rect.contains(point) {
-                    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                    painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
-                    painter.circle_filled(point, 2.5, colors.text_primary);
+                for copy in self.camera.world_shifts(rect.width(), rect.height()) {
+                    if self.camera.globe_blend() > 0.0 && copy != 0 {
+                        continue;
+                    }
+                    let offset = copy as f32
+                        * self.camera.world_width_px(rect.width(), rect.height()) as f32;
+                    let point = egui::pos2(rect.left() + px + offset, rect.top() + py);
+                    if rect.contains(point) {
+                        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                        painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
+                        painter.circle_filled(point, 2.5, colors.text_primary);
+                    }
                 }
             }
 
@@ -837,6 +845,50 @@ fn paint_globe_map(
     units: Units,
     colors: WorkbenchColors,
 ) -> Option<Hit> {
+    let mut hit = None;
+    let flat = camera.globe_blend() == 0.0;
+    for copy in camera.world_shifts(rect.width(), rect.height()) {
+        let period = camera.world_width_px(rect.width(), rect.height());
+        if (!flat && copy != 0) || (flat && copy != 0
+            && (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0) {
+            continue;
+        }
+        let offset = if flat {
+            copy as f32 * camera.world_width_px(rect.width(), rect.height()) as f32
+        } else {
+            0.0
+        };
+        hit = paint_globe_copy(ui, rect, doc, selected, camera, assets, colors, offset).or(hit);
+    }
+    if let Some(hit) = hit {
+        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
+        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+            ui.label(&doc.features[hit.feature].name);
+            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+        });
+    }
+    paint_scale_and_contour_overlay(
+        ui,
+        &ui.painter_at(rect),
+        rect,
+        camera,
+        contour_interval_m,
+        local_elev_range,
+        units,
+    );
+    hit
+}
+
+fn paint_globe_copy(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    doc: &Document,
+    selected: Option<usize>,
+    camera: &GlobeCamera,
+    assets: Option<&BasemapAssets>,
+    colors: WorkbenchColors,
+    offset: f32,
+) -> Option<Hit> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
     if let Some(assets) = assets
@@ -858,7 +910,7 @@ fn paint_globe_map(
             else {
                 continue;
             };
-            let pos = egui::pos2(rect.left() + px, rect.top() + py);
+            let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
             if !rect.contains(pos) {
                 continue;
             }
@@ -918,7 +970,7 @@ fn paint_globe_map(
                     rect.width(),
                     rect.height(),
                 ) {
-                    positions.push(egui::pos2(rect.left() + px, rect.top() + py));
+                    positions.push(egui::pos2(rect.left() + px + offset, rect.top() + py));
                     sample_indices.push(s_idx);
                 } else if positions.len() > 1 && matches!(feature.kind, Kind::Line | Kind::Polygon)
                 {
@@ -975,22 +1027,6 @@ fn paint_globe_map(
             }
         }
     }
-    if let Some(hit) = hit {
-        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
-            ui.label(&doc.features[hit.feature].name);
-            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
-        });
-    }
-    paint_scale_and_contour_overlay(
-        ui,
-        &painter,
-        rect,
-        camera,
-        contour_interval_m,
-        local_elev_range,
-        units,
-    );
     hit
 }
 

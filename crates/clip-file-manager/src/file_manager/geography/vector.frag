@@ -8,7 +8,7 @@ uniform vec4 u_color;
 uniform bool u_dashed;
 out vec4 frag;
 void main() {
-    if(abs(v_geo.x)>180.0 || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
+    if((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
     if(u_dashed && mod(v_along,9.0)>5.0) discard;
     float coverage=1.0-smoothstep(1.0-max(fwidth(v_edge),0.001),1.0,abs(v_edge));
     float alpha=u_color.a*coverage;

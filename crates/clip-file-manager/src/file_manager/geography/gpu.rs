@@ -260,9 +260,9 @@ impl Renderer {
                     west + side * 0.5 - camera.center_lon,
                 ) - side * 0.5;
                 gl.uniform_1_f32(gl.get_uniform_location(p, "u_side").as_ref(), side as f32);
-                for shift in [-360.0, 0.0, 360.0] {
-                    let start = west + shift;
-                    if start > 180.0 || start + side < -180.0 {
+                for copy in camera.world_shifts(width, height) {
+                    let start = west + copy as f64 * 360.0;
+                    if camera.globe_blend() > 0.0 && (start > 180.0 || start + side < -180.0) {
                         continue;
                     }
                     gl.uniform_4_f32(
@@ -701,8 +701,11 @@ impl Renderer {
                     gl.get_uniform_location(p, "u_dashed").as_ref(),
                     i32::from(dash),
                 );
-                for shift in [-360.0, 0.0, 360.0] {
-                    gl.uniform_1_f32(gl.get_uniform_location(p, "u_shift").as_ref(), shift);
+                for copy in frame.camera.world_shifts(width, height) {
+                    gl.uniform_1_f32(
+                        gl.get_uniform_location(p, "u_shift").as_ref(),
+                        copy as f32 * 360.0,
+                    );
                     gl.draw_arrays_instanced(
                         glow::TRIANGLES,
                         0,

@@ -252,6 +252,48 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
                 .textures,
             textures
         );
+        // A wide, low-zoom flat view must paint repeated worlds at both edges.
+        frame.source = 3;
+        frame.style = BasemapStyle::Natural;
+        frame.rivers.clear();
+        frame.camera.mode = little_clip_core::geography::basemap::ProjectionMode::Map2D;
+        frame.camera.zoom = 0.75;
+        frame.camera.center_lat = 0.0;
+        frame.camera.constrain_view(512.0, 128.0);
+        frame.tiles = (0..2)
+            .map(|x| {
+                Arc::new(SourceTile {
+                    id: TileId { level: 0, x, y: 0 },
+                    color: [80, 160, 60, 255].repeat(count),
+                    elevation: vec![0.0; count * 2],
+                    water: vec![0; count],
+                    elevation_range: None,
+                })
+            })
+            .collect();
+        let wide = egui::PaintCallbackInfo {
+            viewport: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, 128.0)),
+            ..info
+        };
+        gl.clear_color(1.0, 0.0, 1.0, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        while renderer.paint(&gl, &wide, &frame).unwrap() {}
+        for x in [0, 128, 256, 384, 511] {
+            gl.read_pixels(
+                x,
+                320,
+                1,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut detail_pixel),
+            );
+            assert_eq!(
+                detail_pixel,
+                [80, 160, 60, 255],
+                "Flat map left background exposed at x={x}"
+            );
+        }
         renderer.destroy(&gl);
         assert!(
             renderer.tiles.is_empty()

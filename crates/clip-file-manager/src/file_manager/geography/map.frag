@@ -40,7 +40,7 @@ vec3 biome_color(vec3 rgb, float h, float lat) {
     return vec3(124,152,86)/255.0;
 }
 void main() {
-    if(abs(v_geo.x)>180.0 || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
+    if((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
     vec4 base=texture(u_color,v_uv);
     vec2 dem=texture(u_height,v_uv).rg;
     float h=dem.r, shade=1.0;

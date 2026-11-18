@@ -1932,6 +1932,36 @@ impl GlobeCamera {
         base * self.zoom
     }
 
+    /// Keeps a flat viewport within the poles; longitude remains freely wrapping.
+    pub fn constrain_view(&mut self, width: f32, height: f32) {
+        if self.globe_blend() > 0.0 || width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let minimum = height as f64 / (std::f64::consts::PI * width.min(height) as f64 * 0.43);
+        self.zoom = self.zoom.max(minimum);
+        let half_lat = (height as f64 / (2.0 * self.scale_px(width, height))).to_degrees();
+        let limit = (90.0 - half_lat).max(0.0);
+        self.center_lat = self.center_lat.clamp(-limit, limit);
+    }
+
+    /// Pixel width of a complete longitude revolution on the flat map.
+    pub fn world_width_px(&self, width: f32, height: f32) -> f64 {
+        std::f64::consts::TAU
+            * self.scale_px(width, height)
+            * self.center_lat.to_radians().cos().abs().max(0.25)
+    }
+
+    /// Copies covering the viewport, including the longitude seam guard copies.
+    pub fn world_shifts(&self, width: f32, height: f32) -> std::ops::RangeInclusive<i32> {
+        let copies = if self.globe_blend() > 0.0 {
+            1
+        } else {
+            (width as f64 / (2.0 * self.world_width_px(width, height)).max(1.0) + 0.5).ceil() as i32
+        }
+        .clamp(1, 128);
+        -copies..=copies
+    }
+
     /// Projects `(lat, lon)` in degrees into viewport pixel coordinates `[x, y]`.
     /// Returns `None` if behind the visible hemisphere of the 3D globe.
     pub fn project(&self, lat: f64, lon: f64, width: f32, height: f32) -> Option<[f32; 2]> {
@@ -1988,12 +2018,15 @@ impl GlobeCamera {
         if blend <= 0.0 {
             let phi = phi0 + y;
             let lambda = x / aspect;
-            return valid_inverse(phi, lambda).then(|| {
-                (
-                    phi.to_degrees(),
-                    wrap_lon(self.center_lon + lambda.to_degrees()),
-                )
-            });
+            return (phi.is_finite()
+                && lambda.is_finite()
+                && phi.abs() <= std::f64::consts::FRAC_PI_2 + 1e-10)
+                .then(|| {
+                    (
+                        phi.to_degrees(),
+                        wrap_lon(self.center_lon + lambda.to_degrees()),
+                    )
+                });
         }
         let globe = orthographic_inverse(x, y, phi0);
         if blend >= 1.0 - 1e-12 {
@@ -3291,6 +3324,33 @@ mod tests {
         assert_eq!(camera.mode, ProjectionMode::Globe3D);
         camera.fit_bounds(None);
         assert_eq!(camera.zoom, 1.0);
+    }
+
+    #[test]
+    fn flat_view_repeats_longitude_and_never_exposes_polar_background() {
+        for (width, height) in [(2400.0, 800.0), (600.0, 1200.0)] {
+            let mut camera = GlobeCamera {
+                mode: ProjectionMode::Map2D,
+                zoom: 0.75,
+                center_lat: 70.0,
+                center_lon: 179.0,
+            };
+            camera.constrain_view(width, height);
+            let period = camera.world_width_px(width, height) as f32;
+            let a = camera
+                .unproject(width * 0.5, height * 0.5, width, height)
+                .unwrap();
+            let b = camera
+                .unproject(width * 0.5 + period, height * 0.5, width, height)
+                .unwrap();
+            assert!((a.1 - b.1).abs() < 0.0001);
+            for x in [0.0, width * 0.5, width] {
+                for y in [0.0, height * 0.5, height] {
+                    assert!(camera.unproject(x, y, width, height).is_some());
+                }
+            }
+            assert!(camera.world_shifts(width, height).contains(&1));
+        }
     }
 
     #[test]
