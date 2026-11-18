@@ -6,7 +6,7 @@ mod tiles;
 
 use super::{
     filesystem::Entry,
-    geography_downloader::{AssetDownloader, DownloadPack, asset_workers},
+    geography_downloader::{AssetDownloader, DownloadPack, asset_workers, dir_size},
     media::PreviewData,
     shelf::preview::Ready,
 };
@@ -122,7 +122,7 @@ pub(super) struct Viewer {
     config: AppConfig,
     downloader: AssetDownloader,
     assets: Option<Arc<BasemapAssets>>,
-    assets_job: Option<Task<Arc<BasemapAssets>>>,
+    assets_job: Option<Task<(Arc<BasemapAssets>, u64)>>,
     prompt_dismissed: bool,
     show_assets_panel: bool,
     tiles: tiles::Tiles,
@@ -144,11 +144,12 @@ impl Viewer {
         let assets_dir = downloader.assets_dir.clone();
         let override_dir = downloader.terrain_override_dir.clone();
         let job = Task::start_unbounded(asset_workers(), move |cancel| {
-            Arc::new(BasemapAssets::load_with_cancel(
+            let assets = Arc::new(BasemapAssets::load_with_cancel(
                 &assets_dir,
                 override_dir.as_deref(),
                 cancel,
-            ))
+            ));
+            (assets, dir_size(&assets_dir))
         });
 
         let mut viewer = Self {
@@ -208,7 +209,8 @@ impl Viewer {
             if let Some(result) = job.poll() {
                 self.assets_job = None;
                 match result {
-                    Ok(loaded) => {
+                    Ok((loaded, disk_usage)) => {
+                        self.downloader.disk_usage_bytes = disk_usage;
                         self.downloader.status = loaded.status();
                         self.assets = Some(loaded);
                     }

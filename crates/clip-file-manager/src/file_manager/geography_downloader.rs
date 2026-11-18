@@ -691,7 +691,7 @@ fn extract_matching_from_zip(
 
 // Conservative accounting: incomplete or protected inventories disable admission.
 // Symlinks are never traversed and depth/entry limits prevent cycles or huge scans.
-fn dir_size(dir: &Path) -> u64 {
+pub(super) fn dir_size(dir: &Path) -> u64 {
     if !dir.exists() {
         return 0;
     }
