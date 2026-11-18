@@ -3,10 +3,7 @@
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
     config::AppConfig,
-    geography::basemap::{
-        AssetStatus, BasemapAssets,
-        storage::{self, AssetDirectory},
-    },
+    geography::basemap::{AssetStatus, BasemapAssets, storage::AssetDirectory},
     jobs::task::Task,
 };
 use std::{
@@ -66,6 +63,241 @@ impl DownloadPack {
 pub struct DownloadProgress {
     pub fraction: f32,
     pub message: String,
+}
+
+const PACKS: [DownloadPack; 9] = [
+    DownloadPack::QuickStart,
+    DownloadPack::Borders,
+    DownloadPack::RoadsAndLakes,
+    DownloadPack::GrwlSummary,
+    DownloadPack::GrwlMasks,
+    DownloadPack::WaterOutlines,
+    DownloadPack::TerrainGebco,
+    DownloadPack::LandCover,
+    DownloadPack::HydroRivers,
+];
+struct AssetFile<'a> {
+    folder: &'static str,
+    name: &'static str,
+    url: &'a str,
+    suffixes: &'static [&'static str],
+}
+impl DownloadPack {
+    fn installed(self, status: &AssetStatus) -> bool {
+        match self {
+            Self::QuickStart => status.has_quick_start(),
+            Self::Borders => status.has_borders,
+            Self::RoadsAndLakes => status.has_roads_lakes,
+            Self::GrwlSummary => status.has_grwl,
+            Self::GrwlMasks => status.has_grwl_masks,
+            Self::WaterOutlines => status.has_gshhg,
+            Self::TerrainGebco => status.has_gebco,
+            Self::LandCover => status.has_land_cover,
+            Self::HydroRivers => status.has_hydrorivers,
+            Self::All => PACKS.into_iter().all(|p| p.installed(status)),
+        }
+    }
+    fn files(self, c: &AppConfig) -> Vec<AssetFile<'_>> {
+        match self {
+            Self::QuickStart => vec![
+                AssetFile {
+                    folder: "",
+                    name: "ne_10m_populated_places_simple.geojson",
+                    url: c.geo_cities_url(),
+                    suffixes: &[],
+                },
+                AssetFile {
+                    folder: "",
+                    name: "ne2_texture.zip",
+                    url: c.geo_ne2_texture_url(),
+                    suffixes: &[".tif", ".tiff", ".png", ".jpg", ".jpeg"],
+                },
+            ],
+            Self::Borders => vec![
+                AssetFile {
+                    folder: "",
+                    name: "ne_10m_admin_0_boundary_lines_land.geojson",
+                    url: c.geo_countries_url(),
+                    suffixes: &[],
+                },
+                AssetFile {
+                    folder: "",
+                    name: "ne_10m_admin_1_states_provinces_lines.geojson",
+                    url: c.geo_states_url(),
+                    suffixes: &[],
+                },
+            ],
+            Self::RoadsAndLakes => vec![
+                AssetFile {
+                    folder: "",
+                    name: "ne_10m_lakes.geojson",
+                    url: c.geo_lakes_url(),
+                    suffixes: &[],
+                },
+                AssetFile {
+                    folder: "",
+                    name: "ne_10m_roads.geojson",
+                    url: c.geo_roads_url(),
+                    suffixes: &[],
+                },
+            ],
+            Self::GrwlSummary => vec![AssetFile {
+                folder: "grwl",
+                name: "grwl_summary.zip",
+                url: c.geo_grwl_summary_url(),
+                suffixes: &[".shp", ".dbf", ".shx"],
+            }],
+            Self::GrwlMasks => vec![AssetFile {
+                folder: "grwl_masks",
+                name: "grwl_masks.zip",
+                url: c.geo_grwl_mask_url(),
+                suffixes: &[".tif", ".tiff"],
+            }],
+            Self::WaterOutlines => vec![AssetFile {
+                folder: "",
+                name: "gshhg.zip",
+                url: c.geo_gshhg_water_url(),
+                suffixes: &["gshhs_c.b", "gshhs_l.b", "gshhs_i.b"],
+            }],
+            Self::HydroRivers => vec![AssetFile {
+                folder: "hydrorivers",
+                name: "hydrorivers.zip",
+                url: c.geo_hydrorivers_url(),
+                suffixes: &[".shp", ".dbf", ".shx"],
+            }],
+            _ => vec![],
+        }
+    }
+}
+struct DownloadSession<'a> {
+    root: &'a AssetDirectory,
+    config: &'a AppConfig,
+    cancelled: &'a AtomicBool,
+    progress: &'a Mutex<DownloadProgress>,
+}
+impl DownloadSession<'_> {
+    fn report(&self, fraction: f32, message: &str) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.fraction = fraction.clamp(0.0, 1.0);
+            p.message = message.into();
+        }
+    }
+    fn remaining(&self) -> u64 {
+        self.config
+            .geography
+            .max_assets_bytes
+            .saturating_sub(dir_size(&self.root.path()))
+    }
+    fn run(&self, pack: DownloadPack, base: f32, span: f32) -> Result<(), String> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("Download cancelled".into());
+        }
+        match pack {
+            DownloadPack::TerrainGebco => self.terrain(base, span),
+            DownloadPack::LandCover => self.land_cover(base, span),
+            _ => {
+                let files = pack.files(self.config);
+                let n = files.len().max(1) as f32;
+                for (i, file) in files.into_iter().enumerate() {
+                    let offset = base + span * i as f32 / n;
+                    let downloaded = download_to_file(
+                        &self.root.path().join(file.folder),
+                        file.name,
+                        file.url,
+                        self.remaining(),
+                        self.cancelled,
+                        |f, m| self.report(offset + f * span / n, m),
+                    )?;
+                    if !file.suffixes.is_empty() {
+                        extract_matching_from_zip(&downloaded, self.cancelled, file.suffixes)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+    fn terrain(&self, base: f32, span: f32) -> Result<(), String> {
+        let mut error = "No GEBCO terrain mirror succeeded".to_string();
+        for url in std::iter::once(self.config.geo_gebco_terrain_url())
+            .chain(GEBCO_FALLBACK_MIRRORS.iter().copied())
+        {
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("Download cancelled".into());
+            }
+            let zipped = url.to_ascii_lowercase().contains(".zip");
+            let name = if zipped {
+                "gebco_terrain.zip"
+            } else {
+                "gebco_terrain.tif"
+            };
+            let attempt = download_to_file(
+                &self.root.path().join("gebco"),
+                name,
+                url,
+                self.remaining(),
+                self.cancelled,
+                |f, m| self.report(base + f * span, m),
+            )
+            .and_then(|file| {
+                if zipped {
+                    extract_matching_from_zip(&file, self.cancelled, &[".tif", ".tiff"])?;
+                }
+                if zipped {
+                    return Ok(());
+                }
+                little_clip_core::geography::basemap::CogDemPyramid::open(file.as_ref())
+                    .map(|_| ())
+                    .ok_or_else(|| "GEBCO mirror returned no usable GeoTIFF".to_string())
+            });
+            match attempt {
+                Ok(()) => return Ok(()),
+                Err(e) => error = e,
+            }
+        }
+        Err(error)
+    }
+    fn land_cover(&self, base: f32, span: f32) -> Result<(), String> {
+        use little_clip_core::geography::basemap::land_cover::{CONVERSION_SPACE, import_netcdf};
+        let tool = CommandRequest::new("gdalwarp")
+            .arg("--version")
+            .run_cancellable(self.cancelled)
+            .map_err(|e| {
+                format!(
+                    "Install GDAL 3.7+ with NetCDF support (gdalwarp) to import land cover: {e}"
+                )
+            })?;
+        if !tool.status.success() {
+            return Err("GDAL land-cover converter is unavailable".into());
+        }
+        let name = "land_cover_lccs_class_2020_v2_1_1.nc";
+        if let Ok(source) = self.root.open_file(std::ffi::OsStr::new(name)) {
+            self.report(
+                base + 0.2 * span,
+                "Converting downloaded Copernicus land cover…",
+            );
+            import_netcdf(self.root, &source, self.remaining(), self.cancelled)
+        } else {
+            let limit = self
+                .remaining()
+                .checked_sub(CONVERSION_SPACE)
+                .ok_or("Insufficient disk budget for land-cover import")?;
+            let downloaded = download_to_file(
+                &self.root.path(),
+                name,
+                self.config.geo_land_cover_url(),
+                limit,
+                self.cancelled,
+                |f, m| self.report(base + f * span * 0.75, m),
+            )?;
+            self.report(base + 0.75 * span, "Converting Copernicus land cover…");
+            import_netcdf(
+                self.root,
+                &downloaded.file,
+                downloaded.expansion_budget + CONVERSION_SPACE,
+                self.cancelled,
+            )
+        }
+    }
 }
 
 pub struct AssetDownloader {
@@ -131,406 +363,50 @@ impl AssetDownloader {
         }
 
         let assets_dir = self.assets_dir.clone();
-        let terrain_override_dir = self.terrain_override_dir.clone();
-        let ne2_url = config.geo_ne2_texture_url().to_string();
-        let cities_url = config.geo_cities_url().to_string();
-        let countries_url = config.geo_countries_url().to_string();
-        let states_url = config.geo_states_url().to_string();
-        let roads_url = config.geo_roads_url().to_string();
-        let lakes_url = config.geo_lakes_url().to_string();
-        let grwl_summary_url = config.geo_grwl_summary_url().to_string();
-        let grwl_mask_url = config.geo_grwl_mask_url().to_string();
-        let gshhg_url = config.geo_gshhg_water_url().to_string();
-        let gebco_url = config.geo_gebco_terrain_url().to_string();
-        let lc_url = config.geo_land_cover_url().to_string();
-        let rivers_url = config.geo_hydrorivers_url().to_string();
-        let status_snapshot = self.status.clone();
-        let max_assets_bytes = self.max_assets_bytes;
+        let config = config.clone();
         let progress = self.progress.clone();
+        let previous = self.status.clone();
+        let override_dir = self.terrain_override_dir.clone();
         let job = Task::start_unbounded(asset_workers(), move |cancelled| {
-            let root = AssetDirectory::create(&assets_dir).map_err(|error| error.to_string())?;
-            let _owner = fs::File::open(root.path()).map_err(|error| error.to_string())?;
-            _owner
+            let root = AssetDirectory::create(&assets_dir).map_err(|e| e.to_string())?;
+            let owner = fs::File::open(root.path()).map_err(|e| e.to_string())?;
+            owner
                 .try_lock()
                 .map_err(|_| "Another geography download owns this asset directory".to_string())?;
-            let assets_dir = root.path();
-            let report = |fraction: f32, msg: &str| {
-                if let Ok(mut p) = progress.lock() {
-                    p.fraction = fraction.clamp(0.0, 1.0);
-                    p.message = msg.to_string();
-                }
+            let session = DownloadSession {
+                root: &root,
+                config: &config,
+                cancelled,
+                progress: &progress,
             };
-            let run_pack = |single: DownloadPack, base: f32, span: f32| -> Result<(), String> {
-                let remaining = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
-                if remaining == 0 {
-                    return Err("Offline geography disk budget reached".into());
-                }
-                match single {
-                    DownloadPack::QuickStart => {
-                        report(
-                            base + 0.02 * span,
-                            "Downloading Natural Earth Populated Places…",
-                        );
-                        let cities_path = download_to_file(
-                            &assets_dir,
-                            "ne_10m_populated_places_simple.geojson",
-                            &cities_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.13) * span, m),
-                        )?;
-                        if let Ok(bytes) = storage::read(&cities_path)
-                            && let Ok(parsed) =
-                                little_clip_core::geography::basemap::parse_cities_geojson(&bytes)
-                            && let Ok(encoded) = serde_json::to_vec(&parsed)
-                        {
-                            let _ = storage::write(assets_dir.join("cities_all.json"), encoded);
-                        }
-                        let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
-                        report(base + 0.16 * span, "Downloading Natural Earth II texture…");
-                        let zip_path = download_to_file(
-                            &assets_dir,
-                            "ne2_texture.zip",
-                            &ne2_url,
-                            rem,
-                            &cancelled,
-                            |f, m| report(base + (0.16 + f * 0.74) * span, m),
-                        )?;
-                        report(base + 0.91 * span, "Extracting Natural Earth II texture…");
-                        extract_matching_from_zip(
-                            &zip_path,
-                            &cancelled,
-                            &[".tif", ".tiff", ".png", ".jpg", ".jpeg"],
-                        )?;
-                    }
-                    DownloadPack::Borders => {
-                        report(
-                            base + 0.02 * span,
-                            "Downloading Natural Earth 10m country borders…",
-                        );
-                        let c_path = download_to_file(
-                            &assets_dir,
-                            "ne_10m_admin_0_boundary_lines_land.geojson",
-                            &countries_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.25) * span, m),
-                        )?;
-                        if let Ok(bytes) = storage::read(&c_path)
-                            && let Ok(parsed) =
-                                little_clip_core::geography::basemap::parse_borders_geojson(&bytes)
-                            && let Ok(encoded) = serde_json::to_vec(&parsed)
-                        {
-                            let _ = storage::write(assets_dir.join("borders_admin0.json"), encoded);
-                        }
-                        let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
-                        report(
-                            base + 0.30 * span,
-                            "Downloading Natural Earth 10m state/province borders…",
-                        );
-                        let s_path = download_to_file(
-                            &assets_dir,
-                            "ne_10m_admin_1_states_provinces_lines.geojson",
-                            &states_url,
-                            rem,
-                            &cancelled,
-                            |f, m| report(base + (0.30 + f * 0.60) * span, m),
-                        )?;
-                        if let Ok(bytes) = storage::read(&s_path)
-                            && let Ok(parsed) =
-                                little_clip_core::geography::basemap::parse_borders_geojson(&bytes)
-                            && let Ok(encoded) = serde_json::to_vec(&parsed)
-                        {
-                            let _ = storage::write(assets_dir.join("borders_admin1.json"), encoded);
-                        }
-                    }
-                    DownloadPack::RoadsAndLakes => {
-                        report(base + 0.02 * span, "Downloading Natural Earth 10m lakes…");
-                        let l_path = download_to_file(
-                            &assets_dir,
-                            "ne_10m_lakes.geojson",
-                            &lakes_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.16) * span, m),
-                        )?;
-                        if let Ok(bytes) = storage::read(&l_path)
-                            && let Ok(parsed) =
-                                little_clip_core::geography::basemap::parse_lakes_geojson(&bytes)
-                            && let Ok(encoded) = serde_json::to_vec(&parsed)
-                        {
-                            let _ = storage::write(assets_dir.join("lakes_10m_v2.json"), encoded);
-                        }
-                        let rem = max_assets_bytes.saturating_sub(dir_size(&assets_dir));
-                        report(base + 0.20 * span, "Downloading Natural Earth 10m roads…");
-                        let r_path = download_to_file(
-                            &assets_dir,
-                            "ne_10m_roads.geojson",
-                            &roads_url,
-                            rem,
-                            &cancelled,
-                            |f, m| report(base + (0.20 + f * 0.70) * span, m),
-                        )?;
-                        if let Ok(bytes) = storage::read(&r_path)
-                            && let Ok(parsed) =
-                                little_clip_core::geography::basemap::parse_roads_geojson(&bytes)
-                            && let Ok(encoded) = serde_json::to_vec(&parsed)
-                        {
-                            let _ = storage::write(assets_dir.join("roads_10m.json"), encoded);
-                        }
-                    }
-                    DownloadPack::GrwlSummary => {
-                        let grwl_dir = assets_dir.join("grwl");
-                        report(
-                            base + 0.02 * span,
-                            "Downloading GRWL summary river widths (43 MB)…",
-                        );
-                        let zip_path = download_to_file(
-                            &grwl_dir,
-                            "grwl_summary.zip",
-                            &grwl_summary_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.85) * span, m),
-                        )?;
-                        report(base + 0.88 * span, "Extracting GRWL centerlines…");
-                        extract_matching_from_zip(
-                            &zip_path,
-                            &cancelled,
-                            &[".shp", ".dbf", ".shx"],
-                        )?;
-                    }
-                    DownloadPack::GrwlMasks => {
-                        let mask_dir = assets_dir.join("grwl_masks");
-                        report(
-                            base + 0.02 * span,
-                            "Downloading GRWL 30m water masks (394 MB)…",
-                        );
-                        let zip_path = download_to_file(
-                            &mask_dir,
-                            "grwl_masks.zip",
-                            &grwl_mask_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.85) * span, m),
-                        )?;
-                        report(base + 0.88 * span, "Extracting GRWL 30m water masks…");
-                        extract_matching_from_zip(&zip_path, &cancelled, &[".tif", ".tiff"])?;
-                    }
-                    DownloadPack::WaterOutlines => {
-                        report(base + 0.02 * span, "Downloading GSHHG coastlines & lakes…");
-                        let zip_path = download_to_file(
-                            &assets_dir,
-                            "gshhg.zip",
-                            &gshhg_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.85) * span, m),
-                        )?;
-                        report(base + 0.88 * span, "Extracting GSHHG binary shorelines…");
-                        extract_matching_from_zip(
-                            &zip_path,
-                            &cancelled,
-                            &["gshhs_c.b", "gshhs_l.b", "gshhs_i.b"],
-                        )?;
-                    }
-                    DownloadPack::TerrainGebco => {
-                        let terrain_dir = assets_dir.join("gebco");
-                        let mut candidates = vec![gebco_url.clone()];
-                        for &mirror in GEBCO_FALLBACK_MIRRORS {
-                            if mirror != gebco_url {
-                                candidates.push(mirror.to_string());
-                            }
-                        }
-                        let mut last_err = String::new();
-                        let mut ok = false;
-                        for (idx, url) in candidates.iter().enumerate() {
-                            if cancelled.load(Ordering::Relaxed) {
-                                return Err("Download cancelled".into());
-                            }
-                            let is_zip = url.to_ascii_lowercase().ends_with(".zip");
-                            let fname = if is_zip {
-                                "gebco_terrain.zip"
-                            } else {
-                                url.rsplit('/').next().unwrap_or("gebco_terrain.tif")
-                            };
-                            report(
-                                base + 0.02 * span,
-                                &format!(
-                                    "Downloading GEBCO terrain (mirror {}/{})…",
-                                    idx + 1,
-                                    candidates.len()
-                                ),
-                            );
-                            match download_to_file(
-                                &terrain_dir,
-                                fname,
-                                url,
-                                remaining,
-                                &cancelled,
-                                |f, m| report(base + (0.02 + f * 0.88) * span, m),
-                            ) {
-                                Ok(downloaded) => {
-                                    if is_zip {
-                                        report(
-                                            base + 0.92 * span,
-                                            "Extracting GEBCO terrain files…",
-                                        );
-                                        extract_matching_from_zip(
-                                            &downloaded,
-                                            &cancelled,
-                                            &[".tif", ".tiff", ".nc"],
-                                        )?;
-                                    }
-                                    ok = true;
-                                    break;
-                                }
-                                Err(err) => {
-                                    last_err = err;
-                                }
-                            }
-                        }
-                        if !ok {
-                            return Err(last_err);
-                        }
-                    }
-                    DownloadPack::LandCover => {
-                        use little_clip_core::geography::basemap::land_cover::{
-                            CONVERSION_SPACE, import_netcdf,
-                        };
-                        let tool=CommandRequest::new("gdalwarp").arg("--version").run_cancellable(cancelled)
-                            .map_err(|error|format!("Install GDAL 3.7+ with NetCDF support (gdalwarp) to import land cover: {error}"))?;
-                        if !tool.status.success() {
-                            return Err("GDAL land-cover converter is unavailable".into());
-                        }
-                        let directory =
-                            AssetDirectory::open(&assets_dir).map_err(|error| error.to_string())?;
-                        let filename = "land_cover_lccs_class_2020_v2_1_1.nc";
-                        if let Ok(source) = directory.open_file(std::ffi::OsStr::new(filename)) {
-                            report(
-                                base + 0.2 * span,
-                                "Converting downloaded Copernicus land cover…",
-                            );
-                            import_netcdf(&directory, &source, remaining, cancelled)?;
-                        } else {
-                            let limit = remaining
-                                .checked_sub(CONVERSION_SPACE)
-                                .ok_or("Insufficient disk budget for land-cover import")?;
-                            report(base + 0.02 * span, "Downloading Copernicus land cover…");
-                            let downloaded = download_to_file(
-                                &assets_dir,
-                                filename,
-                                &lc_url,
-                                limit,
-                                cancelled,
-                                |f, m| report(base + (0.02 + f * 0.70) * span, m),
-                            )?;
-                            report(base + 0.75 * span, "Converting Copernicus land cover…");
-                            import_netcdf(
-                                &directory,
-                                &downloaded.file,
-                                downloaded.expansion_budget + CONVERSION_SPACE,
-                                cancelled,
-                            )?;
-                        }
-                    }
-                    DownloadPack::HydroRivers => {
-                        let rivers_dir = assets_dir.join("hydrorivers");
-                        report(
-                            base + 0.02 * span,
-                            "Downloading HydroRIVERS shapefile archive…",
-                        );
-                        let archive = download_to_file(
-                            &rivers_dir,
-                            "hydrorivers.zip",
-                            &rivers_url,
-                            remaining,
-                            &cancelled,
-                            |f, m| report(base + (0.02 + f * 0.88) * span, m),
-                        )?;
-                        report(base + 0.92 * span, "Extracting HydroRIVERS…");
-                        extract_matching_from_zip(&archive, &cancelled, &[".shp", ".dbf", ".shx"])?;
-                    }
-                    DownloadPack::All => {}
-                }
-                Ok(())
+            let queue: Vec<_> = if pack == DownloadPack::All {
+                PACKS
+                    .into_iter()
+                    .filter(|p| !p.installed(&previous))
+                    .collect()
+            } else {
+                vec![pack]
             };
-
-            let result = (|| -> Result<Arc<BasemapAssets>, String> {
-                if pack == DownloadPack::All {
-                    let mut queue = Vec::new();
-                    if !status_snapshot.has_ne2 || !status_snapshot.has_cities {
-                        queue.push(DownloadPack::QuickStart);
-                    }
-                    if !status_snapshot.has_borders {
-                        queue.push(DownloadPack::Borders);
-                    }
-                    if !status_snapshot.has_roads_lakes {
-                        queue.push(DownloadPack::RoadsAndLakes);
-                    }
-                    if !status_snapshot.has_grwl {
-                        queue.push(DownloadPack::GrwlSummary);
-                    }
-                    if !status_snapshot.has_grwl_masks {
-                        queue.push(DownloadPack::GrwlMasks);
-                    }
-                    if !status_snapshot.has_gshhg {
-                        queue.push(DownloadPack::WaterOutlines);
-                    }
-                    if !status_snapshot.has_gebco {
-                        queue.push(DownloadPack::TerrainGebco);
-                    }
-                    if !status_snapshot.has_land_cover {
-                        queue.push(DownloadPack::LandCover);
-                    }
-                    if !status_snapshot.has_hydrorivers {
-                        queue.push(DownloadPack::HydroRivers);
-                    }
-                    let count = queue.len().max(1) as f32;
-                    for (idx, sub) in queue.into_iter().enumerate() {
-                        run_pack(sub, idx as f32 / count, 0.95 / count)?;
-                    }
-                } else {
-                    run_pack(pack, 0.0, 0.95)?;
-                }
-                report(0.96, "Loading offline basemap assets…");
-                let assets = Arc::new(BasemapAssets::load_with_cancel(
-                    &assets_dir,
-                    terrain_override_dir.as_deref(),
-                    cancelled,
-                ));
-                if cancelled.load(Ordering::Relaxed) {
-                    return Err("Download cancelled".into());
-                }
-                let status = assets.status();
-                let installed = |p| match p {
-                    DownloadPack::QuickStart => status.has_quick_start(),
-                    DownloadPack::Borders => status.has_borders,
-                    DownloadPack::RoadsAndLakes => status.has_roads_lakes,
-                    DownloadPack::GrwlSummary => status.has_grwl,
-                    DownloadPack::GrwlMasks => status.has_grwl_masks,
-                    DownloadPack::WaterOutlines => status.has_gshhg,
-                    DownloadPack::TerrainGebco => status.has_gebco,
-                    DownloadPack::LandCover => status.has_land_cover,
-                    DownloadPack::HydroRivers => status.has_hydrorivers,
-                    DownloadPack::All => {
-                        status.has_quick_start()
-                            && status.has_borders
-                            && status.has_roads_lakes
-                            && status.has_grwl
-                            && status.has_grwl_masks
-                            && status.has_gshhg
-                            && status.has_gebco
-                            && status.has_land_cover
-                            && status.has_hydrorivers
-                    }
-                };
-                if !installed(pack) {
-                    return Err(format!("{} did not produce usable map data", pack.label()));
-                }
-                Ok(assets)
-            })();
-            result.map(|assets| (assets, dir_size(&assets_dir)))
+            for (i, &single) in queue.iter().enumerate() {
+                session.run(
+                    single,
+                    i as f32 / queue.len() as f32,
+                    0.95 / queue.len() as f32,
+                )?;
+            }
+            session.report(0.96, "Loading offline basemap assets…");
+            let assets = Arc::new(BasemapAssets::load_with_cancel(
+                &root.path(),
+                override_dir.as_deref(),
+                cancelled,
+            ));
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Download cancelled".into());
+            }
+            if !pack.installed(&assets.status()) {
+                return Err(format!("{} did not produce usable map data", pack.label()));
+            }
+            Ok((assets, dir_size(&root.path())))
         });
         self.cancelled = job.token.clone();
         self.job = Some(job);
