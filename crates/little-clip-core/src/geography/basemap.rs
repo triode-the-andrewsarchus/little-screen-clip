@@ -1,6 +1,8 @@
 //! Offline 3D-globe / 2D-map projection, Oilslick elevation shading, and basemap data loaders.
 
 pub mod land_cover;
+#[cfg(test)]
+mod profile;
 pub mod storage;
 pub mod tiles;
 use storage::AssetDirectory;
@@ -307,6 +309,8 @@ impl HgtStore {
         let heights = if let Some(hit) = cache.0.get(&key) {
             hit.clone()
         } else {
+            #[cfg(test)]
+            let profile_start = std::time::Instant::now();
             let file = directory.open_file(name).ok()?;
             if file.metadata().ok()?.len() > 3601 * 3601 * 2 {
                 return None;
@@ -316,7 +320,16 @@ impl HgtStore {
                 std::os::fd::AsRawFd::as_raw_fd(&file)
             ))
             .ok()?;
+            #[cfg(test)]
+            let profile_read = profile_start.elapsed();
             let parsed = SrtmTile::from_hgt_bytes(key.0, key.1, &bytes)?;
+            #[cfg(test)]
+            profile::record(
+                name,
+                bytes.len(),
+                profile_read,
+                profile_start.elapsed() - profile_read,
+            );
             let (values, order) = &mut *cache;
             cache_chunk(
                 values,
