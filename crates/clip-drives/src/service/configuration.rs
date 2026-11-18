@@ -70,6 +70,9 @@ impl Inputs {
             .settings_generation
             .checked_add(1)
             .expect("settings revision exhausted");
+        Self::capture(owner, roots)
+    }
+    pub fn capture(owner: &Owner, roots: bool) -> Result<Self> {
         let roots = roots
             .then(|| {
                 Ok::<_, Error>((

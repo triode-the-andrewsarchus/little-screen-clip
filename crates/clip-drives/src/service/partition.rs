@@ -377,7 +377,13 @@ impl Owner {
         let source = self.admitted_source(envelope, &drive)?;
         let destination = kind
             .map(|kind| {
-                let root = self.reviewed_backup_destination(envelope, source.as_deref())?;
+                let root = preflight::destination(
+                    &self.db,
+                    &self.state,
+                    self.config.backup_directory.as_deref(),
+                    envelope.review.as_ref(),
+                    source.as_deref(),
+                )?;
                 preflight::space(&root, &drive, kind)?;
                 Ok::<_, Error>(root)
             })

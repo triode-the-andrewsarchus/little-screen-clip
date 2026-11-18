@@ -1,7 +1,11 @@
 //! Bounded independent captures share the retained bulk pool; backups stay exclusive.
 use super::*;
 use little_clip_core::jobs::task::Task;
+mod preparation;
 mod worker;
+pub(super) use preparation::Input;
+#[cfg(test)]
+pub(super) use worker::Worker;
 
 pub(super) struct Pending {
     pub(super) drive: Option<String>,
@@ -59,7 +63,11 @@ impl Owner {
         }
         Ok(())
     }
-    pub(super) fn start_background(&mut self, envelope: Envelope) {
+    pub(super) fn start_background(
+        &mut self,
+        envelope: Envelope,
+        source: Option<scheduling::Source>,
+    ) {
         if self.preference_blocked(&envelope) {
             self.defer_operation(envelope);
             return;
@@ -102,13 +110,24 @@ impl Owner {
             });
             return;
         }
-        let (drive, roots) = match self.bulk_roots(&envelope) {
-            Ok(value) => value,
-            Err(error) => {
-                self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
-                return;
-            }
+        let Some(source) = source else {
+            self.finish_operation(
+                &envelope.id,
+                &envelope.cancel,
+                Err("Missing retained bulk-operation preparation".into()),
+            );
+            return;
         };
+        let Some(destination) = source.destination else {
+            self.finish_operation(
+                &envelope.id,
+                &envelope.cancel,
+                Err("Missing prepared bulk-operation destination".into()),
+            );
+            return;
+        };
+        let drive = source.drive;
+        let roots = vec![source.root, destination];
         if self.claims_busy(&roots.iter().map(|root| root.scope()).collect::<Vec<_>>()) {
             self.defer_operation(envelope);
             return;
@@ -185,36 +204,6 @@ impl Owner {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
             backup::prune(&db, &selected, keep, &cancel)
         });
-    }
-    fn bulk_roots(&self, envelope: &Envelope) -> Result<(Drive, Vec<Arc<Root>>)> {
-        let selector = match &envelope.request {
-            DriveRequest::Backup { drive, .. }
-            | DriveRequest::ReadOnlyBackup { drive }
-            | DriveRequest::Catalog { drive } => drive,
-            DriveRequest::CatalogWithLimits { drive, .. } => drive,
-            _ => return Err("Missing bulk drive".into()),
-        };
-        let drive = self.drive(selector)?;
-        let mut roots = Vec::new();
-        let source = self
-            .admitted_source(envelope, &drive)?
-            .ok_or("Mount the partition before saving a file backup or catalog")?;
-        roots.push(source);
-        if matches!(
-            envelope.request,
-            DriveRequest::Backup { .. } | DriveRequest::ReadOnlyBackup { .. }
-        ) {
-            let source = roots.first().map(Arc::as_ref);
-            let destination = self.reviewed_backup_destination(envelope, source)?;
-            preflight::space(&destination, &drive, BackupKind::Files)?;
-            roots.push(destination);
-        } else {
-            roots.push(Arc::new(Root::open(&self.state)?));
-        }
-        if self.drive(selector)? != drive {
-            return Err("Drive changed while pinning bulk-operation roots".into());
-        }
-        Ok((drive, roots))
     }
     pub(super) fn launch_bulk(
         &mut self,

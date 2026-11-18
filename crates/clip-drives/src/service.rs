@@ -625,7 +625,7 @@ impl Owner {
             envelope.request,
             DriveRequest::PruneBackups { .. } | DriveRequest::MeasureStorage
         ) {
-            self.start_background(envelope);
+            self.start_background(envelope, None);
             return;
         }
         if self.ram_setup_blocks(&envelope.request) {
@@ -696,7 +696,7 @@ impl Owner {
             | DriveRequest::ReadOnlyBackup { .. } => self.start_partition(envelope),
             DriveRequest::Backup { .. }
             | DriveRequest::Catalog { .. }
-            | DriveRequest::CatalogWithLimits { .. } => self.start_background(envelope),
+            | DriveRequest::CatalogWithLimits { .. } => self.start_background(envelope, source),
             _ => {
                 let id = &envelope.id;
                 let result = self.execute_recorded(id, envelope.request, &envelope.cancel);
@@ -1184,6 +1184,7 @@ fn ram_reason(config: &DriveConfig) -> Result<()> {
 mod tests {
     mod admission;
     mod backup_review;
+    mod bulk_preparation;
     mod catalog_cleanup;
     mod catalog_limits;
     mod catalog_workers;

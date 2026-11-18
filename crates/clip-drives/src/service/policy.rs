@@ -197,19 +197,6 @@ fn managed_overlap(
 }
 
 impl Owner {
-    pub(super) fn backup_destination(&self, source: Option<&Root>) -> Result<Arc<Root>> {
-        let path = self
-            .config
-            .backup_directory
-            .as_ref()
-            .ok_or("Choose a DriveBackupDir before starting a backup")?;
-        let destination = Arc::new(Root::create(path)?);
-        self.validate_backup_directory(&destination)?;
-        if source.is_some_and(|source| source.overlap(&destination)) {
-            return Err("Backup destination overlaps the source partition".into());
-        }
-        Ok(destination)
-    }
     /// Every worker uses the same captured-root scheduling policy, including unmount.
     pub(super) fn claims_busy(&self, claims: &[crate::root::Scope]) -> bool {
         let overlaps = |scope: &crate::root::Scope| claims.iter().any(|claim| claim.overlap(scope));
@@ -241,9 +228,6 @@ impl Owner {
                 .background
                 .values()
                 .any(|job| job.scopes().any(|scope| overlaps(&scope)))
-    }
-    pub(super) fn validate_backup_directory(&self, target: &Root) -> Result<()> {
-        validate_backup_storage(&self.db, &self.state, target)
     }
 }
 pub(super) fn validate_pair_targets(

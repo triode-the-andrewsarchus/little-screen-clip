@@ -1,7 +1,7 @@
 //! One bulk operation owns its input pins until its result is delivered.
 use super::*;
 
-pub(super) struct Worker {
+pub(in crate::service) struct Worker {
     pub state: PathBuf,
     pub id: String,
     pub request: DriveRequest,
@@ -92,11 +92,12 @@ impl Worker {
         kind: BackupKind,
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
-        backup::recover_with_cancel(db, &self.cancel)?;
         let destination = self
             .roots
             .last()
             .ok_or("Missing admitted backup destination")?;
+        policy::validate_backup_storage(db, &self.state, destination)?;
+        backup::recover_with_cancel(db, &self.cancel)?;
         preflight::space(destination, &self.drive, kind)?;
         let version = match kind {
             BackupKind::Files => {

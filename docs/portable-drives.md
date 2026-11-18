@@ -218,6 +218,16 @@ File and image backups validate their selected destination against managed stora
 
 Bulk collection uses the source and destination directory handles captured at admission. Replacing either pathname fails the job instead of switching its input or output to the replacement. Catalog collection also pins its selected state directory before creating its database.
 
+File-backup and catalog root preparation shares the four retained scheduling
+workers. Fresh inventory, reviewed-root validation, destination creation, managed
+storage checks and space admission happen there before copy admission. The
+coordinator compares the captured settings, enrolled-root geometry and mount
+observations before accepting the pins. Changed inputs require a retry; any
+created destination directories are retained. Cancellation and shutdown wait for
+the actual preparation call to exit without starting a cancelled copy. An
+initial review check on the coordinator checks expiry only; workers still check
+the original partition and pinned source/destination before execution.
+
 Explicit pruning uses the same retained worker pool and works when the source
 partition is offline. Startup recovery visits prepared publications, withdrawn
 versions and catalog maintenance in bounded passes on that pool. Controls and
@@ -300,7 +310,8 @@ four budgets or choose **Use larger limits** for this capture; **Use configured
 limits** resets them to the current defaults. Canceling the review starts no job.
 The selected budgets are recorded with the catalog and do not change later
 captures. Catalogs created by older versions have unknown capture budgets.
-Captures share one retained background worker with file backups; independent
+Captures use the retained background pool, with one capture by default and up to
+four configured independent captures. File backups remain exclusive. Independent
 drive synchronization continues while a capture runs.
 
 The CLI supports individual per-run overrides; omitted fields inherit the
@@ -526,10 +537,13 @@ mount inventory stayed unchanged. Shutdown retains probes until they actually
 exit. Initial startup/recovery and some operation-admission checks still perform
 synchronous filesystem work.
 
-Read-only scheduling probes also run on a separate four-slot retained pool. They
-resolve device selectors and observe source/export destination regions without
-creating output directories. Busy probes keep their slots until the underlying
-calls exit, including after cancellation. Settings that do not need those probes
+Scheduling probes also run on a separate four-slot retained pool. They resolve
+device selectors and observe source/export destination regions without creating
+output directories. File-backup and catalog requests additionally prepare their
+retained roots on this pool; direct file-backup preparation may create its
+configured destination through the guarded directory creator. Busy probes keep
+their slots until the underlying calls exit, including after cancellation.
+Settings that do not need those probes
 and an already enrolled independent sync pair remain usable when all four slots
 are occupied. Changed mount observations are rejected or scheduled again; these
 scopes never replace the fresh checks used to prepare and execute a mutation.

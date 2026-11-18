@@ -91,10 +91,14 @@ impl Review {
             remember: false,
         })
     }
-    pub fn validate(&self, drive: &Drive) -> Result<()> {
+    pub fn validate_lifetime(&self) -> Result<()> {
         if self.created.elapsed() >= LIFETIME {
             return Err("Backup review expired; review the partition and destination again".into());
         }
+        Ok(())
+    }
+    pub fn validate(&self, drive: &Drive) -> Result<()> {
+        self.validate_lifetime()?;
         if drive != &self.info.drive {
             return Err(
                 "Selected partition changed since review; review it again before backing up".into(),
@@ -144,6 +148,29 @@ pub(super) fn space(root: &Root, drive: &Drive, kind: BackupKind) -> Result<Back
         full_image_bytes,
         btrfs,
     })
+}
+
+pub(super) fn destination(
+    db: &Store,
+    state: &Path,
+    configured: Option<&Path>,
+    review: Option<&Review>,
+    source: Option<&Root>,
+) -> Result<Arc<Root>> {
+    let destination = match review {
+        Some(review) => {
+            review.destination.validate()?;
+            review.destination.clone()
+        }
+        None => Arc::new(Root::create(
+            configured.ok_or("Choose a DriveBackupDir before starting a backup")?,
+        )?),
+    };
+    policy::validate_backup_storage(db, state, &destination)?;
+    if source.is_some_and(|source| source.overlap(&destination)) {
+        return Err("Backup destination overlaps the source partition".into());
+    }
+    Ok(destination)
 }
 
 impl Service {
@@ -265,28 +292,12 @@ impl Owner {
             return Ok(());
         }
         if let Some(review) = &envelope.review {
-            review.validate(&self.drive(&review.info.drive.id)?)
+            review.validate_lifetime()
         } else if self.config.backup_directory.is_none() {
             Err("Choose a DriveBackupDir before starting a backup".into())
         } else {
             Ok(())
         }
-    }
-
-    pub(super) fn reviewed_backup_destination(
-        &self,
-        envelope: &Envelope,
-        source: Option<&Root>,
-    ) -> Result<Arc<Root>> {
-        let Some(review) = &envelope.review else {
-            return self.backup_destination(source);
-        };
-        review.destination.validate()?;
-        self.validate_backup_directory(&review.destination)?;
-        if source.is_some_and(|source| source.overlap(&review.destination)) {
-            return Err("Backup destination overlaps the source partition".into());
-        }
-        Ok(review.destination.clone())
     }
 
     pub(super) fn admit_backup_destination(

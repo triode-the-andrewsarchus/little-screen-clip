@@ -1,4 +1,4 @@
-//! Read-only scheduling probes never occupy the coordinator or authorize writes.
+//! Retained scheduling and bulk preparation never occupy the coordinator.
 use super::*;
 use crate::root::Scope;
 use little_clip_core::{jobs::task::Task, mount_inventory::Snapshot};
@@ -24,6 +24,7 @@ impl Default for Probes {
 pub(super) struct Pending {
     pub envelope: Envelope,
     epoch: u64,
+    inputs: Option<configuration::Inputs>,
     task: Task<Result<Observation>>,
 }
 struct Observation {
@@ -32,32 +33,32 @@ struct Observation {
     mounts: String,
     source: Option<Source>,
 }
-/// RAM and enrollment preparation retain the source behind their scheduling claim.
+/// Retain admitted source and optional bulk destination behind scheduling claims.
 pub(super) struct Source {
     pub drive: Drive,
     pub root: Arc<Root>,
+    pub destination: Option<Arc<Root>>,
 }
 struct Input {
     selector: Option<String>,
     drives: Vec<Drive>,
     save: Option<(PathBuf, Option<PathBuf>)>,
     retain_source: bool,
+    bulk: Option<background::Input>,
 }
 impl Input {
     fn observe(mut self, inventory: &Inventory, cancel: &AtomicBool) -> Result<Observation> {
         cancelled(cancel)?;
         let mounts = Snapshot::capture()?.signature.clone();
-        if let Some(selector) = &self.selector
-            && (selector.starts_with("/dev/") || self.retain_source)
-        {
-            self.drives = inventory()?;
-            self.selector = Some(discovery::select(self.drives.clone(), selector)?.id);
-        }
-        let source = self.source();
+        let source = self.source(inventory);
         let source = if self.retain_source {
             source?
         } else {
             source.ok().flatten()
+        };
+        let source = match self.bulk.take() {
+            Some(bulk) => Some(bulk.prepare(source, inventory, cancel)?),
+            None => source,
         };
         let claims = self.claims(source.as_ref())?;
         cancelled(cancel)?;
@@ -73,7 +74,13 @@ impl Input {
             source: source.filter(|_| self.retain_source),
         })
     }
-    fn source(&self) -> Result<Option<Source>> {
+    fn source(&mut self, inventory: &Inventory) -> Result<Option<Source>> {
+        if let Some(selector) = &self.selector
+            && (selector.starts_with("/dev/") || self.retain_source)
+        {
+            self.drives = inventory()?;
+            self.selector = Some(discovery::select(self.drives.clone(), selector)?.id);
+        }
         let Some(drive) = self
             .drives
             .iter()
@@ -88,6 +95,7 @@ impl Input {
                 Ok(Source {
                     drive: drive.clone(),
                     root: Arc::new(Root::open(path)?),
+                    destination: None,
                 })
             })
             .transpose()
@@ -97,6 +105,11 @@ impl Input {
             .into_iter()
             .map(|source| source.root.scope())
             .collect::<Vec<_>>();
+        claims.extend(
+            source
+                .and_then(|source| source.destination.as_ref())
+                .map(|root| root.scope()),
+        );
         if let Some((destination, source)) = &self.save {
             if let Some(source) = source
                 && let Ok(root) = Root::open(source)
@@ -134,6 +147,12 @@ impl Owner {
                 DriveRequest::BackupDirectory { path } => Some((path.clone(), None)),
                 _ => None,
             };
+            let bulk = background::Input::capture(self, &envelope);
+            let retain_source = bulk.is_some()
+                || matches!(
+                    envelope.request,
+                    DriveRequest::CopyToRam { .. } | DriveRequest::Pair { .. }
+                );
             Ok(Input {
                 selector: self.request_selector(&envelope.request)?,
                 drives: self
@@ -143,10 +162,8 @@ impl Owner {
                     .drives
                     .clone(),
                 save,
-                retain_source: matches!(
-                    envelope.request,
-                    DriveRequest::CopyToRam { .. } | DriveRequest::Pair { .. }
-                ),
+                retain_source,
+                bulk,
             })
         })();
         let input = match input {
@@ -164,6 +181,17 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
+        let inputs = if input.bulk.is_some() {
+            match configuration::Inputs::capture(self, true) {
+                Ok(inputs) => Some(inputs),
+                Err(error) => {
+                    self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let inventory = self.inventory.clone();
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.scheduling.jobs, move || {
@@ -174,6 +202,7 @@ impl Owner {
             Pending {
                 envelope,
                 epoch: self.sync_epoch,
+                inputs,
                 task,
             },
         );
@@ -196,7 +225,13 @@ impl Owner {
                 .remove(&id)
                 .expect("delivered scheduling probe");
             let envelope = job.envelope;
-            let result = cancelled(&envelope.cancel).and(result);
+            let result = cancelled(&envelope.cancel).and(result).and_then(|observation| {
+                if let Some(inputs) = &job.inputs
+                    && !inputs.current(self, Some(&observation.mounts))? {
+                    return Err("Bulk preparation inputs changed; created directories are retained, retry".into());
+                }
+                Ok(observation)
+            });
             if self.closing.load(Ordering::Acquire) {
                 self.finish_operation(
                     &id,
