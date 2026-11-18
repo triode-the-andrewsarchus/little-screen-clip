@@ -5,6 +5,7 @@ use little_clip_core::jobs::task::Task;
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Input {
     pub paths: Vec<PathBuf>,
+    pub ram: Vec<String>,
     pub drives: Vec<Drive>,
     pub rules: Vec<DriveRule>,
     pub mount_signature: Option<String>,
@@ -224,9 +225,11 @@ pub(super) fn observe(input: Input, previous: Option<IndexPolicy>) -> Result<Ind
         return Err("Mount inventory changed while establishing drive policy sources".into());
     }
     let sources = rules::IndexSources::observed(&input.drives, &routed.mounts);
-    let aliases = policy::catalog_paths(&routed.mounts)
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
+    let aliases = policy::managed_mounts(&routed.mounts, |id| {
+        input.ram.iter().any(|known| known == id)
+    })
+    .map(|(mount, _)| mount.target.clone())
+    .collect::<Vec<_>>();
     let mut requests = input
         .rules
         .iter()
@@ -241,8 +244,8 @@ pub(super) fn observe(input: Input, previous: Option<IndexPolicy>) -> Result<Ind
             Some(path),
         )
     }));
-    // The namespace lists every catalog bind target, including disconnected
-    // servers. Literal exclusions need no FUSE getattr/lifetime probe and are
+    // The namespace lists catalog and registered RAM bind targets, including
+    // disconnected servers. Literal exclusions need no FUSE getattr probe and are
     // protected by this same mount signature. They never authorize content.
     requests.retain(|(_, path)| {
         path.as_ref()

@@ -54,6 +54,77 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Registered RAM mount exclusions checkpoint
+
+Registered RAM views now share catalog views' deny-only mount-table exclusions.
+The policy snapshot captures every RAM record through the existing transactional
+paged visitor, independently of the 1,000-row status display. A 1,101-record test
+proves an older registration remains available to mount classification. Ordinary
+unregistered FUSE data sources retain their existing treatment; the mount label
+and a registered RAM ID establish an exclusion, never content-access authority.
+Publication carries those IDs in its private input and excludes each observed
+RAM bind target literally, with the same mount signature as the other rules.
+It does not request attributes from the RAM server to publish the exclusion.
+
+Synchronization, enrollment-target, backup-destination and RAM-export guards use
+the same observed managed mounts. Their namespace paths cover bind aliases,
+including a registered RAM alias remaining after its original mount is removed.
+An own-session local RAM root still requires the existing access/identity checks
+and remains usable. Other managed boundaries nested in that RAM filesystem keep
+their fence: because resolving such paths could itself invoke a stopped server,
+the observed managed FUSE superblock and its aliases are treated as an opaque
+boundary for that check. This does not give an own-session exception permission
+to enter another recorded backup/catalog/session region. Private backing paths
+retain their existing checks. Orphan/missing-registration and wider image/root
+lifetime cases remain with item 1.6.
+
+The negative control `/tmp/portable-drive-ram-managed-before.log` times out after
+15 seconds waiting for a rule to publish while its registered RAM server is
+stopped. The corrected owned-server fixture completes in about one second,
+publishes a verified policy without the global root exclusion, and synchronizes
+an unrelated pair while the server stays stopped. It also checks unregistered
+FUSE treatment, own-session access, managed-source/export-target refusal and a
+nested foreign boundary. The disposable bind test verifies RAM alias exclusion
+and mutation refusal after original-mount removal. Shared policy assertions
+retain exact alias exclusion and verified-publication checks while removing the
+draft's three new test clones.
+
+Evidence: 238 backend tests pass (98 explicit fixtures ignored) in
+`/tmp/portable-drive-ram-managed-backend-final.log`; the stopped-server fixture
+passes in `/tmp/portable-drive-ram-managed-stopped.log`. The native run passes
+114 main cases across FAT32/exFAT/NTFS, plus three owned-daemon probes (117 raw
+test counts), in `/tmp/portable-drive-ram-managed-vm-filesystems/report.json`.
+It covers both RAM/catalog origin-loss aliases, stopped registered RAM and
+unrelated sync, enrollment/reconciliation admission, RAM population, native
+sync/backup/name handling and actual event-loss recovery. The private light RAM
+flow passes copy, pending changes, removal, offline export and reconnect in
+`/tmp/portable-drive-ram-managed-ui-light/report.json`; its reconnected status
+screenshot was inspected. Affected-package all-target Clippy, runtime build,
+changed-source rustfmt and diff checks pass.
+
+The local baseline `pre-ram-export-preparation` was captured before discovering
+this prerequisite. Its comparison remains REGRESSION for added total CCN, with
+216 NLOC, six functions and thirty CCN added. There is no new reported hotspot,
+clone group or dependency cycle. Existing RAM decoding, bounded visitation,
+root overlap and retained policy publication were reused; neither the public
+protocol nor persisted representation gains fields. Reports:
+`.fitness/portable-drives-ram-managed-local.json` and
+`.fitness/portable-drives-ram-managed-branch.json`.
+
+| Local architecture dimension | Before | After |
+| --- | --- | --- |
+| Average / maximum CCN | 3.49 / 274 | 3.49 / 274 |
+| Duplication | 6.97% | 6.97% |
+| Clone groups | 4,300 | 4,300 |
+| Dependency cycles | 144 | 144 |
+
+The original-baseline result remains REGRESSION: average CCN 3.44→3.49,
+maximum 274 unchanged, duplication 7.30%→6.97%, eleven net clone groups and
+cycles 143→144. This is a prerequisite liveness/alias fix; RAM resume/export
+directory preparation and helper recovery still require worker handoff, and
+watch/configuration/mount-control preparation, the wider lifetime matrix and
+final workspace/architecture gates remain open. Items 1.5 and 1.6 stay Partial.
+
 ## Retained folder-enrollment preparation checkpoint
 
 Folder enrollment now carries a fresh partition pin from read-only scheduling

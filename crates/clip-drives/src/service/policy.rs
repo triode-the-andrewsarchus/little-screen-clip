@@ -3,6 +3,22 @@ use super::*;
 mod views;
 pub(super) use views::mounted_views;
 
+pub(super) fn ram_records(db: &Store) -> Result<Vec<RamSession>> {
+    let snapshot =
+        db.0.is_autocommit()
+            .then(|| db.0.unchecked_transaction())
+            .transpose()?;
+    let mut records = Vec::new();
+    db.visit::<RamSession>("ram", |session| {
+        records.push(session);
+        Ok(())
+    })?;
+    if let Some(snapshot) = snapshot {
+        snapshot.commit()?;
+    }
+    Ok(records)
+}
+
 /// Descriptor-free managed-storage inputs, compared again after worker preparation.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Storage {
@@ -19,8 +35,7 @@ impl Storage {
                 .transpose()?;
         let mut backups = preflight::managed_backup_paths(db)?;
         backups.extend(backup_directory.map(Path::to_path_buf));
-        let ram = db
-            .list::<RamSession>("ram", 0, 1000)?
+        let ram = ram_records(db)?
             .into_iter()
             .map(|s| (s.id, s.path, s.backing.map(|b| b.directory)))
             .collect();
@@ -65,7 +80,10 @@ impl Storage {
             )?;
         }
         let mounts = crate::mounts::inventory()?;
-        let aliases = catalog_paths(&mounts).collect::<Vec<_>>();
+        let aliases = managed_mounts(&mounts, |id| {
+            self.ram.iter().any(|(known, _, _)| known == id)
+        })
+        .collect::<Vec<_>>();
         let managed = std::iter::once((&self.state, false))
             .chain(self.backups.iter().map(|p| (p, false)))
             .chain(
@@ -75,56 +93,100 @@ impl Storage {
             )
             .chain(self.views.iter().map(|p| (p, false)));
         for (path, own_view) in managed {
-            if aliases.iter().any(|alias| path.starts_with(alias)) {
-                continue;
-            }
-            if managed_overlap(path, source, local.filter(|_| !own_view)) {
+            if managed_overlap(path, source, local.filter(|_| !own_view), &aliases) {
                 return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
             }
         }
-        for path in aliases {
-            if path_overlap(path, source) || local.is_some_and(|local| path_overlap(path, local)) {
-                return Err("Sync roots overlap a managed catalog filesystem".into());
+        for (mount, ram) in aliases {
+            let own_view = ram.is_some_and(|id| own_ram == Some(id));
+            if path_overlap(&mount.target, source)
+                || local
+                    .filter(|_| !own_view)
+                    .is_some_and(|local| path_overlap(&mount.target, local))
+            {
+                return Err("Sync roots overlap a managed catalog or RAM filesystem".into());
             }
         }
         Ok(())
     }
 }
 
-pub(super) fn catalog_paths(mounts: &[crate::mounts::Mount]) -> impl Iterator<Item = &Path> {
+pub(super) fn managed_mounts<'a>(
+    mounts: &'a [crate::mounts::Mount],
+    known_ram: impl Fn(&str) -> bool + 'a,
+) -> impl Iterator<Item = (&'a crate::mounts::Mount, Option<&'a str>)> {
     mounts
         .iter()
-        .filter(|mount| {
-            mount.filesystem.starts_with("fuse")
-                && mount
-                    .source
-                    .as_os_str()
-                    .as_encoded_bytes()
-                    .starts_with(b"little-clip-catalog:")
+        .filter(|mount| mount.filesystem.starts_with("fuse"))
+        .filter_map(move |mount| {
+            let source = mount.source.as_os_str().as_encoded_bytes();
+            if source.starts_with(b"little-clip-catalog:") {
+                Some((mount, None))
+            } else {
+                let id = std::str::from_utf8(source.strip_prefix(b"little-clip-ram:")?).ok()?;
+                known_ram(id).then_some((mount, Some(id)))
+            }
         })
-        .map(|mount| mount.target.as_path())
 }
 fn path_overlap(path: &Path, root: &Root) -> bool {
     root.path.starts_with(path) || path.starts_with(&root.path)
 }
 
 pub(super) fn validate_view_target(db: &Store, target: &Root) -> Result<()> {
+    let snapshot =
+        db.0.is_autocommit()
+            .then(|| db.0.unchecked_transaction())
+            .transpose()?;
+    let ram = ram_records(db)?;
+    let views = mounted_views(db)?;
+    if let Some(snapshot) = snapshot {
+        snapshot.commit()?;
+    }
     let mounts = crate::mounts::inventory()?;
-    let aliases = catalog_paths(&mounts).collect::<Vec<_>>();
-    if aliases.iter().any(|path| path_overlap(path, target))
-        || mounted_views(db)?
+    let aliases = managed_mounts(&mounts, |id| ram.iter().any(|session| session.id == id))
+        .collect::<Vec<_>>();
+    if aliases
+        .iter()
+        .any(|(mount, _)| path_overlap(&mount.target, target))
+        || views
             .iter()
-            .filter(|path| !aliases.iter().any(|alias| path.starts_with(alias)))
-            .any(|path| managed_overlap(path, target, None))
+            .any(|path| managed_overlap(path, target, None, &aliases))
     {
-        return Err("Destination overlaps a managed catalog or image view".into());
+        return Err("Destination overlaps a managed catalog or image view, or RAM view".into());
     }
     Ok(())
 }
 
 // Missing managed roots retain their lexical boundary; observed roots also
 // compare filesystem coordinates, covering bind aliases without granting writes.
-fn managed_overlap(path: &Path, source: &Root, local: Option<&Root>) -> bool {
+fn managed_overlap(
+    path: &Path,
+    source: &Root,
+    local: Option<&Root>,
+    aliases: &[(&crate::mounts::Mount, Option<&str>)],
+) -> bool {
+    let mut opaque = false;
+    for (origin, _) in aliases
+        .iter()
+        .filter(|(mount, _)| path.starts_with(&mount.target))
+    {
+        opaque = true;
+        // Resolving a nested managed path could itself call a stopped server.
+        // Retain its fence across the observed FUSE superblock and every alias.
+        if aliases
+            .iter()
+            .filter(|(mount, _)| mount.device == origin.device)
+            .any(|(mount, _)| {
+                path_overlap(&mount.target, source)
+                    || local.is_some_and(|root| path_overlap(&mount.target, root))
+            })
+        {
+            return true;
+        }
+    }
+    if opaque {
+        return false;
+    }
     let managed = Root::open(path).ok();
     std::iter::once(source)
         .chain(local)
@@ -188,15 +250,20 @@ pub(super) fn validate_pair_targets(
             "Pause or remove an existing enrollment before adding more than 256 sync pairs".into(),
         );
     }
+    let mounts = crate::mounts::inventory()?;
+    let aliases = managed_mounts(&mounts, |id| {
+        pairs.iter().any(|pair| pair.ram && pair.id == id)
+    })
+    .collect::<Vec<_>>();
     for pair in pairs.iter().filter(|pair| own != Some(pair.id.as_str())) {
-        if managed_overlap(&pair.local, local, None) {
+        if managed_overlap(&pair.local, local, None, &aliases) {
             return Err("This local folder overlaps an existing sync enrollment".into());
         }
     }
     Ok(())
 }
 fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
-    let sessions = db.list::<RamSession>("ram", 0, 1000)?;
+    let sessions = ram_records(db)?;
     validate_backing_paths(
         sessions
             .iter()
@@ -272,6 +339,56 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
 #[cfg(test)]
 mod mounted_tests {
     use super::*;
+
+    #[test]
+    fn registered_ram_mounts_remain_managed_beyond_the_status_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let identity = kernel_interface::MountIdentity::directory(temp.path()).unwrap();
+        let transaction = db.0.unchecked_transaction().unwrap();
+        for number in 0..1101 {
+            let id = format!("session-{number:04}");
+            db.put("ram", &id, &serde_json::json!({
+                "id": id, "drive": "owned", "path": temp.path().join(&id),
+                "identity": identity, "ready": true, "connected": false, "status": "retained legacy record",
+            })).unwrap();
+        }
+        transaction.commit().unwrap();
+        assert!(
+            db.list::<RamSession>("ram", 0, 1000)
+                .unwrap()
+                .iter()
+                .all(|session| session.id != "session-0000")
+        );
+        let records = ram_records(&db).unwrap();
+        assert_eq!(records.len(), 1101);
+        let mount = crate::mounts::Mount {
+            id: 1,
+            device: 1,
+            target: "/owned/alias".into(),
+            source: "little-clip-ram:session-0000".into(),
+            filesystem: "fuse.clip-ram".into(),
+            root: "/".into(),
+            read_only: false,
+            super_read_only: false,
+        };
+        assert_eq!(
+            managed_mounts(std::slice::from_ref(&mount), |id| records
+                .iter()
+                .any(|s| s.id == id))
+            .count(),
+            1
+        );
+        assert_eq!(
+            managed_mounts(std::slice::from_ref(&mount), |_| false).count(),
+            0
+        );
+        let ordinary = crate::mounts::Mount {
+            filesystem: "ext4".into(),
+            ..mount
+        };
+        assert_eq!(managed_mounts(&[ordinary], |_| true).count(), 0);
+    }
 
     fn header(db: &Store, kind: &str, id: &str, mount: Option<&Path>) {
         db.put(kind, id, &serde_json::json!({

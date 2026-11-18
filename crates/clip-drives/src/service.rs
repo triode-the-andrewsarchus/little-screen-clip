@@ -1032,6 +1032,7 @@ impl Owner {
             .policy_input()
             .unwrap_or_else(|error| publication::Input {
                 paths: vec![self.state.clone()],
+                ram: Vec::new(),
                 drives: Vec::new(),
                 rules: Vec::new(),
                 mount_signature: None,
@@ -1063,13 +1064,14 @@ impl Owner {
         if let Some(path) = &self.config.backup_directory {
             excluded.push(path.clone());
         }
-        self.db.visit::<RamSession>("ram", |session| {
+        let mut ram = Vec::new();
+        for session in policy::ram_records(&self.db)? {
+            ram.push(session.id);
             excluded.push(session.path);
             if let Some(backing) = session.backing {
                 excluded.push(backing.directory);
             }
-            Ok(())
-        })?;
+        }
         excluded.extend(policy::mounted_views(&self.db)?);
         excluded.push(self.state.clone());
         let drives = self
@@ -1088,6 +1090,7 @@ impl Owner {
         excluded.dedup();
         Ok(publication::Input {
             paths: excluded,
+            ram,
             drives,
             rules,
             mount_signature: None,
