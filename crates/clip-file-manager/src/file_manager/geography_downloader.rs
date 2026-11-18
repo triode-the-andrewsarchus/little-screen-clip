@@ -1,4 +1,5 @@
 //! Background downloader and extractor for offline 3D globe / 2D map basemap assets.
+pub(super) mod viewfinder;
 
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
@@ -37,6 +38,7 @@ pub enum DownloadPack {
     GrwlMasks,
     WaterOutlines,
     TerrainGebco,
+    Viewfinder,
     LandCover,
     HydroRivers,
     All,
@@ -51,6 +53,7 @@ impl DownloadPack {
             Self::GrwlSummary => "GRWL River Widths (43 MB centerlines)",
             Self::GrwlMasks => "GRWL 30m Water Masks (394 MB)",
             Self::WaterOutlines => "Water Outlines (GSHHG coastlines & lakes)",
+            Self::Viewfinder => "Viewfinder 1″ Regional Terrain",
             Self::TerrainGebco => "GEBCO 2025 Terrain (15\" global DEM)",
             Self::LandCover => "Copernicus 300m Land Cover",
             Self::HydroRivers => "HydroRIVERS Global Network",
@@ -92,6 +95,7 @@ impl DownloadPack {
             Self::GrwlMasks => status.has_grwl_masks,
             Self::WaterOutlines => status.has_gshhg,
             Self::TerrainGebco => status.has_full_gebco,
+            Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
             Self::All => PACKS.into_iter().all(|p| p.installed(status)),
@@ -174,6 +178,7 @@ struct DownloadSession<'a> {
     config: &'a AppConfig,
     cancelled: &'a AtomicBool,
     progress: &'a Mutex<DownloadProgress>,
+    viewfinder: Option<&'a viewfinder::Plan>,
 }
 struct DownloadOutcome {
     assets: Arc<BasemapAssets>,
@@ -242,6 +247,10 @@ impl DownloadSession<'_> {
         }
         match pack {
             DownloadPack::TerrainGebco => self.terrain(base, span),
+            DownloadPack::Viewfinder => viewfinder::download(
+                self,
+                self.viewfinder.ok_or("Missing regional terrain plan")?,
+            ),
             DownloadPack::LandCover => self.land_cover(base, span),
             _ => {
                 let files = pack.files(self.config);
@@ -399,6 +408,19 @@ impl AssetDownloader {
     }
 
     pub fn start(&mut self, pack: DownloadPack, config: &AppConfig) {
+        self.start_planned(pack, config, None);
+    }
+
+    pub fn start_viewfinder(&mut self, config: &AppConfig, plan: viewfinder::Plan) {
+        self.start_planned(DownloadPack::Viewfinder, config, Some(plan));
+    }
+
+    fn start_planned(
+        &mut self,
+        pack: DownloadPack,
+        config: &AppConfig,
+        plan: Option<viewfinder::Plan>,
+    ) {
         if self.active.is_some() {
             return;
         }
@@ -426,6 +448,7 @@ impl AssetDownloader {
                 config: &config,
                 cancelled,
                 progress: &progress,
+                viewfinder: plan.as_ref(),
             };
             let queue: Vec<_> = if pack == DownloadPack::All {
                 PACKS
@@ -745,6 +768,7 @@ mod tests {
             config,
             cancelled: &cancelled,
             progress: &progress,
+            viewfinder: None,
         }
         .download(queue, None)
         .unwrap()

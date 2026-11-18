@@ -1756,7 +1756,17 @@ impl BasemapAssets {
     /// Samples terrain elevation in meters at `(lat, lon)` from local overrides, COG pyramid, or
     /// overview DEM, returning `None` when no DEM is loaded.
     pub fn sample_elevation_at(&self, lat: f64, lon: f64, target_global_width: f64) -> Option<f32> {
-        if let Some(h) = self.terrain_tiles.sample(lat, lon) {
+        // Decoding 26 MB HGT files for globe overviews would churn the cache.
+        // Use local tiles only beyond the installed global DEM's finest level.
+        let global_width = self
+            .cog_dem
+            .as_ref()
+            .and_then(|cog| cog.levels.iter().map(|l| l.width).max())
+            .or_else(|| self.global_dem.as_ref().map(|g| g.width))
+            .unwrap_or(0);
+        if (global_width == 0 || target_global_width > global_width as f64)
+            && let Some(h) = self.terrain_tiles.sample(lat, lon)
+        {
             return Some(h);
         }
         if (target_global_width > 5400.0 || self.global_dem.is_none())
@@ -1770,7 +1780,7 @@ impl BasemapAssets {
 
     /// Samples terrain elevation in meters at `(lat, lon)`.
     pub fn sample_elevation_m(&self, lat: f64, lon: f64) -> Option<f32> {
-        self.sample_elevation_at(lat, lon, 5400.0)
+        self.sample_elevation_at(lat, lon, 1_296_000.0)
     }
 
     /// Samples Natural Earth II RGB using the full 21600×10800 GeoTIFF when zoomed past the 4096×2048 overview.
@@ -2018,15 +2028,16 @@ impl GlobeCamera {
         if blend <= 0.0 {
             let phi = phi0 + y;
             let lambda = x / aspect;
-            return (phi.is_finite()
-                && lambda.is_finite()
-                && phi.abs() <= std::f64::consts::FRAC_PI_2 + 1e-10)
-                .then(|| {
-                    (
-                        phi.to_degrees(),
-                        wrap_lon(self.center_lon + lambda.to_degrees()),
-                    )
-                });
+            return valid_inverse(
+                phi,
+                lambda.rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI,
+            )
+            .then(|| {
+                (
+                    phi.to_degrees(),
+                    wrap_lon(self.center_lon + lambda.to_degrees()),
+                )
+            });
         }
         let globe = orthographic_inverse(x, y, phi0);
         if blend >= 1.0 - 1e-12 {
@@ -3046,6 +3057,28 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn local_terrain_is_decoded_only_when_global_resolution_is_insufficient() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("N00E000.hgt"),
+            777_i16.to_be_bytes().repeat(4),
+        )
+        .unwrap();
+        let mut assets = BasemapAssets::default();
+        load_hgt_dir(root.path(), &mut assets.terrain_tiles);
+        assets.global_dem = Some(GlobalDemGrid {
+            width: 4,
+            height: 2,
+            heights: vec![100; 8],
+        });
+        assert_eq!(assets.sample_elevation_at(0.5, 0.5, 4.0), Some(100.0));
+        assert!(assets.terrain_tiles.cache.lock().unwrap().0.is_empty());
+        assert_eq!(assets.sample_elevation_at(0.5, 0.5, 8.0), Some(777.0));
+        assert_eq!(assets.sample_elevation_m(0.5, 0.5), Some(777.0));
+        assert_eq!(assets.terrain_tiles.cache.lock().unwrap().0.len(), 1);
     }
 
     #[test]

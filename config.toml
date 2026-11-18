@@ -176,6 +176,10 @@ units = "metric"
 # Ask to download offline basemap assets the first time a geography file is opened.
 prompt_on_open = true
 # Total on-disk budget for downloaded geography datasets in bytes (default: 18 GiB < 20 GB).
+# Optional Viewfinder 1″ terrain also counts against this budget.
+# In Offline Assets, estimate/download the current 2D region before adding it.
+# The review shows compressed, unpacked and temporary space requirements.
+# Tiles are saved in assets_dir/terrain; Get all excludes these regional packs.
 # max_assets_bytes = 19327352832
 # Optional custom directory for downloaded offline globe/map assets (outside git).
 # Defaults to $XDG_DATA_HOME/little-screen-clip/geography

@@ -1,6 +1,7 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
 mod geometry;
 pub(super) mod gpu;
+mod terrain_download;
 mod tiles;
 
 use super::{
@@ -126,6 +127,7 @@ pub(super) struct Viewer {
     show_assets_panel: bool,
     tiles: tiles::Tiles,
     render_error: Option<String>,
+    terrain_download: terrain_download::Regional,
 }
 
 impl Viewer {
@@ -170,6 +172,7 @@ impl Viewer {
             show_assets_panel: false,
             tiles: tiles::Tiles::default(),
             render_error: None,
+            terrain_download: terrain_download::Regional::default(),
         };
         viewer.fit_document();
         viewer.select(selected);
@@ -275,6 +278,7 @@ impl Viewer {
             }
 
             self.camera.constrain_view(rect.width(), rect.height());
+            self.terrain_download.viewport = [rect.width(), rect.height()];
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             if let Err(error) = self.tiles.update(
                 ui,
@@ -700,6 +704,9 @@ impl Viewer {
                         ui.colored_label(colors.warning, err);
                     }
                 });
+                if self.show_assets_panel && self.downloader.active.is_none() {
+                    self.terrain_download.ui(ui, self.camera, &self.config, &mut self.downloader);
+                }
             });
     }
 
@@ -849,8 +856,11 @@ fn paint_globe_map(
     let flat = camera.globe_blend() == 0.0;
     for copy in camera.world_shifts(rect.width(), rect.height()) {
         let period = camera.world_width_px(rect.width(), rect.height());
-        if (!flat && copy != 0) || (flat && copy != 0
-            && (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0) {
+        if (!flat && copy != 0)
+            || (flat
+                && copy != 0
+                && (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0)
+        {
             continue;
         }
         let offset = if flat {
