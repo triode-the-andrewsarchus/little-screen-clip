@@ -217,6 +217,10 @@ impl Owner {
             .as_ref()
             .is_some_and(|job| job.claims.iter().any(&overlaps))
             || self
+                .ram_access
+                .as_ref()
+                .is_some_and(|job| job.claims.iter().any(&overlaps))
+            || self
                 .ram_setup
                 .as_ref()
                 .is_some_and(|job| overlaps(&job.source.scope()))
@@ -232,9 +236,6 @@ impl Owner {
                 .background
                 .values()
                 .any(|job| job.scopes().any(|scope| overlaps(&scope)))
-    }
-    pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
-        validate_ram_backing_storage(&self.db, target)
     }
     pub(super) fn validate_backup_directory(&self, target: &Root) -> Result<()> {
         validate_backup_storage(&self.db, &self.state, target)
@@ -262,7 +263,7 @@ pub(super) fn validate_pair_targets(
     }
     Ok(())
 }
-fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
+pub(super) fn validate_ram_backing_storage(db: &Store, target: &Root) -> Result<()> {
     let sessions = ram_records(db)?;
     validate_backing_paths(
         sessions

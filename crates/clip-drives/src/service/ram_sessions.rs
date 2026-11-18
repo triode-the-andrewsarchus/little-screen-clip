@@ -198,7 +198,7 @@ impl Owner {
     }
 }
 
-fn available(session: &RamSession, live: bool) -> Result<()> {
+pub(super) fn available(session: &RamSession, live: bool) -> Result<()> {
     if let Some(backing) = &session.backing {
         if !backing.mounted
             || !live

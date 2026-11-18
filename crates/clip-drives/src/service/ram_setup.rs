@@ -21,11 +21,12 @@ pub(super) struct Allocation {
 
 impl Owner {
     pub(super) fn ram_setup_blocks(&self, request: &DriveRequest) -> bool {
-        self.ram_setup.is_some()
-            && matches!(
-                request,
-                DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
-            )
+        (self.ram_access.is_some() && matches!(request, DriveRequest::CopyToRam { .. }))
+            || self.ram_setup.is_some()
+                && matches!(
+                    request,
+                    DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
+                )
     }
     pub(super) fn start_ram_setup(
         &mut self,

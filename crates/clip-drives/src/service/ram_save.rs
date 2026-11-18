@@ -9,6 +9,16 @@ pub(super) struct Save {
 }
 
 impl Save {
+    fn validate_roots(db: &Store, source: &Root, target: &Root) -> Result<()> {
+        source.validate()?;
+        target.validate()?;
+        policy::validate_ram_backing_storage(db, target)?;
+        policy::validate_view_target(db, target)?;
+        if source.overlap(target) {
+            return Err("Choose a save destination outside this RAM session".into());
+        }
+        Ok(())
+    }
     pub fn run(
         &self,
         db: &Store,
@@ -30,9 +40,7 @@ impl Save {
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<String> {
         cancelled(cancel)?;
-        self.source.validate()?;
-        self.target.validate()?;
-        policy::validate_view_target(db, &self.target)?;
+        Self::validate_roots(db, &self.source, &self.target)?;
         let id = format!("save:{}", self.session.id);
         let root_metadata = scan::observe(&self.source, Path::new(""), false, u64::MAX, cancel)?
             .ok_or("RAM root disappeared")?;
@@ -81,21 +89,24 @@ impl Save {
         ))
     }
 }
-impl Owner {
-    pub(super) fn prepare_ram_save(&mut self, id: &str, destination: &Path) -> Result<Arc<Save>> {
-        self.mount_ram(id)?;
-        let session: RamSession = self.db.get("ram", id)?.ok_or("Unknown RAM session")?;
-        self.ram_available(&session)?;
+impl Save {
+    pub(super) fn prepare(
+        db: &Store,
+        session: RamSession,
+        destination: &Path,
+        claim: &crate::root::Scope,
+        cancel: &AtomicBool,
+    ) -> Result<Arc<Self>> {
+        if Root::planned_scope(destination)? != *claim {
+            return Err("RAM save destination changed since scheduling admission; retry".into());
+        }
+        cancelled(cancel)?;
         let source = Arc::new(Root::open(&session.path)?);
         let base = Root::create(destination)?;
-        self.validate_ram_backing_target(&base)?;
-        policy::validate_view_target(&self.db, &base)?;
-        if source.overlap(&base) {
-            return Err("Choose a save destination outside this RAM session".into());
-        }
+        Self::validate_roots(db, &source, &base)?;
         let name = format!("ram-copy-{}", uuid::Uuid::new_v4());
         base.ensure_directory(Path::new(&name))?;
-        let target = Arc::new(Root::open(&base.path.join(name))?);
+        let target = Arc::new(base.subtree(Path::new(&name))?);
         let pin = target.directory(Path::new(""), false)?;
         File::open(crate::root::anchor(&pin))?
             .set_permissions(fs::Permissions::from_mode(0o700))?;
@@ -105,6 +116,8 @@ impl Owner {
             target,
         }))
     }
+}
+impl Owner {
     pub(super) fn saved_ram_result(&self, save: &Save, result: &Result<String>) -> Result<()> {
         if let Some(mut session) = self.db.get::<RamSession>("ram", &save.session.id)? {
             session.save_status = Some(match result {

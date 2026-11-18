@@ -42,6 +42,7 @@ mod partition;
 mod policy;
 mod preflight;
 mod publication;
+mod ram_access;
 mod ram_pending;
 mod ram_save;
 mod ram_sessions;
@@ -85,6 +86,7 @@ struct Owner {
     children: HashMap<String, std::process::Child>,
     ram_children: HashMap<String, crate::ram::Mounted>,
     ram_setup: Option<ram_setup::Pending>,
+    ram_access: Option<ram_access::Pending>,
     // Keep the creating worker alive until every transferred RAM server has exited.
     ram_setup_jobs: little_clip_core::jobs::BackgroundJobs,
 }
@@ -234,6 +236,7 @@ impl Service {
             children: HashMap::new(),
             ram_children: HashMap::new(),
             ram_setup: None,
+            ram_access: None,
             ram_setup_jobs: little_clip_core::jobs::BackgroundJobs::new_named(
                 1,
                 1,
@@ -448,7 +451,10 @@ impl Owner {
             }
             // Retained admission adds a read phase before copying. Poll those
             // short phases promptly instead of adding an idle 200 ms per phase.
-            let poll_ms = if self.sync_preparing.is_empty() && self.scheduling.pending.is_empty() {
+            let poll_ms = if self.sync_preparing.is_empty()
+                && self.scheduling.pending.is_empty()
+                && self.ram_access.is_none()
+            {
                 200
             } else {
                 20
@@ -480,6 +486,7 @@ impl Owner {
             );
             self.poll_partition();
             self.poll_ram_setup();
+            self.poll_ram_access();
             self.poll_sync();
             for envelope in std::mem::take(&mut self.deferred) {
                 self.operation(envelope);
@@ -526,6 +533,7 @@ impl Owner {
             );
         }
         self.drain_scopes();
+        self.drain_ram_preparation();
         self.drain_sync();
         while let Some(job) = &self.partition {
             job.cancel.store(true, Ordering::Release);
@@ -548,10 +556,6 @@ impl Owner {
                 &self.closing,
                 false,
             );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        while self.ram_setup.is_some() {
-            self.poll_ram_setup();
             std::thread::sleep(Duration::from_millis(20));
         }
         self.ram_children.clear();
@@ -660,7 +664,7 @@ impl Owner {
             DriveRequest::Pair { .. } => self.start_enrollment(envelope, source, claims),
             DriveRequest::Sync { .. }
             | DriveRequest::FlushRam { .. }
-            | DriveRequest::SaveRam { .. } => self.start_reconciliation(envelope),
+            | DriveRequest::SaveRam { .. } => self.start_reconciliation(envelope, claims),
             DriveRequest::Eject { .. }
             | DriveRequest::Backup {
                 kind: BackupKind::Image,
@@ -1186,6 +1190,7 @@ mod tests {
     mod native_read_only;
     mod policy_aliases;
     mod policy_coverage;
+    mod ram_access;
     mod ram_writeback;
     mod read_only;
     mod scope_admission;

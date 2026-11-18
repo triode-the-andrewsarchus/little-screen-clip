@@ -36,6 +36,10 @@ impl Owner {
             .as_ref()
             .is_some_and(|job| job.drive.id == drive)
             || self
+                .ram_access
+                .as_ref()
+                .is_some_and(|job| job.drive == drive)
+            || self
                 .partition
                 .as_ref()
                 .is_some_and(|job| job.drive == drive)

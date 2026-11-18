@@ -185,66 +185,41 @@ impl Owner {
         changes.full |= unavailable && periodic;
         changes
     }
-    pub(super) fn start_reconciliation(&mut self, envelope: Envelope) {
-        if self.sync_waiting.len() >= 16 {
-            self.finish_operation(
+    pub(super) fn start_reconciliation(
+        &mut self,
+        envelope: Envelope,
+        claims: Vec<crate::root::Scope>,
+    ) {
+        let pair = match &envelope.request {
+            DriveRequest::Sync { pair } => pair,
+            DriveRequest::FlushRam { session } | DriveRequest::SaveRam { session, .. } => session,
+            _ => unreachable!("reconciliation request"),
+        };
+        match self.db.get::<RamSession>("ram", pair) {
+            Ok(Some(session)) => self.start_ram_access(envelope, session, claims),
+            Ok(None) if matches!(envelope.request, DriveRequest::Sync { .. }) => {
+                self.queue_sync(reconciliation::Intent {
+                    queued: Instant::now(),
+                    pair: pair.clone(),
+                    initialize: false,
+                    operation: Some(envelope.id),
+                    cancel: envelope.cancel,
+                    paths: None,
+                    save: None,
+                    writeback: None,
+                });
+            }
+            result => self.finish_operation(
                 &envelope.id,
                 &envelope.cancel,
-                Err("Reconciliation queue is full; retry admission".into()),
-            );
-            return;
-        }
-        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.prepare_reconciliation(&envelope.request, &envelope.cancel)
-        }))
-        .unwrap_or_else(|_| {
-            Err("Reconciliation setup failed; retained storage needs recovery".into())
-        });
-        match prepared {
-            Ok((pair, initialize, save)) => self.queue_sync(reconciliation::Intent {
-                queued: Instant::now(),
-                pair,
-                initialize,
-                operation: Some(envelope.id),
-                cancel: envelope.cancel,
-                paths: None,
-                save,
-                writeback: None,
-            }),
-            Err(error) => self.finish_operation(&envelope.id, &envelope.cancel, Err(error)),
-        }
-    }
-    pub(super) fn prepare_reconciliation(
-        &mut self,
-        request: &DriveRequest,
-        cancel: &AtomicBool,
-    ) -> Result<(String, bool, Option<Arc<super::ram_save::Save>>)> {
-        cancelled(cancel)?;
-        match request {
-            DriveRequest::Sync { pair } | DriveRequest::FlushRam { session: pair } => {
-                let initial = self
-                    .db
-                    .get::<RamSession>("ram", pair)?
-                    .is_some_and(|s| !s.ready);
-                if self.db.get::<RamSession>("ram", pair)?.is_some() {
-                    self.mount_ram(pair)?;
-                }
-                Ok((pair.clone(), initial, None))
-            }
-            DriveRequest::SaveRam {
-                session,
-                destination,
-            } => {
-                if self.db.get::<SyncPair>("pair", session)?.is_none() {
-                    return Err("RAM enrollment is missing".into());
-                }
-                Ok((
-                    session.clone(),
-                    false,
-                    Some(self.prepare_ram_save(session, destination)?),
-                ))
-            }
-            _ => Err("Invalid reconciliation request".into()),
+                Err(result.err().unwrap_or_else(|| {
+                    if matches!(envelope.request, DriveRequest::SaveRam { .. }) {
+                        "RAM enrollment is missing".into()
+                    } else {
+                        "Unknown RAM session".into()
+                    }
+                })),
+            ),
         }
     }
     pub(super) fn prepare_sync_pair(&self, pair: SyncPair, drive: &Drive) -> Result<Plan> {

@@ -98,12 +98,13 @@ impl Input {
             .map(|source| source.root.scope())
             .collect::<Vec<_>>();
         if let Some((destination, source)) = &self.save {
-            claims.push(Root::planned_scope(destination)?);
             if let Some(source) = source
                 && let Ok(root) = Root::open(source)
             {
                 claims.push(root.scope());
             }
+            // Enrollment and RAM export retain the destination as the last claim.
+            claims.push(Root::planned_scope(destination)?);
         }
         Ok(claims)
     }
