@@ -44,6 +44,7 @@ impl Viewers {
             Some(ViewerSession::Text(state)) => state.busy(),
             Some(ViewerSession::Pdf(state)) => state.file_write_pending(),
             Some(ViewerSession::Midi(state)) => state.export_pending(),
+            Some(ViewerSession::Geography(state)) => state.writes_pending(),
             _ => false,
         }
     }

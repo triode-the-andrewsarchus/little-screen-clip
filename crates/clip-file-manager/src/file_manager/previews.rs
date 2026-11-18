@@ -842,6 +842,7 @@ impl EntryPreviews {
             revision: entry.revision,
             edge,
             orientation,
+            animate: false,
         }
         .checked(&entry.path, &self.context);
         let started = if refresh {

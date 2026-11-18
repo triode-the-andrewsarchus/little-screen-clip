@@ -1,7 +1,7 @@
 //! Dedicated native-resolution hover preview cache for gallery and similarity grid tiles.
 use super::super::{
     search::PreviewContext,
-    shelf::preview::{Previews, Source},
+    shelf::preview::{AnimatedTexture, Previews, Source},
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,6 +17,7 @@ pub const HOVER_EDGE_STEP: u32 = 128;
 #[derive(Default)]
 pub(in crate::file_manager) struct GalleryHover {
     cache: Previews,
+    animation: AnimatedTexture,
     context: PreviewContext,
     key: Option<(PathBuf, u32, uuid::Uuid, u64)>,
     unhover_time: Option<std::time::Instant>,
@@ -32,11 +33,18 @@ impl GalleryHover {
     /// Polls in-flight hover preview loads and uploads completed textures.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
+        if let Some((_, _, id, _)) = self.key {
+            self.animation
+                .poll(ctx, id, self.cache.get(id), self.unhover_time.is_none());
+        } else {
+            self.animation.clear();
+        }
     }
 
     /// Clears all cached textures and active requests.
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.animation.clear();
         self.key = None;
         self.unhover_time = None;
     }
@@ -92,13 +100,14 @@ impl GalleryHover {
                     revision,
                     edge,
                     orientation: None,
+                    animate: true,
                 }
                 .checked(path, &self.context),
             );
         }
-        self.cache
-            .get(id)
-            .and_then(|ready| ready.texture.as_ref())
+        self.animation
+            .texture()
+            .or_else(|| self.cache.get(id).and_then(|ready| ready.texture.as_ref()))
             .map(|t| (t.id(), t.size_vec2()))
             .or(fallback)
     }
@@ -165,5 +174,94 @@ mod tests {
         // Retain with different hovered path or None clears cache
         hover.retain(Some(path_b));
         assert!(hover.key.is_none());
+    }
+
+    fn write_test_gif(path: &Path, frame_count: usize) {
+        use image::codecs::gif::{GifEncoder, Repeat};
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut bytes);
+            encoder.set_repeat(Repeat::Infinite).unwrap();
+            let frames = (0..frame_count).map(|idx| {
+                let color = if idx % 2 == 0 {
+                    image::Rgba([255, 0, 0, 255])
+                } else {
+                    image::Rgba([0, 255, 0, 255])
+                };
+                image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(4, 4, color),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                )
+            });
+            encoder.encode_frames(frames).unwrap();
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn animated_gif_hover_loads_frames_while_still_gif_stays_static() {
+        let folder = tempfile::tempdir().unwrap();
+        let animated_path = folder.path().join("animated.gif");
+        let still_path = folder.path().join("still.gif");
+        write_test_gif(&animated_path, 3);
+        write_test_gif(&still_path, 1);
+        let entries = crate::file_manager::filesystem::read_directory(
+            folder.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries;
+        let animated_rev = entries
+            .iter()
+            .find(|e| e.path == animated_path)
+            .unwrap()
+            .revision;
+        let still_rev = entries
+            .iter()
+            .find(|e| e.path == still_path)
+            .unwrap()
+            .revision;
+
+        let ctx = egui::Context::default();
+        let mut hover = GalleryHover::default();
+
+        hover.texture_for(&animated_path, animated_rev, 128, None);
+        let id = hover.key.as_ref().unwrap().2;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while hover.cache.get(id).is_none() {
+            hover.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        hover.poll(&ctx);
+        assert!(hover.cache.get(id).unwrap().data.animated_frames.is_some());
+        assert!(hover.animation.texture().is_some());
+
+        hover.texture_for(&still_path, still_rev, 128, None);
+        let still_id = hover.key.as_ref().unwrap().2;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while hover.cache.get(still_id).is_none() {
+            hover.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        hover.poll(&ctx);
+        assert!(
+            hover
+                .cache
+                .get(still_id)
+                .unwrap()
+                .data
+                .animated_frames
+                .is_none()
+        );
+        assert!(hover.animation.texture().is_none());
+        assert!(
+            hover
+                .texture_for(&still_path, still_rev, 128, None)
+                .is_some()
+        );
     }
 }

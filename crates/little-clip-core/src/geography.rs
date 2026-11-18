@@ -1,5 +1,7 @@
 //! Bounded WGS84 geometry and offline map/profile preparation.
+pub mod basemap;
 mod geojson;
+pub mod units;
 use chrono::DateTime;
 use roxmltree::{Document as Xml, Node};
 
@@ -70,6 +72,9 @@ pub struct Document {
     pub features: Vec<Feature>,
     /// Projected bounds [minimum x, minimum y, maximum x, maximum y].
     pub bounds: [f64; 4],
+    /// Unwrapped WGS84 [west, south, east, north], using the same compact
+    /// longitude interval as the planar preview. Includes all source positions.
+    pub geographic_bounds: Option<[f64; 4]>,
     /// Actual partial-data or unsupported-data disclosures.
     pub notes: Vec<String>,
     /// Total original positions.
@@ -286,6 +291,7 @@ fn prepare(
                 })
                 .collect(),
             bounds: [0.0, 0.0, 1.0, 1.0],
+            geographic_bounds: None,
             notes,
             points: 0,
             samples: 0,
@@ -323,6 +329,12 @@ fn prepare(
         title,
         features,
         bounds,
+        geographic_bounds: Some([
+            origin + bounds[0] / cosine,
+            bounds[1],
+            origin + bounds[2] / cosine,
+            bounds[3],
+        ]),
         notes,
         points,
         samples,

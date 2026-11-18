@@ -22,6 +22,7 @@ pub(crate) mod fuse_binwalk;
 mod gallery;
 mod gcode;
 mod geography;
+pub(crate) mod geography_downloader;
 mod image_strip;
 mod mail;
 mod markdown_hover;

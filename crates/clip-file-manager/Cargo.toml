@@ -37,6 +37,7 @@ zstd = { version = "0.13", default-features = false }
 zip = { version = "7.4", default-features = false, features = ["deflate"] }
 imagesize = "0.12"
 tiny-skia = { workspace = true }
+lyon_tessellation = "=1.0.22"
 ttf-parser = "0.25"
 wuff = "0.2.10"
 udev = "0.9.3"

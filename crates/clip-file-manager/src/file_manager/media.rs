@@ -42,6 +42,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub photo_rating: u8,
     pub photo_metadata: Option<little_clip_ops::metadata::ImageMetadataSummary>,
     pub photo: Option<std::sync::Arc<super::image_strip::Analysis>>,
+    pub animated_frames: Option<std::sync::Arc<AnimatedFrames>>,
     pub midi_document: Option<std::sync::Arc<super::midi_strip::Document>>,
     pub handwritten_info: Option<std::sync::Arc<little_clip_core::notebook::Info>>,
     pub pdf_info: Option<std::sync::Arc<little_clip_core::pdf::PdfInfo>>,
@@ -96,9 +97,128 @@ impl PreviewData {
             photo_rating: 0,
             photo_metadata: None,
             photo: None,
+            animated_frames: None,
             materials: None,
         }
     }
+}
+
+pub(in crate::file_manager) struct AnimatedFrame {
+    pub image: ImageThumbnail,
+    pub delay: Duration,
+}
+
+pub(in crate::file_manager) struct AnimatedFrames {
+    pub frames: Vec<AnimatedFrame>,
+    pub total_duration: Duration,
+}
+
+impl AnimatedFrames {
+    /// Returns `(frame_index, remaining_delay)` for `elapsed` within the looping animation.
+    pub fn frame_at(&self, elapsed: Duration) -> (usize, Duration) {
+        if self.frames.len() <= 1 {
+            return (0, Duration::ZERO);
+        }
+        let total_ms = self.total_duration.as_millis() as u64;
+        if total_ms == 0 {
+            return (0, Duration::ZERO);
+        }
+        let pos_ms = (elapsed.as_millis() as u64) % total_ms;
+        let mut accum = 0u64;
+        for (idx, frame) in self.frames.iter().enumerate() {
+            let delay_ms = frame.delay.as_millis() as u64;
+            accum += delay_ms;
+            if pos_ms < accum {
+                let remaining = (accum - pos_ms).max(16);
+                return (idx, Duration::from_millis(remaining));
+            }
+        }
+        (self.frames.len() - 1, Duration::from_millis(16))
+    }
+}
+
+pub(in crate::file_manager) fn is_gif_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"))
+}
+
+const MAX_ANIMATION_FRAMES: usize = 240;
+const MAX_ANIMATION_BYTES: usize = 64 * 1024 * 1024;
+
+/// Decodes a multi-frame GIF into scaled RGBA frames for hover playback.
+///
+/// Returns `None` for non-GIFs, single-frame still GIFs, cancelled jobs, or decode errors.
+pub(in crate::file_manager) fn decode_animated_gif(
+    bytes: &[u8],
+    edge: u32,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Option<((u32, u32), AnimatedFrames)> {
+    use image::{AnimationDecoder, ImageDecoder, codecs::gif::GifDecoder};
+    use std::sync::atomic::Ordering;
+
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut decoder = GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    decoder.set_limits(raster_preview_limits()).ok()?;
+    let (orig_w, orig_h) = decoder.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return None;
+    }
+
+    let mut frames = Vec::new();
+    let mut total_duration = Duration::ZERO;
+    let mut total_bytes = 0usize;
+
+    for frame_result in decoder.into_frames() {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let Ok(frame) = frame_result else {
+            break;
+        };
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        let raw_delay = numer.checked_div(denom).unwrap_or(100);
+        // Browsers normalize < 20ms GIF frame delays to 100ms to avoid runaway CPU usage.
+        let delay_ms = if raw_delay < 20 {
+            100
+        } else {
+            raw_delay.min(10_000)
+        };
+        let delay = Duration::from_millis(u64::from(delay_ms));
+
+        let buffer = frame.into_buffer();
+        let rgba = if buffer.width().max(buffer.height()) > edge && edge > 0 {
+            image::DynamicImage::ImageRgba8(buffer)
+                .thumbnail(edge, edge)
+                .to_rgba8()
+        } else {
+            buffer
+        };
+        let thumb = ImageThumbnail::from_rgba(rgba);
+        total_bytes = total_bytes.saturating_add(thumb.premultiplied_rgba.len());
+        frames.push(AnimatedFrame {
+            image: thumb,
+            delay,
+        });
+        total_duration += delay;
+
+        if frames.len() >= MAX_ANIMATION_FRAMES || total_bytes >= MAX_ANIMATION_BYTES {
+            break;
+        }
+    }
+
+    if frames.len() <= 1 {
+        return None;
+    }
+    Some((
+        (orig_w, orig_h),
+        AnimatedFrames {
+            frames,
+            total_duration,
+        },
+    ))
 }
 
 pub(super) fn media_frame(
@@ -312,5 +432,36 @@ mod tests {
         assert_eq!((width, height), (8192, 1080));
         assert!(validate_video_dimensions((width, height)).is_err());
         assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
+    }
+
+    fn encode_gif(frame_colors: &[[u8; 4]], delay_ms: u32) -> Vec<u8> {
+        use image::codecs::gif::{GifEncoder, Repeat};
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut bytes);
+            encoder.set_repeat(Repeat::Infinite).unwrap();
+            let frames = frame_colors.iter().map(|&rgba| {
+                let img = image::RgbaImage::from_pixel(4, 4, image::Rgba(rgba));
+                image::Frame::from_parts(img, 0, 0, image::Delay::from_numer_denom_ms(delay_ms, 1))
+            });
+            encoder.encode_frames(frames).unwrap();
+        }
+        bytes
+    }
+
+    #[test]
+    fn decode_animated_gif_distinguishes_still_and_animated_gifs() {
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let still = encode_gif(&[[255, 0, 0, 255]], 100);
+        assert!(decode_animated_gif(&still, 128, &cancelled).is_none());
+
+        let animated = encode_gif(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]], 100);
+        let ((w, h), frames) = decode_animated_gif(&animated, 128, &cancelled).unwrap();
+        assert_eq!((w, h), (4, 4));
+        assert_eq!(frames.frames.len(), 3);
+        assert_eq!(frames.frame_at(Duration::from_millis(0)).0, 0);
+        assert_eq!(frames.frame_at(Duration::from_millis(120)).0, 1);
+        assert_eq!(frames.frame_at(Duration::from_millis(250)).0, 2);
+        assert_eq!(frames.frame_at(Duration::from_millis(320)).0, 0);
     }
 }

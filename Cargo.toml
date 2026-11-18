@@ -57,7 +57,7 @@ incremental = false
 [profile.dev.package."*"]
 opt-level = 3
 
-# DSP and image loops are owned by this workspace crate, so the dependency
+# DSP, image and terrain loops live in this workspace crate, so the dependency
 # wildcard above does not optimize them. Keep desktop previews responsive in
 # development builds too; line tables and debug assertions remain enabled.
 [profile.dev.package.little-clip-core]

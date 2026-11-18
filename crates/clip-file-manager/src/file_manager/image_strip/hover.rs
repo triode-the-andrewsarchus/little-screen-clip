@@ -1,6 +1,6 @@
 use super::super::{
     filesystem::Entry,
-    shelf::preview::{Previews, Source},
+    shelf::preview::{AnimatedTexture, Previews, Source},
 };
 use super::Analysis;
 use egui::{Rect, TextureHandle, Ui, vec2};
@@ -10,8 +10,10 @@ use std::{collections::BTreeSet, path::PathBuf};
 pub(in crate::file_manager) struct Hover {
     pub(in crate::file_manager) context: super::super::search::PreviewContext,
     cache: Previews,
+    animation: AnimatedTexture,
     key: Option<(PathBuf, uuid::Uuid, u32, uuid::Uuid)>,
     seen: bool,
+    segment_hovered: bool,
     veil_texture: Option<(uuid::Uuid, usize, TextureHandle)>,
     dimmed_color: Option<[f32; 3]>,
 }
@@ -26,11 +28,19 @@ impl Hover {
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
+        if let Some((_, _, _, id)) = self.key {
+            self.animation
+                .poll(ctx, id, self.cache.get(id), !self.segment_hovered);
+        } else {
+            self.animation.clear();
+        }
     }
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.animation.clear();
         self.key = None;
         self.seen = false;
+        self.segment_hovered = false;
         self.veil_texture = None;
         self.dimmed_color = None;
     }
@@ -52,6 +62,7 @@ impl Hover {
         segment: Option<usize>,
     ) {
         self.seen = true;
+        self.segment_hovered = segment.is_some();
         let screen = ui.ctx().screen_rect().shrink(8.0);
         let top = thumbnail.bottom() + 6.0;
         let bounds = vec2(screen.width(), screen.bottom() - top);
@@ -72,6 +83,7 @@ impl Hover {
         {
             self.clear();
             self.seen = true;
+            self.segment_hovered = segment.is_some();
             self.key = Some((entry.path.clone(), identity, edge, uuid::Uuid::new_v4()));
         }
         let id = self.key.as_ref().unwrap().3;
@@ -83,14 +95,16 @@ impl Hover {
                     revision: entry.revision,
                     edge,
                     orientation: Some(analysis.orientation),
+                    animate: true,
                 }
                 .checked(&entry.path, &self.context),
             );
         }
-        let texture = self
-            .cache
-            .get(id)
-            .and_then(|ready| ready.texture.as_ref())
+        let texture = segment
+            .is_none()
+            .then(|| self.animation.texture())
+            .flatten()
+            .or_else(|| self.cache.get(id).and_then(|ready| ready.texture.as_ref()))
             .or(fallback);
 
         if let Some(seg) = segment {

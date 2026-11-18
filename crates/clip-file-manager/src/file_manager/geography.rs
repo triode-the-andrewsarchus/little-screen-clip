@@ -1,5 +1,16 @@
-//! Offline geographic maps with a linked supplied-elevation profile.
-use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
+//! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
+mod geometry;
+pub(super) mod gpu;
+mod river_coverage;
+mod terrain_download;
+mod tiles;
+
+use super::{
+    filesystem::Entry,
+    geography_downloader::{AssetDownloader, DownloadPack, asset_workers, dir_size},
+    media::PreviewData,
+    shelf::preview::Ready,
+};
 use crate::ui_ext::fit_cartesian_point as project;
 use crate::{
     icons::Icon,
@@ -7,7 +18,16 @@ use crate::{
     ui_appearance::WorkbenchColors,
 };
 use little_clip_core::{
-    geography::{Document, Feature, Kind, MAX_BYTES, Sample},
+    config::AppConfig,
+    geography::{
+        Document, Feature, Kind, MAX_BYTES, Sample,
+        basemap::{
+            BasemapAssets, BasemapStyle, GlobeCamera, MAX_MAP_ZOOM, MIN_MAP_ZOOM, ProjectionMode,
+            oilslick_color,
+        },
+        units::Units,
+    },
+    jobs::task::Task,
     palette::AppPalette,
 };
 use std::{
@@ -32,6 +52,7 @@ fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
         Document::gpx(&bytes)
     }
 }
+
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Geography".into(), Icon::Image);
     match read(path, token) {
@@ -78,19 +99,39 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     }
     data
 }
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Hit {
     feature: usize,
     path: usize,
     point: usize,
 }
+
 pub(super) struct Viewer {
     document: Document,
     selected: usize,
     current: Option<Hit>,
-    zoom: f32,
-    pan: egui::Vec2,
+    camera: GlobeCamera,
+    style: BasemapStyle,
+    show_country_borders: bool,
+    show_state_borders: bool,
+    show_city_names: bool,
+    show_rivers: bool,
+    show_roads: bool,
+    show_contours: bool,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+    config: AppConfig,
+    downloader: AssetDownloader,
+    assets: Option<Arc<BasemapAssets>>,
+    assets_job: Option<Task<(Arc<BasemapAssets>, u64)>>,
+    prompt_dismissed: bool,
+    show_assets_panel: bool,
+    tiles: tiles::Tiles,
+    render_error: Option<String>,
+    terrain_download: terrain_download::Regional,
 }
+
 impl Viewer {
     pub fn load(path: &Path) -> Result<Self, String> {
         let document = read(path, &AtomicBool::new(false))?;
@@ -100,16 +141,52 @@ impl Viewer {
             .enumerate()
             .max_by_key(|(_, f)| f.points)
             .map_or(0, |(i, _)| i);
+        let config = AppConfig::load();
+        let downloader = AssetDownloader::new(&config);
+        let assets_dir = downloader.assets_dir.clone();
+        let override_dir = downloader.terrain_override_dir.clone();
+        let job = Task::start_unbounded(asset_workers(), move |cancel| {
+            let assets = Arc::new(BasemapAssets::load_with_cancel(
+                &assets_dir,
+                override_dir.as_deref(),
+                cancel,
+            ));
+            (assets, dir_size(&assets_dir))
+        });
+
         let mut viewer = Self {
             document,
             selected,
             current: None,
-            zoom: 1.0,
-            pan: egui::Vec2::ZERO,
+            camera: GlobeCamera::default(),
+            style: BasemapStyle::Natural,
+            show_country_borders: true,
+            show_state_borders: true,
+            show_city_names: true,
+            show_rivers: true,
+            show_roads: true,
+            show_contours: true,
+            contour_interval_m: None,
+            local_elev_range: [0.0, 1000.0],
+            config,
+            downloader,
+            assets: None,
+            assets_job: Some(job),
+            prompt_dismissed: false,
+            show_assets_panel: false,
+            tiles: tiles::Tiles::default(),
+            render_error: None,
+            terrain_download: terrain_download::Regional::default(),
         };
+        viewer.fit_document();
         viewer.select(selected);
         Ok(viewer)
     }
+
+    pub fn writes_pending(&self) -> bool {
+        self.downloader.active.is_some()
+    }
+
     pub fn select(&mut self, index: usize) {
         if index < self.document.features.len() {
             self.selected = index;
@@ -124,8 +201,43 @@ impl Viewer {
                 });
         }
     }
+
+    fn fit_document(&mut self) {
+        self.camera.fit_bounds(self.document.geographic_bounds);
+    }
+
+    fn poll_background(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.assets_job {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+            if let Some(result) = job.poll() {
+                self.assets_job = None;
+                match result {
+                    Ok((loaded, disk_usage)) => {
+                        self.downloader.disk_usage_bytes = disk_usage;
+                        self.downloader.status = loaded.status();
+                        self.assets = Some(loaded);
+                    }
+                    Err(error) => {
+                        self.downloader.last_error =
+                            Some(format!("Asset loading failed: {error:?}"))
+                    }
+                }
+                ctx.request_repaint();
+            }
+        }
+        if let Some(downloaded) = self.downloader.poll(ctx) {
+            self.assets = Some(downloaded);
+            ctx.request_repaint();
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
+        self.poll_background(ui.ctx());
         StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |_| {});
+
+        let colors = WorkbenchColors::from_palette(palette);
+        self.download_prompt_banner(ui, palette, colors);
+
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
             ui.allocate_ui_at_rect(left, |ui| {
@@ -135,46 +247,476 @@ impl Viewer {
         }
         ui.allocate_ui_at_rect(layout.center, |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
-            let colors = WorkbenchColors::from_palette(palette);
+            self.toolbar(ui, palette);
+
             let feature = &self.document.features[self.selected];
-            let profile_visible = feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
-            let map_height = (ui.available_height() - if profile_visible { 190.0 } else { 26.0 }).max(80.0);
+            let profile_visible =
+                feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
+            let legend_h = if self.style == BasemapStyle::Oilslick {
+                26.0
+            } else {
+                0.0
+            };
+            let map_height =
+                (ui.available_height() - legend_h - if profile_visible { 190.0 } else { 26.0 })
+                    .max(80.0);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), map_height),
                 egui::Sense::click_and_drag(),
             );
-            crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut self.zoom, &mut self.pan, 16.0);
-            let hit = paint_map(
-                ui, rect, &self.document, Some(self.selected), self.zoom, self.pan, colors,
-            );
-            if response.clicked()
-                && let Some(hit) = hit {
-                    self.selected = hit.feature;
-                    self.current = Some(hit);
-                }
-            if let Some(sample) = self.current.and_then(|hit| self.sample(hit)) {
-                let point = project(rect, self.document.bounds, sample.xy, self.zoom, self.pan);
-                if rect.contains(point) {
-                    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                    painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
-                    painter.circle_filled(point, 2.0, colors.text_primary);
+
+            // Handle drag-to-rotate/pan and scroll-to-zoom with smooth 3D -> 2D transition
+            if response.dragged() {
+                let delta = response.drag_delta();
+                if delta.length_sq() > 0.0 {
+                    self.camera
+                        .pan_by(delta.x, delta.y, rect.width(), rect.height());
                 }
             }
-            ui.label("Offline map · north up · drag to pan, scroll to zoom")
-                .on_hover_text("Local equirectangular projection. Supplied positions only; no basemap or terrain information.");
-            if !profile_visible { return; }
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.01 {
+                    let factor = (scroll * 0.004).exp() as f64;
+                    self.camera.zoom =
+                        (self.camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
+                }
+            }
+
+            self.camera.constrain_view(rect.width(), rect.height());
+            self.terrain_download.viewport = [rect.width(), rect.height()];
+            ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
+            if let Err(error) = self.tiles.update(
+                ui,
+                rect,
+                self.assets.as_ref(),
+                self.camera,
+                self.style,
+                self.show_contours,
+                geometry::Layers {
+                    countries: self.show_country_borders,
+                    states: self.show_state_borders,
+                    rivers: self.show_rivers,
+                    roads: self.show_roads,
+                },
+            ) {
+                self.render_error = Some(error);
+            }
+            self.contour_interval_m = self.tiles.contour;
+            self.local_elev_range = self.tiles.range;
+
+            let hit = paint_globe_map(
+                ui,
+                rect,
+                &self.document,
+                Some(self.selected),
+                &self.camera,
+                self.assets.as_deref().filter(|_| self.show_city_names),
+                self.contour_interval_m,
+                self.local_elev_range,
+                self.config.geography.units,
+                colors,
+            );
+            if response.clicked()
+                && let Some(hit) = hit
+            {
+                self.selected = hit.feature;
+                self.current = Some(hit);
+            }
+            if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
+                && let Some([px, py]) = self.camera.project(
+                    sample.point.lat,
+                    sample.point.lon,
+                    rect.width(),
+                    rect.height(),
+                )
+            {
+                for copy in self.camera.world_shifts(rect.width(), rect.height()) {
+                    if self.camera.globe_blend() > 0.0 && copy != 0 {
+                        continue;
+                    }
+                    let offset = copy as f32
+                        * self.camera.world_width_px(rect.width(), rect.height()) as f32;
+                    let point = egui::pos2(rect.left() + px + offset, rect.top() + py);
+                    if rect.contains(point) {
+                        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                        painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
+                        painter.circle_filled(point, 2.5, colors.text_primary);
+                    }
+                }
+            }
+
+            if self.style == BasemapStyle::Oilslick {
+                paint_oilslick_legend(ui, colors, self.config.geography.units);
+            }
+
+            if let Some(error) = &self.render_error {
+                ui.colored_label(colors.warning, error);
+            }
+            let blend = self.camera.globe_blend();
+            let proj_label = if blend > 0.9 {
+                "3D Globe"
+            } else if blend < 0.1 {
+                "2D Map"
+            } else {
+                "3D → 2D Transition"
+            };
+            let dem_source =
+                if self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0 {
+                    "DEM loaded"
+                } else {
+                    "Terrain unavailable"
+                };
+            ui.label(format!(
+                "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
+                self.camera.zoom
+            ));
+
+            if !profile_visible {
+                return;
+            }
             let feature = &self.document.features[self.selected];
             let (profile, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
                 egui::Sense::hover(),
             );
-            let point = paint_profile(ui, profile, feature, self.selected, self.current, colors);
+            let point = paint_profile(
+                ui,
+                profile,
+                feature,
+                self.selected,
+                self.current,
+                colors,
+                self.config.geography.units,
+            );
             if response.hovered() && point.is_some() && point != self.current {
                 self.current = point;
                 ui.ctx().request_repaint();
             }
         });
     }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let terrain_available =
+            self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("View:");
+            for (label, mode) in [
+                ("Auto 3D→2D", ProjectionMode::Auto),
+                ("3D Globe", ProjectionMode::Globe3D),
+                ("2D Map", ProjectionMode::Map2D),
+            ] {
+                if ui
+                    .selectable_label(self.camera.mode == mode, label)
+                    .clicked()
+                {
+                    self.camera.mode = mode;
+                }
+            }
+            ui.separator();
+            ui.label("Shading:");
+            for (label, style) in [
+                ("Natural", BasemapStyle::Natural),
+                ("Hypsometric", BasemapStyle::Hypsometric),
+                ("Oilslick", BasemapStyle::Oilslick),
+                ("Hillshade", BasemapStyle::Hillshade),
+            ] {
+                let enabled = style == BasemapStyle::Natural || terrain_available;
+                let button = egui::SelectableLabel::new(self.style == style, label);
+                if ui
+                    .add_enabled(enabled, button)
+                    .on_disabled_hover_text(
+                        "Load elevation data in Offline Assets to enable terrain shading.",
+                    )
+                    .clicked()
+                {
+                    self.style = style;
+                }
+            }
+            ui.separator();
+            ui.checkbox(&mut self.show_country_borders, "Countries")
+                .on_hover_text("Show country borders and coastline outlines.");
+            ui.checkbox(&mut self.show_state_borders, "States");
+            ui.checkbox(&mut self.show_city_names, "City names");
+            ui.checkbox(&mut self.show_rivers, "Rivers");
+            ui.checkbox(&mut self.show_roads, "Roads");
+            ui.add_enabled(
+                terrain_available,
+                egui::Checkbox::new(&mut self.show_contours, "Contours"),
+            )
+            .on_disabled_hover_text("Contours require GEBCO elevation or local HGT terrain.");
+            ui.separator();
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Globe", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.camera.zoom = 1.0;
+            }
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Fit", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.fit_document();
+            }
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Offline Assets…", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
+                self.show_assets_panel = !self.show_assets_panel;
+            }
+        });
+    }
+
+    fn download_prompt_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        colors: WorkbenchColors,
+    ) {
+        if self.assets_job.is_some() {
+            ui.label("Loading offline map assets…");
+            return;
+        }
+        let needs_prompt = self.config.geography.prompt_on_open
+            && !self.downloader.status.has_quick_start()
+            && !self.prompt_dismissed;
+        if !needs_prompt
+            && !self.show_assets_panel
+            && self.downloader.active.is_none()
+            && self.downloader.last_error.is_none()
+        {
+            return;
+        }
+        egui::Frame::none()
+            .fill(colors.recessed)
+            .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(pack) = self.downloader.active {
+                        let prog = self.downloader.progress_snapshot();
+                        ui.strong(pack.label());
+                        ui.add(
+                            egui::ProgressBar::new(prog.fraction)
+                                .desired_width(180.0)
+                                .text(prog.message),
+                        );
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Cancel", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.cancel();
+                        }
+                        return;
+                    }
+                    if needs_prompt {
+                        ui.strong("Download offline globe & map basemap?");
+                        ui.label(format!(
+                            "Assets folder: {} (configurable in config.toml [geography])",
+                            self.downloader.assets_dir.display()
+                        ));
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Primary
+                                    .button("Download Quick Start (NE2 + Cities ≥ 250k)", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.start(DownloadPack::QuickStart, &self.config);
+                        }
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Get all", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.downloader.start(DownloadPack::All, &self.config);
+                        }
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Not now", palette)
+                                    .compact(),
+                            )
+                            .clicked()
+                        {
+                            self.prompt_dismissed = true;
+                        }
+                    }
+                    if self.show_assets_panel {
+                        ui.separator();
+                        let st = self.downloader.status.clone();
+                        let used_gb =
+                            self.downloader.disk_usage_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                        let budget_gb =
+                            self.downloader.max_assets_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                        ui.label(format!(
+                            "Disk: {used_gb:.2}/{budget_gb:.1} GB · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
+                            yes_no(st.has_ne2),
+                            yes_no(st.has_cities),
+                            yes_no(st.has_borders),
+                            yes_no(st.has_roads_lakes),
+                            yes_no(st.has_grwl),
+                            yes_no(st.has_grwl_masks),
+                            yes_no(st.has_gshhg),
+                            if st.has_full_gebco { "15″" } else if st.has_gebco { "overview only" } else { "no" },
+                            yes_no(st.has_land_cover),
+                            st.local_hgt_count
+                        ));
+                        if (!st.has_ne2
+                            || !st.has_cities
+                            || !st.has_borders
+                            || !st.has_roads_lakes
+                            || !st.has_grwl
+                            || !st.has_grwl_masks
+                            || !st.has_gshhg
+                            || !st.has_full_gebco
+                            || !st.has_land_cover
+                            || !st.has_hydrorivers)
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Primary
+                                        .button("Get all", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::All, &self.config);
+                        }
+                        if !st.has_ne2
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get NE2 + Cities", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::QuickStart, &self.config);
+                        }
+                        if !st.has_borders
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Borders (~7 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::Borders, &self.config);
+                        }
+                        if !st.has_roads_lakes
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Roads & Lakes (~55 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::RoadsAndLakes, &self.config);
+                        }
+                        if !st.has_grwl
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GRWL Widths (43 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::GrwlSummary, &self.config);
+                        }
+                        if !st.has_grwl_masks
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GRWL 30m Masks (394 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::GrwlMasks, &self.config);
+                        }
+                        if !st.has_gshhg
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GSHHG Water (~113 MB)", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::WaterOutlines, &self.config);
+                        }
+                        if !st.has_full_gebco
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get GEBCO 15″ Terrain", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::TerrainGebco, &self.config);
+                        }
+                        if !st.has_land_cover
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get Land Cover", palette)
+                                        .compact(),
+                                )
+                                .on_hover_text("Importing land cover requires GDAL 3.7+ (gdalwarp) with NetCDF support. Other map layers download independently.")
+                                .clicked()
+                        {
+                            self.downloader.start(DownloadPack::LandCover, &self.config);
+                        }
+                        if !st.has_hydrorivers
+                            && ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Get HydroRIVERS", palette)
+                                        .compact(),
+                                )
+                                .clicked()
+                        {
+                            self.downloader
+                                .start(DownloadPack::HydroRivers, &self.config);
+                        }
+                    }
+                    if let Some(err) = &self.downloader.last_error {
+                        ui.colored_label(colors.warning, err);
+                    }
+                });
+                if self.show_assets_panel && self.downloader.active.is_none() {
+                    self.terrain_download.ui(ui, self.camera, &self.config, &mut self.downloader);
+                }
+            });
+    }
+
     fn sample(&self, hit: Hit) -> Option<&Sample> {
         self.document
             .features
@@ -183,6 +725,7 @@ impl Viewer {
             .get(hit.path)?
             .get(hit.point)
     }
+
     fn details(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if !self.document.title.is_empty() {
             ui.heading(&self.document.title);
@@ -192,6 +735,7 @@ impl Viewer {
             self.document.features.len(),
             self.document.points
         ));
+        let mut zoom_f32 = self.camera.zoom as f32;
         ui.horizontal(|ui| {
             if ui
                 .add(
@@ -201,14 +745,20 @@ impl Viewer {
                 )
                 .clicked()
             {
-                self.zoom = 1.0;
-                self.pan = egui::Vec2::ZERO;
+                self.fit_document();
+                zoom_f32 = self.camera.zoom as f32;
             }
-            ui.add(
-                egui::Slider::new(&mut self.zoom, 1.0..=16.0)
-                    .show_value(false)
-                    .text("Zoom"),
-            );
+            if ui
+                .add(
+                    egui::Slider::new(&mut zoom_f32, MIN_MAP_ZOOM as f32..=MAX_MAP_ZOOM as f32)
+                        .logarithmic(true)
+                        .show_value(false)
+                        .text("Zoom"),
+                )
+                .changed()
+            {
+                self.camera.zoom = zoom_f32 as f64;
+            }
         });
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut chosen = None;
@@ -249,12 +799,15 @@ impl Viewer {
                 ));
                 if matches!(feature.kind, Kind::Line | Kind::Polygon) {
                     ui.label(format!(
-                        "Spherical length {:.2} km",
-                        feature.distance_m / 1000.0
+                        "Spherical length {}",
+                        self.config.geography.units.distance(feature.distance_m)
                     ));
                 }
                 if let Some([low, high]) = feature.elevation {
-                    ui.label(format!("Supplied elevation {low:.1}–{high:.1} m"));
+                    ui.label(format!(
+                        "Supplied elevation {}",
+                        self.config.geography.units.elevation_range(low, high)
+                    ));
                 }
                 if let Some(sample) = self.current.and_then(|hit| self.sample(hit)) {
                     ui.separator();
@@ -262,12 +815,18 @@ impl Viewer {
                     ui.label(format!("Latitude {:.6}", sample.point.lat));
                     ui.label(format!("Longitude {:.6}", sample.point.lon));
                     if let Some(value) = sample.point.elevation {
-                        ui.label(format!("Elevation {value:.1} m"));
+                        ui.label(format!(
+                            "Elevation {}",
+                            self.config.geography.units.elevation(value)
+                        ));
                     }
                     if !sample.point.time.is_empty() {
                         ui.add(egui::Label::new(&sample.point.time).wrap(true));
                     }
-                    ui.label(format!("Along feature {:.1} m", sample.distance_m));
+                    ui.label(format!(
+                        "Along feature {}",
+                        self.config.geography.units.distance(sample.distance_m)
+                    ));
                 }
                 for (name, value) in &feature.properties {
                     ui.strong(name);
@@ -279,6 +838,319 @@ impl Viewer {
             });
     }
 }
+
+fn yes_no(v: bool) -> &'static str {
+    if v { "ok" } else { "missing" }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Renders projected basemap raster, coastlines, cities, and GeoJSON/GPX overlay"
+)]
+fn paint_globe_map(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    doc: &Document,
+    selected: Option<usize>,
+    camera: &GlobeCamera,
+    assets: Option<&BasemapAssets>,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+    units: Units,
+    colors: WorkbenchColors,
+) -> Option<Hit> {
+    let mut hit = None;
+    let flat = camera.globe_blend() == 0.0;
+    for copy in camera.world_shifts(rect.width(), rect.height()) {
+        let period = camera.world_width_px(rect.width(), rect.height());
+        if (!flat && copy != 0)
+            || (flat
+                && copy != 0
+                && (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0)
+        {
+            continue;
+        }
+        let offset = if flat {
+            copy as f32 * camera.world_width_px(rect.width(), rect.height()) as f32
+        } else {
+            0.0
+        };
+        hit = paint_globe_copy(ui, rect, doc, selected, camera, assets, colors, offset).or(hit);
+    }
+    if let Some(hit) = hit {
+        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
+        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+            ui.label(&doc.features[hit.feature].name);
+            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+        });
+    }
+    paint_scale_and_contour_overlay(
+        ui,
+        &ui.painter_at(rect),
+        rect,
+        camera,
+        contour_interval_m,
+        local_elev_range,
+        units,
+    );
+    hit
+}
+
+fn paint_globe_copy(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    doc: &Document,
+    selected: Option<usize>,
+    camera: &GlobeCamera,
+    assets: Option<&BasemapAssets>,
+    colors: WorkbenchColors,
+    offset: f32,
+) -> Option<Hit> {
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
+    if let Some(assets) = assets
+        && !assets.cities.is_empty()
+    {
+        let min_pop = if camera.zoom < 3.0 {
+            250_000
+        } else if camera.zoom < 8.0 {
+            50_000
+        } else {
+            0
+        };
+        let mut occupied: Vec<egui::Rect> = Vec::new();
+        for city in &assets.cities {
+            if city.pop_max < min_pop {
+                break;
+            }
+            let Some([px, py]) = camera.project(city.lat, city.lon, rect.width(), rect.height())
+            else {
+                continue;
+            };
+            let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
+            if !rect.contains(pos) {
+                continue;
+            }
+            let font_size = if city.pop_max >= 1_000_000 {
+                13.5
+            } else {
+                12.0
+            };
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    city.name.clone(),
+                    egui::FontId::proportional(font_size),
+                    egui::Color32::from_rgb(248, 250, 252),
+                )
+            });
+            let label_pos = pos + egui::vec2(6.0, -galley.size().y * 0.5);
+            let pill_rect =
+                egui::Rect::from_min_size(label_pos, galley.size()).expand2(egui::vec2(4.0, 1.5));
+            let box_rect = pill_rect.expand(4.0);
+            if occupied.iter().any(|r| r.intersects(box_rect)) {
+                continue;
+            }
+            occupied.push(box_rect);
+            painter.circle_filled(pos, 3.0, egui::Color32::from_rgb(255, 214, 96));
+            painter.circle_stroke(
+                pos,
+                3.0,
+                egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(180)),
+            );
+            painter.rect_filled(pill_rect, 3.0, egui::Color32::from_black_alpha(150));
+            painter.galley(label_pos, galley, egui::Color32::from_rgb(248, 250, 252));
+            if occupied.len() >= 56 {
+                break;
+            }
+        }
+    }
+
+    // User GeoJSON / GPX features
+    let pointer = super::ui::preview_hovered(ui, rect)
+        .then(|| ui.input(|i| i.pointer.hover_pos()))
+        .flatten();
+    let mut nearest = 64.0;
+    let mut hit = None;
+    for (index, feature) in doc.features.iter().enumerate() {
+        let color = if selected == Some(index) {
+            colors.accent
+        } else {
+            colors.text_primary.gamma_multiply(0.85)
+        };
+        for (path_index, path) in feature.paths.iter().enumerate() {
+            let mut positions = Vec::with_capacity(path.len());
+            let mut sample_indices = Vec::with_capacity(path.len());
+            for (s_idx, sample) in path.iter().enumerate() {
+                if let Some([px, py]) = camera.project(
+                    sample.point.lat,
+                    sample.point.lon,
+                    rect.width(),
+                    rect.height(),
+                ) {
+                    positions.push(egui::pos2(rect.left() + px + offset, rect.top() + py));
+                    sample_indices.push(s_idx);
+                } else if positions.len() > 1 && matches!(feature.kind, Kind::Line | Kind::Polygon)
+                {
+                    painter.add(egui::Shape::line(
+                        std::mem::take(&mut positions),
+                        egui::Stroke::new(
+                            if selected == Some(index) {
+                                3.0_f32
+                            } else {
+                                1.75_f32
+                            },
+                            color,
+                        ),
+                    ));
+                    sample_indices.clear();
+                } else {
+                    positions.clear();
+                    sample_indices.clear();
+                }
+            }
+            if matches!(feature.kind, Kind::Line | Kind::Polygon) && positions.len() > 1 {
+                painter.add(egui::Shape::line(
+                    positions.clone(),
+                    egui::Stroke::new(
+                        if selected == Some(index) {
+                            3.0_f32
+                        } else {
+                            1.75_f32
+                        },
+                        color,
+                    ),
+                ));
+            }
+            if feature.kind == Kind::Point || path.len() == 1 {
+                for position in &positions {
+                    painter.circle_filled(*position, 4.5, color);
+                }
+            }
+            if let Some(pointer) = pointer
+                && let Some((pos_idx, distance)) = nearest_on_path(
+                    &positions,
+                    pointer,
+                    matches!(feature.kind, Kind::Line | Kind::Polygon),
+                )
+                && distance < nearest
+                && let Some(&orig_point) = sample_indices.get(pos_idx)
+            {
+                nearest = distance;
+                hit = Some(Hit {
+                    feature: index,
+                    path: path_index,
+                    point: orig_point,
+                });
+            }
+        }
+    }
+    hit
+}
+
+fn paint_scale_and_contour_overlay(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &GlobeCamera,
+    contour_interval_m: Option<f32>,
+    local_elev_range: [f32; 2],
+    units: Units,
+) {
+    let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
+    let meters_per_px = 6_371_000.0 / scale_px;
+    let target_m = meters_per_px * 110.0;
+    let (nice_m, scale_label) = units.scale_bar(target_m);
+    let bar_w = (nice_m / meters_per_px) as f32;
+
+    let mut text = scale_label;
+    if let Some(interval) = contour_interval_m {
+        text.push_str(&format!(
+            "  ·  Contour: {} (index {})  ·  Elev: {}",
+            units.elevation(interval as f64),
+            units.elevation(interval as f64 * 5.0),
+            units.elevation_range(local_elev_range[0] as f64, local_elev_range[1] as f64)
+        ));
+    }
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(
+            text,
+            egui::FontId::proportional(11.5),
+            egui::Color32::from_rgb(244, 246, 250),
+        )
+    });
+    let box_w = (bar_w + galley.size().x + 26.0).min(rect.width() - 20.0);
+    let box_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.bottom() - 32.0),
+        egui::vec2(box_w, 22.0),
+    );
+    painter.rect_filled(box_rect, 4.0, egui::Color32::from_black_alpha(165));
+    let bar_y = box_rect.center().y + 2.0;
+    let bar_x0 = box_rect.left() + 8.0;
+    let bar_x1 = bar_x0 + bar_w;
+    let stroke = egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(244, 246, 250));
+    painter.line_segment(
+        [egui::pos2(bar_x0, bar_y), egui::pos2(bar_x1, bar_y)],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(bar_x0, bar_y - 4.0),
+            egui::pos2(bar_x0, bar_y + 1.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(bar_x1, bar_y - 4.0),
+            egui::pos2(bar_x1, bar_y + 1.0),
+        ],
+        stroke,
+    );
+    painter.galley(
+        egui::pos2(bar_x1 + 8.0, box_rect.center().y - galley.size().y * 0.5),
+        galley,
+        egui::Color32::from_rgb(244, 246, 250),
+    );
+}
+
+fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors, units: Units) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    let bar = egui::Rect::from_min_max(
+        rect.min + egui::vec2(4.0, 4.0),
+        egui::pos2(
+            (rect.right() - 190.0).max(rect.left() + 80.0),
+            rect.bottom() - 4.0,
+        ),
+    );
+    let steps = 64usize;
+    let step_w = bar.width() / steps as f32;
+    for i in 0..steps {
+        let elev = if i < 4 {
+            0.0
+        } else {
+            ((i - 4) as f32 / (steps - 4) as f32) * 3500.0
+        };
+        let [r, g, b] = oilslick_color(elev, 0.9);
+        let seg = egui::Rect::from_min_size(
+            egui::pos2(bar.left() + i as f32 * step_w, bar.top()),
+            egui::vec2(step_w + 0.5, bar.height()),
+        );
+        painter.rect_filled(seg, 0.0, egui::Color32::from_rgb(r, g, b));
+    }
+    painter.text(
+        egui::pos2(bar.right() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!(
+            "Oilslick: {} cycle + sea-level break",
+            units.elevation(500.0)
+        ),
+        egui::TextStyle::Small.resolve(ui.style()),
+        colors.text_secondary,
+    );
+}
+
 fn paint_map(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -350,6 +1222,7 @@ fn paint_map(
     }
     hit
 }
+
 fn nearest_on_path(
     positions: &[egui::Pos2],
     pointer: egui::Pos2,
@@ -370,6 +1243,7 @@ fn nearest_on_path(
     }
     Some(best)
 }
+
 fn paint_profile(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -377,6 +1251,7 @@ fn paint_profile(
     feature_index: usize,
     current: Option<Hit>,
     colors: WorkbenchColors,
+    units: Units,
 ) -> Option<Hit> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, colors.recessed);
@@ -394,8 +1269,9 @@ fn paint_profile(
         rect.left_top() + egui::vec2(5.0, 3.0),
         egui::Align2::LEFT_TOP,
         format!(
-            "Supplied elevation · {low:.1}–{high:.1} m · {:.2} km",
-            feature.distance_m / 1000.0
+            "Supplied elevation · {} · {}",
+            units.elevation_range(low, high),
+            units.distance(feature.distance_m)
         ),
         egui::TextStyle::Small.resolve(ui.style()),
         colors.text_secondary,
@@ -454,6 +1330,7 @@ fn paint_profile(
     }
     hit
 }
+
 pub(super) fn show_list(
     ui: &mut egui::Ui,
     row: egui::Rect,
