@@ -2682,13 +2682,12 @@ fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
         else {
             continue;
         };
-        let Ok(file) = directory.open_file(&entry.file_name()) else {
+        // Inventory metadata only. Guarded payload opening and identity checks
+        // happen on first use, avoiding thousands of NAS opens at startup.
+        let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        let Ok(metadata) = file.metadata() else {
-            continue;
-        };
-        if metadata.len() <= 3601 * 3601 * 2 {
+        if metadata.is_file() && metadata.len() <= 3601 * 3601 * 2 {
             out.sources
                 .entry(key)
                 .or_insert_with(|| (directory.clone(), entry.file_name()));
@@ -3075,6 +3074,22 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn hgt_inventory_rejects_nonregular_entries_and_revalidates_on_use() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let tile = root.path().join("N00E000.hgt");
+        fs::write(&tile, [0, 10, 0, 10, 0, 10, 0, 10]).unwrap();
+        symlink(&tile, root.path().join("N00E001.hgt")).unwrap();
+        fs::create_dir(root.path().join("N00E002.hgt")).unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        assert_eq!(store.sources.len(), 1);
+        fs::remove_file(&tile).unwrap();
+        symlink("/dev/zero", &tile).unwrap();
+        assert_eq!(store.sample(0.5, 0.5), None);
     }
 
     #[test]
