@@ -2,6 +2,127 @@
 use super::*;
 use std::collections::HashSet;
 
+#[test]
+fn ram_source_checks_do_not_reenter_the_coordinator() {
+    use std::sync::atomic::AtomicUsize;
+    let fixture = TestDrives::new(0);
+    let armed = Arc::new(AtomicBool::new(false));
+    let active = armed.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let service = fixture.start_observed_reads(Arc::new(move || {
+        if active.load(Ordering::Acquire)
+            && std::thread::current().name() == Some("portable-drive-owner")
+        {
+            observed.fetch_add(1, Ordering::AcqRel);
+        }
+    }));
+    armed.store(true, Ordering::Release);
+    let result = completed(
+        &service,
+        DriveRequest::CopyToRam {
+            drive: "part:large".into(),
+        },
+    );
+    armed.store(false, Ordering::Release);
+    service.shutdown().unwrap();
+    assert_eq!(result.state, "failed", "{}", result.message);
+    assert!(status(&service).ram.is_empty());
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        0,
+        "RAM source discovery ran on the coordinator"
+    );
+}
+
+#[test]
+fn held_ram_source_revalidation_keeps_independent_work_live_and_retires_before_allocation() {
+    for fault in ["drive", "root", "shutdown"] {
+        let shutdown = fault == "shutdown";
+        let fixture = TestDrives::new(0);
+        let (entered, release, observe) =
+            worker_observer("drive-ram-setup-", Arc::new(AtomicBool::new(true)));
+        let service = fixture.start_observed_reads(observe);
+        let local = fixture.pair(&service, "small", "");
+        let operation = accept(
+            &service,
+            DriveRequest::CopyToRam {
+                drive: "part:large".into(),
+            },
+        );
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_unfinished(&service, &operation);
+        finish(
+            &service,
+            DriveRequest::Rule {
+                drive: "part:small".into(),
+                relative: "private".into(),
+                catalog: true,
+                index: false,
+            },
+        );
+        fs::write(
+            local.join("independent"),
+            b"sync during RAM source validation",
+        )
+        .unwrap();
+        wait_contents(
+            &fixture.temp.path().join("small/independent"),
+            b"sync during RAM source validation",
+        );
+        let closing = if shutdown {
+            service
+                .request(DriveRequest::Cancel {
+                    operation: operation.clone(),
+                })
+                .unwrap();
+            assert_unfinished(&service, &operation);
+            Some(shutdown_while_held(&service))
+        } else {
+            if fault == "drive" {
+                fixture.drives.lock().unwrap()[1].evidence =
+                    "replaced during source validation".into();
+            } else {
+                let source = fixture.temp.path().join("large");
+                fs::rename(&source, fixture.temp.path().join("removed-large")).unwrap();
+                fs::create_dir(source).unwrap();
+            }
+            None
+        };
+        release.send(()).unwrap();
+        if let Some(closing) = closing {
+            finish_held_shutdown(closing);
+        }
+        let result = wait_operation(&service, &operation, |op| op.finished.is_some());
+        if shutdown {
+            assert_eq!(result.state, "cancelled", "{}", result.message);
+        } else {
+            assert_eq!(result.state, "failed", "{}", result.message);
+            assert!(
+                result.message.contains(if fault == "drive" {
+                    "Drive changed during RAM preparation"
+                } else {
+                    "Directory or mount was replaced or removed"
+                }),
+                "{}",
+                result.message
+            );
+            service.shutdown().unwrap();
+        }
+        assert!(status(&service).ram.is_empty());
+        let db = Store::existing(&service.state.join("drives.sqlite"), true).unwrap();
+        assert!(db.ids("ram-allocation", "", 128).unwrap().is_empty());
+        let entries: u64 =
+            db.0.query_row(
+                "SELECT count(*) FROM entries WHERE scan LIKE 'ram-preflight:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(entries, 0);
+    }
+}
+
 fn warm_observers(
     fixture: &TestDrives,
     service: &Service,
@@ -139,76 +260,85 @@ fn four_held_scope_probes_keep_controls_sync_cancellation_and_shutdown_owned() {
 #[test]
 #[ignore = "requires tmpfs, /dev/fuse and the packaged RAM helper; stops only its owned child"]
 fn stalled_fuse_scope_admission_keeps_controls_sync_and_shutdown_owned() {
-    let fixture = TestDrives::new(0);
-    let (backing, source_id, mut native, source) = fixture.native_source("partition");
-    let selector = "/dev/little-clip-owned-scope-fixture";
-    fixture.drives.lock().unwrap()[1].device = selector.into();
-    let threads = Arc::new(Mutex::new(HashMap::new()));
-    let observed = threads.clone();
-    let service = fixture.start_configured(
-        DriveConfig {
-            ram_min_available: u64::MAX,
-            sync_interval_seconds: 3600,
-            ..Default::default()
-        },
-        Some(Arc::new(move || {
-            // SAFETY: gettid has no arguments or memory effects.
-            let tid = unsafe { libc::syscall(libc::SYS_gettid) };
-            observed.lock().unwrap().insert(
-                tid,
-                std::thread::current().name() == Some("portable-drive-owner"),
-            );
-        })),
-        fixture.image_authority(),
-    );
-    let local = fixture.pair(&service, "small", "");
-    let mut shutdown = None;
-    let mut accepted = None;
-    native.with_suspended(|| {
-        let id = accept(
-            &service,
-            DriveRequest::Catalog {
-                drive: selector.into(),
+    for ram in [false, true] {
+        let fixture = TestDrives::new(0);
+        let (backing, source_id, mut native, source) = fixture.native_source("partition");
+        let selector = "/dev/little-clip-owned-scope-fixture";
+        fixture.drives.lock().unwrap()[1].device = selector.into();
+        let threads = Arc::new(Mutex::new(HashMap::new()));
+        let observed = threads.clone();
+        let service = fixture.start_configured(
+            DriveConfig {
+                ram_min_available: u64::MAX,
+                sync_interval_seconds: 3600,
+                ..Default::default()
             },
+            Some(Arc::new(move || {
+                // SAFETY: gettid has no arguments or memory effects.
+                let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+                observed.lock().unwrap().insert(
+                    tid,
+                    std::thread::current().name() == Some("portable-drive-owner"),
+                );
+            })),
+            fixture.image_authority(),
         );
-        let (tid, wait) = wait_fuse_request(|| threads.lock().unwrap().keys().copied().collect());
-        eprintln!("SCOPE_FUSE_METADATA_BLOCKED tid={tid} wchan={wait}");
-        assert!(
-            !threads.lock().unwrap()[&tid],
-            "Coordinator entered the FUSE wait"
-        );
-        assert_configuration_responsive(&service);
-        fs::write(
-            local.join("independent"),
-            b"sync during a real source-scope stall",
-        )
-        .unwrap();
-        wait_contents(
-            &fixture.temp.path().join("small/independent"),
-            b"sync during a real source-scope stall",
-        );
-        service
-            .request(DriveRequest::Cancel {
-                operation: id.clone(),
-            })
+        let local = fixture.pair(&service, "small", "");
+        let mut shutdown = None;
+        let mut accepted = None;
+        native.with_suspended(|| {
+            let id = accept(
+                &service,
+                if ram {
+                    DriveRequest::CopyToRam {
+                        drive: "part:large".into(),
+                    }
+                } else {
+                    DriveRequest::Catalog {
+                        drive: selector.into(),
+                    }
+                },
+            );
+            let (tid, wait) =
+                wait_fuse_request(|| threads.lock().unwrap().keys().copied().collect());
+            eprintln!("SCOPE_FUSE_METADATA_BLOCKED ram={ram} tid={tid} wchan={wait}");
+            assert!(
+                !threads.lock().unwrap()[&tid],
+                "Coordinator entered the FUSE wait"
+            );
+            assert_configuration_responsive(&service);
+            fs::write(
+                local.join("independent"),
+                b"sync during a real source-scope stall",
+            )
             .unwrap();
-        assert_unfinished(&service, &id);
-        let (joining, completed) = shutdown_while_held(&service);
-        accepted = Some(id);
-        shutdown = Some((joining, completed));
-    });
-    finish_held_shutdown(shutdown.unwrap());
-    assert_eq!(
-        wait_operation(&service, &accepted.unwrap(), |op| op.finished.is_some()).state,
-        "cancelled"
-    );
-    assert!(status(&service).catalogs.is_empty());
-    assert_eq!(
-        fs::read(source.join("edit")).unwrap(),
-        b"original portable content"
-    );
-    drop(native);
-    crate::ram::discard(&backing, &source_id).unwrap();
+            wait_contents(
+                &fixture.temp.path().join("small/independent"),
+                b"sync during a real source-scope stall",
+            );
+            service
+                .request(DriveRequest::Cancel {
+                    operation: id.clone(),
+                })
+                .unwrap();
+            assert_unfinished(&service, &id);
+            let (joining, completed) = shutdown_while_held(&service);
+            accepted = Some(id);
+            shutdown = Some((joining, completed));
+        });
+        finish_held_shutdown(shutdown.unwrap());
+        assert_eq!(
+            wait_operation(&service, &accepted.unwrap(), |op| op.finished.is_some()).state,
+            "cancelled"
+        );
+        assert!(status(&service).catalogs.is_empty());
+        assert_eq!(
+            fs::read(source.join("edit")).unwrap(),
+            b"original portable content"
+        );
+        drop(native);
+        crate::ram::discard(&backing, &source_id).unwrap();
+    }
 }
 
 #[test]
@@ -299,4 +429,63 @@ fn simultaneous_scope_deliveries_cannot_replace_the_retained_ram_setup_owner() {
             .is_empty()
     );
     service.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "requires the disposable native-filesystem guest and packaged RAM helper"]
+fn native_ram_source_handoff_populates_and_flushes_the_selected_partition() {
+    crate::require_disposable_guest();
+    let drive = crate::sync_edge_tests::native_fs::guest_drive();
+    let selected = drive.id.clone();
+    let source = drive.mount.clone().unwrap();
+    let folder = PathBuf::from(format!("ram-handoff-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(source.join(&folder)).unwrap();
+    let relative = folder.join("edit");
+    fs::write(source.join(&relative), b"original portable bytes").unwrap();
+    let fixture = TestDrives::new(0);
+    *fixture.drives.lock().unwrap() = vec![drive];
+    let service = fixture.start_configured(
+        DriveConfig {
+            ram_min_available: 0,
+            sync_interval_seconds: 3600,
+            ..Default::default()
+        },
+        None,
+        fixture.image_authority(),
+    );
+    finish(
+        &service,
+        DriveRequest::CopyToRam {
+            drive: selected.clone(),
+        },
+    );
+    let session = status(&service).ram.pop().unwrap();
+    assert!(session.ready && session.connected);
+    assert_eq!(session.drive, selected);
+    assert_eq!(
+        fs::read(session.path.join(&relative)).unwrap(),
+        b"original portable bytes"
+    );
+    finish(
+        &service,
+        DriveRequest::Pause {
+            pair: session.id.clone(),
+            paused: true,
+        },
+    );
+    fs::write(session.path.join(&relative), b"RAM first edit").unwrap();
+    assert_eq!(
+        fs::read(source.join(&relative)).unwrap(),
+        b"original portable bytes"
+    );
+    finish(
+        &service,
+        DriveRequest::FlushRam {
+            session: session.id.clone(),
+        },
+    );
+    assert_eq!(fs::read(source.join(&relative)).unwrap(), b"RAM first edit");
+    discard_ram(&service, &session);
+    service.shutdown().unwrap();
+    fs::remove_dir_all(source.join(folder)).unwrap();
 }

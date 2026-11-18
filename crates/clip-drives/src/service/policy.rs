@@ -198,14 +198,6 @@ impl Owner {
         )?
         .validate(source, local, own_ram)
     }
-    pub(super) fn validate_storage_source(&self, source: &Root) -> Result<()> {
-        Storage::capture(
-            &self.db,
-            &self.state,
-            self.config.backup_directory.as_deref(),
-        )?
-        .validate_source(source)
-    }
     pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
         validate_ram_backing_storage(&self.db, target)
     }

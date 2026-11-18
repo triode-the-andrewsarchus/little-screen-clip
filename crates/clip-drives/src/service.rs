@@ -616,6 +616,7 @@ impl Owner {
         envelope: Envelope,
         drive: Option<String>,
         claims: Vec<crate::root::Scope>,
+        source: Option<scheduling::Source>,
     ) {
         // A probe may have started before another RAM setup acquired the slot.
         if self.ram_setup_blocks(&envelope.request) {
@@ -655,7 +656,7 @@ impl Owner {
             return;
         }
         match &envelope.request {
-            DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope),
+            DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope, source),
             DriveRequest::Pair { .. }
             | DriveRequest::Sync { .. }
             | DriveRequest::FlushRam { .. }
@@ -1837,6 +1838,26 @@ mod tests {
                 .unwrap();
         });
         (entered_rx, release_tx, wait)
+    }
+    fn worker_observer(
+        prefix: &'static str,
+        armed: Arc<AtomicBool>,
+    ) -> (
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let (entered, release, gate) = worker_gate();
+        let observe = Arc::new(move || {
+            if std::thread::current()
+                .name()
+                .is_some_and(|name| name.starts_with(prefix))
+                && armed.swap(false, Ordering::AcqRel)
+            {
+                gate();
+            }
+        });
+        (entered, release, observe)
     }
     #[test]
     fn a_completed_owned_image_survives_remount_failure_with_a_terminal_warning() {

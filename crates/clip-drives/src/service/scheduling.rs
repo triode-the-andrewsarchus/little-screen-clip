@@ -30,23 +30,36 @@ struct Observation {
     drive: Option<String>,
     claims: Vec<Scope>,
     mounts: String,
+    source: Option<Source>,
+}
+/// RAM preparation retains the exact source behind its scheduling claim.
+pub(super) struct Source {
+    pub drive: Drive,
+    pub root: Arc<Root>,
 }
 struct Input {
     selector: Option<String>,
     drives: Vec<Drive>,
     save: Option<(PathBuf, Option<PathBuf>)>,
+    retain_source: bool,
 }
 impl Input {
     fn observe(mut self, inventory: &Inventory, cancel: &AtomicBool) -> Result<Observation> {
         cancelled(cancel)?;
         let mounts = Snapshot::capture()?.signature.clone();
         if let Some(selector) = &self.selector
-            && selector.starts_with("/dev/")
+            && (selector.starts_with("/dev/") || self.retain_source)
         {
             self.drives = inventory()?;
             self.selector = Some(discovery::select(self.drives.clone(), selector)?.id);
         }
-        let claims = self.claims()?;
+        let source = self.source();
+        let source = if self.retain_source {
+            source?
+        } else {
+            source.ok().flatten()
+        };
+        let claims = self.claims(source.as_ref())?;
         cancelled(cancel)?;
         if Snapshot::capture()?.signature != mounts {
             return Err(
@@ -57,19 +70,33 @@ impl Input {
             drive: self.selector,
             claims,
             mounts,
+            source: source.filter(|_| self.retain_source),
         })
     }
-    fn claims(&self) -> Result<Vec<Scope>> {
-        let mut claims = Vec::new();
-        if let Some(path) = self
+    fn source(&self) -> Result<Option<Source>> {
+        let Some(drive) = self
             .drives
             .iter()
             .find(|drive| Some(&drive.id) == self.selector.as_ref())
-            .and_then(|drive| drive.mount.as_ref())
-            && let Ok(root) = Root::open(path)
-        {
-            claims.push(root.scope());
-        }
+        else {
+            return Ok(None);
+        };
+        drive
+            .mount
+            .as_ref()
+            .map(|path| {
+                Ok(Source {
+                    drive: drive.clone(),
+                    root: Arc::new(Root::open(path)?),
+                })
+            })
+            .transpose()
+    }
+    fn claims(&self, source: Option<&Source>) -> Result<Vec<Scope>> {
+        let mut claims = source
+            .into_iter()
+            .map(|source| source.root.scope())
+            .collect::<Vec<_>>();
         if let Some((destination, source)) = &self.save {
             claims.push(Root::planned_scope(destination)?);
             if let Some(source) = source
@@ -115,6 +142,7 @@ impl Owner {
                     .drives
                     .clone(),
                 save,
+                retain_source: matches!(envelope.request, DriveRequest::CopyToRam { .. }),
             })
         })();
         let input = match input {
@@ -125,7 +153,7 @@ impl Owner {
             }
         };
         if input.selector.is_none() && input.save.is_none() {
-            self.dispatch_scoped(envelope, None, Vec::new());
+            self.dispatch_scoped(envelope, None, Vec::new(), None);
             return;
         }
         if self.scheduling.pending.len() >= WORKERS {
@@ -180,7 +208,12 @@ impl Owner {
                     {
                         self.defer_operation(envelope);
                     } else {
-                        self.dispatch_scoped(envelope, observation.drive, observation.claims);
+                        self.dispatch_scoped(
+                            envelope,
+                            observation.drive,
+                            observation.claims,
+                            observation.source,
+                        );
                     }
                 }
                 Err(error) => self.finish_operation(&id, &envelope.cancel, Err(error)),

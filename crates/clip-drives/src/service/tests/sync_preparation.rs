@@ -28,17 +28,8 @@ struct Held {
 impl Held {
     fn new(fixture: &TestDrives) -> Self {
         let armed = Arc::new(AtomicBool::new(false));
-        let observe = armed.clone();
-        let (entered, release, gate) = worker_gate();
-        let service = fixture.start_observed_reads(Arc::new(move || {
-            if std::thread::current()
-                .name()
-                .is_some_and(|name| name.starts_with("drive-sync-"))
-                && observe.swap(false, Ordering::AcqRel)
-            {
-                gate();
-            }
-        }));
+        let (entered, release, observe) = worker_observer("drive-sync-", armed.clone());
+        let service = fixture.start_observed_reads(observe);
         Self {
             service,
             armed,

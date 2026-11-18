@@ -27,31 +27,20 @@ impl Owner {
                 DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
             )
     }
-    pub(super) fn start_ram_setup(&mut self, envelope: Envelope) {
+    pub(super) fn start_ram_setup(
+        &mut self,
+        envelope: Envelope,
+        source: Option<scheduling::Source>,
+    ) {
         let prepared = (|| {
-            let DriveRequest::CopyToRam { drive } = &envelope.request else {
+            let DriveRequest::CopyToRam { .. } = &envelope.request else {
                 return Err("Invalid RAM setup request".into());
             };
-            let drive = self.drive(drive)?;
+            let source = source.ok_or("Mount the drive before copying it to RAM")?;
+            let drive = source.drive;
             self.check_busy(&drive.id)?;
             eligible(&self.db, &self.config, &drive)?;
-            let source = Arc::new(Root::open(
-                drive
-                    .mount
-                    .as_deref()
-                    .ok_or("Mount the drive before copying it to RAM")?,
-            )?);
-            self.validate_storage_source(&source)?;
-            if self.drive(&drive.id)? != drive {
-                return Err("Drive changed while pinning RAM source".into());
-            }
-            if self.claims_busy(&[source.scope()]) {
-                return Err(
-                    "RAM source overlaps an active storage operation; retry after it finishes"
-                        .into(),
-                );
-            }
-            Ok((drive, source))
+            Ok((drive, source.root))
         })();
         let (drive, source) = match prepared {
             Ok(value) => value,
@@ -219,6 +208,7 @@ impl Preparation<'_> {
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<crate::ram::Mounted> {
         cancelled(cancel)?;
+        self.validate_source()?;
         eligible(db, self.config, self.drive)?;
         ram_reason(self.config)?;
         policy::Storage::capture(db, self.state, self.config.backup_directory.as_deref())?
@@ -240,11 +230,10 @@ impl Preparation<'_> {
         self.publish(db, backing)
     }
     fn validate_source(&self) -> Result<()> {
-        self.source.validate()?;
         if discovery::select((self.inventory)()?, &self.drive.id)? != *self.drive {
             return Err("Drive changed during RAM preparation".into());
         }
-        Ok(())
+        self.source.validate()
     }
     fn allocate(
         &self,

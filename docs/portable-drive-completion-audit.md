@@ -54,6 +54,81 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Retained RAM source handoff checkpoint
+
+Copy to RAM now retains the source opened by read-only scheduling admission,
+instead of reopening it and repeating inventory calls on the coordinator. Both
+stable drive IDs and device selectors obtain fresh inventory on the existing
+four scope workers. The resulting drive/root observation supplies the exact
+scheduling claim checked by dispatch; deferral or a changed observation releases
+the pin and retries ordinary admission. Accepted RAM preparation keeps that same
+pin on the existing single preparation worker, with the established busy-drive
+reservation, cancellation, shutdown and singleton ownership. No new pool or
+source-opening mechanism was added.
+
+Before eligibility, RAM availability, managed-root validation, the allocation
+journal or source enumeration, the preparation worker rechecks fresh drive
+identity and validates the retained root. Root validation follows inventory so
+a directory replaced during a slow inventory call cannot pass the earlier
+observation. The existing checks after sizing and allocation remain. RAM quota
+configuration changes still queue while an accepted allocation owns its settings;
+indexing-rule controls and independent pairs continue to run. Broader enrollment,
+export/resume, configuration-directory, bulk/partition and mount-control
+preparation remain tracked in 1.5.
+
+The negative control `/tmp/portable-drive-ram-source-before.log` records two
+coordinator inventory calls during one Copy to RAM request. Its new expectation
+of zero calls fails before the change and passes afterward. Controlled held-worker
+cases verify independent rule completion and sync, changed drive evidence,
+replacement of the source directory during inventory, cancellation, retained
+shutdown/singleton ownership, and absence of preflight rows or allocation journals
+after refusal. The stopped-FUSE scheduling fixture now covers both catalog capture
+and stable-ID Copy to RAM, with observed non-coordinator kernel waits, responsive
+configuration, independent writeback and actual-exit shutdown ownership. Shared
+one-shot named-worker gating reuses the existing bounded gate in RAM and sync
+tests, eliminating the first draft's new test clone.
+
+Validation: 233 backend tests pass (95 explicit fixtures ignored) in
+`/tmp/portable-drive-ram-source-backend-final.log`; affected-package all-target
+Clippy passes with warnings denied in `/tmp/portable-drive-ram-source-clippy.log`.
+The owned native scope run passes all five selected cases, including both stopped
+FUSE requests and simultaneous RAM-setup deliveries, in
+`/tmp/portable-drive-ram-source-native-scopes.log`. The final guest run passes 75
+cases across FAT32/exFAT/NTFS:
+`/tmp/portable-drive-ram-source-vm-final/report.json`. It includes direct service
+partition-to-RAM population, paused RAM-first edits flushed back to the selected
+partition, cancellation/replacement controls, both initial-population recovery
+cases, sync and event-loss recovery. The new service fixture reuses TestDrives
+rather than duplicating startup. Private light UI acceptance passes RAM setup,
+removal, offline export and reconnect, with the reconnected status screenshot
+inspected: `/tmp/portable-drive-ram-source-ui-light/report.json`. The runtime
+build and changed-source rustfmt checks pass.
+
+The local architecture comparison still reports REGRESSION because total CCN
+increased by 11 across the new cases and source handoff. It introduces no new
+reported hotspot, clone group or dependency cycle. `start_ram_setup` falls from
+CCN 17 to 11 by removing coordinator inventory/root work and its duplicated
+admission checks; actual source opening and validation reuse the existing scope
+and RAM preparation workers. All four reported service-test clone fragments
+were already present in `pre-ram-source-preparation`. The shared named gate and
+existing TestDrives fixture remove the two draft test clones without altering
+the assertions. Added code is 211 NLOC and four net functions, primarily test
+coverage; no new public API or dependency is introduced.
+
+| Local architecture dimension | Before | After |
+| --- | --- | --- |
+| Average / maximum CCN | 3.49 / 274 | 3.49 / 274 |
+| Duplication | 6.98% | 6.97% |
+| Clone groups | 4,300 | 4,300 |
+| Dependency cycles | 144 | 144 |
+
+Reports: `.fitness/portable-drives-ram-source-local.json` and
+`.fitness/portable-drives-ram-source-branch.json`. Against the original baseline,
+the unresolved branch result remains REGRESSION: average CCN 3.44→3.49, maximum
+274 unchanged, duplication 7.30%→6.97%, eleven net additional clone groups and
+cycles 143→144. This checkpoint narrows item 1.5; it does not close the other
+audit rows or the final architecture gate.
+
 ## Managed catalog/image boundary checkpoint
 
 The previous status-page lookup could miss a mounted legacy catalog or image
