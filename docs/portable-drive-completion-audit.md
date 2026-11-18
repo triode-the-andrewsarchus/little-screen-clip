@@ -102,8 +102,11 @@ Clippy and the runtime build pass in
 `/tmp/portable-drive-catalog-controls-backend-final.log`,
 `/tmp/portable-drive-catalog-controls-clippy.log` and
 `/tmp/portable-drive-catalog-controls-build.log` (backend/Files/CLI binaries).
-Daemon all-target Clippy also passes in
-`/tmp/portable-drive-catalog-controls-daemon-clippy.log`. Native guest catalog cases use
+Daemon all-target Clippy and its full debug build also pass in
+`/tmp/portable-drive-catalog-controls-daemon-clippy.log` and
+`/tmp/portable-drive-catalog-controls-daemon-build.log`. The cold daemon build
+completed in 20m40s; its retained process was polled through actual successful exit.
+Native guest catalog cases use
 the shared disposable-source fixture also used by retention, capturing real
 FAT32/exFAT/NTFS source metadata while retaining the owned command gates.
 
