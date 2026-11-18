@@ -1472,7 +1472,7 @@ impl GlobeCamera {
         let x_2d = d_lon * rad_per_deg * cos_c * scale;
         let y_2d = -d_lat * rad_per_deg * scale;
 
-        if blend <= 0.001 {
+        if blend <= 0.0 {
             return Some([(cx + x_2d) as f32, (cy + y_2d) as f32]);
         }
 
@@ -1497,37 +1497,78 @@ impl GlobeCamera {
         Some([px as f32, py as f32])
     }
 
-    /// Inverse-projects viewport pixel `(px, py)` back to `(lat, lon)` in degrees.
+    /// Inverse-projects the same blended surface used by the GPU and `project`.
+    /// Pixels outside the visible geographic surface return `None`.
     pub fn unproject(&self, px: f32, py: f32, width: f32, height: f32) -> Option<(f64, f64)> {
-        let blend = self.globe_blend();
-        let scale = self.scale_px(width, height).max(1.0);
-        let nx = (px as f64 - width as f64 * 0.5) / scale;
-        let ny = -(py as f64 - height as f64 * 0.5) / scale;
-
-        if blend < 0.5 {
-            let cos_c = self.center_lat.to_radians().cos().abs().max(0.25);
-            let deg_per_rad = 180.0 / std::f64::consts::PI;
-            let lat = (self.center_lat + ny * deg_per_rad).clamp(-89.9, 89.9);
-            let lon = wrap_lon(self.center_lon + (nx / cos_c) * deg_per_rad);
-            return Some((lat, lon));
-        }
-
-        let r2 = nx * nx + ny * ny;
-        if r2 > 1.0 {
+        let scale = self.scale_px(width, height);
+        if !scale.is_finite() || scale <= 0.0 || !px.is_finite() || !py.is_finite() {
             return None;
         }
-        let rho = r2.sqrt();
-        if rho < 1e-8 {
-            return Some((self.center_lat, self.center_lon));
-        }
-        let c = rho.asin();
-        let sin_c = c.sin();
-        let cos_c = c.cos();
+        let x = (px as f64 - width as f64 * 0.5) / scale;
+        let y = -(py as f64 - height as f64 * 0.5) / scale;
+        let blend = self.globe_blend();
         let phi0 = self.center_lat.to_radians();
-        let lat = (cos_c * phi0.sin() + (ny * sin_c * phi0.cos()) / rho).asin();
-        let lon = self.center_lon.to_radians()
-            + (nx * sin_c).atan2(rho * phi0.cos() * cos_c - ny * phi0.sin() * sin_c);
-        Some((lat.to_degrees(), wrap_lon(lon.to_degrees())))
+        let aspect = phi0.cos().abs().max(0.25);
+        if blend <= 0.0 {
+            let phi = phi0 + y;
+            let lambda = x / aspect;
+            return valid_inverse(phi, lambda).then(|| {
+                (
+                    phi.to_degrees(),
+                    wrap_lon(self.center_lon + lambda.to_degrees()),
+                )
+            });
+        }
+        let globe = orthographic_inverse(x, y, phi0);
+        if blend >= 1.0 - 1e-12 {
+            return globe.map(|(phi, lambda)| {
+                (
+                    phi.to_degrees(),
+                    wrap_lon(self.center_lon + lambda.to_degrees()),
+                )
+            });
+        }
+        // The inverse of a blend is not a blend of its inverses. Solve the two
+        // forward equations with their analytic Jacobian, in radians, with a
+        // bounded damped Newton iteration. Pure globe/map modes remain analytic.
+        let guess = if blend > 0.5 { globe } else { None };
+        let (mut phi, mut lambda) = guess.unwrap_or((
+            (phi0 + y).clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+            (x / aspect).clamp(-std::f64::consts::PI, std::f64::consts::PI),
+        ));
+        let (s0, c0) = phi0.sin_cos();
+        for _ in 0..32 {
+            let (sp, cp) = phi.sin_cos();
+            let (sl, cl) = lambda.sin_cos();
+            let fx = blend * cp * sl + (1.0 - blend) * aspect * lambda - x;
+            let fy = blend * (c0 * sp - s0 * cp * cl) + (1.0 - blend) * (phi - phi0) - y;
+            let front = s0 * sp + c0 * cp * cl;
+            if fx.hypot(fy) * scale < 0.002 {
+                return (valid_inverse(phi, lambda)
+                    && (blend <= 0.2 || front >= -0.02 * (1.0 - blend)))
+                    .then(|| {
+                        (
+                            phi.to_degrees(),
+                            wrap_lon(self.center_lon + lambda.to_degrees()),
+                        )
+                    });
+            }
+            let a = -blend * sp * sl;
+            let b = blend * cp * cl + (1.0 - blend) * aspect;
+            let c = blend * (c0 * cp + s0 * sp * cl) + (1.0 - blend);
+            let d = blend * s0 * cp * sl;
+            let determinant = a * d - b * c;
+            if determinant.abs() < 1e-14 {
+                return None;
+            }
+            let dp = (d * fx - b * fy) / determinant;
+            let dl = (-c * fx + a * fy) / determinant;
+            let damping = (0.35 / dp.abs().max(dl.abs()).max(0.35)).min(1.0);
+            phi = (phi - dp * damping)
+                .clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            lambda = (lambda - dl * damping).clamp(-std::f64::consts::PI, std::f64::consts::PI);
+        }
+        None
     }
 
     /// Pans the camera by screen pixel delta `(dx, dy)`.
@@ -1540,6 +1581,28 @@ impl GlobeCamera {
     }
 }
 
+fn valid_inverse(phi: f64, lambda: f64) -> bool {
+    phi.is_finite()
+        && lambda.is_finite()
+        && phi.abs() <= std::f64::consts::FRAC_PI_2 + 1e-10
+        && lambda.abs() <= std::f64::consts::PI + 1e-10
+}
+fn orthographic_inverse(x: f64, y: f64, phi0: f64) -> Option<(f64, f64)> {
+    let r2 = x * x + y * y;
+    if r2 > 1.0 {
+        return None;
+    }
+    if r2 < 1e-16 {
+        return Some((phi0, 0.0));
+    }
+    let z = (1.0 - r2).sqrt();
+    let (s0, c0) = phi0.sin_cos();
+    Some((
+        (z * s0 + y * c0).clamp(-1.0, 1.0).asin(),
+        x.atan2(c0 * z - y * s0),
+    ))
+}
+
 pub fn choose_contour_interval_m(span_m: f32, zoom: f64) -> f32 {
     let target = (span_m.max(20.0) / 14.0) / (zoom as f32 / 6.0).clamp(0.6, 2.5);
     for &step in &[10.0_f32, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0] {
@@ -1550,8 +1613,7 @@ pub fn choose_contour_interval_m(span_m: f32, zoom: f64) -> f32 {
     1000.0
 }
 
-/// Maps a Natural Earth II pixel into a clean, smudge-free biome color (water, forest, grass,
-/// scrub/desert, rock, snow/ice) so close-zoom terrain stays crisp without blurry baked rivers.
+/// Wraps longitude into the canonical half-open `[-180, 180)` interval.
 pub fn wrap_lon(lon: f64) -> f64 {
     ((lon + 180.0).rem_euclid(360.0)) - 180.0
 }
@@ -2181,6 +2243,52 @@ mod tests {
 
         cam.zoom = 5.0;
         assert_eq!(cam.globe_blend(), 0.0);
+    }
+
+    #[test]
+    fn blended_projection_roundtrips_visible_points_across_the_transition() {
+        for center_lat in [-70.0, 0.0, 35.0, 70.0] {
+            for center_lon in [-179.0, -105.0, 179.0] {
+                for zoom in [1.0, 1.8, 2.0, 2.5, 3.15, 3.8, 4.49, 5.0, 512.0] {
+                    let camera = GlobeCamera {
+                        center_lat,
+                        center_lon,
+                        zoom,
+                        mode: ProjectionMode::Auto,
+                    };
+                    for dy in [-40.0, -15.0, 0.0, 15.0, 40.0] {
+                        for dx in [-80.0, -20.0, 0.0, 20.0, 80.0] {
+                            let lat = (center_lat + dy).clamp(-89.5, 89.5);
+                            let lon = wrap_lon(center_lon + dx);
+                            let Some(p) = camera.project(lat, lon, 960.0, 720.0) else {
+                                continue;
+                            };
+                            let result = camera.unproject(p[0], p[1], 960.0, 720.0);
+                            let (actual_lat, actual_lon) = result.unwrap_or_else(|| {
+                                panic!("inverse missing for {camera:?}, point {lat},{lon} at {p:?}")
+                            });
+                            let q = camera
+                                .project(actual_lat, actual_lon, 960.0, 720.0)
+                                .unwrap();
+                            assert!(
+                                (p[0] - q[0]).hypot(p[1] - q[1]) < 0.02,
+                                "{camera:?}: {p:?} -> {q:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_rejects_background_pixels_and_invalid_viewports() {
+        let mut camera = GlobeCamera::default();
+        assert!(camera.unproject(0.0, 0.0, 960.0, 720.0).is_none());
+        camera.mode = ProjectionMode::Map2D;
+        assert!(camera.unproject(480.0, -10000.0, 960.0, 720.0).is_none());
+        assert!(camera.unproject(f32::NAN, 0.0, 960.0, 720.0).is_none());
+        assert!(camera.unproject(0.0, 0.0, 0.0, 0.0).is_none());
     }
 
     #[test]
