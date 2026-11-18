@@ -1,5 +1,6 @@
 //! Offline 3D-globe / 2D-map projection, Oilslick elevation shading, and basemap data loaders.
 
+pub mod hgt;
 pub mod land_cover;
 #[cfg(test)]
 mod profile;
@@ -338,25 +339,26 @@ impl HgtStore {
         } else {
             #[cfg(test)]
             let profile_start = std::time::Instant::now();
-            let file = directory.open_file(name).ok()?;
-            if file.metadata().ok()?.len() > 3601 * 3601 * 2 {
-                return None;
-            }
-            let mut bytes = storage::read(format!(
-                "/proc/self/fd/{}",
-                std::os::fd::AsRawFd::as_raw_fd(&file)
-            ))
-            .ok()?;
+            let (file, compressed) = match directory.open_file(name) {
+                Ok(file) => (file, false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (directory.open_file(&hgt::compressed_name(name)).ok()?, true)
+                }
+                Err(_) => return None,
+            };
+            let bytes = hgt::read_stored(&file).ok()?;
             #[cfg(test)]
             let profile_read = profile_start.elapsed();
-            hgt_samples(bytes.len())?;
+            #[cfg(test)]
+            let stored_bytes = bytes.len();
+            let mut bytes = hgt::decode(bytes, compressed).ok()?;
             // The snapshot reader grows geometrically; do not let spare capacity
             // evict another useful degree tile from the byte-bounded cache.
             bytes.shrink_to_fit();
             #[cfg(test)]
             profile::record(
                 name,
-                bytes.len(),
+                stored_bytes,
                 profile_read,
                 profile_start.elapsed() - profile_read,
             );
@@ -2737,14 +2739,20 @@ fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
     };
     for entry in entries.take(65_536).flatten() {
         let path = entry.path();
-        if !path
+        let raw_path = path.with_extension("");
+        let hgt_path = if path.extension().is_some_and(|s| s == "zst") {
+            &raw_path
+        } else {
+            &path
+        };
+        if !hgt_path
             .extension()
             .and_then(|s| s.to_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("hgt"))
         {
             continue;
         }
-        let Some(key) = path
+        let Some(key) = hgt_path
             .file_stem()
             .and_then(|s| s.to_str())
             .and_then(parse_hgt_name)
@@ -2756,10 +2764,10 @@ fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if metadata.is_file() && metadata.len() <= 3601 * 3601 * 2 {
+        if metadata.is_file() && metadata.len() <= hgt::MAX_STORED_BYTES as u64 {
             out.sources
                 .entry(key)
-                .or_insert_with(|| (directory.clone(), entry.file_name()));
+                .or_insert_with(|| (directory.clone(), hgt_path.file_name().unwrap().to_owned()));
         }
     }
 }
@@ -3143,6 +3151,34 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(order.len(), 1);
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
+    }
+
+    #[test]
+    fn mixed_hgt_inventory_survives_raw_to_compressed_migration() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = AssetDirectory::open(root.path()).unwrap();
+        let raw = 123_i16.to_be_bytes().repeat(4);
+        let name = std::ffi::OsStr::new("N00E000.hgt");
+        directory.write(name, &raw).unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        let mut frame = Vec::new();
+        hgt::encode(
+            &mut raw.as_slice(),
+            &mut frame,
+            8,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        directory
+            .write(&hgt::compressed_name(name), &frame)
+            .unwrap();
+        fs::remove_file(root.path().join(name)).unwrap();
+        assert_eq!(store.sample(0.5, 0.5), Some(123.));
+        let mut reloaded = HgtStore::default();
+        load_hgt_dir(root.path(), &mut reloaded);
+        assert_eq!(reloaded.sources.len(), 1);
+        assert_eq!(reloaded.sample(0.5, 0.5), Some(123.));
     }
 
     #[test]

@@ -216,10 +216,11 @@ fn catalog(root: &AssetDirectory, cancel: &AtomicBool) -> Result<Vec<Tile>, Stri
     Err("NASADEM catalog exceeds its 20,000-tile limit".into())
 }
 fn present(directory: &AssetDirectory, tile: &Tile) -> bool {
-    directory
-        .open_file(std::ffi::OsStr::new(&tile.filename()))
-        .and_then(|f| f.metadata())
-        .is_ok_and(|m| m.len() == HGT_BYTES)
+    little_clip_core::geography::basemap::hgt::present(
+        directory,
+        std::ffi::OsStr::new(&tile.filename()),
+        HGT_BYTES,
+    )
 }
 fn validate_zip(file: &Downloaded, tile: &Tile) -> Result<(), String> {
     let mut zip =
@@ -559,11 +560,12 @@ pub(crate) fn cli(args: &[std::ffi::OsString]) -> Result<(), String> {
         pending.len()
     );
     println!(
-        "Estimated remaining transfer: {:.2} GB; elevation grids: {:.2} GB; budget available: {:.2} GB",
+        "Estimated remaining transfer: {:.2} GB; uncompressed upper bound: {:.2} GB; budget available: {:.2} GB",
         estimated as f64 / 1e9,
         raw as f64 / 1e9,
         remaining as f64 / 1e9
     );
+    println!("Terrain is stored losslessly as .hgt.zst; budget estimates use uncompressed sizes.");
     println!(
         "Elevation destination: {}",
         config.geo_assets_dir().join("nasadem/terrain").display()

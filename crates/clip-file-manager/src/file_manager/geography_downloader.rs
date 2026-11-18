@@ -708,6 +708,40 @@ impl AsRef<Path> for Downloaded {
     }
 }
 
+// Codec dispatch and bounded copying are independent of archive enumeration.
+fn write_archive_payload(
+    entry: &mut impl Read,
+    staged: &mut impl Write,
+    name: &str,
+    size: u64,
+    remaining: &mut u64,
+    cancelled: &AtomicBool,
+) -> Result<String, String> {
+    if name.to_ascii_lowercase().ends_with(".hgt") {
+        little_clip_core::geography::basemap::hgt::encode(entry, staged, size, cancelled)
+            .map_err(|e| e.to_string())?;
+        *remaining -= size;
+        return Ok(format!("{name}.zst"));
+    }
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Extraction cancelled".into());
+        }
+        let count = entry.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        *remaining = remaining
+            .checked_sub(count as u64)
+            .ok_or("Expanded archive exceeds the geography disk budget")?;
+        staged
+            .write_all(&buffer[..count])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(name.to_owned())
+}
+
 fn extract_matching_from_zip(
     zip_path: &Downloaded,
     cancelled: &AtomicBool,
@@ -719,7 +753,6 @@ fn extract_matching_from_zip(
         return Err("Archive has too many entries".into());
     }
     let mut remaining = zip_path.expansion_budget;
-    let mut buffer = [0u8; 64 * 1024];
     let mut extracted = 0;
     for i in 0..archive.len() {
         if cancelled.load(Ordering::Relaxed) {
@@ -741,29 +774,33 @@ fn extract_matching_from_zip(
             if entry.size() > remaining {
                 return Err("Expanded archive exceeds the geography disk budget".into());
             }
+            let entry_size = entry.size();
             let mut staged = zip_path.directory.stage().map_err(|e| e.to_string())?;
-            loop {
-                if cancelled.load(Ordering::Relaxed) {
-                    return Err("Extraction cancelled".into());
-                }
-                let count = entry.read(&mut buffer).map_err(|e| e.to_string())?;
-                if count == 0 {
-                    break;
-                }
-                remaining = remaining
-                    .checked_sub(count as u64)
-                    .ok_or("Expanded archive exceeds the geography disk budget")?;
-                staged
-                    .write_all(&buffer[..count])
-                    .map_err(|e| e.to_string())?;
-            }
+            let mut payload_budget = remaining;
+            let target_name = write_archive_payload(
+                &mut entry,
+                &mut staged,
+                &name,
+                entry_size,
+                &mut payload_budget,
+                cancelled,
+            )?;
+            remaining = remaining
+                .checked_sub(
+                    staged
+                        .as_file()
+                        .metadata()
+                        .map_err(|e| e.to_string())?
+                        .len(),
+                )
+                .ok_or("Expanded archive exceeds the geography disk budget")?;
             if cancelled.load(Ordering::Relaxed) {
                 return Err("Extraction cancelled".into());
             }
             extracted += 1;
             zip_path
                 .directory
-                .install(staged, std::ffi::OsStr::new(&name))
+                .install(staged, std::ffi::OsStr::new(&target_name))
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -960,6 +997,37 @@ mod tests {
         }
         assert!(downloader.active.is_none());
         assert_eq!(downloader.last_error.as_deref(), Some("Download cancelled"));
+    }
+
+    #[test]
+    fn terrain_extraction_stores_a_lossless_compressed_frame() {
+        use little_clip_core::geography::basemap::{hgt, storage};
+        let root = tempfile::tempdir().unwrap();
+        let directory = AssetDirectory::open(root.path()).unwrap();
+        let raw = [10_i16, -100, i16::MIN, 9000]
+            .into_iter()
+            .flat_map(i16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let mut staged = directory.stage().unwrap();
+        {
+            let mut zip = zip::ZipWriter::new(staged.as_file_mut());
+            zip.start_file("N00E000.hgt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&raw).unwrap();
+            zip.finish().unwrap();
+        }
+        let file = staged.as_file().try_clone().unwrap();
+        let downloaded = Downloaded {
+            path: PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())),
+            file,
+            expansion_budget: 1024,
+            _staging: Some(staged),
+            directory,
+        };
+        extract_matching_from_zip(&downloaded, &AtomicBool::new(false), &[".hgt"]).unwrap();
+        assert!(!root.path().join("N00E000.hgt").exists());
+        let encoded = storage::read(root.path().join("N00E000.hgt.zst")).unwrap();
+        assert_eq!(hgt::decode(encoded, true).unwrap(), raw);
     }
 
     #[test]

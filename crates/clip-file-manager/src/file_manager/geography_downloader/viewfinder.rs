@@ -230,10 +230,13 @@ fn coverage(html: &str, bounds: [f64; 4]) -> Result<Vec<String>, String> {
     Ok(selected.into_iter().collect())
 }
 fn present(directory: Option<&AssetDirectory>, tile: &Tile) -> bool {
-    directory
-        .and_then(|d| d.open_file(std::ffi::OsStr::new(&tile.name)).ok())
-        .and_then(|f| f.metadata().ok())
-        .is_some_and(|m| m.len() == tile.bytes)
+    directory.is_some_and(|directory| {
+        little_clip_core::geography::basemap::hgt::present(
+            directory,
+            std::ffi::OsStr::new(&tile.name),
+            tile.bytes,
+        )
+    })
 }
 
 pub fn plan(config: &AppConfig, bounds: [f64; 4], cancel: &AtomicBool) -> Result<Plan, String> {
