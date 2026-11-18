@@ -377,7 +377,7 @@ impl GrwlSummaryIndex {
         &self.segments
     }
 
-    pub fn load_or_build(dir: &Path) -> Option<Self> {
+    pub fn load_or_build(dir: &Path, cancelled: &std::sync::atomic::AtomicBool) -> Option<Self> {
         let cache_path = dir.join("grwl_summary_v2.bin");
         if let Ok(bytes) = storage::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
@@ -387,7 +387,7 @@ impl GrwlSummaryIndex {
         let grwl_dir = dir.join("grwl");
         let shp_path = find_first_with_ext(&grwl_dir, &["shp"])?;
         let dbf_path = shp_path.with_extension("dbf");
-        let built = Self::build_from_shp(&shp_path, &dbf_path)?;
+        let built = Self::build_from_shp(&shp_path, &dbf_path, cancelled)?;
         if let Ok(encoded) = built.encode_bin() {
             let _ = storage::write(&cache_path, encoded);
         }
@@ -425,7 +425,11 @@ impl GrwlSummaryIndex {
         out
     }
 
-    fn build_from_shp(shp_path: &Path, dbf_path: &Path) -> Option<Self> {
+    fn build_from_shp(
+        shp_path: &Path,
+        dbf_path: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Option<Self> {
         let mut dbf_widths: Vec<f32> = Vec::new();
         if let Ok(dbf_file) = crate::kernel_interface::open_content(dbf_path, true) {
             let mut rdr = BufReader::new(dbf_file);
@@ -436,7 +440,7 @@ impl GrwlSummaryIndex {
                 let n_recs = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
                 if header_len < 33
                     || rec_len < 2
-                    || n_recs > 1_000_000
+                    || n_recs > 16 * 1024 * 1024
                     || (n_recs as u64)
                         .checked_mul(rec_len as u64)?
                         .checked_add(header_len as u64)?
@@ -469,6 +473,9 @@ impl GrwlSummaryIndex {
                         dbf_widths.reserve(n_recs);
                         let mut rec = vec![0u8; rec_len];
                         for _ in 0..n_recs {
+                            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                return None;
+                            }
                             if rdr.read_exact(&mut rec).is_err() {
                                 break;
                             }
@@ -492,11 +499,14 @@ impl GrwlSummaryIndex {
         let mut rec_hdr = [0u8; 8];
         let mut rec_idx = 0usize;
         while rdr.read_exact(&mut rec_hdr).is_ok() {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
             let content_words =
                 usize::try_from(i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?)).ok()?;
             let content_bytes = content_words.checked_mul(2)?;
             if content_bytes > 32 * 1024 * 1024
-                || rec_idx >= 1_000_000
+                || rec_idx >= 16 * 1024 * 1024
                 || content_bytes as u64 > rdr.get_ref().metadata().ok()?.len()
             {
                 return None;
@@ -559,7 +569,7 @@ impl GrwlSummaryIndex {
         let mut pos = 0usize;
         let seg_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
         pos += 4;
-        if seg_count > 1_000_000 || seg_count > bytes.len().saturating_sub(pos) / 6 {
+        if seg_count > 4 * 1024 * 1024 || seg_count > bytes.len().saturating_sub(pos) / 6 {
             return None;
         }
         let mut segments = Vec::with_capacity(seg_count);
@@ -908,7 +918,7 @@ impl HydroRiversIndex {
         &self.segments
     }
 
-    pub fn load_or_build(dir: &Path) -> Option<Self> {
+    pub fn load_or_build(dir: &Path, cancelled: &std::sync::atomic::AtomicBool) -> Option<Self> {
         let cache_path = dir.join("rivers_stra3_v3.bin");
         if let Ok(bytes) = storage::read(&cache_path)
             && let Some(idx) = Self::decode_bin(&bytes)
@@ -918,7 +928,7 @@ impl HydroRiversIndex {
         let rivers_dir = dir.join("hydrorivers");
         let shp_path = find_first_with_ext(&rivers_dir, &["shp"])?;
         let dbf_path = shp_path.with_extension("dbf");
-        let built = Self::build_from_shp(&shp_path, &dbf_path)?;
+        let built = Self::build_from_shp(&shp_path, &dbf_path, cancelled)?;
         if let Ok(encoded) = built.encode_bin() {
             let _ = storage::write(&cache_path, encoded);
         }
@@ -956,7 +966,11 @@ impl HydroRiversIndex {
         out
     }
 
-    fn build_from_shp(shp_path: &Path, dbf_path: &Path) -> Option<Self> {
+    fn build_from_shp(
+        shp_path: &Path,
+        dbf_path: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Option<Self> {
         let mut dbf_ord: Vec<(u8, f32)> = Vec::new();
         if let Ok(dbf_file) = crate::kernel_interface::open_content(dbf_path, true) {
             let mut rdr = BufReader::new(dbf_file);
@@ -967,7 +981,7 @@ impl HydroRiversIndex {
                 let n_recs = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
                 if header_len < 33
                     || rec_len < 2
-                    || n_recs > 1_000_000
+                    || n_recs > 16 * 1024 * 1024
                     || (n_recs as u64)
                         .checked_mul(rec_len as u64)?
                         .checked_add(header_len as u64)?
@@ -1001,6 +1015,9 @@ impl HydroRiversIndex {
                         dbf_ord.reserve(n_recs);
                         let mut rec = vec![0u8; rec_len];
                         for _ in 0..n_recs {
+                            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                return None;
+                            }
                             if rdr.read_exact(&mut rec).is_err() {
                                 break;
                             }
@@ -1032,11 +1049,14 @@ impl HydroRiversIndex {
         let mut rec_hdr = [0u8; 8];
         let mut rec_idx = 0usize;
         while rdr.read_exact(&mut rec_hdr).is_ok() {
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
             let content_words =
                 usize::try_from(i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?)).ok()?;
             let content_bytes = content_words.checked_mul(2)?;
             if content_bytes > 32 * 1024 * 1024
-                || rec_idx >= 1_000_000
+                || rec_idx >= 16 * 1024 * 1024
                 || content_bytes as u64 > rdr.get_ref().metadata().ok()?.len()
             {
                 return None;
@@ -1101,7 +1121,7 @@ impl HydroRiversIndex {
         let mut pos = 0usize;
         let seg_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
         pos += 4;
-        if seg_count > 1_000_000 || seg_count > bytes.len().saturating_sub(pos) / 6 {
+        if seg_count > 4 * 1024 * 1024 || seg_count > bytes.len().saturating_sub(pos) / 6 {
             return None;
         }
         let mut segments = Vec::with_capacity(seg_count);
@@ -1572,11 +1592,11 @@ impl BasemapAssets {
             return Self::default();
         }
         let land_cover = load_land_cover(assets_dir);
-        let rivers = HydroRiversIndex::load_or_build(assets_dir);
+        let rivers = HydroRiversIndex::load_or_build(assets_dir, cancelled);
         if stopped() {
             return Self::default();
         }
-        let grwl_summary = GrwlSummaryIndex::load_or_build(assets_dir);
+        let grwl_summary = GrwlSummaryIndex::load_or_build(assets_dir, cancelled);
         if stopped() {
             return Self::default();
         }
@@ -2971,8 +2991,16 @@ mod tests {
         )
         .unwrap();
         for round in 0..2 {
-            let grwl = GrwlSummaryIndex::load_or_build(root.path()).unwrap();
-            let hydro = HydroRiversIndex::load_or_build(root.path()).unwrap();
+            let grwl = GrwlSummaryIndex::load_or_build(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+            let hydro = HydroRiversIndex::load_or_build(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
             assert_eq!(grwl.segments().len(), 2);
             assert_eq!(hydro.segments().len(), 2);
             assert_eq!(grwl.segments()[0].points, vec![[0.0, 0.0], [0.1, 0.0]]);
