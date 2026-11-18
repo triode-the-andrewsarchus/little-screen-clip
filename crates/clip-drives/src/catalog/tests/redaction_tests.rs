@@ -1,6 +1,9 @@
 use super::*;
 use crate::catalog::redaction::{self, Intent};
-use std::{os::unix::ffi::OsStringExt, sync::Arc};
+use std::{
+    os::unix::{ffi::OsStringExt, fs::MetadataExt},
+    sync::Arc,
+};
 
 fn exclude(fixture: &Fixture, relative: &Path) -> Intent {
     redaction::set_rule(
@@ -43,6 +46,337 @@ fn saved(fixture: &Fixture, id: &str) -> Store {
     .unwrap()
 }
 
+fn aliased_file() -> (Fixture, Catalog, Intent, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = fixture();
+    let relative = PathBuf::from(OsString::from_vec(b"saved_\xff".to_vec()));
+    let path = fixture.source.path.join(&relative);
+    std::fs::write(&path, b"metadata-only alias payload").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
+    std::fs::write(fixture.source.path.join("zz-later"), b"ordinary sibling").unwrap();
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    std::fs::hard_link(&path, fixture.source.path.join("new-alias")).unwrap();
+    let intent = exclude(&fixture, Path::new("new-alias"));
+    (fixture, catalog, intent, relative)
+}
+
+fn assert_single_redaction_replay(fixture: &Fixture, catalog: &Catalog, intent: &Intent) {
+    let before: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(before.pending_redactions, 0);
+    assert_eq!(before.redaction_generation, 1);
+    assert!(apply(fixture, intent).unwrap());
+    let after: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+}
+
+#[test]
+fn a_later_alias_redacts_saved_raw_names_using_metadata_without_opening_payloads() {
+    let (fixture, catalog, intent, relative) = aliased_file();
+    assert!(apply(&fixture, &intent).unwrap());
+    let database = saved(&fixture, &catalog.id);
+    let entry = scan::entry(&database, "catalog", &relative)
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.kind, "excluded");
+    assert!(entry.hash.is_none());
+    assert!(
+        scan::entry(&database, "catalog", Path::new("zz-later"))
+            .unwrap()
+            .is_some()
+    );
+    let metadata = std::fs::metadata(fixture.source.path.join(&relative)).unwrap();
+    assert_eq!(metadata.mode() & 0o777, 0);
+    assert_eq!(metadata.len(), b"metadata-only alias payload".len() as u64);
+    assert_single_redaction_replay(&fixture, &catalog, &intent);
+}
+
+#[test]
+fn an_unavailable_original_keeps_alias_cleanup_pending_then_recovers_without_media_writes() {
+    let (fixture, catalog, intent, relative) = aliased_file();
+    let offline = fixture.temp.path().join("offline-source");
+    std::fs::rename(&fixture.source.path, &offline).unwrap();
+    let error = apply(&fixture, &intent).unwrap_err();
+    assert!(
+        error.to_string().contains("cleanup remains pending"),
+        "{error}"
+    );
+    redaction::failure(&fixture.db, &intent, error.to_string()).unwrap();
+    let pending: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(pending.pending_redactions, 1);
+    assert_eq!(pending.redaction_generation, 0);
+    assert!(pending.redacted.is_none());
+    assert!(pending.redaction_error.is_some());
+    assert_eq!(
+        scan::entry(&saved(&fixture, &catalog.id), "catalog", &relative)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "file"
+    );
+    std::fs::rename(&offline, &fixture.source.path).unwrap();
+    assert!(apply(&fixture, &intent).unwrap());
+    let completed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(completed.pending_redactions, 0);
+    assert!(completed.redaction_error.is_none());
+    assert_eq!(
+        scan::entry(&saved(&fixture, &catalog.id), "catalog", &relative)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "excluded"
+    );
+}
+
+#[test]
+fn an_explicit_root_exclusion_can_finish_uncertain_alias_cleanup_offline() {
+    let (fixture, catalog, intent, relative) = aliased_file();
+    let offline = fixture.temp.path().join("offline-source");
+    std::fs::rename(&fixture.source.path, &offline).unwrap();
+    assert!(apply(&fixture, &intent).is_err());
+    exclude(&fixture, Path::new(""));
+    let root = fixture
+        .db
+        .list::<Intent>("catalog-redaction", 0, 10)
+        .unwrap()
+        .into_iter()
+        .find(|intent| intent.relative.as_os_str().is_empty())
+        .unwrap();
+    assert!(apply(&fixture, &root).unwrap());
+    assert!(apply(&fixture, &intent).unwrap());
+    let completed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+    assert_eq!(completed.entries, 0);
+    assert_eq!(completed.pending_redactions, 0);
+    assert!(completed.root_excluded);
+    assert_eq!(
+        std::fs::metadata(offline.join(relative)).unwrap().mode() & 0o777,
+        0
+    );
+}
+
+#[test]
+fn unresolved_saved_names_roll_back_earlier_alias_edits_before_retry() {
+    let (fixture, catalog, intent, relative) = aliased_file();
+    std::fs::remove_file(fixture.source.path.join("zz-later")).unwrap();
+    let error = apply(&fixture, &intent).unwrap_err();
+    assert!(
+        error.to_string().contains("no longer resolvable"),
+        "{error}"
+    );
+    let database = saved(&fixture, &catalog.id);
+    assert_eq!(
+        scan::entry(&database, "catalog", &relative)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "file"
+    );
+    assert!(
+        database
+            .get::<u64>("redaction", &intent.id)
+            .unwrap()
+            .is_none()
+    );
+    drop(database);
+    std::fs::write(fixture.source.path.join("zz-later"), b"replacement sibling").unwrap();
+    assert!(apply(&fixture, &intent).unwrap());
+    assert_eq!(
+        scan::entry(&saved(&fixture, &catalog.id), "catalog", &relative)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "excluded"
+    );
+}
+
+#[test]
+fn missing_or_stale_source_context_cannot_authorize_alias_cleanup() {
+    for invalid in ["missing", "unique_mount", "boot", "inode"] {
+        let (fixture, catalog, intent, relative) = aliased_file();
+        let database = Store::existing(
+            &fixture
+                .state
+                .path
+                .join("catalogs")
+                .join(format!("{}.sqlite", catalog.id)),
+            false,
+        )
+        .unwrap();
+        if invalid == "missing" {
+            database.remove("source", "redaction-context").unwrap();
+        } else {
+            let mut value: serde_json::Value = database
+                .get("source", "redaction-context")
+                .unwrap()
+                .unwrap();
+            match invalid {
+                "unique_mount" => value["lifetime"]["unique_mount"] = 0.into(),
+                "boot" => value["lifetime"]["boot"] = uuid::Uuid::new_v4().to_string().into(),
+                "inode" => value["lifetime"]["identity"]["inode"] = 0.into(),
+                _ => unreachable!(),
+            }
+            database.put("source", "redaction-context", &value).unwrap();
+        }
+        drop(database);
+        assert!(apply(&fixture, &intent).is_err(), "{invalid}");
+        assert_eq!(
+            scan::entry(&saved(&fixture, &catalog.id), "catalog", &relative)
+                .unwrap()
+                .unwrap()
+                .kind,
+            "file"
+        );
+        let pending: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
+        assert_eq!(pending.pending_redactions, 1);
+    }
+}
+
+#[test]
+fn replacing_a_source_with_a_symlink_cannot_redirect_alias_cleanup() {
+    let (fixture, catalog, intent, relative) = aliased_file();
+    let original = fixture.temp.path().join("moved-source");
+    std::fs::rename(&fixture.source.path, &original).unwrap();
+    std::os::unix::fs::symlink(&original, &fixture.source.path).unwrap();
+    assert!(apply(&fixture, &intent).is_err());
+    assert_eq!(
+        scan::entry(&saved(&fixture, &catalog.id), "catalog", &relative)
+            .unwrap()
+            .unwrap()
+            .kind,
+        "file"
+    );
+    std::fs::remove_file(&fixture.source.path).unwrap();
+    std::fs::rename(&original, &fixture.source.path).unwrap();
+    assert!(apply(&fixture, &intent).unwrap());
+}
+
+#[test]
+fn alias_resolution_rejects_retargeting_and_observes_cancellation_after_a_match() {
+    for retarget in [true, false] {
+        let (fixture, catalog, intent, _) = aliased_file();
+        let database = saved(&fixture, &catalog.id);
+        let cancel = AtomicBool::new(false);
+        let mut matched = 0;
+        let result = redaction::boundaries::visit(&database, &intent.relative, &cancel, |_| {
+            matched += 1;
+            if retarget {
+                let alias = fixture.source.path.join("new-alias");
+                std::fs::remove_file(&alias).unwrap();
+                std::fs::write(alias, b"different inode").unwrap();
+            } else {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+            Ok(())
+        });
+        assert_eq!(matched, 1);
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains(if retarget {
+                "changed during"
+            } else {
+                "Cancelled"
+            }),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the disposable native-filesystem guest; historical catalog name-equivalence gate"]
+fn native_historical_redaction_uses_source_name_equivalence() {
+    for (rule, spelling) in [
+        ("Future", "future"),
+        ("Résumé", "résumé"),
+        ("Ångström", "ångström"),
+        ("Future/Inner", "future/inner"),
+    ] {
+        let (_native, fixture) = native_fixture();
+        let actual = fixture.source.path.join(spelling);
+        std::fs::create_dir_all(&actual).unwrap();
+        std::fs::write(actual.join("unique-secret"), b"retained payload").unwrap();
+        let equivalent = fixture.source.metadata(Path::new(rule)).unwrap().is_some();
+        let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+        if equivalent {
+            // The pinned canonical-directory path must avoid walking unrelated
+            // historical names or any contents below the excluded boundary.
+            std::fs::remove_file(fixture.source.path.join("file.txt")).unwrap();
+        }
+        let intent = exclude(&fixture, Path::new(rule));
+        let replaced = crate::sync_edge_tests::native_fs::GuestMount::attach(
+            &fixture.source.path,
+            &fixture.source.path,
+        );
+        assert!(
+            apply(&fixture, &intent).is_err(),
+            "A replacement bind cannot reuse the captured source lifetime"
+        );
+        drop(replaced);
+        assert!(apply(&fixture, &intent).unwrap());
+        let database = saved(&fixture, &catalog.id);
+        let descendant = scan::entry(
+            &database,
+            "catalog",
+            &Path::new(spelling).join("unique-secret"),
+        )
+        .unwrap();
+        eprintln!("Historical catalog {rule:?} / {spelling:?}: {equivalent}");
+        assert_eq!(descendant.is_none(), equivalent, "{rule}");
+        let boundary = scan::entry(&database, "catalog", Path::new(spelling))
+            .unwrap()
+            .unwrap();
+        assert_eq!(boundary.kind == "excluded", equivalent, "{rule}");
+        assert_eq!(
+            std::fs::read(actual.join("unique-secret")).unwrap(),
+            b"retained payload"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the disposable native-filesystem guest; renamed historical boundary gate"]
+fn native_historical_case_rename_resolves_the_saved_spelling_without_inode_reuse() {
+    let (_native, fixture) = native_fixture();
+    let source = &fixture.source.path;
+    std::fs::create_dir(source.join("future")).unwrap();
+    std::fs::write(
+        source.join("future/secret"),
+        b"retained after a case rename",
+    )
+    .unwrap();
+    if fixture
+        .source
+        .metadata(Path::new("Future"))
+        .unwrap()
+        .is_none()
+    {
+        eprintln!("Native filesystem keeps Future/future distinct; no case-alias rename applies");
+        return;
+    }
+    let catalog = fixture.capture(&DriveConfig::default()).unwrap();
+    std::fs::rename(source.join("future"), source.join("intermediate-name")).unwrap();
+    std::fs::rename(source.join("intermediate-name"), source.join("FUTURE")).unwrap();
+    let pin = fixture
+        .source
+        .directory(Path::new("Future"), false)
+        .unwrap();
+    assert_eq!(
+        std::fs::read_link(crate::root::anchor(&pin)).unwrap(),
+        source.join("FUTURE")
+    );
+    drop(pin);
+    let intent = exclude(&fixture, Path::new("Future"));
+    assert!(apply(&fixture, &intent).unwrap());
+    crate::catalog::test_assertions::redacted_leaf(
+        &fixture.state.path,
+        &catalog.id,
+        Path::new("future/secret"),
+        source,
+        b"retained after a case rename",
+    );
+}
+
 #[test]
 fn legacy_spelling_intents_redact_offline_and_keep_their_original_replay_identity() {
     let fixture = fixture();
@@ -80,12 +414,7 @@ fn legacy_spelling_intents_redact_offline_and_keep_their_original_replay_identit
             .is_some()
     );
     drop(database);
-    let completed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
-    assert_eq!(completed.pending_redactions, 0);
-    assert_eq!(completed.redaction_generation, 1);
-    assert!(apply(&fixture, &intent).unwrap());
-    let replayed: Catalog = fixture.db.get("catalog", &catalog.id).unwrap().unwrap();
-    assert_eq!(replayed.redaction_generation, 1);
+    assert_single_redaction_replay(&fixture, &catalog, &intent);
     assert_eq!(
         std::fs::read(offline.join(&folder).join("secret")).unwrap(),
         b"retained payload"

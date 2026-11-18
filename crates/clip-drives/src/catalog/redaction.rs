@@ -5,6 +5,7 @@ use std::{
     os::{fd::AsRawFd, unix::fs::MetadataExt},
     sync::Arc,
 };
+pub(super) mod boundaries;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Intent {
@@ -202,14 +203,7 @@ pub(super) fn visit_exclusions(
     })
 }
 
-fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
-    if db.get::<u64>("redaction", &intent.id)?.is_some() {
-        return Ok(());
-    }
-    let transaction = db.0.unchecked_transaction()?;
-    // Older accepted intents retain their original idempotency key, but SQL
-    // boundaries use the same lexical spelling as current rule addresses.
-    let relative: PathBuf = intent.relative.components().collect();
+fn redact_boundary(db: &Store, relative: &Path, catalog: &mut Catalog) -> Result<usize> {
     let prefix = relative.as_os_str().as_bytes();
     let removed = if prefix.is_empty() {
         catalog.root_excluded = true;
@@ -223,7 +217,7 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
             "DELETE FROM entries WHERE scan='catalog' AND path>=?1 AND path<?2",
             params![lower, upper],
         )?;
-        if let Some(mut entry) = scan::entry(db, "catalog", &relative)? {
+        if let Some(mut entry) = scan::entry(db, "catalog", relative)? {
             entry.kind = "excluded".into();
             entry.hash = None;
             entry.link = None;
@@ -235,10 +229,6 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
         removed
     };
     // Completeness of retained ancestors changes when descendants are removed.
-    if let Some(details) = &mut catalog.details {
-        details.directory.subtree_complete = false;
-        details.directory.incomplete_child = true;
-    }
     for parent in relative
         .ancestors()
         .skip(1)
@@ -251,6 +241,27 @@ fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog) -> Result<()> {
             }
             scan::put(db, "catalog", &entry)?;
         }
+    }
+    Ok(removed)
+}
+
+fn redact(db: &Store, intent: &Intent, catalog: &mut Catalog, cancel: &AtomicBool) -> Result<()> {
+    if db.get::<u64>("redaction", &intent.id)?.is_some() {
+        return Ok(());
+    }
+    let transaction = db.0.unchecked_transaction()?;
+    // Preserve legacy replay keys while canonicalizing lexical boundaries.
+    let relative: PathBuf = intent.relative.components().collect();
+    let mut removed = 0usize;
+    boundaries::visit(db, &relative, cancel, |boundary| {
+        removed = removed
+            .checked_add(redact_boundary(db, boundary, catalog)?)
+            .ok_or("Catalog redaction count overflow")?;
+        Ok(())
+    })?;
+    if let Some(details) = &mut catalog.details {
+        details.directory.subtree_complete = false;
+        details.directory.incomplete_child = true;
     }
     catalog.entries = db.0.query_row(
         "SELECT count(*) FROM entries WHERE scan='catalog'",
@@ -318,7 +329,7 @@ pub(crate) fn apply(state: Arc<Root>, intent: &Intent, cancel: &AtomicBool) -> R
     db.0.execute_batch(
         "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON;",
     )?;
-    redact(&db, intent, &mut catalog)?;
+    redact(&db, intent, &mut catalog, cancel)?;
     // No FUSE reader retains rowid-derived inodes across this compaction.
     db.0.execute_batch("VACUUM")?;
     lease.sync()?;

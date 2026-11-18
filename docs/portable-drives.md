@@ -597,9 +597,22 @@ NTFS3's `nocase` option. Catalog capture separately compares the current rule
 object with the directory boundary through its guarded source root before
 hashing or descending. This respects catalog exclusions even when search indexing
 is enabled, without removing files from full backups or sync. Missing rule names
-remain distinct where the filesystem treats them as distinct. Historical catalog
-redaction name matching, broader relocation and consumer matrices remain separate
-acceptance work; capture matching alone is not their proof.
+remain distinct where the filesystem treats them as distinct.
+
+Historical cleanup accepts exact saved paths offline. For another spelling, new
+catalogs can ask their verified original mount to resolve the name. A pinned
+canonical directory avoids enumerating its children or unrelated siblings; a
+bounded metadata cursor handles saved names after a case-only rename. These
+checks read no file payloads and preserve the capture date. New catalog databases
+record the source path and boot/namespace/non-reused mount lifetime locally for
+this purpose; no marker or naming table is written to the source media.
+
+When that context is missing, replaced or unavailable, alias cleanup remains
+pending with an error rather than claiming the records were removed. A remounted
+volume cannot reuse an earlier mount lifetime. Exact saved-name exclusions still
+work offline; an explicitly selected whole-drive catalog exclusion removes all
+saved entries and lets uncertain pending cleanup finish. Offline arbitrary-alias
+resolution, broader relocation and consumer matrices remain acceptance work.
 
 Legacy development records naming only a device node have no persistent identity
 evidence. They remain retained without being attached to a potentially reused

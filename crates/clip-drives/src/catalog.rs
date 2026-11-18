@@ -64,6 +64,7 @@ pub(crate) fn capture(
     let id = staged.id().to_owned();
     let result = (|| {
         let (cat_db, pages) = capture_details::database(&staged.path(), config.catalog_max_bytes)?;
+        redaction::boundaries::record_source(&cat_db, root)?;
         let coverage = scan::scan(&cat_db, root, "catalog", &limits, cancel, progress)?;
         hashes::enrich(db, &cat_db, drive, root, config, cancel, started)?;
         cat_db.0.pragma_update(None, "max_page_count", pages)?;
