@@ -13,6 +13,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+// Compact overview grids must fit the bounded in-memory representation.
+fn grid_len(width: u32, height: u32, channels: usize) -> Option<usize> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let length = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(channels)?;
+    (length <= 128 * 1024 * 1024).then_some(length)
+}
+
 /// Projection mode for the geography viewer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ProjectionMode {
@@ -139,6 +150,12 @@ pub struct EquirectTexture {
 impl EquirectTexture {
     /// Bilinearly samples `(lat, lon)` in degrees.
     pub fn sample_rgb(&self, lat: f64, lon: f64) -> [u8; 3] {
+        if grid_len(self.width, self.height, 3) != Some(self.rgb.len())
+            || !lat.is_finite()
+            || !lon.is_finite()
+        {
+            return [26, 62, 108];
+        }
         let u = ((lon + 180.0) / 360.0).rem_euclid(1.0) * (self.width.saturating_sub(1) as f64);
         let v = ((90.0 - lat).clamp(0.0, 180.0) / 180.0) * (self.height.saturating_sub(1) as f64);
         let x0 = (u.floor() as u32).min(self.width - 1);
@@ -181,6 +198,12 @@ pub struct SrtmTile {
 impl SrtmTile {
     /// Parses a standard SRTM1 (`3601×3601`) or SRTM3 (`1201×1201`) `.hgt` file.
     pub fn from_hgt_bytes(lat_floor: i32, lon_floor: i32, bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > 3601 * 3601 * 2
+            || !(-90..90).contains(&lat_floor)
+            || !(-180..180).contains(&lon_floor)
+        {
+            return None;
+        }
         let count = bytes.len() / 2;
         let samples = (count as f64).sqrt().round() as usize;
         if samples < 2 || samples * samples * 2 != bytes.len() {
@@ -200,6 +223,13 @@ impl SrtmTile {
 
     /// Samples elevation in meters at `(lat, lon)` inside this 1°×1° tile.
     pub fn sample(&self, lat: f64, lon: f64) -> Option<f32> {
+        if self.samples < 2
+            || self.samples.checked_mul(self.samples) != Some(self.heights.len())
+            || !lat.is_finite()
+            || !lon.is_finite()
+        {
+            return None;
+        }
         let fx = (lon - self.lon_floor as f64).clamp(0.0, 1.0) * (self.samples - 1) as f64;
         let fy = (1.0 - (lat - self.lat_floor as f64).clamp(0.0, 1.0)) * (self.samples - 1) as f64;
         let x0 = (fx.floor() as usize).min(self.samples - 1);
@@ -319,6 +349,16 @@ impl GrwlSummaryIndex {
                 let header_len = u16::from_le_bytes([hdr[8], hdr[9]]) as usize;
                 let rec_len = u16::from_le_bytes([hdr[10], hdr[11]]) as usize;
                 let n_recs = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+                if header_len < 33
+                    || rec_len < 2
+                    || n_recs > 1_000_000
+                    || (n_recs as u64)
+                        .checked_mul(rec_len as u64)?
+                        .checked_add(header_len as u64)?
+                        > rdr.get_ref().metadata().ok()?.len()
+                {
+                    return None;
+                }
                 let mut field_buf = vec![0u8; header_len.saturating_sub(32)];
                 if rdr.read_exact(&mut field_buf).is_ok() && rec_len > 1 {
                     let mut offset = 1usize;
@@ -332,6 +372,9 @@ impl GrwlSummaryIndex {
                             .unwrap_or("")
                             .to_ascii_lowercase();
                         let flen = chunk[16] as usize;
+                        if offset.checked_add(flen)? > rec_len {
+                            return None;
+                        }
                         if name == "width_med" || (w_span.is_none() && name == "width_mean") {
                             w_span = Some((offset, flen));
                         }
@@ -360,11 +403,19 @@ impl GrwlSummaryIndex {
         rdr.read_exact(&mut hdr).ok()?;
         let mut segments = Vec::new();
         let mut cells = vec![Vec::new(); 180 * 90];
+        let mut memberships = 0usize;
         let mut rec_hdr = [0u8; 8];
         let mut rec_idx = 0usize;
         while rdr.read_exact(&mut rec_hdr).is_ok() {
-            let content_words = i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?) as usize;
-            let content_bytes = content_words.saturating_mul(2);
+            let content_words =
+                usize::try_from(i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?)).ok()?;
+            let content_bytes = content_words.checked_mul(2)?;
+            if content_bytes > 32 * 1024 * 1024
+                || rec_idx >= 1_000_000
+                || content_bytes as u64 > rdr.get_ref().metadata().ok()?.len()
+            {
+                return None;
+            }
             if content_bytes < 4 {
                 break;
             }
@@ -383,7 +434,12 @@ impl GrwlSummaryIndex {
             }
             let parts = shp_polyline_parts(&buf, 32)?;
             for points in parts {
-                index_points(&mut cells, segments.len() as u32, &points);
+                memberships += index_points(
+                    &mut cells,
+                    segments.len() as u32,
+                    &points,
+                    (16 * 1024 * 1024) - memberships,
+                )?;
                 segments.push(GrwlSegment {
                     width_med_m,
                     points,
@@ -418,17 +474,26 @@ impl GrwlSummaryIndex {
         let mut pos = 0usize;
         let seg_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
         pos += 4;
+        if seg_count > 1_000_000 || seg_count > bytes.len().saturating_sub(pos) / 6 {
+            return None;
+        }
         let mut segments = Vec::with_capacity(seg_count);
         for _ in 0..seg_count {
             let width_med_m = f32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
             pos += 4;
             let n = u16::from_le_bytes(bytes.get(pos..pos + 2)?.try_into().ok()?) as usize;
             pos += 2;
+            if !(2..=256).contains(&n) || n > bytes.len().saturating_sub(pos) / 8 {
+                return None;
+            }
             let mut points = Vec::with_capacity(n);
             for _ in 0..n {
                 let lon = f32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
                 let lat = f32::from_le_bytes(bytes.get(pos + 4..pos + 8)?.try_into().ok()?);
                 pos += 8;
+                if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+                    return None;
+                }
                 points.push([lon, lat]);
             }
             segments.push(GrwlSegment {
@@ -437,17 +502,30 @@ impl GrwlSummaryIndex {
             });
         }
         let mut cells = Vec::with_capacity(180 * 90);
+        let mut memberships = 0usize;
         for _ in 0..(180 * 90) {
             let len = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
             pos += 4;
+            memberships = memberships.checked_add(len)?;
+            if len > seg_count
+                || len > bytes.len().saturating_sub(pos) / 4
+                || memberships > 16 * 1024 * 1024
+            {
+                return None;
+            }
             let mut cell = Vec::with_capacity(len);
             for _ in 0..len {
-                cell.push(u32::from_le_bytes(
-                    bytes.get(pos..pos + 4)?.try_into().ok()?,
-                ));
+                let id = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
+                if id as usize >= seg_count {
+                    return None;
+                }
+                cell.push(id);
                 pos += 4;
             }
             cells.push(cell);
+        }
+        if pos != bytes.len() {
+            return None;
         }
         Some(Self { segments, cells })
     }
@@ -503,7 +581,12 @@ fn shp_polyline_parts(bytes: &[u8], limit: usize) -> Option<Vec<Vec<[f32; 2]>>> 
     Some(parts)
 }
 
-fn index_points(cells: &mut [Vec<u32>], id: u32, points: &[[f32; 2]]) {
+fn index_points(
+    cells: &mut [Vec<u32>],
+    id: u32,
+    points: &[[f32; 2]],
+    remaining: usize,
+) -> Option<usize> {
     let bounds = points
         .iter()
         .fold([180.0_f32, 90.0, -180.0, -90.0], |b, p| {
@@ -516,11 +599,16 @@ fn index_points(cells: &mut [Vec<u32>], id: u32, points: &[[f32; 2]]) {
         });
     let x = |lon: f32| (((lon + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
     let y = |lat: f32| (((lat + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize;
+    let count = (y(bounds[3]) - y(bounds[1]) + 1) * (x(bounds[2]) - x(bounds[0]) + 1);
+    if count > remaining {
+        return None;
+    }
     for gy in y(bounds[1])..=y(bounds[3]) {
         for gx in x(bounds[0])..=x(bounds[2]) {
             cells[gy * 180 + gx].push(id);
         }
     }
+    Some(count)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -548,6 +636,18 @@ impl GrwlMaskStore {
         if let Ok(bytes) = storage::read(&idx_path)
             && let Ok(entries) = serde_json::from_slice::<Vec<GrwlMaskEntry>>(&bytes)
             && !entries.is_empty()
+            && entries.len() <= 65_536
+            && entries.iter().all(|e| {
+                e.width > 0
+                    && e.height > 0
+                    && e.min_lon.is_finite()
+                    && e.max_lon.is_finite()
+                    && e.min_lat.is_finite()
+                    && e.max_lat.is_finite()
+                    && e.min_lon < e.max_lon
+                    && e.min_lat < e.max_lat
+                    && Path::new(&e.file).file_name() == Some(std::ffi::OsStr::new(&e.file))
+            })
         {
             return Some(Self {
                 mask_dir,
@@ -737,6 +837,16 @@ impl HydroRiversIndex {
                 let header_len = u16::from_le_bytes([hdr[8], hdr[9]]) as usize;
                 let rec_len = u16::from_le_bytes([hdr[10], hdr[11]]) as usize;
                 let n_recs = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+                if header_len < 33
+                    || rec_len < 2
+                    || n_recs > 1_000_000
+                    || (n_recs as u64)
+                        .checked_mul(rec_len as u64)?
+                        .checked_add(header_len as u64)?
+                        > rdr.get_ref().metadata().ok()?.len()
+                {
+                    return None;
+                }
                 let mut field_buf = vec![0u8; header_len.saturating_sub(32)];
                 if rdr.read_exact(&mut field_buf).is_ok() && rec_len > 1 {
                     let mut offset = 1usize;
@@ -749,6 +859,9 @@ impl HydroRiversIndex {
                         let end = chunk[..11].iter().position(|&b| b == 0).unwrap_or(11);
                         let name = std::str::from_utf8(&chunk[..end]).unwrap_or("");
                         let flen = chunk[16] as usize;
+                        if offset.checked_add(flen)? > rec_len {
+                            return None;
+                        }
                         if name == "ORD_STRA" {
                             ord_span = Some((offset, flen));
                         } else if name == "DIS_AV_CMS" {
@@ -787,11 +900,19 @@ impl HydroRiversIndex {
         rdr.read_exact(&mut hdr).ok()?;
         let mut segments = Vec::new();
         let mut cells = vec![Vec::new(); 180 * 90];
+        let mut memberships = 0usize;
         let mut rec_hdr = [0u8; 8];
         let mut rec_idx = 0usize;
         while rdr.read_exact(&mut rec_hdr).is_ok() {
-            let content_words = i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?) as usize;
-            let content_bytes = content_words.saturating_mul(2);
+            let content_words =
+                usize::try_from(i32::from_be_bytes(rec_hdr[4..8].try_into().ok()?)).ok()?;
+            let content_bytes = content_words.checked_mul(2)?;
+            if content_bytes > 32 * 1024 * 1024
+                || rec_idx >= 1_000_000
+                || content_bytes as u64 > rdr.get_ref().metadata().ok()?.len()
+            {
+                return None;
+            }
             if content_bytes < 4 {
                 break;
             }
@@ -810,7 +931,12 @@ impl HydroRiversIndex {
             }
             let parts = shp_polyline_parts(&buf, 24)?;
             for points in parts {
-                index_points(&mut cells, segments.len() as u32, &points);
+                memberships += index_points(
+                    &mut cells,
+                    segments.len() as u32,
+                    &points,
+                    (16 * 1024 * 1024) - memberships,
+                )?;
                 segments.push(RiverSegment {
                     ord_stra: ord,
                     dis_cms: dis,
@@ -847,6 +973,9 @@ impl HydroRiversIndex {
         let mut pos = 0usize;
         let seg_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
         pos += 4;
+        if seg_count > 1_000_000 || seg_count > bytes.len().saturating_sub(pos) / 6 {
+            return None;
+        }
         let mut segments = Vec::with_capacity(seg_count);
         for _ in 0..seg_count {
             let ord_stra = *bytes.get(pos)?;
@@ -855,11 +984,17 @@ impl HydroRiversIndex {
             pos += 4;
             let n = u16::from_le_bytes(bytes.get(pos..pos + 2)?.try_into().ok()?) as usize;
             pos += 2;
+            if !(2..=256).contains(&n) || n > bytes.len().saturating_sub(pos) / 8 {
+                return None;
+            }
             let mut points = Vec::with_capacity(n);
             for _ in 0..n {
                 let lon = f32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
                 let lat = f32::from_le_bytes(bytes.get(pos + 4..pos + 8)?.try_into().ok()?);
                 pos += 8;
+                if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+                    return None;
+                }
                 points.push([lon, lat]);
             }
             segments.push(RiverSegment {
@@ -869,17 +1004,30 @@ impl HydroRiversIndex {
             });
         }
         let mut cells = Vec::with_capacity(180 * 90);
+        let mut memberships = 0usize;
         for _ in 0..(180 * 90) {
             let len = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
             pos += 4;
+            memberships = memberships.checked_add(len)?;
+            if len > seg_count
+                || len > bytes.len().saturating_sub(pos) / 4
+                || memberships > 16 * 1024 * 1024
+            {
+                return None;
+            }
             let mut cell = Vec::with_capacity(len);
             for _ in 0..len {
-                cell.push(u32::from_le_bytes(
-                    bytes.get(pos..pos + 4)?.try_into().ok()?,
-                ));
+                let id = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
+                if id as usize >= seg_count {
+                    return None;
+                }
+                cell.push(id);
                 pos += 4;
             }
             cells.push(cell);
+        }
+        if pos != bytes.len() {
+            return None;
         }
         Some(Self { segments, cells })
     }
@@ -1123,7 +1271,13 @@ pub struct GlobalDemGrid {
 
 impl GlobalDemGrid {
     /// Samples elevation in meters at `(lat, lon)`.
-    pub fn sample(&self, lat: f64, lon: f64) -> f32 {
+    pub fn sample(&self, lat: f64, lon: f64) -> Option<f32> {
+        if grid_len(self.width, self.height, 1) != Some(self.heights.len())
+            || !lat.is_finite()
+            || !lon.is_finite()
+        {
+            return None;
+        }
         let u = ((lon + 180.0) / 360.0).rem_euclid(1.0) * (self.width.saturating_sub(1) as f64);
         let v = ((90.0 - lat).clamp(0.0, 180.0) / 180.0) * (self.height.saturating_sub(1) as f64);
         let x0 = (u.floor() as u32).min(self.width - 1);
@@ -1135,7 +1289,7 @@ impl GlobalDemGrid {
         let get = |x: u32, y: u32| self.heights[(y * self.width + x) as usize] as f32;
         let top = get(x0, y0) * (1.0 - fx) + get(x1, y0) * fx;
         let bot = get(x0, y1) * (1.0 - fx) + get(x1, y1) * fx;
-        top * (1.0 - fy) + bot * fy
+        Some(top * (1.0 - fy) + bot * fy)
     }
 }
 
@@ -1148,6 +1302,12 @@ pub struct GlobalLandCoverGrid {
 
 impl GlobalLandCoverGrid {
     pub fn sample(&self, lat: f64, lon: f64) -> LandCoverClass {
+        if grid_len(self.width, self.height, 1) != Some(self.classes.len())
+            || !lat.is_finite()
+            || !lon.is_finite()
+        {
+            return LandCoverClass::Ocean;
+        }
         let u = ((lon + 180.0) / 360.0).rem_euclid(1.0) * (self.width.saturating_sub(1) as f64);
         let v = ((90.0 - lat).clamp(0.0, 180.0) / 180.0) * (self.height.saturating_sub(1) as f64);
         let x = (u.round() as u32).min(self.width - 1);
@@ -1319,7 +1479,7 @@ impl BasemapAssets {
         {
             return Some(h);
         }
-        self.global_dem.as_ref().map(|g| g.sample(lat, lon))
+        self.global_dem.as_ref().and_then(|g| g.sample(lat, lon))
     }
 
     /// Samples terrain elevation in meters at `(lat, lon)`.
@@ -2066,7 +2226,7 @@ fn load_ne2_overview(dir: &Path) -> Option<EquirectTexture> {
     {
         let w = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
         let h = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-        if bytes.len() == 8 + (w as usize) * (h as usize) * 3 {
+        if grid_len(w, h, 3).and_then(|n| n.checked_add(8)) == Some(bytes.len()) {
             return Some(EquirectTexture {
                 width: w,
                 height: h,
@@ -2125,7 +2285,7 @@ fn load_hgt_dir(dir: &Path, out: &mut HashMap<(i32, i32), SrtmTile>) {
 
 fn parse_hgt_name(stem: &str) -> Option<(i32, i32)> {
     let b = stem.as_bytes();
-    if b.len() < 7 {
+    if b.len() != 7 || !b.is_ascii() || !b[1..3].iter().chain(&b[4..7]).all(u8::is_ascii_digit) {
         return None;
     }
     let ns = b[0] as char;
@@ -2142,7 +2302,7 @@ fn parse_hgt_name(stem: &str) -> Option<(i32, i32)> {
         'W' => -lon,
         _ => return None,
     };
-    Some((lat, lon))
+    ((-90..90).contains(&lat) && (-180..180).contains(&lon)).then_some((lat, lon))
 }
 
 fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
@@ -2152,7 +2312,7 @@ fn load_global_dem(dir: &Path) -> Option<GlobalDemGrid> {
     {
         let width = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
         let height = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-        let expected = 8 + (width as usize) * (height as usize) * 2;
+        let expected = grid_len(width, height, 2)?.checked_add(8)?;
         if bytes.len() == expected {
             let heights = bytes[8..]
                 .as_chunks::<2>()
@@ -2229,7 +2389,7 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
     }
     let width = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
     let height = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-    if bytes.len() != 8 + (width as usize) * (height as usize) {
+    if grid_len(width, height, 1).and_then(|n| n.checked_add(8)) != Some(bytes.len()) {
         return None;
     }
     Some(GlobalLandCoverGrid {
@@ -2242,6 +2402,88 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_grids_and_unicode_tile_names_are_rejected() {
+        for name in [
+            "é12E123",
+            "Né2E123",
+            "N90E180",
+            "N12E999",
+            "N12E123extra",
+            "N1xE123",
+        ] {
+            assert_eq!(parse_hgt_name(name), None, "{name}");
+        }
+        assert_eq!(parse_hgt_name("s12w123"), Some((-12, -123)));
+        let root = tempfile::tempdir().unwrap();
+        for (w, h) in [(0u32, 0u32), (u32::MAX, u32::MAX), (1, 0), (100, 100)] {
+            let mut bytes = w.to_le_bytes().to_vec();
+            bytes.extend(h.to_le_bytes());
+            for name in ["land_cover.u8", "gebco_overview.i16", "ne2_overview.rgb"] {
+                fs::write(root.path().join(name), &bytes).unwrap();
+            }
+            assert!(load_land_cover(root.path()).is_none());
+            assert!(load_global_dem(root.path()).is_none());
+            assert!(load_ne2_overview(root.path()).is_none());
+        }
+        assert!(
+            GlobalDemGrid {
+                width: 0,
+                height: 0,
+                heights: vec![]
+            }
+            .sample(0.0, 0.0)
+            .is_none()
+        );
+        assert!(
+            SrtmTile {
+                lat_floor: 0,
+                lon_floor: 0,
+                samples: 0,
+                heights: vec![]
+            }
+            .sample(0.0, 0.0)
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn river_caches_reject_unbounded_counts_truncation_and_invalid_references() {
+        let grwl = GrwlSummaryIndex {
+            segments: vec![GrwlSegment {
+                width_med_m: 10.0,
+                points: vec![[0.0, 0.0], [1.0, 1.0]],
+            }],
+            cells: vec![vec![]; 180 * 90],
+        };
+        let hydro = HydroRiversIndex {
+            segments: vec![RiverSegment {
+                ord_stra: 3,
+                dis_cms: 10.0,
+                points: vec![[0.0, 0.0], [1.0, 1.0]],
+            }],
+            cells: vec![vec![]; 180 * 90],
+        };
+        let g = grwl.encode_bin().unwrap();
+        let h = hydro.encode_bin().unwrap();
+        for bytes in [&g, &h] {
+            for end in [0, 1, 4, 20, bytes.len() - 1] {
+                assert!(GrwlSummaryIndex::decode_bin(&bytes[..end]).is_none());
+                assert!(HydroRiversIndex::decode_bin(&bytes[..end]).is_none());
+            }
+        }
+        for count in [u32::MAX, 1_000_001] {
+            assert!(GrwlSummaryIndex::decode_bin(&count.to_le_bytes()).is_none());
+            assert!(HydroRiversIndex::decode_bin(&count.to_le_bytes()).is_none());
+        }
+        let mut invalid = grwl;
+        invalid.cells[0].push(1);
+        assert!(GrwlSummaryIndex::decode_bin(&invalid.encode_bin().unwrap()).is_none());
+        let mut invalid = hydro;
+        invalid.cells[0].push(1);
+        assert!(HydroRiversIndex::decode_bin(&invalid.encode_bin().unwrap()).is_none());
+    }
 
     #[test]
     fn oilslick_has_sharp_sea_level_contrast_and_500m_cycle() {
