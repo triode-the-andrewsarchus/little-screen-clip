@@ -318,7 +318,7 @@ pub struct DriveStatus {
     pub discovery_error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncPair {
     #[serde(default)]
     pub local_identity: Option<StorageIdentity>,
@@ -336,7 +336,7 @@ pub struct SyncPair {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RamSession {
     /// Captured RAM directory identity; replacements cannot authorize discard.
     pub identity: crate::kernel_interface::MountIdentity,
@@ -363,7 +363,7 @@ pub struct RamSession {
 }
 
 /// Observed RAM changes awaiting reconciliation, independently of durable exports.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RamPending {
     /// Distinct observed relative paths, including renames and removals.
     pub paths: u64,
@@ -371,7 +371,7 @@ pub struct RamPending {
     pub full_check_required: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RamSave {
     #[serde(with = "crate::path_serde")]
     pub path: PathBuf,
@@ -387,7 +387,7 @@ impl RamSession {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RamBacking {
     #[serde(with = "crate::path_serde")]
     pub directory: PathBuf,

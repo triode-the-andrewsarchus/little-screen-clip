@@ -68,19 +68,54 @@ impl BackgroundJobs {
 
     /// Creates a bounded executor with a fixed worker count and queue length.
     pub fn new(workers: usize, queue: usize) -> Self {
+        Self::with_name(workers, queue, None)
+    }
+
+    /// Creates a bounded executor whose worker names identify its role.
+    ///
+    /// Worker names append a zero-based index to `name`, such as `inventory-0`.
+    /// Queue admission and task lifetimes follow [`Self::new`].
+    ///
+    /// # Panics
+    /// Panics if a worker cannot be created or `name` contains a NUL byte.
+    ///
+    /// # Examples
+    /// ```
+    /// use little_clip_core::jobs::BackgroundJobs;
+    /// use std::time::Duration;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let jobs = BackgroundJobs::new_named(1, 1, "inventory");
+    /// let (_, result) = jobs.submit(Duration::from_secs(1), || {
+    ///     std::thread::current().name().map(str::to_owned)
+    /// });
+    /// assert_eq!(result.recv()??.as_deref(), Some("inventory-0"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new_named(workers: usize, queue: usize, name: &str) -> Self {
+        Self::with_name(workers, queue, Some(name))
+    }
+
+    fn with_name(workers: usize, queue: usize, name: Option<&str>) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<Job>(queue);
         let receiver = Arc::new(Mutex::new(receiver));
-        for _ in 0..workers.max(1) {
+        for index in 0..workers.max(1) {
             let receiver = Arc::clone(&receiver);
-            std::thread::spawn(move || {
-                loop {
-                    let job = match receiver.lock().expect("job queue mutex poisoned").recv() {
-                        Ok(job) => job,
-                        Err(_) => return,
-                    };
-                    job();
-                }
-            });
+            let mut builder = std::thread::Builder::new();
+            if let Some(name) = name {
+                builder = builder.name(format!("{name}-{index}"));
+            }
+            builder
+                .spawn(move || {
+                    loop {
+                        let job = match receiver.lock().expect("job queue mutex poisoned").recv() {
+                            Ok(job) => job,
+                            Err(_) => return,
+                        };
+                        job();
+                    }
+                })
+                .expect("could not create background worker");
         }
         Self {
             sender,
