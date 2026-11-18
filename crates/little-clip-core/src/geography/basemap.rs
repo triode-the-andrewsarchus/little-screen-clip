@@ -706,9 +706,14 @@ fn index_points(
     Some(count)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct GrwlMaskEntry {
     file: String,
+    epsg: u16,
+    origin: [f64; 2],
+    scale: [f64; 2],
+    #[serde(skip)]
+    projection: Option<proj4rs::Proj>,
     width: u32,
     height: u32,
     min_lon: f64,
@@ -717,10 +722,151 @@ struct GrwlMaskEntry {
     max_lat: f64,
 }
 
+fn mask_geokeys(decoder: &mut tiff::decoder::Decoder<BufReader<fs::File>>) -> Option<(u16, f64)> {
+    let keys = decoder
+        .get_tag_u16_vec(tiff::tags::Tag::Unknown(34735))
+        .ok()?;
+    if keys.len() < 4 || keys[0] != 1 || keys.len() != 4 + keys[3] as usize * 4 {
+        return None;
+    }
+    let key = |id| {
+        keys[4..]
+            .chunks_exact(4)
+            .find(|k| k[0] == id && k[1] == 0 && k[2] == 1)
+            .map(|k| k[3])
+    };
+    let epsg = match key(1024)? {
+        1 => key(3072)?,
+        2 => key(2048)?,
+        _ => return None,
+    };
+    let point = match key(1025).unwrap_or(1) {
+        1 => 0.0,
+        2 => 0.5,
+        _ => return None,
+    };
+    Some((epsg, point))
+}
+
+impl GrwlMaskEntry {
+    fn read(path: &Path, name: &str) -> Option<Self> {
+        let file = crate::kernel_interface::open_content(path, true).ok()?;
+        let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file)).ok()?;
+        let (width, height) = decoder.dimensions().ok()?;
+        if decoder.colortype().ok()? != tiff::ColorType::Gray(8) {
+            return None;
+        }
+        let (epsg, point) = mask_geokeys(&mut decoder)?;
+        let scale = decoder
+            .get_tag_f64_vec(tiff::tags::Tag::Unknown(33550))
+            .ok()?;
+        let tie = decoder
+            .get_tag_f64_vec(tiff::tags::Tag::Unknown(33922))
+            .ok()?;
+        if scale.len() < 2 || tie.len() < 6 {
+            return None;
+        }
+        let mut mask = Self {
+            file: name.into(),
+            width,
+            height,
+            epsg,
+            origin: [
+                tie[3] - (tie[0] + point) * scale[0],
+                tie[4] + (tie[1] + point) * scale[1],
+            ],
+            scale: [scale[0], scale[1]],
+            projection: None,
+            min_lon: 0.,
+            max_lon: 0.,
+            min_lat: 0.,
+            max_lat: 0.,
+        };
+        let geographic = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84").ok()?;
+        mask.prepare(&geographic)?;
+        Some(mask)
+    }
+    fn prepare(&mut self, geographic: &proj4rs::Proj) -> Option<()> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > 1_000_000
+            || self.height > 1_000_000
+            || !self.origin.iter().all(|x| x.is_finite())
+            || !self.scale.iter().all(|x| x.is_finite() && *x > 0.)
+        {
+            return None;
+        }
+        self.projection = match self.epsg {
+            4326 => None,
+            32601..=32660 | 32701..=32760 => Some(
+                proj4rs::Proj::from_proj_string(&format!(
+                    "+proj=utm +zone={} {} +datum=WGS84 +units=m",
+                    self.epsg % 100,
+                    if self.epsg >= 32700 { "+south" } else { "" }
+                ))
+                .ok()?,
+            ),
+            _ => return None,
+        };
+        let bounds = self.geographic_bounds(geographic)?;
+        // Cover rounding and extrema between the bounded edge samples.
+        self.min_lon = (bounds[0] - 0.001).max(-180.);
+        self.max_lon = (bounds[2] + 0.001).min(180.);
+        self.min_lat = (bounds[1] - 0.001).max(-90.);
+        self.max_lat = (bounds[3] + 0.001).min(90.);
+        Some(())
+    }
+    fn geographic_bounds(&self, geographic: &proj4rs::Proj) -> Option<[f64; 4]> {
+        let mut bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        // UTM tile edges curve in geographic coordinates: include edge interiors.
+        for i in 0..=16 {
+            let t = i as f64 / 16.;
+            for (x, y) in [(t, 0.), (t, 1.), (0., t), (1., t)] {
+                let mut point = (
+                    self.origin[0] + x * self.width as f64 * self.scale[0],
+                    self.origin[1] - y * self.height as f64 * self.scale[1],
+                    0.,
+                );
+                if let Some(projection) = &self.projection {
+                    proj4rs::transform::transform(projection, geographic, &mut point).ok()?;
+                    point.0 = point.0.to_degrees();
+                    point.1 = point.1.to_degrees();
+                }
+                if !(-180.0..=180.0).contains(&point.0) || !(-90.0..=90.0).contains(&point.1) {
+                    return None;
+                }
+                bounds[0] = bounds[0].min(point.0);
+                bounds[1] = bounds[1].min(point.1);
+                bounds[2] = bounds[2].max(point.0);
+                bounds[3] = bounds[3].max(point.1);
+            }
+        }
+        Some(bounds)
+    }
+    fn pixel(&self, lat: f64, lon: f64, geographic: &proj4rs::Proj) -> Option<(u32, u32)> {
+        let mut point = (lon, lat, 0.);
+        if let Some(projection) = &self.projection {
+            point.0 = lon.to_radians();
+            point.1 = lat.to_radians();
+            proj4rs::transform::transform(geographic, projection, &mut point).ok()?;
+        }
+        let x = ((point.0 - self.origin[0]) / self.scale[0]).floor();
+        let y = ((self.origin[1] - point.1) / self.scale[1]).floor();
+        (x >= 0. && y >= 0. && x < self.width as f64 && y < self.height as f64)
+            .then_some((x as u32, y as u32))
+    }
+}
+
 /// On-demand 30 m GRWL GeoTIFF water-mask store (`GRWL_mask_V01.01`).
 pub struct GrwlMaskStore {
-    mask_dir: AssetDirectory,
+    mask_dir: Arc<AssetDirectory>,
     entries: Vec<GrwlMaskEntry>,
+    geographic: proj4rs::Proj,
     cells: Vec<Vec<u32>>,
     inner: Mutex<MaskInner>,
 }
@@ -733,8 +879,8 @@ struct MaskInner {
 
 impl GrwlMaskStore {
     pub fn load_or_index(dir: &Path) -> Option<Self> {
-        let mask_dir = AssetDirectory::open(&dir.join("grwl_masks")).ok()?;
-        let idx_path = dir.join("grwl_masks_idx.json");
+        let mask_dir = Arc::new(AssetDirectory::open(&dir.join("grwl_masks")).ok()?);
+        let idx_path = dir.join("grwl_masks_idx_v2.json");
         if let Ok(bytes) = storage::read(&idx_path)
             && let Ok(entries) = serde_json::from_slice::<Vec<GrwlMaskEntry>>(&bytes)
             && !entries.is_empty()
@@ -750,8 +896,9 @@ impl GrwlMaskStore {
                     && e.min_lat < e.max_lat
                     && Path::new(&e.file).file_name() == Some(std::ffi::OsStr::new(&e.file))
             })
+            && let Some(store) = Self::from_entries(mask_dir.clone(), entries)
         {
-            return Self::from_entries(mask_dir, entries);
+            return Some(store);
         }
         let mut entries = Vec::new();
         for entry in fs::read_dir(mask_dir.path()).ok()?.flatten() {
@@ -763,40 +910,8 @@ impl GrwlMaskStore {
             {
                 continue;
             }
-            let Ok(file) = crate::kernel_interface::open_content(&p, true) else {
-                continue;
-            };
-            let Ok(mut dec) = tiff::decoder::Decoder::new(BufReader::new(file)) else {
-                continue;
-            };
-            let Ok((w, h)) = dec.dimensions() else {
-                continue;
-            };
-            let Ok(scale_val) = dec.get_tag_f64_vec(tiff::tags::Tag::Unknown(33550)) else {
-                continue;
-            };
-            let Ok(tie_val) = dec.get_tag_f64_vec(tiff::tags::Tag::Unknown(33922)) else {
-                continue;
-            };
-            if scale_val.len() < 2 || tie_val.len() < 6 {
-                continue;
-            }
-            let sx = scale_val[0];
-            let sy = scale_val[1];
-            let min_lon = tie_val[3] - tie_val[0] * sx;
-            let max_lat = tie_val[4] + tie_val[1] * sy;
-            let max_lon = min_lon + (w as f64) * sx;
-            let min_lat = max_lat - (h as f64) * sy;
-            if (-180.0..=180.0).contains(&min_lon) && (-90.0..=90.0).contains(&min_lat) {
-                entries.push(GrwlMaskEntry {
-                    file: entry.file_name().to_string_lossy().into_owned(),
-                    width: w,
-                    height: h,
-                    min_lon,
-                    max_lon,
-                    min_lat,
-                    max_lat,
-                });
+            if let Some(mask) = GrwlMaskEntry::read(&p, entry.file_name().to_str()?) {
+                entries.push(mask);
             }
         }
         if entries.is_empty() {
@@ -808,7 +923,14 @@ impl GrwlMaskStore {
         Self::from_entries(mask_dir, entries)
     }
 
-    fn from_entries(mask_dir: AssetDirectory, entries: Vec<GrwlMaskEntry>) -> Option<Self> {
+    fn from_entries(
+        mask_dir: Arc<AssetDirectory>,
+        mut entries: Vec<GrwlMaskEntry>,
+    ) -> Option<Self> {
+        let geographic = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84").ok()?;
+        for entry in &mut entries {
+            entry.prepare(&geographic)?;
+        }
         let mut cells = vec![Vec::new(); 180 * 90];
         let mut memberships = 0;
         for (i, e) in entries.iter().enumerate() {
@@ -825,6 +947,7 @@ impl GrwlMaskStore {
         Some(Self {
             mask_dir,
             entries,
+            geographic,
             cells,
             inner: Mutex::new(MaskInner {
                 decoders: HashMap::new(),
@@ -842,18 +965,15 @@ impl GrwlMaskStore {
         }
         let cell = (((lat + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize * 180
             + (((lon + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-        let idx = *self.cells[cell].iter().find(|&&i| {
+        let (idx, px, py) = self.cells[cell].iter().find_map(|&i| {
             let e = &self.entries[i as usize];
-            lon >= e.min_lon && lon < e.max_lon && lat >= e.min_lat && lat < e.max_lat
-        })? as usize;
+            if lon < e.min_lon || lon > e.max_lon || lat < e.min_lat || lat > e.max_lat {
+                return None;
+            }
+            e.pixel(lat, lon, &self.geographic)
+                .map(|(x, y)| (i as usize, x, y))
+        })?;
         let entry = &self.entries[idx];
-        let px = (((lon - entry.min_lon) / (entry.max_lon - entry.min_lon)) * entry.width as f64)
-            .floor() as u32;
-        let py = (((entry.max_lat - lat) / (entry.max_lat - entry.min_lat)) * entry.height as f64)
-            .floor() as u32;
-        if px >= entry.width || py >= entry.height {
-            return None;
-        }
         let mut inner = self.inner.lock().ok()?;
         if !inner.decoders.contains_key(&idx) {
             let file = self
@@ -2705,6 +2825,52 @@ mod tests {
     }
 
     #[test]
+    fn mask_geokeys_locate_northern_and_southern_utm_pixels_and_survive_index_reload() {
+        for (epsg, lat, lon, easting, northing) in [
+            (32618u16, 40.0, -75.0, 500000.0, 4427757.218738),
+            (32756, -33.8688, 151.2093, 334368.633648, 6250948.345385),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir(root.path().join("grwl_masks")).unwrap();
+            let file = fs::File::create(root.path().join("grwl_masks/mask.tif")).unwrap();
+            let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+            let mut image = encoder
+                .new_image::<tiff::encoder::colortype::Gray8>(2, 2)
+                .unwrap();
+            image
+                .encoder()
+                .write_tag(
+                    tiff::tags::Tag::Unknown(34735),
+                    &[
+                        1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, epsg,
+                    ][..],
+                )
+                .unwrap();
+            image
+                .encoder()
+                .write_tag(tiff::tags::Tag::Unknown(33550), &[30.0f64, 30.0, 0.0][..])
+                .unwrap();
+            image
+                .encoder()
+                .write_tag(
+                    tiff::tags::Tag::Unknown(33922),
+                    &[0.0f64, 0.0, 0.0, easting - 15.0, northing + 15.0, 0.0][..],
+                )
+                .unwrap();
+            image.write_data(&[1, 0, 1, 0]).unwrap();
+            drop(encoder);
+            // Reference coordinates were obtained independently with PROJ/GDAL.
+            for _ in 0..2 {
+                let masks = GrwlMaskStore::load_or_index(root.path()).unwrap();
+                assert_eq!(masks.sample_water(lat, lon), Some(true));
+                assert_eq!(masks.sample_water(lat, lon + 0.0004), Some(false));
+                assert_eq!(masks.sample_water(lat + 0.001, lon), None);
+            }
+            assert!(root.path().join("grwl_masks_idx_v2.json").exists());
+        }
+    }
+
+    #[test]
     fn masks_decode_only_requested_strips_and_index_coverage() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("mask.tif");
@@ -2718,9 +2884,13 @@ mod tests {
         image.write_data(&pixels).unwrap();
         drop(encoder);
         let store = GrwlMaskStore::from_entries(
-            AssetDirectory::open(root.path()).unwrap(),
+            Arc::new(AssetDirectory::open(root.path()).unwrap()),
             vec![GrwlMaskEntry {
                 file: "mask.tif".into(),
+                epsg: 4326,
+                origin: [0., 8.],
+                scale: [1., 1.],
+                projection: None,
                 width: 8,
                 height: 8,
                 min_lon: 0.0,

@@ -80,3 +80,4 @@ oxideav-pcx = { version = "0.1.2", default-features = false }
 zip = { version = "7.4", default-features = false, features = ["deflate"] }
 anydoc = "0.2"
 rdocx = "0.17"
+proj4rs = { version = "0.3", default-features = false }
