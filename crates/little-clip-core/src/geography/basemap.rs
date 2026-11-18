@@ -358,31 +358,31 @@ impl HgtStore {
 }
 
 fn load_hgt_tile(directory: &AssetDirectory, name: &std::ffi::OsStr) -> Option<Vec<u8>> {
-    #[cfg(test)]
-    let profile_start = std::time::Instant::now();
-    let (file, compressed) = match directory.open_file(name) {
-        Ok(file) => (file, false),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            (directory.open_file(&hgt::compressed_name(name)).ok()?, true)
-        }
-        Err(_) => return None,
+    let read = |name: &std::ffi::OsStr, compressed| {
+        #[cfg(test)]
+        let profile_start = std::time::Instant::now();
+        let file = directory.open_file(name).ok()?;
+        let (bytes, _) = hgt::read_stored(&file).ok()?;
+        #[cfg(test)]
+        let profile_read = profile_start.elapsed();
+        #[cfg(test)]
+        let stored_bytes = bytes.len();
+        let mut bytes = hgt::decode(bytes, compressed).ok()?;
+        // Snapshot reads grow geometrically; spare capacity must not evict useful tiles.
+        bytes.shrink_to_fit();
+        #[cfg(test)]
+        profile::record(
+            name,
+            stored_bytes,
+            profile_read,
+            profile_start.elapsed() - profile_read,
+        );
+        Some(bytes)
     };
-    let (bytes, _) = hgt::read_stored(&file).ok()?;
-    #[cfg(test)]
-    let profile_read = profile_start.elapsed();
-    #[cfg(test)]
-    let stored_bytes = bytes.len();
-    let mut bytes = hgt::decode(bytes, compressed).ok()?;
-    // Snapshot reads grow geometrically; spare capacity must not evict useful tiles.
-    bytes.shrink_to_fit();
-    #[cfg(test)]
-    profile::record(
-        name,
-        stored_bytes,
-        profile_read,
-        profile_start.elapsed() - profile_read,
-    );
-    Some(bytes)
+    // A converter can retire the raw name after open(), invalidating its guarded
+    // snapshot. Retry the independently guarded, already-published frame before
+    // recording a persistent failure in this asset generation.
+    read(name, false).or_else(|| read(&hgt::compressed_name(name), true))
 }
 
 fn hgt_samples(bytes: usize) -> Option<usize> {
@@ -2753,42 +2753,65 @@ fn load_hgt_dir(dir: &Path, out: &mut HgtStore) {
     let Ok(directory) = AssetDirectory::open(dir).map(Arc::new) else {
         return;
     };
+    let before = fs::metadata(directory.path())
+        .ok()
+        .map(|m| crate::file_inventory::identity(&m));
+    scan_hgt_dir(&directory, out);
+    let after = fs::metadata(directory.path())
+        .ok()
+        .map(|m| crate::file_inventory::identity(&m));
+    // Readdir is not a snapshot. During one-way raw -> compressed migration,
+    // either name can disappear from its enumeration window. Merge a second pass
+    // only when the directory changed; stable inventories keep one cheap pass.
+    if before.is_none() || before != after {
+        scan_hgt_dir(&directory, out);
+    }
+}
+
+fn scan_hgt_dir(directory: &Arc<AssetDirectory>, out: &mut HgtStore) {
     let Ok(entries) = fs::read_dir(directory.path()) else {
         return;
     };
     for entry in entries.take(65_536).flatten() {
-        let path = entry.path();
-        let raw_path = path.with_extension("");
-        let hgt_path = if path.extension().is_some_and(|s| s == "zst") {
-            &raw_path
-        } else {
-            &path
-        };
-        if !hgt_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("hgt"))
-        {
-            continue;
-        }
-        let Some(key) = hgt_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(parse_hgt_name)
-        else {
-            continue;
-        };
-        // Inventory metadata only. Guarded payload opening and identity checks
-        // happen on first use, avoiding thousands of NAS opens at startup.
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_file() && metadata.len() <= hgt::MAX_STORED_BYTES as u64 {
+        if let Some((key, name)) = hgt_entry(directory, &entry) {
             out.sources
                 .entry(key)
-                .or_insert_with(|| (directory.clone(), hgt_path.file_name().unwrap().to_owned()));
+                .or_insert_with(|| (directory.clone(), name));
         }
     }
+}
+
+fn hgt_entry(
+    directory: &AssetDirectory,
+    entry: &fs::DirEntry,
+) -> Option<((i32, i32), std::ffi::OsString)> {
+    let path = entry.path();
+    let raw_path = path.with_extension("");
+    let hgt_path = if path.extension().is_some_and(|s| s == "zst") {
+        &raw_path
+    } else {
+        &path
+    };
+    if !hgt_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("hgt"))
+    {
+        return None;
+    }
+    let key = hgt_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(parse_hgt_name)?;
+    let name = hgt_path.file_name()?;
+    // Metadata stays no-follow. A stale raw DirEntry may refer to a name already
+    // retired by migration; its verified replacement was installed first.
+    let metadata = entry
+        .metadata()
+        .or_else(|_| fs::symlink_metadata(directory.path().join(hgt::compressed_name(name))))
+        .ok()?;
+    (metadata.is_file() && metadata.len() <= hgt::MAX_STORED_BYTES as u64)
+        .then(|| (key, name.to_owned()))
 }
 
 /// Returns the southwest degree origin of a standard HGT tile filename stem.
@@ -3172,6 +3195,12 @@ mod tests {
         assert!(cache_chunk(&mut cache, &mut order, 10, vec![0u8; 11], 10).is_none());
     }
 
+    fn hgt_fixture() -> (tempfile::TempDir, AssetDirectory, Vec<u8>) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = AssetDirectory::open(root.path()).unwrap();
+        (root, directory, 123_i16.to_be_bytes().repeat(4))
+    }
+
     fn write_hgt_frame(directory: &AssetDirectory, name: &std::ffi::OsStr, raw: &[u8]) {
         let mut frame = Vec::new();
         hgt::encode(
@@ -3208,10 +3237,44 @@ mod tests {
     }
 
     #[test]
+    fn hgt_inventory_accepts_a_raw_entry_retired_after_enumeration() {
+        let (root, directory, raw) = hgt_fixture();
+        let name = std::ffi::OsStr::new("N00E000.hgt");
+        directory.write(name, &raw).unwrap();
+        let entry = fs::read_dir(directory.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        write_hgt_frame(&directory, &hgt::compressed_name(name), &raw);
+        fs::remove_file(root.path().join(name)).unwrap();
+        assert!(entry.metadata().is_err());
+        assert_eq!(
+            hgt_entry(&directory, &entry),
+            Some(((0, 0), name.to_owned()))
+        );
+    }
+
+    #[test]
+    fn failed_raw_snapshot_uses_a_verified_frame_before_caching_failure() {
+        let (root, directory, raw) = hgt_fixture();
+        let name = std::ffi::OsStr::new("N00E000.hgt");
+        write_hgt_frame(&directory, &hgt::compressed_name(name), &raw);
+        // Guarded read failures and malformed raw data both reach the same
+        // compressed fallback, rather than poisoning this degree tile's cache.
+        std::os::unix::fs::symlink("/dev/zero", root.path().join(name)).unwrap();
+        assert_eq!(load_hgt_tile(&directory, name).unwrap(), raw);
+        fs::remove_file(root.path().join(name)).unwrap();
+        directory.write(name, b"incomplete").unwrap();
+        let mut store = HgtStore::default();
+        load_hgt_dir(root.path(), &mut store);
+        assert_eq!(store.sample(0.5, 0.5), Some(123.));
+        assert!(store.cache.lock().unwrap().failed.is_empty());
+    }
+
+    #[test]
     fn mixed_hgt_inventory_survives_raw_to_compressed_migration() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = AssetDirectory::open(root.path()).unwrap();
-        let raw = 123_i16.to_be_bytes().repeat(4);
+        let (root, directory, raw) = hgt_fixture();
         let name = std::ffi::OsStr::new("N00E000.hgt");
         directory.write(name, &raw).unwrap();
         let mut store = HgtStore::default();

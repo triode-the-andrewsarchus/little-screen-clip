@@ -49,7 +49,7 @@ this audit; the commands below rerun their containing suites.
 
 ## Verification performed
 
-- Latest focused core geography suite: **45 passed**, two opt-in tests skipped.
+- Latest focused core geography suite: **47 passed**, two opt-in tests skipped.
 - Latest focused file-manager geography/download suite: **30 passed**, two opt-in tests skipped.
 - Core Task lifecycle suite: **4 passed**.
 - Opt-in native Rust GPU renderer: **passed on NVIDIA and Mesa llvmpipe**.
@@ -90,3 +90,21 @@ each frame byte for byte before installing it and retiring its exact original.
 Mixed raw/compressed inventories remain usable while it runs. Completion of that
 local migration must be checked against its live process, final log, remaining
 raw files and resulting inventory; it is not claimed complete by this audit.
+
+## Concurrent migration follow-up
+
+A fully compressed regional profile exposed a one-tile omission during directory
+mutation: a single-pass enumeration reported 14,519 instead of 14,520 sources.
+The loader now rechecks the existing directory metadata identity and merges one
+additional scan only if it changed. A stale raw directory entry can use metadata
+from its already-published compressed replacement. Payload reads similarly retry
+the independently guarded compressed snapshot when the raw snapshot is retired
+or otherwise unusable, before caching a failure. No directory-wide lock or
+unbounded stabilization loop is introduced.
+
+Deterministic tests cover a raw entry removed after enumeration and both guarded
+read rejection and malformed raw content with a valid compressed replacement.
+Three consecutive real-data profiles, while the converter remained active, each
+asserted the full 14,520-source inventory. Their sampled Omaha region used only
+compressed files. The opt-in profile can enforce an expected inventory with
+`LITTLE_CLIP_GEOGRAPHY_PROFILE_EXPECT_HGT=14520`.

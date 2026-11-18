@@ -38,6 +38,13 @@ fn terrain_loading_profile() {
         started.elapsed().as_secs_f64() * 1000.,
         assets.status().local_hgt_count
     );
+    if let Ok(expected) = std::env::var("LITTLE_CLIP_GEOGRAPHY_PROFILE_EXPECT_HGT") {
+        assert_eq!(
+            assets.status().local_hgt_count,
+            expected.parse::<usize>().unwrap(),
+            "Concurrent migration must preserve the complete inventory"
+        );
+    }
     let selected = std::env::var("LITTLE_CLIP_GEOGRAPHY_PROFILE_CASE").unwrap_or_default();
     for (name, lat, lon, zoom) in [
         ("omaha-close", 41.265, -95.90, 3500.),
