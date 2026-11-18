@@ -522,6 +522,14 @@ mount inventory stayed unchanged. Shutdown retains probes until they actually
 exit. Initial startup/recovery and some operation-admission checks still perform
 synchronous filesystem work.
 
+Read-only scheduling probes also run on a separate four-slot retained pool. They
+resolve device selectors and observe source/export destination regions without
+creating output directories. Busy probes keep their slots until the underlying
+calls exit, including after cancellation. Settings that do not need those probes
+and an already enrolled independent sync pair remain usable when all four slots
+are occupied. Changed mount observations are rejected or scheduled again; these
+scopes never replace the fresh checks used to prepare and execute a mutation.
+
 Logical row bytes count stored text and raw path bytes without materializing
 every JSON record. They are components of registry storage, with page/index
 overhead excluded. The registry file observation includes `drives.sqlite`, its

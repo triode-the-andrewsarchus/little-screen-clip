@@ -20,6 +20,13 @@ pub(super) struct Allocation {
 }
 
 impl Owner {
+    pub(super) fn ram_setup_blocks(&self, request: &DriveRequest) -> bool {
+        self.ram_setup.is_some()
+            && matches!(
+                request,
+                DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
+            )
+    }
     pub(super) fn start_ram_setup(&mut self, envelope: Envelope) {
         let prepared = (|| {
             let DriveRequest::CopyToRam { drive } = &envelope.request else {

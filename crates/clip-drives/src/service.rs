@@ -49,6 +49,7 @@ mod ram_setup;
 mod reconciliation;
 mod refresh;
 mod rules;
+mod scheduling;
 
 struct Owner {
     closing: Arc<AtomicBool>,
@@ -62,6 +63,7 @@ struct Owner {
     maintenance: maintenance::Cleanup,
     publication: publication::Publication,
     refresh: refresh::Refresh,
+    scheduling: scheduling::Probes,
     policy_waiting: std::collections::VecDeque<publication::Waiter>,
     partition: Option<partition::Pending>,
     partition_jobs: little_clip_core::jobs::BackgroundJobs,
@@ -201,6 +203,7 @@ impl Service {
             maintenance: Default::default(),
             publication: publication.with_inventory(inventory.clone()),
             refresh: refresh::Refresh::new(inventory.clone()),
+            scheduling: scheduling::Probes::default(),
             policy_waiting: Default::default(),
             partition: None,
             partition_jobs: little_clip_core::jobs::BackgroundJobs::new(1, 1),
@@ -437,6 +440,7 @@ impl Owner {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
+            self.poll_scopes();
             self.poll_refresh();
             self.poll_policy();
             if discovered.elapsed() >= Duration::from_secs(5) {
@@ -503,6 +507,7 @@ impl Owner {
                 Err("Daemon stopping; queued operation cancelled before execution".into()),
             );
         }
+        self.drain_scopes();
         let mut waiting = std::mem::take(&mut self.sync_waiting);
         waiting.extend(std::mem::take(&mut self.sync_auto).into_values());
         for intent in waiting {
@@ -598,48 +603,23 @@ impl Owner {
             self.start_background(envelope);
             return;
         }
-        if self.ram_setup.is_some()
-            && matches!(
-                envelope.request,
-                DriveRequest::CopyToRam { .. } | DriveRequest::Configure { .. }
-            )
-        {
+        if self.ram_setup_blocks(&envelope.request) {
             self.defer_operation(envelope);
             return;
         }
-        let drive = self.request_drive(&envelope.request).ok().flatten();
-        let mut roots = Vec::new();
-        let mut claims = Vec::new();
-        if let Some(drive) = &drive
-            && let Some(drive) = self
-                .shared
-                .lock()
-                .ok()
-                .and_then(|status| status.drives.iter().find(|d| &d.id == drive).cloned())
-            && let Some(path) = drive.mount
-            && let Ok(root) = Root::open(&path)
-        {
-            roots.push(root);
+        self.start_scopes(envelope);
+    }
+    fn dispatch_scoped(
+        &mut self,
+        envelope: Envelope,
+        drive: Option<String>,
+        claims: Vec<crate::root::Scope>,
+    ) {
+        // A probe may have started before another RAM setup acquired the slot.
+        if self.ram_setup_blocks(&envelope.request) {
+            self.defer_operation(envelope);
+            return;
         }
-        if let DriveRequest::SaveRam {
-            destination,
-            session,
-        } = &envelope.request
-        {
-            match Root::planned_scope(destination) {
-                Ok(scope) => claims.push(scope),
-                Err(error) => {
-                    self.finish_operation(&envelope.id, &envelope.cancel, Err(error));
-                    return;
-                }
-            }
-            if let Ok(Some(session)) = self.db.get::<RamSession>("ram", session)
-                && let Ok(root) = Root::open(&session.path)
-            {
-                roots.push(root);
-            }
-        }
-        claims.extend(roots.iter().map(Root::scope));
         let busy = drive
             .as_ref()
             .is_some_and(|drive| self.check_busy(drive).is_err())
@@ -651,7 +631,6 @@ impl Owner {
                     .flatten()
                     .is_some_and(|pair| drive.as_ref() == Some(&pair.drive))
             });
-        drop(roots);
         if busy {
             if matches!(envelope.request, DriveRequest::Pause { paused: true, .. }) {
                 for job in self.sync_jobs.values().filter(|job| {
@@ -663,70 +642,27 @@ impl Owner {
             self.defer_operation(envelope);
             return;
         }
-        if matches!(envelope.request, DriveRequest::CopyToRam { .. }) {
-            self.start_ram_setup(envelope);
-            return;
-        }
-        if matches!(
-            envelope.request,
+        match &envelope.request {
+            DriveRequest::CopyToRam { .. } => self.start_ram_setup(envelope),
             DriveRequest::Pair { .. }
-                | DriveRequest::Sync { .. }
-                | DriveRequest::FlushRam { .. }
-                | DriveRequest::SaveRam { .. }
-        ) {
-            if self.sync_waiting.len() >= 16 {
-                self.finish_operation(
-                    &envelope.id,
-                    &envelope.cancel,
-                    Err("Reconciliation queue is full; retry admission".into()),
-                );
-                return;
-            }
-            let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.prepare_reconciliation(&envelope.request, &envelope.cancel)
-            }))
-            .unwrap_or_else(|_| {
-                Err("Reconciliation setup failed; retained storage needs recovery".into())
-            });
-            match prepared {
-                Ok((pair, initialize, save)) => self.queue_sync(reconciliation::Intent {
-                    queued: Instant::now(),
-                    pair,
-                    initialize,
-                    operation: Some(envelope.id),
-                    cancel: envelope.cancel,
-                    paths: None,
-                    save,
-                    writeback: None,
-                }),
-                Err(error) => self.finish_operation(&envelope.id, &envelope.cancel, Err(error)),
-            }
-            return;
-        }
-        if matches!(
-            envelope.request,
+            | DriveRequest::Sync { .. }
+            | DriveRequest::FlushRam { .. }
+            | DriveRequest::SaveRam { .. } => self.start_reconciliation(envelope),
             DriveRequest::Eject { .. }
-                | DriveRequest::Backup {
-                    kind: BackupKind::Image,
-                    ..
-                }
-                | DriveRequest::ReadOnlyBackup { .. }
-        ) {
-            self.start_partition(envelope);
-            return;
-        }
-        if matches!(
-            envelope.request,
+            | DriveRequest::Backup {
+                kind: BackupKind::Image,
+                ..
+            }
+            | DriveRequest::ReadOnlyBackup { .. } => self.start_partition(envelope),
             DriveRequest::Backup { .. }
-                | DriveRequest::Catalog { .. }
-                | DriveRequest::CatalogWithLimits { .. }
-        ) {
-            self.start_background(envelope);
-            return;
+            | DriveRequest::Catalog { .. }
+            | DriveRequest::CatalogWithLimits { .. } => self.start_background(envelope),
+            _ => {
+                let id = &envelope.id;
+                let result = self.execute_recorded(id, envelope.request, &envelope.cancel);
+                self.finish_operation(id, &envelope.cancel, result);
+            }
         }
-        let id = &envelope.id;
-        let result = self.execute_recorded(id, envelope.request, &envelope.cancel);
-        self.finish_operation(id, &envelope.cancel, result);
     }
     fn execute_recorded(
         &mut self,
@@ -1224,6 +1160,7 @@ mod tests {
     mod policy_coverage;
     mod ram_writeback;
     mod read_only;
+    mod scope_admission;
     mod status_refresh;
     mod storage;
     use super::*;

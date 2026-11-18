@@ -142,6 +142,35 @@ impl Owner {
         changes.full |= unavailable && periodic;
         changes
     }
+    pub(super) fn start_reconciliation(&mut self, envelope: Envelope) {
+        if self.sync_waiting.len() >= 16 {
+            self.finish_operation(
+                &envelope.id,
+                &envelope.cancel,
+                Err("Reconciliation queue is full; retry admission".into()),
+            );
+            return;
+        }
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.prepare_reconciliation(&envelope.request, &envelope.cancel)
+        }))
+        .unwrap_or_else(|_| {
+            Err("Reconciliation setup failed; retained storage needs recovery".into())
+        });
+        match prepared {
+            Ok((pair, initialize, save)) => self.queue_sync(reconciliation::Intent {
+                queued: Instant::now(),
+                pair,
+                initialize,
+                operation: Some(envelope.id),
+                cancel: envelope.cancel,
+                paths: None,
+                save,
+                writeback: None,
+            }),
+            Err(error) => self.finish_operation(&envelope.id, &envelope.cancel, Err(error)),
+        }
+    }
     pub(super) fn prepare_reconciliation(
         &mut self,
         request: &DriveRequest,
@@ -487,6 +516,19 @@ impl Owner {
         }
     }
     pub(super) fn request_drive(&self, request: &DriveRequest) -> Result<Option<String>> {
+        let selector = self.request_selector(request)?;
+        selector
+            .map(|selector| {
+                if selector.starts_with("/dev/") {
+                    Ok(self.drive(&selector)?.id)
+                } else {
+                    Ok(selector)
+                }
+            })
+            .transpose()
+    }
+    // Registry-only lookup: device-node resolution belongs to filesystem workers.
+    pub(super) fn request_selector(&self, request: &DriveRequest) -> Result<Option<String>> {
         let pair = match request {
             DriveRequest::Sync { pair }
             | DriveRequest::Pause { pair, .. }
@@ -507,13 +549,7 @@ impl Owner {
             | DriveRequest::Catalog { drive }
             | DriveRequest::CatalogWithLimits { drive, .. }
             | DriveRequest::Eject { drive }
-            | DriveRequest::PruneBackups { drive } => {
-                if drive.starts_with("/dev/") {
-                    Ok(Some(self.drive(drive)?.id))
-                } else {
-                    Ok(Some(drive.clone()))
-                }
-            }
+            | DriveRequest::PruneBackups { drive } => Ok(Some(drive.clone())),
             _ => Ok(None),
         }
     }
