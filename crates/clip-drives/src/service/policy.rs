@@ -1,5 +1,7 @@
 //! Enrollment checks keep managed storage out of synchronization feedback loops.
 use super::*;
+mod views;
+pub(super) use views::mounted_views;
 
 /// Descriptor-free managed-storage inputs, compared again after worker preparation.
 #[derive(Clone, PartialEq, Eq)]
@@ -7,7 +9,7 @@ pub(super) struct Storage {
     state: PathBuf,
     backups: Vec<PathBuf>,
     ram: Vec<(String, PathBuf, Option<PathBuf>)>,
-    catalogs: Vec<PathBuf>,
+    views: Vec<PathBuf>,
 }
 impl Storage {
     pub fn capture(db: &Store, state: &Path, backup_directory: Option<&Path>) -> Result<Self> {
@@ -22,11 +24,7 @@ impl Storage {
             .into_iter()
             .map(|s| (s.id, s.path, s.backing.map(|b| b.directory)))
             .collect();
-        let catalogs = db
-            .list::<Catalog>("catalog", 0, 1000)?
-            .into_iter()
-            .filter_map(|c| c.mount)
-            .collect();
+        let views = mounted_views(db)?;
         if let Some(snapshot) = snapshot {
             snapshot.commit()?;
         }
@@ -34,17 +32,31 @@ impl Storage {
             state: state.to_path_buf(),
             backups,
             ram,
-            catalogs,
+            views,
         })
     }
     pub fn validate(&self, source: &Root, local: &Root, own_ram: Option<&str>) -> Result<()> {
+        if source.overlap(local) {
+            return Err("Sync roots overlap after a directory or mount change; pause and re-enroll the pair".into());
+        }
+        self.validate_roots(source, Some(local), own_ram)
+    }
+    pub fn validate_source(&self, source: &Root) -> Result<()> {
+        self.validate_roots(source, None, None)
+    }
+    fn validate_roots(
+        &self,
+        source: &Root,
+        local: Option<&Root>,
+        own_ram: Option<&str>,
+    ) -> Result<()> {
         validate_backing_paths(
             self.ram
                 .iter()
                 .filter_map(|(_, _, backing)| backing.as_ref()),
             source,
         )?;
-        if own_ram.is_none() {
+        if let Some(local) = local.filter(|_| own_ram.is_none()) {
             validate_backing_paths(
                 self.ram
                     .iter()
@@ -52,9 +64,8 @@ impl Storage {
                 local,
             )?;
         }
-        if source.overlap(local) {
-            return Err("Sync roots overlap after a directory or mount change; pause and re-enroll the pair".into());
-        }
+        let mounts = crate::mounts::inventory()?;
+        let aliases = catalog_paths(&mounts).collect::<Vec<_>>();
         let managed = std::iter::once((&self.state, false))
             .chain(self.backups.iter().map(|p| (p, false)))
             .chain(
@@ -62,14 +73,53 @@ impl Storage {
                     .iter()
                     .map(|(id, path, _)| (path, own_ram == Some(id.as_str()))),
             )
-            .chain(self.catalogs.iter().map(|p| (p, false)));
+            .chain(self.views.iter().map(|p| (p, false)));
         for (path, own_view) in managed {
-            if managed_overlap(path, source, (!own_view).then_some(local)) {
+            if aliases.iter().any(|alias| path.starts_with(alias)) {
+                continue;
+            }
+            if managed_overlap(path, source, local.filter(|_| !own_view)) {
                 return Err("Sync roots overlap managed backups, RAM or catalog storage".into());
+            }
+        }
+        for path in aliases {
+            if path_overlap(path, source) || local.is_some_and(|local| path_overlap(path, local)) {
+                return Err("Sync roots overlap a managed catalog filesystem".into());
             }
         }
         Ok(())
     }
+}
+
+pub(super) fn catalog_paths(mounts: &[crate::mounts::Mount]) -> impl Iterator<Item = &Path> {
+    mounts
+        .iter()
+        .filter(|mount| {
+            mount.filesystem.starts_with("fuse")
+                && mount
+                    .source
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .starts_with(b"little-clip-catalog:")
+        })
+        .map(|mount| mount.target.as_path())
+}
+fn path_overlap(path: &Path, root: &Root) -> bool {
+    root.path.starts_with(path) || path.starts_with(&root.path)
+}
+
+pub(super) fn validate_view_target(db: &Store, target: &Root) -> Result<()> {
+    let mounts = crate::mounts::inventory()?;
+    let aliases = catalog_paths(&mounts).collect::<Vec<_>>();
+    if aliases.iter().any(|path| path_overlap(path, target))
+        || mounted_views(db)?
+            .iter()
+            .filter(|path| !aliases.iter().any(|alias| path.starts_with(alias)))
+            .any(|path| managed_overlap(path, target, None))
+    {
+        return Err("Destination overlaps a managed catalog or image view".into());
+    }
+    Ok(())
 }
 
 // Missing managed roots retain their lexical boundary; observed roots also
@@ -148,6 +198,14 @@ impl Owner {
         )?
         .validate(source, local, own_ram)
     }
+    pub(super) fn validate_storage_source(&self, source: &Root) -> Result<()> {
+        Storage::capture(
+            &self.db,
+            &self.state,
+            self.config.backup_directory.as_deref(),
+        )?
+        .validate_source(source)
+    }
     pub(super) fn validate_ram_backing_target(&self, target: &Root) -> Result<()> {
         validate_ram_backing_storage(&self.db, target)
     }
@@ -191,15 +249,7 @@ pub(super) fn validate_backup_storage(db: &Store, state: &Path, target: &Root) -
             return Err("Backup directory overlaps a paired local folder or RAM copy".into());
         }
     }
-    for catalog in db.list::<Catalog>("catalog", 0, 1000)? {
-        if let Some(path) = catalog.mount
-            && let Ok(root) = Root::open(&path)
-            && root.overlap(target)
-        {
-            return Err("Backup directory overlaps a mounted catalog".into());
-        }
-    }
-    Ok(())
+    validate_view_target(db, target)
 }
 
 pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
@@ -237,37 +287,151 @@ pub(super) fn validate_config(config: &DriveConfig) -> Result<()> {
     Ok(())
 }
 
-/// Reads only headers referenced by the existing mounted-view registries.
-pub(super) fn mounted_views(db: &Store) -> Result<Vec<PathBuf>> {
-    #[derive(serde::Deserialize)]
-    struct Location {
-        #[serde(default, with = "little_clip_core::path_serde::optional")]
-        mount: Option<PathBuf>,
-    }
-    let mut paths = Vec::new();
-    for (registry, kind) in [("catalog-mount", "catalog"), ("image-mount", "backup")] {
-        let mut after = String::new();
-        loop {
-            let ids = db.ids(registry, &after, 128)?;
-            let Some(last) = ids.last() else {
-                break;
-            };
-            after = last.clone();
-            for id in ids {
-                if let Some(location) = db.get::<Location>(kind, &id)? {
-                    paths.extend(location.mount);
-                }
-            }
-        }
-    }
-    Ok(paths)
-}
-
 #[cfg(test)]
 mod mounted_tests {
     use super::*;
+
+    fn header(db: &Store, kind: &str, id: &str, mount: Option<&Path>) {
+        db.put(kind, id, &serde_json::json!({
+            "id": id, "drive": "owned", "evidence": "owned", "label": "owned",
+            "captured": 0, "entries": 0, "complete": true, "coverage": "complete",
+            "path": "/owned/backups/bucket/version", "mount": mount.map(|p| p.as_os_str().as_encoded_bytes()),
+        })).unwrap();
+    }
+
     #[test]
-    fn mounted_view_lookup_pages_only_registered_headers_and_preserves_raw_paths() {
+    fn old_registered_and_legacy_views_protect_sync_and_backup_admission() {
+        for kind in ["catalog", "backup"] {
+            for registered in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let state = Root::create(&temp.path().join("state")).unwrap();
+                let db = Store::open(&state.path.join("drives.sqlite")).unwrap();
+                let view = Root::create(&temp.path().join("view")).unwrap();
+                let local = Root::create(&temp.path().join("local")).unwrap();
+                fs::write(view.path.join("keep"), b"original view bytes").unwrap();
+                header(&db, kind, "old-mounted", Some(&view.path));
+                if registered {
+                    db.put(
+                        if kind == "catalog" {
+                            "catalog-mount"
+                        } else {
+                            "image-mount"
+                        },
+                        "old-mounted",
+                        &serde_json::json!({"path": view.path}),
+                    )
+                    .unwrap();
+                }
+                let transaction = db.0.unchecked_transaction().unwrap();
+                for index in 0..1100 {
+                    header(&db, kind, &format!("history-{index:04}"), None);
+                }
+                transaction.commit().unwrap();
+                let storage = Storage::capture(&db, &state.path, None).unwrap();
+                assert!(storage.validate_source(&view).is_err());
+                assert!(validate_view_target(&db, &view).is_err());
+                assert!(
+                    storage.validate(&view, &local, None).is_err(),
+                    "{kind}, registered={registered}: managed source was accepted"
+                );
+                assert!(
+                    storage.validate(&local, &view, None).is_err(),
+                    "{kind}, registered={registered}: managed target was accepted"
+                );
+                assert!(
+                    validate_backup_storage(&db, &state.path, &view).is_err(),
+                    "{kind}, registered={registered}: backup target was accepted"
+                );
+                assert_eq!(
+                    fs::read(view.path.join("keep")).unwrap(),
+                    b"original view bytes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unregistered_mounted_headers_remain_visible_beyond_the_history_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let path = temp.path().join("legacy");
+        header(&db, "catalog", "legacy", Some(&path));
+        for index in 0..1100 {
+            header(&db, "catalog", &format!("history-{index}"), None);
+        }
+        assert_eq!(mounted_views(&db).unwrap(), vec![path]);
+    }
+
+    #[test]
+    fn uncertain_view_metadata_refuses_admission_without_discarding_the_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        for (kind, registry) in [("catalog", "catalog-mount"), ("backup", "image-mount")] {
+            db.put(registry, "owned", &1_u64).unwrap();
+            assert!(
+                mounted_views(&db)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no saved header")
+            );
+            for mount in [
+                None,
+                Some(Path::new("relative")),
+                Some(Path::new("/root/../view")),
+                Some(Path::new("/view\0bad")),
+            ] {
+                header(&db, kind, "owned", mount);
+                assert!(mounted_views(&db).is_err(), "{kind}: {mount:?}");
+            }
+            header(&db, kind, "owned", Some(&temp.path().join("view")));
+            db.0.execute(
+                "UPDATE entities SET json='broken json' WHERE kind=?1 AND id='owned'",
+                [kind],
+            )
+            .unwrap();
+            assert!(mounted_views(&db).is_err());
+            db.put(
+                kind,
+                "owned",
+                &serde_json::json!({"mount": temp.path(), "extra": "x".repeat(65536)}),
+            )
+            .unwrap();
+            assert!(
+                mounted_views(&db)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("decoding budget")
+            );
+            db.remove(kind, "owned").unwrap();
+            db.remove(registry, "owned").unwrap();
+            assert!(mounted_views(&db).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn image_header_and_runtime_disagreement_preserves_both_deny_boundaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
+        let first = Root::create(&temp.path().join("first")).unwrap();
+        let second = Root::create(&temp.path().join("second")).unwrap();
+        header(&db, "backup", "image", Some(&first.path));
+        db.put(
+            "image-mount",
+            "image",
+            &serde_json::json!({"path": second.path}),
+        )
+        .unwrap();
+        assert_eq!(
+            mounted_views(&db).unwrap(),
+            vec![first.path.clone(), second.path.clone()]
+        );
+        for root in [&first, &second] {
+            assert!(validate_view_target(&db, root).is_err());
+        }
+    }
+
+    #[test]
+    fn mounted_view_lookup_pages_candidates_and_registries_and_preserves_raw_paths() {
         let temp = tempfile::tempdir().unwrap();
         let db = Store::open(&temp.path().join("state.sqlite")).unwrap();
         let transaction = db.0.unchecked_transaction().unwrap();

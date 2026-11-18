@@ -41,6 +41,7 @@ impl Owner {
                     .as_deref()
                     .ok_or("Mount the drive before copying it to RAM")?,
             )?);
+            self.validate_storage_source(&source)?;
             if self.drive(&drive.id)? != drive {
                 return Err("Drive changed while pinning RAM source".into());
             }
@@ -75,8 +76,9 @@ impl Owner {
         let cancel = envelope.cancel.clone();
         let task = write_task(&self.ram_setup_jobs, move || {
             let db = Store::existing(&state.join("drives.sqlite"), false)?;
-            let mut progress = job_progress(state, operation.clone());
+            let mut progress = job_progress(state.clone(), operation.clone());
             let result = Preparation {
+                state: &state,
                 config: &config,
                 inventory: &inventory,
                 drive: &worker_drive,
@@ -201,6 +203,7 @@ fn eligible(db: &Store, config: &DriveConfig, drive: &Drive) -> Result<()> {
 }
 
 struct Preparation<'a> {
+    state: &'a Path,
     config: &'a DriveConfig,
     inventory: &'a Inventory,
     drive: &'a Drive,
@@ -218,6 +221,8 @@ impl Preparation<'_> {
         cancelled(cancel)?;
         eligible(db, self.config, self.drive)?;
         ram_reason(self.config)?;
+        policy::Storage::capture(db, self.state, self.config.backup_directory.as_deref())?
+            .validate_source(self.source)?;
         db.put(
             "ram-allocation",
             self.id,

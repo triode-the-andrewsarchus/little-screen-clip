@@ -349,6 +349,15 @@ fn native_image_backup_checks_authority_busy_source_and_read_only_mount() {
         .unwrap()
         .unwrap();
     observed.validate(&Root::open(mounted).unwrap()).unwrap();
+    let image_root = Root::open(mounted).unwrap();
+    assert!(policy::validate_view_target(&image_state, &image_root).is_err());
+    assert!(
+        policy::Storage::capture(&image_state, &temp.path().join("state"), None)
+            .unwrap()
+            .validate_source(&image_root)
+            .is_err()
+    );
+    drop(image_root);
     assert_eq!(
         fs::read(mounted.join("image-source.txt")).unwrap(),
         b"first authorized partition backup"

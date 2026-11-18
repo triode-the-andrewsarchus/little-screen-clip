@@ -8,6 +8,15 @@ pub(super) struct Input {
     pub drives: Vec<Drive>,
     pub rules: Vec<DriveRule>,
     pub mount_signature: Option<String>,
+    pub metadata_error: Option<String>,
+}
+impl Input {
+    fn metadata_ready(&self) -> Result<()> {
+        if let Some(error) = &self.metadata_error {
+            return Err(format!("Managed-view metadata is uncertain: {error}").into());
+        }
+        Ok(())
+    }
 }
 type Observer = Arc<dyn Fn(Input, Option<IndexPolicy>) -> Result<IndexPolicy> + Send + Sync>;
 
@@ -115,7 +124,10 @@ impl Publication {
         let observer = self.observer.clone();
         self.pending = Some((
             self.epoch,
-            write_task(&self.jobs, move || observer(input, previous)),
+            write_task(&self.jobs, move || {
+                input.metadata_ready()?;
+                observer(input, previous)
+            }),
         ));
         self.dirty = false;
     }
@@ -206,11 +218,15 @@ impl Owner {
 }
 
 pub(super) fn observe(input: Input, previous: Option<IndexPolicy>) -> Result<IndexPolicy> {
+    input.metadata_ready()?;
     let routed = little_clip_core::mount_inventory::Snapshot::capture()?;
     if input.mount_signature.as_deref() != Some(routed.signature.as_str()) {
         return Err("Mount inventory changed while establishing drive policy sources".into());
     }
     let sources = rules::IndexSources::observed(&input.drives, &routed.mounts);
+    let aliases = policy::catalog_paths(&routed.mounts)
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
     let mut requests = input
         .rules
         .iter()
@@ -225,7 +241,17 @@ pub(super) fn observe(input: Input, previous: Option<IndexPolicy>) -> Result<Ind
             Some(path),
         )
     }));
-    let policy = IndexPolicy::observed_rules(requests, previous.as_ref())?;
+    // The namespace lists every catalog bind target, including disconnected
+    // servers. Literal exclusions need no FUSE getattr/lifetime probe and are
+    // protected by this same mount signature. They never authorize content.
+    requests.retain(|(_, path)| {
+        path.as_ref()
+            .is_none_or(|path| !aliases.iter().any(|alias| path.starts_with(alias)))
+    });
+    let mut policy = IndexPolicy::observed_rules(requests, previous.as_ref())?;
+    policy.excluded.extend(aliases);
+    policy.excluded.sort();
+    policy.excluded.dedup();
     if !policy
         .context
         .as_ref()

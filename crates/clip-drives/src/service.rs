@@ -984,7 +984,7 @@ impl Owner {
         {
             return Err("Catalog mount identity changed; refusing unmount".into());
         }
-        if observed.is_none() {
+        let message = if observed.is_none() {
             if crate::mounts::inventory()?
                 .iter()
                 .any(|mount| mount.target == *path)
@@ -994,37 +994,52 @@ impl Owner {
                         .into(),
                 );
             }
-            catalog.mount = None;
-            self.db.put("catalog", id, &catalog)?;
-            return Ok("Catalog is no longer mounted".into());
-        }
-        let output = CommandRequest::new("fusermount3")
-            .arg("-u")
-            .arg(path)
-            .timeout(Duration::from_secs(10))
-            .own_process_group()
-            .run()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err(format!(
-                "Could not unmount catalog: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-        if self
-            .children
-            .get_mut(id)
-            .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
-        {
-            self.children.remove(id);
-        }
+            "Catalog is no longer mounted"
+        } else {
+            let output = CommandRequest::new("fusermount3")
+                .arg("-u")
+                .arg(path)
+                .timeout(Duration::from_secs(10))
+                .own_process_group()
+                .run()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "Could not unmount catalog: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .into());
+            }
+            if self
+                .children
+                .get_mut(id)
+                .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
+            {
+                self.children.remove(id);
+            }
+            "Catalog unmounted"
+        };
+        let transaction = self.db.0.unchecked_transaction()?;
         self.db.remove("catalog-mount", id)?;
         catalog.mount = None;
         self.db.put("catalog", id, &catalog)?;
-        Ok("Catalog unmounted".into())
+        transaction.commit()?;
+        Ok(message.into())
     }
     fn publish_policy(&mut self, fresh: bool) -> Result<()> {
+        let input = self
+            .policy_input()
+            .unwrap_or_else(|error| publication::Input {
+                paths: vec![self.state.clone()],
+                drives: Vec::new(),
+                rules: Vec::new(),
+                mount_signature: None,
+                metadata_error: Some(error.to_string()),
+            });
+        self.publication.request(&self.state, input, fresh)?;
+        Ok(())
+    }
+    fn policy_input(&self) -> Result<publication::Input> {
         let transaction = self.db.0.unchecked_transaction()?;
         let mut excluded = preflight::managed_backup_paths(&self.db)?;
         excluded.extend(
@@ -1070,17 +1085,13 @@ impl Owner {
         transaction.commit()?;
         excluded.sort();
         excluded.dedup();
-        self.publication.request(
-            &self.state,
-            publication::Input {
-                paths: excluded,
-                drives,
-                rules,
-                mount_signature: None,
-            },
-            fresh,
-        )?;
-        Ok(())
+        Ok(publication::Input {
+            paths: excluded,
+            drives,
+            rules,
+            mount_signature: None,
+            metadata_error: None,
+        })
     }
 }
 fn rule_id(drive: &str, relative: &Path) -> String {
@@ -1166,6 +1177,7 @@ mod tests {
     mod event_loss;
     mod guest_ram;
     mod maintenance;
+    mod managed_views;
     mod native_images;
     mod native_read_only;
     mod policy_aliases;

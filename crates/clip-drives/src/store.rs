@@ -4,6 +4,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{path::Path, time::Duration};
 
+// Malformed headers are candidates too: consumers must disclose uncertainty,
+// while unrelated valid unmounted history stays outside this small index.
+const VIEW_FILTER: &str = "kind IN ('catalog','backup') AND CASE WHEN json_valid(json) THEN coalesce(json_type(json,'$.mount') <> 'null',0) ELSE 1 END";
+
 pub(crate) struct Store(pub Connection);
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -21,6 +25,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS sync_dirs(pair TEXT NOT NULL,path BLOB NOT NULL,PRIMARY KEY(pair,path));
             CREATE TABLE IF NOT EXISTS ram_pending(id INTEGER PRIMARY KEY AUTOINCREMENT,pair TEXT NOT NULL,path BLOB NOT NULL,UNIQUE(pair,path));
             CREATE TABLE IF NOT EXISTS baseline(pair TEXT NOT NULL,path BLOB NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(pair,path));")?;
+        db.execute_batch(&format!("CREATE INDEX IF NOT EXISTS entity_mounted_headers ON entities(kind,id) WHERE {VIEW_FILTER}"))?;
         Self::checked(db)
     }
     /// Connects to initialized state without acquiring a schema write lock.
@@ -79,7 +84,17 @@ impl Store {
     }
     /// Bounded key pages remain stable when completed entities are removed.
     pub fn ids(&self, kind: &str, after: &str, limit: usize) -> Result<Vec<String>> {
-        let mut statement = self.0.prepare("SELECT CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind=?1 AND id>?2 ORDER BY id LIMIT ?3")?;
+        self.id_page(kind, after, limit, "")
+    }
+    /// Pages mounted or uncertain catalog/backup headers through the partial index.
+    pub fn mounted_ids(&self, kind: &str, after: &str, limit: usize) -> Result<Vec<String>> {
+        self.id_page(kind, after, limit, &format!(" AND {VIEW_FILTER}"))
+    }
+    fn id_page(&self, kind: &str, after: &str, limit: usize, filter: &str) -> Result<Vec<String>> {
+        let query = format!(
+            "SELECT CASE WHEN length(CAST(id AS BLOB))<=128 THEN id END FROM entities WHERE kind=?1 AND id>?2{filter} ORDER BY id LIMIT ?3"
+        );
+        let mut statement = self.0.prepare(&query)?;
         let rows = statement.query_map(params![kind, after, limit.min(1000) as i64], |row| {
             row.get::<_, Option<String>>(0)
         })?;
@@ -155,6 +170,67 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounted_header_index_migrates_legacy_state_and_tracks_commits() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.sqlite");
+        let db = Store::open(&path).unwrap();
+        db.0.execute_batch("DROP INDEX entity_mounted_headers")
+            .unwrap();
+        for index in 0..2100 {
+            db.put(
+                "catalog",
+                &format!("history-{index:04}"),
+                &serde_json::json!({"mount": null}),
+            )
+            .unwrap();
+        }
+        db.put(
+            "catalog",
+            "legacy",
+            &serde_json::json!({"mount": "/owned/view"}),
+        )
+        .unwrap();
+        drop(db);
+        let db = Store::open(&path).unwrap();
+        assert_eq!(db.mounted_ids("catalog", "", 128).unwrap(), ["legacy"]);
+        let query = format!(
+            "EXPLAIN QUERY PLAN SELECT id FROM entities WHERE kind=?1 AND id>?2 AND {VIEW_FILTER} ORDER BY id LIMIT 128"
+        );
+        let plan: String =
+            db.0.query_row(&query, ["catalog", ""], |row| row.get(3))
+                .unwrap();
+        assert!(plan.contains("entity_mounted_headers"), "{plan}");
+        {
+            let transaction = db.0.unchecked_transaction().unwrap();
+            db.put("catalog", "legacy", &serde_json::json!({"mount": null}))
+                .unwrap();
+            assert!(db.mounted_ids("catalog", "", 128).unwrap().is_empty());
+            transaction.rollback().unwrap();
+        }
+        assert_eq!(db.mounted_ids("catalog", "", 128).unwrap(), ["legacy"]);
+        db.0.execute(
+            "UPDATE entities SET json='broken json' WHERE kind='catalog' AND id='legacy'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(db.mounted_ids("catalog", "", 128).unwrap(), ["legacy"]);
+        db.remove("catalog", "legacy").unwrap();
+        assert!(db.mounted_ids("catalog", "", 128).unwrap().is_empty());
+        db.put(
+            "backup",
+            &"x".repeat(129),
+            &serde_json::json!({"mount": "/owned/image"}),
+        )
+        .unwrap();
+        assert!(
+            db.mounted_ids("backup", "", 128)
+                .unwrap_err()
+                .to_string()
+                .contains("decoding budget")
+        );
+    }
 
     #[test]
     fn entity_key_pages_survive_removals_without_skipping_and_reject_oversized_keys() {

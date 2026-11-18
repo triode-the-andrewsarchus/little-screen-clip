@@ -32,6 +32,7 @@ impl Save {
         cancelled(cancel)?;
         self.source.validate()?;
         self.target.validate()?;
+        policy::validate_view_target(db, &self.target)?;
         let id = format!("save:{}", self.session.id);
         let root_metadata = scan::observe(&self.source, Path::new(""), false, u64::MAX, cancel)?
             .ok_or("RAM root disappeared")?;
@@ -88,6 +89,7 @@ impl Owner {
         let source = Arc::new(Root::open(&session.path)?);
         let base = Root::create(destination)?;
         self.validate_ram_backing_target(&base)?;
+        policy::validate_view_target(&self.db, &base)?;
         if source.overlap(&base) {
             return Err("Choose a save destination outside this RAM session".into());
         }
@@ -128,7 +130,7 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
 
     #[test]
-    fn cancelled_export_retains_completed_files_and_a_retry_preserves_directory_metadata() {
+    fn guarded_and_cancelled_exports_retain_files_and_retry_preserves_directory_metadata() {
         let temp = tempfile::tempdir().unwrap();
         let source = Arc::new(Root::create(&temp.path().join("ram")).unwrap());
         let target = Arc::new(Root::create(&temp.path().join("saved")).unwrap());
@@ -161,6 +163,32 @@ mod tests {
             target,
         };
         let cancel = AtomicBool::new(false);
+        for kind in ["catalog", "backup"] {
+            // The destination became managed after the Save pinned its roots.
+            db.put(
+                kind,
+                "mounted-view",
+                &serde_json::json!({"mount": save.target.path}),
+            )
+            .unwrap();
+            assert!(
+                save.run(&db, &cancel, &mut |_, _| panic!(
+                    "Managed target reached copying"
+                ))
+                .unwrap_err()
+                .to_string()
+                .contains("managed catalog or image view")
+            );
+            assert_eq!(fs::read_dir(&save.target.path).unwrap().count(), 0);
+            let scanned: u64 =
+                db.0.query_row("SELECT count(*) FROM entries", [], |row| row.get(0))
+                    .unwrap();
+            assert_eq!(
+                scanned, 0,
+                "Managed target must be rejected before source enumeration"
+            );
+            db.remove(kind, "mounted-view").unwrap();
+        }
         let result = save.run(&db, &cancel, &mut |_, _| {
             if save.target.path.join("folder/a").is_file() {
                 cancel.store(true, Ordering::Release);

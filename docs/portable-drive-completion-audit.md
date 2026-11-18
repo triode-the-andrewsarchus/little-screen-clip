@@ -54,6 +54,91 @@ Audit starting revision: `7202c4ec`. Personal `.cargo/config.toml` and `config.t
 | 7.6 | Partial | Million-file, delta, sparse-active-backup, RAM byte/inode limits, bounded guest available-memory pressure, underlying-tmpfs exhaustion and acknowledged data/namespace/metadata edits across daemon death pass. A 10 TiB sparse RAM entry is rejected before hashing. Actual repeated kernel overflow and subsequent prompt nested edits pass on native FAT32/exFAT/NTFS. Active-worker loss, concurrent pressure/admission and unacknowledged interrupted writes remain. |
 | 7.7 | Partial | Prior worktree passed workspace tests, format, clippy and documented architecture review; rerun affected and final gates after remaining changes. |
 
+## Managed catalog/image boundary checkpoint
+
+The previous status-page lookup could miss a mounted legacy catalog or image
+header after 1,000 newer history records. Negative controls in
+`/tmp/portable-drive-managed-view-before.log` reproduce both the missing legacy
+boundary and acceptance of its managed source. The replacement lookup combines
+mounted/uncertain catalog and backup headers with all current registrations in a
+single transaction. A partial SQLite index avoids decoding or walking ordinary
+unmounted history for this lookup; 128-key pages, bounded identifiers, 64 KiB
+headers and lossless path decoding are shared with the existing Store mechanisms.
+The query-plan test proves index selection after migrating legacy state, and
+checks updates, rollback, malformed candidates, deletion and oversized keys.
+Header/runtime image-path disagreement retains both deny boundaries. Missing,
+oversized, malformed, relative, parent-traversing and NUL-containing registered
+paths fail closed. These metadata boundaries never authorize provider reads or
+unmounting.
+
+Sync source/target preparation, backup destinations, RAM setup and RAM export
+reuse the full view boundary lookup. The RAM setup worker and export worker
+repeat the checks before payload enumeration. An export whose already-pinned
+destination becomes a managed view is refused before scanning or writing; the
+existing cancellation/completed-file and retry/metadata checks remain intact.
+Catalog header and registration retirement now share a transaction after both
+normal unmount and detection of an external unmount. A forced update failure
+proves rollback retains both records, followed by a successful retry.
+
+Policy metadata-capture failures immediately publish a root exclusion through
+the retained publication worker. A known metadata error never reaches its
+filesystem observer. Rule completion reports the pause; repair and an explicit
+retry restore the verified policy while preserving prior offline observations.
+Catalog FUSE source labels in the same bounded namespace snapshot provide
+additional deny-only boundaries for bind aliases, including after origin loss.
+Those literal exclusions bypass FUSE getattr/root probes. The first draft's
+17 backend failures exposed disconnected catalog servers already present in the
+host namespace; no unknown mount was removed. Avoiding those probes allows
+unrelated policy publication to proceed without making the mount label content
+authority. Orphan RAM/image aliases and the wider managed-root/lifetime matrix
+remain unfinished; plan item 1.6 stays Partial.
+
+Current backend evidence: 231 passed, 94 explicit fixtures ignored in
+`/tmp/portable-drive-managed-view-backend-final.log`; affected-package all-target
+Clippy passes with warnings denied in
+`/tmp/portable-drive-managed-view-clippy.log`. The native filesystem run passes
+117 cases across FAT32/exFAT/NTFS in
+`/tmp/portable-drive-managed-view-vm-filesystems/report.json`, including real
+catalog bind-alias protection after original-mount removal, catalog worker/limit
+and publication lifecycle checks, sync and event-loss recovery. The final-build
+image/lifecycle run passes another 36 cases, including the managed-view and
+atomic-retirement checks on all three formats, real UDisks image mounts, managed
+image-root refusal, provider revision checks and live maintenance recovery:
+`/tmp/portable-drive-managed-view-vm-lifecycle/report.json`. Private light UI
+acceptance passes RAM setup, pending changes, removal, offline export and
+reconnect in `/tmp/portable-drive-managed-view-ui-light/report.json`; offline and
+reconnected status screenshots were inspected. Changed Rust sources pass
+rustfmt checks and the runtime build succeeds. This checkpoint does not close
+the remaining audit rows or the branch-wide architecture gate.
+
+Architecture comparison against `pre-managed-view-admission` still reports
+REGRESSION. The added admission validation and atomic retirement each add one
+fallible step to existing routines: `start_ram_setup` 16→17, export `copy` 16→17,
+and `unmount` 17→18. Consolidating retirement into one transaction removed the
+first draft's duplicated cleanup and redundant observed-mount branch (20→18).
+The lookup reuses Store paging/bounded decoding, existing pinned-root overlap
+checks and the existing retained policy publisher; it introduces no dependency
+or payload-access mechanism. The five reported modified-file clone fragments
+were individually checked against the saved baseline: all were already present
+in `store::list`/`scan::page` or existing service tests. Total clones/cycles do not
+grow in this checkpoint. The new paths/tests account for 577 NLOC, 21 functions
+and 69 total CCN; the three necessary error checks remain disclosed rather than
+being hidden behind metric-only wrappers.
+
+| Local architecture dimension | Before | After |
+| --- | --- | --- |
+| Average / maximum CCN | 3.49 / 274 | 3.49 / 274 |
+| Duplication | 6.98% | 6.98% |
+| Clone groups | 4,300 | 4,300 |
+| Dependency cycles | 144 | 144 |
+
+Reports: `.fitness/portable-drives-managed-view-local.json` and
+`.fitness/portable-drives-managed-view-branch.json`. Against the original
+`pre-portable-drive-services` baseline, the unresolved result remains REGRESSION:
+average CCN 3.44→3.49, maximum 274 unchanged, duplication 7.30%→6.98%, clone groups
+4,289→4,300 and cycles 143→144. These broader remaining regressions and the
+unfinished audit rows still require work.
+
 ## Retained reconciliation-root preparation checkpoint
 
 Enrolled sync and RAM-writeback root preparation now runs on the existing four

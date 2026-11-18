@@ -754,6 +754,17 @@ without service databases or Git metadata. Catalog databases contain metadata, n
 file payloads. Btrfs snapshots/reflinks apply only at a compatible backup destination;
 the removable filesystem does not need Btrfs support.
 
+Mounted catalog and partition-image boundaries remain protected independently of
+the paginated status/history display. An indexed metadata lookup combines saved
+mount headers (including legacy headers) with current mount registrations, using
+bounded decoding and preserving Unix path bytes. RAM setup, synchronization,
+backup destinations and RAM exports reject these managed views. Missing or damaged
+registered headers pause optional background indexing until repaired; they do not
+silently remove exclusions. Catalog bind aliases also remain excluded after the
+original mount is removed. Their deny-only mount-table labels require no content
+or attribute request to a disconnected catalog server. Image/RAM alias recovery
+and the wider lifetime matrix remain under the completion audit.
+
 The standalone `scripts/test_drive_admission.py` acceptance test uses a private
 runtime/socket, source and SQLite state with the test-support `drive_fixture`
 example and current `clipctl`. Build those binaries before running
