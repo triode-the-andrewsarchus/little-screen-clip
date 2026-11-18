@@ -1764,7 +1764,10 @@ impl BasemapAssets {
             .and_then(|cog| cog.levels.iter().map(|l| l.width).max())
             .or_else(|| self.global_dem.as_ref().map(|g| g.width))
             .unwrap_or(0);
-        if (global_width == 0 || target_global_width > global_width as f64)
+        // Without a global DEM, reserve optional degree tiles for regional views.
+        // A broad overview would otherwise thrash the bounded decoded HGT cache.
+        if target_global_width > global_width as f64
+            && (global_width > 0 || target_global_width > 5400.0)
             && let Some(h) = self.terrain_tiles.sample(lat, lon)
         {
             return Some(h);
@@ -3069,6 +3072,8 @@ mod tests {
         .unwrap();
         let mut assets = BasemapAssets::default();
         load_hgt_dir(root.path(), &mut assets.terrain_tiles);
+        assert_eq!(assets.sample_elevation_at(0.5, 0.5, 512.0), None);
+        assert!(assets.terrain_tiles.cache.lock().unwrap().0.is_empty());
         assets.global_dem = Some(GlobalDemGrid {
             width: 4,
             height: 2,
