@@ -39,6 +39,7 @@ pub(super) struct EntryPreviews {
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
+    pub(super) geography: super::geography::Strips,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
@@ -148,6 +149,7 @@ impl EntryPreviews {
         *id
     }
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
+        self.geography.poll(ctx);
         self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
         self.image_hover.poll(ctx);
@@ -231,6 +233,7 @@ impl EntryPreviews {
     pub fn retain(&mut self, visible: &BTreeSet<std::path::PathBuf>) {
         if visible.is_empty() {
             self.text_status.clear();
+            self.geography.suspend();
         }
         self.multisample.retain(visible);
         self.pdf_pages.retain(visible);
@@ -287,6 +290,7 @@ impl EntryPreviews {
     }
     /// Stop hidden preview work without changing this folder's row geometry.
     pub fn retire(&mut self) {
+        self.geography.clear();
         self.multisample.clear();
         self.cache.clear();
         self.pdf_pages.clear();
@@ -401,8 +405,18 @@ impl EntryPreviews {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)
         } else if entry.is_geography() {
-            super::geography::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::GeographicFeature)
+            let id = self.identity(entry);
+            self.listing(entry);
+            super::geography::show_list(
+                ui,
+                row,
+                entry,
+                columns,
+                self.cache.get(id),
+                &mut self.geography,
+                colors,
+            )
+            .map(super::DocumentPosition::GeographicFeature)
         } else if entry.is_database() {
             super::database::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::DatabaseTable)

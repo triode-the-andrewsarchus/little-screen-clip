@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 const CPU_BUDGET: usize = 96 * 1024 * 1024;
+const RIVER_BUDGET: usize = 64 * 1024 * 1024;
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 fn workers() -> &'static BackgroundJobs {
     static WORKERS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 8));
@@ -36,6 +37,46 @@ pub(super) struct Tiles {
     error: Option<String>,
     pub range: [f32; 2],
     pub contour: Option<f32>,
+}
+
+/// Geographic working set shared by one viewport or a collection of strips.
+#[derive(Default)]
+pub(super) struct Requests {
+    raster: BTreeSet<TileId>,
+    rivers: BTreeSet<RiverKey>,
+}
+
+impl Requests {
+    fn new(raster: BTreeSet<TileId>, camera: &GlobeCamera, size: [f32; 2], rivers: bool) -> Self {
+        let level = raster.iter().map(|tile| tile.level).max().unwrap_or(0);
+        Self {
+            raster,
+            rivers: RiverKey::visible(camera, size, rivers, level),
+        }
+    }
+
+    pub(super) fn preview(camera: &GlobeCamera, size: [f32; 2], pixels_per_point: f32) -> Self {
+        let raster = little_clip_core::geography::basemap::tiles::preview_tiles(
+            camera,
+            size[0],
+            size[1],
+            pixels_per_point,
+        );
+        Self::new(raster, camera, size, true)
+    }
+
+    pub(super) fn include(&mut self, request: &Self) {
+        self.raster.extend(request.raster.iter().copied());
+        self.rivers.extend(request.rivers.iter().copied());
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.raster.is_empty() && self.rivers.is_empty()
+    }
+
+    pub(super) fn covers(&self, request: &Self) -> bool {
+        request.raster.is_subset(&self.raster) && request.rivers.is_subset(&self.rivers)
+    }
 }
 impl Default for Tiles {
     fn default() -> Self {
@@ -66,6 +107,30 @@ impl Tiles {
         let Some(assets) = assets else {
             return Ok(());
         };
+        let size = [rect.width(), rect.height()];
+        let wanted = Requests::new(
+            visible_tiles(&camera, size[0], size[1], ui.ctx().pixels_per_point())
+                .into_iter()
+                .collect(),
+            &camera,
+            size,
+            layers.rivers,
+        );
+        let raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
+        let mut frame = self.frame(wanted, camera, size, layers);
+        self.update_contours(&mut frame, style, contours);
+        gpu::paint(ui, rect, frame)?;
+        raster_result
+    }
+
+    pub(super) fn prepare(
+        &mut self,
+        ctx: &egui::Context,
+        assets: &Arc<BasemapAssets>,
+        wanted: &Requests,
+        raster_budget: usize,
+        river_budget: usize,
+    ) -> Result<(), String> {
         if !self
             .assets
             .as_ref()
@@ -100,31 +165,20 @@ impl Tiles {
                 }
             }
         }
-        let wanted: BTreeSet<_> = visible_tiles(
-            &camera,
-            rect.width(),
-            rect.height(),
-            ui.ctx().pixels_per_point(),
-        )
-        .into_iter()
-        .collect();
         let source = assets.clone();
-        let raster_error =
-            self.raster
-                .update(&wanted, CPU_BUDGET, SourceTile::bytes, move |id, cancel| {
-                    SourceTile::prepare(&source, id, cancel)
-                        .ok_or_else(|| "Map tile preparation cancelled".into())
-                });
-        let river_keys = RiverKey::visible(
-            &camera,
-            [rect.width(), rect.height()],
-            layers.rivers,
-            wanted.iter().map(|tile| tile.level).max().unwrap_or(0),
+        let raster_error = self.raster.update(
+            &wanted.raster,
+            raster_budget,
+            SourceTile::bytes,
+            move |id, cancel| {
+                SourceTile::prepare(&source, id, cancel)
+                    .ok_or_else(|| "Map tile preparation cancelled".into())
+            },
         );
         let source = assets.clone();
         let river_error = self.rivers.update(
-            &river_keys,
-            64 * 1024 * 1024,
+            &wanted.rivers,
+            river_budget,
             Scene::bytes,
             move |key, cancel| key.prepare(&source, cancel),
         );
@@ -132,57 +186,76 @@ impl Tiles {
             || !self.rivers.pending.is_empty()
             || self.scene_job.is_some()
         {
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
-        let tiles: Vec<_> = wanted
-            .iter()
-            .filter_map(|id| self.raster.ready.get(id).cloned())
-            .collect();
-        let finest = tiles.iter().map(|tile| tile.id.level).max().unwrap_or(0);
-        let ranges: Vec<_> = tiles
-            .iter()
-            .filter(|tile| tile.id.level == finest)
-            .filter_map(|tile| tile.elevation_range)
-            .collect();
-        self.range = ranges
-            .iter()
-            .fold([f32::INFINITY, f32::NEG_INFINITY], |r, x| {
-                [r[0].min(x[0]), r[1].max(x[1])]
-            });
-        self.contour = (contours && camera.zoom >= 3.5 && !ranges.is_empty()).then(|| {
-            choose_contour_interval_m((self.range[1] - self.range[0]).max(20.0), camera.zoom)
-        });
-        if ranges.is_empty() {
-            self.range = [0.0, 1000.0];
-        }
-        gpu::paint(
-            ui,
-            rect,
-            gpu::Frame {
-                source: self.source,
-                size: [rect.width(), rect.height()],
-                camera,
-                style,
-                contours: self.contour,
-                range: self.range,
-                tiles,
-                scene: self.scene.clone(),
-                rivers: river_keys
-                    .iter()
-                    .filter_map(|key| {
-                        self.rivers
-                            .ready
-                            .get(key)
-                            .map(|scene| (*key, scene.clone()))
-                    })
-                    .collect(),
-                layers,
-            },
-        )?;
         match raster_error.or(river_error) {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    pub(super) fn frame(
+        &self,
+        wanted: Requests,
+        camera: GlobeCamera,
+        size: [f32; 2],
+        layers: Layers,
+    ) -> gpu::Frame {
+        gpu::Frame {
+            source: self.source,
+            size,
+            camera,
+            style: BasemapStyle::Natural,
+            contours: None,
+            range: [0.0, 1000.0],
+            tiles: wanted
+                .raster
+                .iter()
+                .filter_map(|id| self.raster.ready.get(id).cloned())
+                .collect(),
+            scene: self.scene.clone(),
+            rivers: wanted
+                .rivers
+                .iter()
+                .filter_map(|key| {
+                    self.rivers
+                        .ready
+                        .get(key)
+                        .map(|scene| (*key, scene.clone()))
+                })
+                .collect(),
+            layers,
+        }
+    }
+
+    fn update_contours(&mut self, frame: &mut gpu::Frame, style: BasemapStyle, contours: bool) {
+        let finest = frame
+            .tiles
+            .iter()
+            .map(|tile| tile.id.level)
+            .max()
+            .unwrap_or(0);
+        let range = frame
+            .tiles
+            .iter()
+            .filter(|tile| tile.id.level == finest)
+            .filter_map(|tile| tile.elevation_range)
+            .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
+        self.range = range.unwrap_or([0.0, 1000.0]);
+        self.contour = range
+            .filter(|_| contours && frame.camera.zoom >= 3.5)
+            .map(|[low, high]| {
+                choose_contour_interval_m((high - low).max(20.0), frame.camera.zoom)
+            });
+        frame.style = style;
+        frame.range = self.range;
+        frame.contours = self.contour;
+    }
+
+    pub(super) fn suspend(&mut self) {
+        self.raster.pending.clear();
+        self.rivers.pending.clear();
+        self.scene_job = None;
     }
 }
 

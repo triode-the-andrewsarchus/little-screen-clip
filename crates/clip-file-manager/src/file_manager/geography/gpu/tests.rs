@@ -265,7 +265,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
                 Arc::new(SourceTile {
                     id: TileId { level: 0, x, y: 0 },
                     color: [80, 160, 60, 255].repeat(count),
-                    elevation: vec![0.0; count * 2],
+                    elevation: Vec::new(),
                     water: vec![0; count],
                     elevation_range: None,
                 })

@@ -424,6 +424,12 @@ impl TextureTile {
             .into_iter()
             .enumerate()
             {
+                let (edge, data) = if data.is_empty() {
+                    // Surface-only tiles share the same shader and a single invalid DEM texel.
+                    (1, &[0; 8][..])
+                } else {
+                    (PADDED_EDGE as i32, data)
+                };
                 gl.bind_texture(glow::TEXTURE_2D, Some(textures[index]));
                 gl.tex_parameter_i32(
                     glow::TEXTURE_2D,
@@ -449,8 +455,8 @@ impl TextureTile {
                     glow::TEXTURE_2D,
                     0,
                     format as i32,
-                    PADDED_EDGE as i32,
-                    PADDED_EDGE as i32,
+                    edge,
+                    edge,
                     0,
                     external,
                     ty,

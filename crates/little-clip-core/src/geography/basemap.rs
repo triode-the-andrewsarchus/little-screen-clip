@@ -1768,6 +1768,19 @@ impl BasemapAssets {
         terrain_override_dir: Option<&Path>,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Self {
+        Self::load_assets(assets_dir, cancelled, Some(terrain_override_dir))
+    }
+
+    /// Loads imagery and vector layers without opening elevation sources.
+    pub fn load_surface(assets_dir: &Path, cancelled: &std::sync::atomic::AtomicBool) -> Self {
+        Self::load_assets(assets_dir, cancelled, None)
+    }
+
+    fn load_assets(
+        assets_dir: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+        elevation: Option<Option<&Path>>,
+    ) -> Self {
         let stopped = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
         if stopped() {
             return Self::default();
@@ -1807,22 +1820,6 @@ impl BasemapAssets {
         if stopped() {
             return Self::default();
         }
-        let mut terrain_tiles = HgtStore::default();
-        if let Some(dir) = terrain_override_dir {
-            load_hgt_dir(dir, &mut terrain_tiles);
-        }
-        load_hgt_dir(&assets_dir.join("terrain"), &mut terrain_tiles);
-        load_hgt_dir(&assets_dir.join("nasadem/terrain"), &mut terrain_tiles);
-
-        if stopped() {
-            return Self::default();
-        }
-        let global_dem = load_global_dem(assets_dir);
-        let cog_dem =
-            find_dem_file(&assets_dir.join("gebco")).and_then(|p| CogDemPyramid::open(&p));
-        if stopped() {
-            return Self::default();
-        }
         let land_cover = load_land_cover(assets_dir);
         let rivers = HydroRiversIndex::load_or_build(assets_dir, cancelled);
         if stopped() {
@@ -1835,7 +1832,7 @@ impl BasemapAssets {
         let grwl_masks = GrwlMaskStore::load_or_index(assets_dir);
         let has_hydrorivers = rivers.as_ref().is_some_and(|r| !r.segments.is_empty());
 
-        Self {
+        let mut assets = Self {
             assets_dir: root
                 .as_ref()
                 .map(|root| root.display_path().to_path_buf())
@@ -1848,15 +1845,43 @@ impl BasemapAssets {
             roads,
             lakes,
             coastlines,
-            terrain_tiles,
-            global_dem,
-            cog_dem,
             land_cover,
             rivers,
             grwl_summary,
             grwl_masks,
             has_hydrorivers,
+            ..Self::default()
+        };
+        if let Some(override_dir) = elevation {
+            assets.load_elevation(assets_dir, override_dir, cancelled);
         }
+        assets
+    }
+
+    fn load_elevation(
+        &mut self,
+        dir: &Path,
+        override_dir: Option<&Path>,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) {
+        let stopped = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
+        if stopped() {
+            return;
+        }
+        if let Some(dir) = override_dir {
+            load_hgt_dir(dir, &mut self.terrain_tiles);
+        }
+        load_hgt_dir(&dir.join("terrain"), &mut self.terrain_tiles);
+        load_hgt_dir(&dir.join("nasadem/terrain"), &mut self.terrain_tiles);
+        if stopped() {
+            return;
+        }
+        self.global_dem = load_global_dem(dir);
+        self.cog_dem = find_dem_file(&dir.join("gebco")).and_then(|p| CogDemPyramid::open(&p));
+    }
+
+    pub(super) fn has_elevation(&self) -> bool {
+        self.global_dem.is_some() || self.cog_dem.is_some() || !self.terrain_tiles.is_empty()
     }
 
     /// Samples terrain elevation in meters at `(lat, lon)` from local overrides, COG pyramid, or
@@ -2948,6 +2973,27 @@ fn load_land_cover(dir: &Path) -> Option<GlobalLandCoverGrid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surface_preview_loads_ground_color_without_loading_elevation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cover = [1u32.to_le_bytes(); 2].concat();
+        cover.push(LandCoverClass::Forest as u8);
+        fs::write(root.path().join("land_cover.u8"), cover).unwrap();
+        let mut dem = [1u32.to_le_bytes(); 2].concat();
+        dem.extend_from_slice(&200i16.to_le_bytes());
+        fs::write(root.path().join("gebco_overview.i16"), dem).unwrap();
+
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let surface = BasemapAssets::load_surface(root.path(), &cancel);
+        assert!(surface.status().has_land_cover);
+        assert!(!surface.has_elevation());
+        assert!(BasemapAssets::load(root.path(), None).status().has_gebco);
+        let tile =
+            tiles::SourceTile::prepare(&surface, tiles::TileId::at(0, 0., 0.), &cancel).unwrap();
+        assert!(tile.elevation.is_empty());
+        assert_eq!(&tile.color[..3], &LandCoverClass::Forest.rgb());
+    }
 
     #[test]
     fn detailed_dem_source_supersedes_preview_and_cached_overview() {

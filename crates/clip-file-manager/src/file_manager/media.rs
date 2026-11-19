@@ -51,7 +51,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub notebook: Option<std::sync::Arc<super::notebook::Summary>>,
     pub multisample: Option<std::sync::Arc<little_clip_core::multisample::Document>>,
     pub toolpath: Option<std::sync::Arc<little_clip_core::gcode::Document>>,
-    pub geography: Option<std::sync::Arc<little_clip_core::geography::Document>>,
+    pub geography: Option<std::sync::Arc<super::geography::Preview>>,
     pub database: Option<std::sync::Arc<super::database::Summary>>,
     pub calendar: Option<std::sync::Arc<super::calendar::Summary>>,
     pub mail: Option<std::sync::Arc<super::mail::Summary>>,

@@ -102,11 +102,6 @@ pub(super) fn family(entry: &Entry) -> Category {
 }
 
 fn format_family(entry: &Entry) -> Category {
-    let extension = entry
-        .path
-        .extension()
-        .map(|v| v.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
     if entry.is_vcv_patch() {
         Category::VcvRack
     } else if little_clip_core::audio::is_audio_path(&entry.path)
@@ -122,24 +117,28 @@ fn format_family(entry: &Entry) -> Category {
         Category::Scene
     } else if super::font_strip::known(&entry.path) {
         Category::Font
-    } else if little_clip_core::notebook::is_candidate_path(&entry.path) {
-        Category::Document
-    } else if extension_category(&extension) != Category::Other {
-        extension_category(&extension)
-    } else if super::text_strip::known_text(&entry.path) {
-        Category::Text
-    } else if super::binary_strip::known(&entry.path) {
-        Category::Binary
     } else {
-        extension_category(&extension)
+        match extension_category(entry) {
+            Category::Other if super::text_strip::known_text(&entry.path) => Category::Text,
+            Category::Other if super::binary_strip::known(&entry.path) => Category::Binary,
+            category => category,
+        }
     }
 }
 
-fn extension_category(extension: &str) -> Category {
-    match extension {
+fn extension_category(entry: &Entry) -> Category {
+    if entry.is_geography() || little_clip_core::notebook::is_candidate_path(&entry.path) {
+        return Category::Document;
+    }
+    let extension = entry
+        .path
+        .extension()
+        .map(|v| v.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
         "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
-        | "epub" | "cbz" | "gpx" | "sfz" | "sf2" | "nki" | "gcode" | "geojson" | "sqlite"
-        | "sqlite3" | "db" | "db3" | "ics" | "eml" | "ipynb" => Category::Document,
+        | "epub" | "cbz" | "sfz" | "sf2" | "nki" | "gcode" | "sqlite" | "sqlite3" | "db"
+        | "db3" | "ics" | "eml" | "ipynb" => Category::Document,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "tgz" | "tbz" | "tbz2" | "txz" | "tzst"
         | "7z" | "rar" => Category::Archive,
         _ => Category::Other,
@@ -320,6 +319,13 @@ mod tests {
             warning: None,
             revision: 0,
             identity: None,
+        }
+    }
+
+    #[test]
+    fn radiacode_tracks_sort_with_map_documents() {
+        for name in ["survey.RCTRK", "route.gpx", "map.geojson"] {
+            assert_eq!(family(&file_entry(name)), Category::Document);
         }
     }
 

@@ -250,6 +250,7 @@ impl Reader {
             lat,
             elevation,
             time: String::new(),
+            radiation: None,
         })
     }
     fn push(

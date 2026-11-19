@@ -1103,6 +1103,11 @@ mod tests {
                 "Unplaced record",
             ),
             (
+                "../little-clip-core/tests/fixtures/geography/survey.rctrk",
+                super::super::DocumentPosition::GeographicFeature(0),
+                "Dose rate 0.060 µSv/h",
+            ),
+            (
                 "../little-clip-core/tests/fixtures/gcode/frame.gcode",
                 super::super::DocumentPosition::ToolpathLine(12),
                 "Source line 12",

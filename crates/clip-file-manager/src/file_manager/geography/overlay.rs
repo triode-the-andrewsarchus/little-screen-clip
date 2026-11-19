@@ -1,5 +1,8 @@
 //! Prepared document paths and their projection onto the interactive map.
-use super::Hit;
+use super::{
+    Hit,
+    radiation::{DoseScale, dose_rate},
+};
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Painter, Pos2, Rect, Shape, Stroke, pos2};
 use little_clip_core::geography::{
@@ -9,6 +12,7 @@ use little_clip_core::geography::{
 
 const ARC_STEP_M: f64 = 220_000.0;
 const MAX_ARC_INSERTIONS: f64 = 65_536.0;
+const OUTLINE: f32 = 0.85;
 
 #[derive(Clone, Copy)]
 struct Position {
@@ -29,6 +33,7 @@ impl From<&Point> for Position {
 struct Vertex {
     position: Position,
     sample: usize,
+    dose_rate: Option<f64>,
 }
 
 pub(super) struct Overlay(Vec<Path>);
@@ -38,6 +43,7 @@ struct Path {
     index: usize,
     connected: bool,
     vertices: Vec<Vertex>,
+    dose_scale: Option<DoseScale>,
 }
 
 impl Overlay {
@@ -59,6 +65,7 @@ impl Overlay {
                     index,
                     connected: path.len() > 1 && matches!(source.kind, Kind::Line | Kind::Polygon),
                     vertices: vertices(path, source.kind == Kind::Line, step),
+                    dose_scale: source.dose_rate.map(DoseScale),
                 });
             }
         }
@@ -78,11 +85,14 @@ impl Overlay {
             best: None,
         };
         for path in &self.0 {
-            let stroke = if selected == Some(path.feature) {
+            let mut stroke = if selected == Some(path.feature) {
                 Stroke::new(3.0_f32, colors.accent)
             } else {
                 Stroke::new(1.75_f32, colors.text_primary.gamma_multiply(0.85))
             };
+            if path.dose_scale.is_some() {
+                stroke.width += 1.5;
+            }
             path.paint(painter, projection, stroke, &mut hit);
         }
         hit.best
@@ -93,15 +103,20 @@ fn vertices(path: &[Sample], arc: bool, step: f64) -> Vec<Vertex> {
     let mut vertices = Vec::with_capacity(path.len());
     for (index, sample) in path.iter().enumerate() {
         let position = Position::from(&sample.point);
+        let rate = dose_rate(&sample.point);
         if arc && let Some(previous) = index.checked_sub(1).map(|index| &path[index]) {
             let steps = ((sample.distance_m - previous.distance_m) / step).ceil() as usize;
             if steps > 1 {
                 let start = Position::from(&previous.point);
                 for i in 1..steps {
                     let t = i as f64 / steps as f64;
+                    let rate = dose_rate(&previous.point)
+                        .zip(rate)
+                        .map(|(a, b)| a + (b - a) * t);
                     vertices.push(Vertex {
                         position: great_circle(start, position, t),
                         sample: if t <= 0.5 { index - 1 } else { index },
+                        dose_rate: rate,
                     });
                 }
             }
@@ -109,6 +124,7 @@ fn vertices(path: &[Sample], arc: bool, step: f64) -> Vec<Vertex> {
         vertices.push(Vertex {
             position,
             sample: index,
+            dose_rate: rate,
         });
     }
     vertices
@@ -244,6 +260,7 @@ impl Path {
             path: self.index,
             point: vertex.sample,
         };
+        let mut path = PathPainter::new(painter, self.dose_scale, stroke);
         if !self.connected {
             for &vertex in &self.vertices {
                 let mut position = vertex.position;
@@ -251,36 +268,101 @@ impl Path {
                 if let Some(point) = projection.point(position)
                     && projection.rect.contains(point)
                 {
-                    painter.circle_filled(point, 4.5, stroke.color);
+                    path.point(point, 4.5, vertex.dose_rate);
                     hit.point(sample_hit(vertex), point);
                 }
             }
             return;
         }
-        let mut run = Vec::new();
-        let clip = projection.rect.expand(stroke.width);
+        let clip = projection.rect.expand(stroke.width + OUTLINE);
         for pair in self.vertices.windows(2) {
             let [a, b] = [pair[0], pair[1]];
-            projection.line(a.position, b.position, |[start, end]| {
-                if !Rect::from_two_pos(start, end).intersects(clip) {
-                    return;
+            projection.line(a.position, b.position, |edge| {
+                if Rect::from_two_pos(edge[0], edge[1]).intersects(clip) {
+                    path.line(edge, [a.dose_rate, b.dose_rate]);
+                    hit.line([sample_hit(a), sample_hit(b)], edge);
                 }
-                if run
-                    .last()
-                    .is_none_or(|last: &Pos2| last.distance_sq(start) > 1e-6)
-                {
-                    if !run.is_empty() {
-                        painter.add(Shape::line(std::mem::take(&mut run), stroke));
-                    }
-                    run.push(start);
-                }
-                run.push(end);
-                hit.line([sample_hit(a), sample_hit(b)], [start, end]);
             });
         }
-        if !run.is_empty() {
-            painter.add(Shape::line(run, stroke));
+        path.finish();
+    }
+}
+
+/// Draws a continuous black casing beneath the colored strokes of each path.
+struct PathPainter<'a> {
+    painter: &'a Painter,
+    dose_scale: Option<DoseScale>,
+    fallback: Stroke,
+    run_stroke: Stroke,
+    run: Vec<Pos2>,
+    outline: Vec<Pos2>,
+    foreground: Vec<Shape>,
+}
+
+impl<'a> PathPainter<'a> {
+    fn new(painter: &'a Painter, dose_scale: Option<DoseScale>, stroke: Stroke) -> Self {
+        Self {
+            painter,
+            dose_scale,
+            fallback: stroke,
+            run_stroke: stroke,
+            run: Vec::new(),
+            outline: Vec::new(),
+            foreground: Vec::new(),
         }
+    }
+
+    fn line(&mut self, [start, end]: [Pos2; 2], [a, b]: [Option<f64>; 2]) {
+        let stroke = self
+            .dose_scale
+            .map_or(self.fallback, |scale| scale.segment(a, b, self.fallback));
+        let discontinuous = self
+            .outline
+            .last()
+            .is_none_or(|last| last.distance_sq(start) > 1e-6);
+        if discontinuous {
+            self.flush_outline();
+            self.outline.push(start);
+        }
+        self.outline.push(end);
+        if self.run_stroke != stroke || discontinuous {
+            self.flush_color();
+            self.run_stroke = stroke;
+            self.run.push(start);
+        }
+        self.run.push(end);
+    }
+
+    fn point(&self, position: Pos2, radius: f32, dose: Option<f64>) {
+        let color = self
+            .dose_scale
+            .zip(dose)
+            .map_or(self.fallback.color, |(scale, dose)| scale.color(dose));
+        self.painter
+            .circle_filled(position, radius + OUTLINE, egui::Color32::BLACK);
+        self.painter.circle_filled(position, radius, color);
+    }
+
+    fn flush_color(&mut self) {
+        if !self.run.is_empty() {
+            self.foreground
+                .push(Shape::line(std::mem::take(&mut self.run), self.run_stroke));
+        }
+    }
+
+    fn flush_outline(&mut self) {
+        if !self.outline.is_empty() {
+            self.painter.add(Shape::line(
+                std::mem::take(&mut self.outline),
+                Stroke::new(self.fallback.width + 2.0 * OUTLINE, egui::Color32::BLACK),
+            ));
+        }
+    }
+
+    fn finish(mut self) {
+        self.flush_outline();
+        self.flush_color();
+        self.painter.extend(self.foreground);
     }
 }
 

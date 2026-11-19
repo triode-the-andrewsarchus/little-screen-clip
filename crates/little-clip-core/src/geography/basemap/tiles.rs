@@ -53,7 +53,7 @@ impl TileId {
 pub struct SourceTile {
     pub id: TileId,
     pub color: Vec<u8>,
-    /// Interleaved meters and validity; missing DEM data is never fabricated.
+    /// Interleaved meters and validity. Empty when no elevation sources are loaded.
     pub elevation: Vec<f32>,
     /// 0 = no coverage, 128 = observed land, 255 = observed water.
     pub water: Vec<u8>,
@@ -68,12 +68,14 @@ impl SourceTile {
     pub fn prepare(assets: &BasemapAssets, id: TileId, cancel: &AtomicBool) -> Option<Self> {
         let [west, north, side] = id.bounds();
         let target = (EDGE as u32 * (2u32 << id.level)) as f64;
-        let mut elevation = assets.elevation_sampler(target);
+        let mut elevation = assets
+            .has_elevation()
+            .then(|| assets.elevation_sampler(target));
         let count = PADDED_EDGE * PADDED_EDGE;
         let mut tile = Self {
             id,
             color: Vec::with_capacity(count * 4),
-            elevation: Vec::with_capacity(count * 2),
+            elevation: Vec::with_capacity(if elevation.is_some() { count * 2 } else { 0 }),
             water: Vec::with_capacity(count),
             elevation_range: None,
         };
@@ -93,17 +95,8 @@ impl SourceTile {
                 });
                 tile.color.extend_from_slice(&color.unwrap_or([60, 78, 90]));
                 tile.color.push(if color.is_some() { 255 } else { 0 });
-                let height = elevation
-                    .sample(lat, lon)
-                    .filter(|h| h.is_finite() && *h > -32000.0);
-                tile.elevation.extend_from_slice(&[
-                    height.unwrap_or(0.0),
-                    if height.is_some() { 1.0 } else { 0.0 },
-                ]);
-                if let Some(height) = height.filter(|h| *h > 0.0) {
-                    let range = tile.elevation_range.get_or_insert([height, height]);
-                    range[0] = range[0].min(height);
-                    range[1] = range[1].max(height);
+                if let Some(elevation) = &mut elevation {
+                    tile.push_height(elevation.sample(lat, lon));
                 }
                 tile.water.push(
                     match (id.level >= 8)
@@ -121,6 +114,19 @@ impl SourceTile {
         }
         Some(tile)
     }
+
+    fn push_height(&mut self, height: Option<f32>) {
+        let height = height.filter(|h| h.is_finite() && *h > -32000.0);
+        self.elevation.extend_from_slice(&[
+            height.unwrap_or(0.0),
+            if height.is_some() { 1.0 } else { 0.0 },
+        ]);
+        if let Some(height) = height.filter(|h| *h > 0.0) {
+            let range = self.elevation_range.get_or_insert([height, height]);
+            range[0] = range[0].min(height);
+            range[1] = range[1].max(height);
+        }
+    }
 }
 
 /// Samples the visible surface, with a one-tile guard band and coarse ancestors.
@@ -131,8 +137,7 @@ pub fn visible_tiles(
     height: f32,
     pixels_per_point: f32,
 ) -> Vec<TileId> {
-    let target = camera.scale_px(width, height) * std::f64::consts::TAU * pixels_per_point as f64;
-    let mut level = ((target / (EDGE * 2) as f64).log2().ceil().max(0.0) as u8).min(MAX_LEVEL);
+    let mut level = display_level(camera, width, height, pixels_per_point);
     loop {
         let mut ids = surface_tiles(camera, width, height, level);
         let finest: Vec<_> = ids.iter().copied().collect();
@@ -160,7 +165,38 @@ pub fn visible_tiles(
     }
 }
 
+/// A compact preview needs only visible raster tiles and limits work per document.
+pub fn preview_tiles(
+    camera: &GlobeCamera,
+    width: f32,
+    height: f32,
+    pixels_per_point: f32,
+) -> BTreeSet<TileId> {
+    for level in (0..=display_level(camera, width, height, pixels_per_point)).rev() {
+        let tiles = sample_tiles(camera, width, height, level, 0);
+        if tiles.len() <= 6 || level == 0 {
+            return tiles;
+        }
+    }
+    unreachable!()
+}
+
+fn display_level(camera: &GlobeCamera, width: f32, height: f32, pixels_per_point: f32) -> u8 {
+    let target = camera.scale_px(width, height) * std::f64::consts::TAU * pixels_per_point as f64;
+    ((target / (EDGE * 2) as f64).log2().ceil().max(0.0) as u8).min(MAX_LEVEL)
+}
+
 pub fn surface_tiles(camera: &GlobeCamera, width: f32, height: f32, level: u8) -> BTreeSet<TileId> {
+    sample_tiles(camera, width, height, level, 1)
+}
+
+fn sample_tiles(
+    camera: &GlobeCamera,
+    width: f32,
+    height: f32,
+    level: u8,
+    guard: i32,
+) -> BTreeSet<TileId> {
     let rows = 1i32 << level.min(MAX_LEVEL);
     let mut ids = BTreeSet::new();
     for y in 0..=12 {
@@ -172,8 +208,8 @@ pub fn surface_tiles(camera: &GlobeCamera, width: f32, height: f32, level: u8) -
                 height,
             ) {
                 let id = TileId::at(level, lat, lon);
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
+                for dy in -guard..=guard {
+                    for dx in -guard..=guard {
                         let ty = id.y as i32 + dy;
                         if (0..rows).contains(&ty) {
                             ids.insert(TileId {

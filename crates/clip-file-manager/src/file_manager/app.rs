@@ -131,6 +131,10 @@ impl FileManagerApp {
         browser
             .music_previews
             .set_audio_dadaspec(config.file_manager.audio_dadaspec);
+        browser
+            .previews
+            .geography
+            .configure(config.geo_assets_dir());
         browser.video_previews.subtitles_enabled = config.file_manager.video_subtitles_enabled;
         browser.video_timeline_decimation = match config.file_manager.video_timeline_decimation {
             value @ (1 | 2 | 4 | 8 | 16) => value,

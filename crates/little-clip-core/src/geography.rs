@@ -1,6 +1,7 @@
 //! Bounded WGS84 geometry and offline map/profile preparation.
 pub mod basemap;
 mod geojson;
+mod radiacode;
 pub mod units;
 use chrono::DateTime;
 use roxmltree::{Document as Xml, Node};
@@ -33,6 +34,18 @@ pub struct Point {
     pub elevation: Option<f64>,
     /// Original supplied time, without assuming a missing time zone.
     pub time: String,
+    /// Measurements supplied by a RadiaCode track.
+    pub radiation: Option<RadiationReading>,
+}
+/// Measurements at one recorded position.
+#[derive(Clone, Copy, Debug)]
+pub struct RadiationReading {
+    /// Reported dose rate in µSv/h, using RadiaCode's unit conversion.
+    pub dose_rate_usv_h: Option<f64>,
+    /// Counts per second.
+    pub count_rate_cps: Option<f64>,
+    /// Reported GPS accuracy in meters.
+    pub accuracy_m: Option<f64>,
 }
 /// One bounded drawing sample, retaining an actual input position.
 #[derive(Clone, Debug)]
@@ -61,6 +74,8 @@ pub struct Feature {
     pub distance_m: f64,
     /// Elevation extrema over all supplied readable elevations.
     pub elevation: Option<[f64; 2]>,
+    /// Dose-rate extrema in µSv/h over all readable positions.
+    pub dose_rate: Option<[f64; 2]>,
     /// Supplied text properties.
     pub properties: Vec<(String, String)>,
 }
@@ -89,6 +104,14 @@ struct RawFeature {
     properties: Vec<(String, String)>,
 }
 impl Document {
+    /// Reads Android tab-separated and JSON RadiaCode track exports.
+    ///
+    /// # Errors
+    /// Rejects unsupported encodings, tracks without readable positions, and exceeded budgets.
+    pub fn radiacode(bytes: &[u8]) -> Result<Self, String> {
+        radiacode::parse(bytes)
+    }
+
     /// Parses RFC 7946 points, lines, polygon boundaries and geometry collections.
     ///
     /// # Errors
@@ -259,6 +282,7 @@ fn point(node: Node<'_, '_>) -> Result<Point, String> {
         lat,
         elevation,
         time: child_text(node, "time").unwrap_or_default(),
+        radiation: None,
     })
 }
 fn clip(value: &str, limit: usize) -> String {
@@ -287,6 +311,7 @@ fn prepare(
                     points: 0,
                     distance_m: 0.0,
                     elevation: None,
+                    dose_rate: None,
                     properties: feature.properties,
                 })
                 .collect(),
@@ -312,7 +337,7 @@ fn prepare(
         features.push(feature);
     }
     if samples < points {
-        notes.push(format!("Map/profile drawing uses {samples} of {points} positions; distances and elevation bounds use all positions."));
+        notes.push(format!("Drawing uses {samples} of {points} positions. Length and measurement ranges use all positions."));
     }
     if features
         .iter()
@@ -385,6 +410,7 @@ fn prepare_feature(
     let stride = count.div_ceil((count * DRAW_POINTS / points).max(2)).max(1);
     let mut distance = 0.0;
     let mut elevation: Option<[f64; 2]> = None;
+    let mut dose_rate: Option<[f64; 2]> = None;
     let mut paths = Vec::new();
     for path in feature.paths {
         let mut prepared = Vec::new();
@@ -395,6 +421,11 @@ fn prepare_feature(
             }
             if let Some(value) = point.elevation {
                 let range = elevation.get_or_insert([value, value]);
+                range[0] = range[0].min(value);
+                range[1] = range[1].max(value);
+            }
+            if let Some(value) = point.radiation.and_then(|reading| reading.dose_rate_usv_h) {
+                let range = dose_rate.get_or_insert([value, value]);
                 range[0] = range[0].min(value);
                 range[1] = range[1].max(value);
             }
@@ -428,6 +459,7 @@ fn prepare_feature(
         points: count,
         distance_m: distance,
         elevation,
+        dose_rate,
         properties: feature.properties,
     }
 }
@@ -494,6 +526,7 @@ mod tests {
                 lat: 0.0,
                 elevation: (i != 1).then_some(i as f64),
                 time: String::new(),
+                radiation: None,
             })
             .collect();
         let doc = prepare(
@@ -518,6 +551,7 @@ mod tests {
                 lat: 0.0,
                 elevation: Some(i as f64),
                 time: String::new(),
+                radiation: None,
             })
             .collect();
         let doc = prepare(
