@@ -498,8 +498,17 @@ impl Previews {
     }
 
     pub fn retain(&mut self, ids: &BTreeSet<uuid::Uuid>) {
-        self.ready.retain(|id, _| ids.contains(id));
-        self.pending.retain(|id, _| ids.contains(id));
+        self.retain_with_ready(ids, |_| false);
+    }
+
+    pub fn retain_with_ready(
+        &mut self,
+        visible: &BTreeSet<uuid::Uuid>,
+        keep_ready: impl Fn(uuid::Uuid) -> bool,
+    ) {
+        self.ready
+            .retain(|id, _| visible.contains(id) || keep_ready(*id));
+        self.pending.retain(|id, _| visible.contains(id));
     }
 
     pub fn get(&self, id: uuid::Uuid) -> Option<&Ready> {

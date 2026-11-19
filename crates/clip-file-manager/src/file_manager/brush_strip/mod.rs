@@ -1,4 +1,4 @@
-//! Visible-only brush stroke strips using the shared cancellable preview cache.
+//! Brush stroke strips with visible-only jobs and a bounded cache of completed previews.
 use super::{
     filesystem::Entry,
     media::PreviewData,
@@ -8,7 +8,7 @@ use crate::{icons::Icon, ui_appearance::WorkbenchColors};
 use egui::{Align2, FontId, Rect, Ui, pos2, vec2};
 use little_clip_core::brushes::BrushLibrary;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::Path,
     sync::{Arc, atomic::AtomicBool},
 };
@@ -79,12 +79,16 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     data
 }
 
+const RECENT_BRUSH_ROWS: usize = 12;
+const RECENT_BRUSH_RASTERS: usize = 48;
+
 #[derive(Default)]
 pub(super) struct Previews {
     pub(in crate::file_manager) context: super::search::PreviewContext,
     cache: Cache,
     strokes: BTreeMap<(uuid::Uuid, usize), ([u8; 3], u32, u32, uuid::Uuid)>,
     hover: HoverRaster,
+    recent: VecDeque<uuid::Uuid>,
 }
 
 impl Previews {
@@ -100,12 +104,46 @@ impl Previews {
         };
     }
 
-    pub fn retain(&mut self, visible: &BTreeSet<uuid::Uuid>) {
-        self.strokes
-            .retain(|(source, _), _| visible.contains(source));
+    fn remember(&mut self, source: uuid::Uuid) {
+        self.forget(source);
+        self.recent.push_front(source);
+        self.recent.truncate(RECENT_BRUSH_ROWS);
+    }
+
+    pub fn forget(&mut self, source: uuid::Uuid) {
+        self.recent.retain(|id| *id != source);
+    }
+
+    pub fn retain(&mut self, visible: &BTreeSet<uuid::Uuid>) -> &VecDeque<uuid::Uuid> {
+        if visible.is_empty() {
+            self.recent.clear();
+        }
+        let visible_rasters: BTreeSet<_> = self
+            .strokes
+            .iter()
+            .filter(|((source, _), _)| visible.contains(source))
+            .map(|(_, (_, _, _, raster))| *raster)
+            .collect();
+        let recent_rasters: BTreeSet<_> = self
+            .recent
+            .iter()
+            .copied()
+            .filter(|source| !visible.contains(source))
+            .flat_map(|source| self.strokes.range((source, 0)..=(source, usize::MAX)))
+            .map(|(_, (_, _, _, raster))| *raster)
+            .filter(|&raster| {
+                self.cache
+                    .get(raster)
+                    .is_some_and(|ready| ready.texture.is_some())
+            })
+            .take(RECENT_BRUSH_RASTERS)
+            .collect();
         self.cache
-            .retain(&self.strokes.values().map(|(_, _, _, id)| *id).collect());
+            .retain_with_ready(&visible_rasters, |id| recent_rasters.contains(&id));
+        self.strokes
+            .retain(|_, (_, _, _, id)| visible_rasters.contains(id) || recent_rasters.contains(id));
         self.hover.retain(|source| visible.contains(&source));
+        &self.recent
     }
 
     #[expect(
@@ -163,6 +201,7 @@ impl Previews {
             return;
         };
 
+        self.remember(source);
         let preferred_width = (body.height() * 2.2 + 84.0).max(160.0);
         let capacity = ((body.width() / preferred_width).floor() as usize).clamp(1, 24);
         let slots = super::previews::strip_slots(library.brushes.len(), capacity);
@@ -183,39 +222,30 @@ impl Previews {
             colors.text_primary.b(),
         ];
         let dpi = ui.ctx().pixels_per_point();
+        let hover_idle = ui.input(|input| {
+            input.raw_scroll_delta == egui::Vec2::ZERO
+                && input.smooth_scroll_delta == egui::Vec2::ZERO
+                && !input.pointer.primary_down()
+        });
 
         for (ordinal, cell) in cells {
             let index = ordinal - 1;
             let preset = &library.brushes[index];
             let preview_rect = cell_preview_rect(cell);
-            let req_w = (preview_rect.width() * dpi).ceil().clamp(32.0, 512.0) as u32;
-            let req_h = (preview_rect.height() * dpi).ceil().clamp(16.0, 192.0) as u32;
+            let (req_w, req_h) = raster_dimensions(preview_rect, dpi);
 
-            let record = self
-                .strokes
-                .entry((source, index))
-                .or_insert_with(|| (fg_rgb, req_w, req_h, uuid::Uuid::new_v4()));
-            if record.0 != fg_rgb || record.1 != req_w || record.2 != req_h {
-                self.cache.invalidate(record.3);
-                *record = (fg_rgb, req_w, req_h, uuid::Uuid::new_v4());
-            }
-            let id = record.3;
-            if self.cache.needs(id) {
-                self.cache.request(
-                    id,
-                    Source::BrushStroke(StrokeRequest {
-                        library: library.clone(),
-                        index,
-                        width: req_w,
-                        height: req_h,
-                        fg_rgb,
-                    })
-                    .checked(&entry.path, &self.context),
-                );
-            }
-
-            let ready = self.cache.get(id);
-            if let Some(texture) = ready.and_then(|ready| ready.texture.as_ref()) {
+            let texture = self.stroke_texture(
+                source,
+                &entry.path,
+                StrokeRequest {
+                    library: library.clone(),
+                    index,
+                    width: req_w,
+                    height: req_h,
+                    fg_rgb,
+                },
+            );
+            if let Some(texture) = texture {
                 ui.painter().image(
                     texture.id(),
                     preview_rect,
@@ -241,11 +271,39 @@ impl Previews {
                 .with_clip_rect(label_rect.intersect(ui.clip_rect()))
                 .galley(label_rect.min, galley, colors.text_secondary);
 
-            if super::ui::preview_hovered(ui, cell) {
-                let fallback = ready.and_then(|ready| ready.texture.clone());
+            if hover_idle && super::ui::preview_hovered(ui, cell) {
+                let fallback = texture.cloned();
                 self.show_hover(ui, entry, source, index, library, fg_rgb, fallback.as_ref());
             }
         }
+    }
+
+    fn stroke_texture(
+        &mut self,
+        source: uuid::Uuid,
+        path: &Path,
+        request: StrokeRequest,
+    ) -> Option<&egui::TextureHandle> {
+        let requested = (request.fg_rgb, request.width, request.height);
+        let record = self
+            .strokes
+            .entry((source, request.index))
+            .or_insert_with(|| (requested.0, requested.1, requested.2, uuid::Uuid::new_v4()));
+        if record.0 != requested.0
+            || record.1.abs_diff(requested.1) > 1
+            || record.2.abs_diff(requested.2) > 1
+        {
+            self.cache.invalidate(record.3);
+            *record = (requested.0, requested.1, requested.2, uuid::Uuid::new_v4());
+        }
+        let id = record.3;
+        if self.cache.needs(id) {
+            self.cache.request(
+                id,
+                Source::BrushStroke(request).checked(path, &self.context),
+            );
+        }
+        self.cache.get(id)?.texture.as_ref()
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -303,12 +361,29 @@ fn cell_preview_rect(cell: Rect) -> Rect {
     Rect::from_center_size(area.center(), vec2(area.width(), height))
 }
 
+fn raster_dimensions(rect: Rect, dpi: f32) -> (u32, u32) {
+    // Screen-space row positions move fractionally while scrolling. Round away
+    // subpixel error before using the dimensions as the texture cache key.
+    (
+        (rect.width() * dpi).round().clamp(32.0, 512.0) as u32,
+        (rect.height() * dpi).round().clamp(16.0, 192.0) as u32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use little_clip_core::brushes::{
         BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape, render::render_brush_preview,
     };
+
+    #[test]
+    fn fractional_vertical_scroll_keeps_the_raster_size() {
+        for y in [-123.335, 0.0, 12.1, 50.08, 400.30] {
+            let cell = Rect::from_min_size(pos2(10.0, y), vec2(260.0, 94.0));
+            assert_eq!(raster_dimensions(cell_preview_rect(cell), 1.0), (250, 76));
+        }
+    }
 
     #[test]
     fn wide_and_narrow_cells_show_the_tip_and_stroke() {
@@ -328,13 +403,8 @@ mod tests {
             let cell = Rect::from_min_size(pos2(10.0, 24.0), vec2(width, 94.0));
             let preview = cell_preview_rect(cell);
             assert!(cell.contains_rect(preview));
-            let image = render_brush_preview(
-                &preset,
-                preview.width().ceil() as u32,
-                preview.height().ceil() as u32,
-                [240; 3],
-                true,
-            );
+            let (width, height) = raster_dimensions(preview, 1.0);
+            let image = render_brush_preview(&preset, width, height, [240; 3], true);
             let alpha =
                 |x: u32, y: u32| image.premultiplied_rgba[((y * image.width + x) * 4 + 3) as usize];
             let middle = image.height / 2;
