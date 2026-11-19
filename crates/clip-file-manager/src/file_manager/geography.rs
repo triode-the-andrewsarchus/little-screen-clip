@@ -2,7 +2,9 @@
 mod geometry;
 pub(super) mod gpu;
 mod overlay;
+mod radiation;
 mod river_coverage;
+mod strips;
 mod terrain_download;
 mod tiles;
 
@@ -12,7 +14,6 @@ use super::{
     media::PreviewData,
     shelf::preview::Ready,
 };
-use crate::ui_ext::fit_cartesian_point as project;
 use crate::{
     icons::Icon,
     shell::{StudioPanelLayout, StudioShell},
@@ -44,14 +45,19 @@ fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     if token.load(Ordering::Relaxed) {
         return Err("Geography opening cancelled".into());
     }
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("geojson"))
-    {
-        Document::geojson(&bytes)
-    } else {
-        Document::gpx(&bytes)
+    let extension = path.extension().unwrap_or_default().to_ascii_lowercase();
+    match extension.to_str() {
+        Some("geojson") => Document::geojson(&bytes),
+        Some("rctrk") => Document::radiacode(&bytes),
+        _ => Document::gpx(&bytes),
     }
+}
+
+pub(super) use strips::Strips;
+
+pub(in crate::file_manager) struct Preview {
+    document: Document,
+    overlay: overlay::Overlay,
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
@@ -94,7 +100,10 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
                 .sum();
             document.title = String::new();
             document.notes.clear();
-            data.geography = Some(Arc::new(document));
+            data.geography = Some(Arc::new(Preview {
+                overlay: overlay::Overlay::prepare(&document),
+                document,
+            }));
         }
         Err(error) => data.detail = error,
     }
@@ -255,11 +264,10 @@ impl Viewer {
             let feature = &self.document.features[self.selected];
             let profile_visible =
                 feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
-            let legend_h = if self.style == BasemapStyle::Oilslick {
-                26.0
-            } else {
-                0.0
-            };
+            let dose_scale = feature.dose_rate.map(radiation::DoseScale);
+            let legend_h = 26.0
+                * (u8::from(self.style == BasemapStyle::Oilslick) + u8::from(dose_scale.is_some()))
+                    as f32;
             let map_height =
                 (ui.available_height() - legend_h - if profile_visible { 190.0 } else { 26.0 })
                     .max(80.0);
@@ -337,6 +345,9 @@ impl Viewer {
                 }
             }
 
+            if let Some(scale) = dose_scale {
+                scale.legend(ui);
+            }
             if self.style == BasemapStyle::Oilslick {
                 paint_oilslick_legend(ui, colors, self.config.geography.units);
             }
@@ -410,7 +421,7 @@ impl Viewer {
             }
             let offset = (copy as f64 * period) as f32;
             if let Some(assets) = cities {
-                paint_cities(ui, &painter, rect, camera, assets, offset);
+                paint_cities(ui, &painter, rect, camera, assets, offset, 56);
             }
             let projection = overlay::Projection {
                 camera,
@@ -429,10 +440,7 @@ impl Viewer {
         if let Some(hit) = hit
             && let Some(sample) = self.sample(hit)
         {
-            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
-                ui.label(&self.document.features[hit.feature].name);
-                ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
-            });
+            show_position(ui, &self.document.features[hit.feature].name, sample);
         }
         paint_scale_and_contour_overlay(
             ui,
@@ -871,6 +879,7 @@ impl Viewer {
                             self.config.geography.units.elevation(value)
                         ));
                     }
+                    radiation::show_reading(ui, &sample.point);
                     if !sample.point.time.is_empty() {
                         ui.add(egui::Label::new(&sample.point.time).wrap(true));
                     }
@@ -895,12 +904,13 @@ fn yes_no(v: bool) -> &'static str {
 }
 
 fn paint_cities(
-    ui: &mut egui::Ui,
+    ui: &egui::Ui,
     painter: &egui::Painter,
     rect: egui::Rect,
     camera: &GlobeCamera,
     assets: &BasemapAssets,
     offset: f32,
+    label_limit: usize,
 ) {
     // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
     let min_pop = if camera.zoom < 3.0 {
@@ -950,7 +960,7 @@ fn paint_cities(
         );
         painter.rect_filled(pill_rect, 3.0, egui::Color32::from_black_alpha(150));
         painter.galley(label_pos, galley, egui::Color32::from_rgb(248, 250, 252));
-        if occupied.len() >= 56 {
+        if occupied.len() >= label_limit {
             break;
         }
     }
@@ -1060,97 +1070,44 @@ fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors, units: Unit
     );
 }
 
-fn paint_map(
-    ui: &mut egui::Ui,
+fn paint_strip_map(
+    ui: &egui::Ui,
     rect: egui::Rect,
-    doc: &Document,
-    selected: Option<usize>,
-    zoom: f32,
-    pan: egui::Vec2,
+    preview: &Preview,
+    maps: &mut Strips,
     colors: WorkbenchColors,
 ) -> Option<Hit> {
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, colors.recessed);
-    let pointer = super::ui::preview_hovered(ui, rect)
-        .then(|| ui.input(|i| i.pointer.hover_pos()))
-        .flatten();
-    let mut nearest = 64.0;
-    let mut hit = None;
-    for (index, feature) in doc.features.iter().enumerate() {
-        let color = if selected == Some(index) {
-            colors.accent
-        } else {
-            colors.text_secondary
-        };
-        for (path_index, path) in feature.paths.iter().enumerate() {
-            let positions: Vec<_> = path
-                .iter()
-                .map(|sample| project(rect, doc.bounds, sample.xy, zoom, pan))
-                .collect();
-            if matches!(feature.kind, Kind::Line | Kind::Polygon) && positions.len() > 1 {
-                painter.add(egui::Shape::line(
-                    positions.clone(),
-                    egui::Stroke::new(
-                        if selected == Some(index) {
-                            3.0_f32
-                        } else {
-                            1.5_f32
-                        },
-                        color,
-                    ),
-                ));
-            }
-            if feature.kind == Kind::Point || path.len() == 1 {
-                for position in &positions {
-                    painter.circle_filled(*position, 4.0, color);
-                }
-            }
-            if let Some(pointer) = pointer
-                && let Some((point, distance)) = nearest_on_path(
-                    &positions,
-                    pointer,
-                    matches!(feature.kind, Kind::Line | Kind::Polygon),
-                )
-                && distance < nearest
-            {
-                nearest = distance;
-                hit = Some(Hit {
-                    feature: index,
-                    path: path_index,
-                    point,
-                });
-            }
-        }
-    }
-    if let Some(hit) = hit {
-        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
-            ui.label(&doc.features[hit.feature].name);
-            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
-        });
-    }
-    hit
+    let bounds = preview
+        .document
+        .geographic_bounds
+        .filter(|_| rect.is_positive())?;
+    let camera = strips::camera(rect, bounds);
+    maps.paint(ui, rect, camera);
+    let pointer = ui
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|_| super::ui::preview_hovered(ui, rect));
+    let projection = overlay::Projection {
+        camera: &camera,
+        rect,
+        offset: 0.0,
+    };
+    let (hit, _) = preview
+        .overlay
+        .paint_copy(&painter, projection, None, colors, pointer)?;
+    let sample = &preview.document.features[hit.feature].paths[hit.path][hit.point];
+    show_position(ui, &preview.document.features[hit.feature].name, sample);
+    Some(hit)
 }
 
-fn nearest_on_path(
-    positions: &[egui::Pos2],
-    pointer: egui::Pos2,
-    connected: bool,
-) -> Option<(usize, f32)> {
-    let mut best = positions
-        .iter()
-        .enumerate()
-        .map(|(index, p)| (index, p.distance_sq(pointer)))
-        .min_by(|a, b| a.1.total_cmp(&b.1))?;
-    if connected {
-        for (point, pair) in positions.windows(2).enumerate() {
-            let (t, distance) = crate::ui_ext::segment_hit(pointer, pair[0], pair[1]);
-            if distance < best.1 {
-                best = (point + usize::from(t > 0.5), distance);
-            }
-        }
-    }
-    Some(best)
+fn show_position(ui: &egui::Ui, name: &str, sample: &Sample) {
+    egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+        ui.label(name);
+        ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+        radiation::show_reading(ui, &sample.point);
+    });
 }
 
 fn paint_profile(
@@ -1246,6 +1203,7 @@ pub(super) fn show_list(
     entry: &Entry,
     columns: super::ui::ListColumns,
     ready: Option<&Ready>,
+    maps: &mut Strips,
     colors: WorkbenchColors,
 ) -> Option<usize> {
     let rect = super::ui::information_strip(
@@ -1257,15 +1215,14 @@ pub(super) fn show_list(
         colors,
     );
     ui.painter().rect_filled(rect, 3.0, colors.recessed);
-    let document = ready.and_then(|r| r.data.geography.as_ref())?;
+    let preview = ready.and_then(|r| r.data.geography.as_ref())?;
     let map = egui::Rect::from_min_max(
         rect.min,
         egui::pos2(rect.left() + rect.width().min(240.0), rect.bottom()),
     );
-    let mut hovered =
-        paint_map(ui, map, document, None, 1.0, egui::Vec2::ZERO, colors).map(|hit| hit.feature);
+    let mut hovered = paint_strip_map(ui, map, preview, maps, colors).map(|hit| hit.feature);
     let mut x = map.right() + 4.0;
-    for (index, feature) in document.features.iter().enumerate().take(4) {
+    for (index, feature) in preview.document.features.iter().enumerate().take(4) {
         let width = 180.0;
         if x + width > rect.right() {
             break;
@@ -1301,14 +1258,75 @@ pub(super) fn show_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radiacode_preview_and_both_projections_draw_dose_colors() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/geography/survey.rctrk");
+        let summary = load(&path, &AtomicBool::new(false)).geography.unwrap();
+        assert_eq!(summary.document.features[0].dose_rate, Some([0.06, 0.17]));
+
+        let mut viewer = Viewer::load(&path).unwrap();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
+        let ctx = egui::Context::default();
+        let colors = WorkbenchColors::from_palette(&crate::ui_appearance::palette(
+            little_clip_core::config::WorkbenchAppearance::Dark,
+        ));
+        let scale = radiation::DoseScale([0.06, 0.17]);
+        for mode in [ProjectionMode::Map2D, ProjectionMode::Globe3D] {
+            viewer.camera.mode = mode;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        viewer.overlay.paint_copy(
+                            ui.painter(),
+                            overlay::Projection {
+                                camera: &viewer.camera,
+                                rect,
+                                offset: 0.0,
+                            },
+                            Some(0),
+                            colors,
+                            None,
+                        );
+                    });
+                },
+            );
+            let outline_index = output
+                .shapes
+                .iter()
+                .position(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Path(path) if path.stroke.color == egui::Color32::BLACK
+                            && path.stroke.width > 4.5 && path.points.len() == 4
+                    )
+                })
+                .expect("Thin black outline should trace the whole route");
+            for rate in [0.06_f64.midpoint(0.08), 0.17_f64.midpoint(0.15)] {
+                assert!(
+                    output.shapes[outline_index + 1..]
+                        .iter()
+                        .any(|shape| matches!(&shape.shape,
+                            egui::Shape::Path(path) if path.stroke.color == scale.color(rate)
+                        )),
+                    "Missing dose color for {rate} in {mode:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn sampled_folder_features_and_viewer_selection_keep_source_indices() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../little-clip-core/tests/fixtures/geography/harbor.gpx");
         let data = load(&path, &AtomicBool::new(false));
         let summary = data.geography.unwrap();
-        assert!(summary.samples <= 512);
-        assert_eq!(summary.features[1].name, "Ferry route");
+        assert!(summary.document.samples <= 512);
+        assert_eq!(summary.document.features[1].name, "Ferry route");
         let mut viewer = Viewer::load(&path).unwrap();
         viewer.select(1);
         assert_eq!(
@@ -1339,9 +1357,9 @@ mod tests {
         );
         let data = load(&path, &AtomicBool::new(false));
         let summary = data.geography.unwrap();
-        assert_eq!(summary.features[0].kind, Kind::Polygon);
-        assert_eq!(summary.features[0].paths.len(), 2);
-        assert!(summary.samples <= 512);
+        assert_eq!(summary.document.features[0].kind, Kind::Polygon);
+        assert_eq!(summary.document.features[0].paths.len(), 2);
+        assert!(summary.document.samples <= 512);
         let mut viewer = Viewer::load(&path).unwrap();
         viewer.select(3);
         assert_eq!(
@@ -1358,20 +1376,5 @@ mod tests {
                 .elevation,
             Some(12.0)
         );
-    }
-    #[test]
-    fn line_hits_choose_actual_endpoints_and_unconnected_points_have_no_line_hits() {
-        let path = [egui::pos2(10.0, 10.0), egui::pos2(110.0, 10.0)];
-        assert_eq!(
-            nearest_on_path(&path, egui::pos2(75.0, 11.0), true),
-            Some((1, 1.0))
-        );
-        assert!(
-            nearest_on_path(&path, egui::pos2(75.0, 11.0), false)
-                .unwrap()
-                .1
-                > 1000.0
-        );
-        assert!(nearest_on_path(&[], egui::Pos2::ZERO, true).is_none());
     }
 }

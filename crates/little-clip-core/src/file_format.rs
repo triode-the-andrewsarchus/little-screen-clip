@@ -38,7 +38,7 @@ impl Format {
             "eml" => Some(Self::Mail),
             "ics" => Some(Self::Calendar),
             "sqlite" | "sqlite3" | "db" | "db3" => Some(Self::Database),
-            "gpx" | "geojson" => Some(Self::Geography),
+            "gpx" | "geojson" | "rctrk" => Some(Self::Geography),
             "gcode" => Some(Self::Toolpath),
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
@@ -82,6 +82,7 @@ mod tests {
             ("a.DB3", Format::Database),
             ("a.GPX", Format::Geography),
             ("a.GEOJSON", Format::Geography),
+            ("a.RCTRK", Format::Geography),
             ("a.GCODE", Format::Toolpath),
             ("a.SF2", Format::Multisample),
             ("a.SFZ", Format::Multisample),
