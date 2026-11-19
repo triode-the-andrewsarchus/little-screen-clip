@@ -218,10 +218,10 @@ impl Preview {
         self.stale = true;
     }
 
-    fn poll(&mut self, ui: &egui::Ui) {
+    fn poll(&mut self, ctx: &egui::Context) {
         if let Some(result) = self.pending.as_ref().and_then(Task::poll) {
             self.pending = None;
-            ui.ctx().request_repaint();
+            ctx.request_repaint();
             match result {
                 Ok(Ok(pixels)) => {
                     self.warnings = pixels.warnings;
@@ -232,7 +232,7 @@ impl Preview {
                         |scene| scene.size(),
                     );
                     self.aspect = Some(size.x / size.y);
-                    self.texture = Some(ui.ctx().load_texture(
+                    self.texture = Some(ctx.load_texture(
                         "native diagram",
                         pixels.image,
                         egui::TextureOptions::LINEAR,
@@ -249,15 +249,12 @@ impl Preview {
         }
     }
 
-    fn prepare(
-        &mut self,
-        ui: &egui::Ui,
-        format: Format,
-        source: &str,
-        foreground: Option<[u8; 3]>,
-    ) {
-        self.update_source(format, source, foreground);
-        if format == Format::Mermaid
+    pub(crate) fn tick(&mut self, ctx: &egui::Context) {
+        self.poll(ctx);
+        if self
+            .source
+            .as_ref()
+            .is_some_and(|(format, ..)| *format == Format::Mermaid)
             && self.pending.is_none()
             && self.due.is_none()
             && self
@@ -266,14 +263,15 @@ impl Preview {
         {
             self.due = Some(Instant::now());
         }
-        self.poll(ui);
-        if self.due.is_some_and(|due| Instant::now() >= due) && self.pending.is_none() {
+        if self.due.is_some_and(|due| Instant::now() >= due)
+            && self.pending.is_none()
+            && let Some((format, source, foreground)) = self.source.clone()
+        {
             self.due = None;
             // Count failed refreshes too, so an expired image cannot cause a
             // render attempt every frame after a transient worker failure.
             self.prepared_at = Some(Instant::now());
             self.stale = true;
-            let source = source.to_owned();
             self.pending = Some(Task::start(
                 BackgroundJobs::global(),
                 Duration::from_secs(10),
@@ -293,7 +291,21 @@ impl Preview {
             ));
         }
         if self.pending.is_some() || self.due.is_some() {
-            ui.ctx().request_repaint_after(Duration::from_millis(30));
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        ui: &egui::Ui,
+        format: Format,
+        source: &str,
+        foreground: Option<[u8; 3]>,
+    ) {
+        self.update_source(format, source, foreground);
+        if let Some(due) = self.due {
+            ui.ctx()
+                .request_repaint_after(due.saturating_duration_since(Instant::now()));
         }
     }
 

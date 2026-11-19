@@ -18,9 +18,6 @@ impl eframe::App for WorkbenchApp {
             self.appearance_applied = true;
         }
 
-        if let Some(strip) = &mut self.rolling_audio_strip {
-            strip.poll_copy(ctx);
-        }
         self.poll_daemon_mutation(ctx);
 
         while let Ok(result) = self.state_rx.try_recv() {
@@ -51,11 +48,6 @@ impl eframe::App for WorkbenchApp {
         self.appearance_sync.poll(ctx);
 
         self.poll_rolling_editor_load(ctx);
-        if let Some((_, state)) = self.retained_image_session.as_mut()
-            && state.poll_cached_jobs()
-        {
-            ctx.request_repaint_after(Duration::from_millis(16));
-        }
         self.poll_image_load(ctx);
         self.poll_text_load(ctx);
         self.poll_office_document_load(ctx);
@@ -72,6 +64,7 @@ impl eframe::App for WorkbenchApp {
                 self.poll_midi_load(ctx);
             }
         }
+        self.tick_viewer(ctx);
     }
 
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -127,7 +120,7 @@ impl eframe::App for WorkbenchApp {
                         )),
                 )
                 .show(root, |ui| {
-                    strip.render_ui(ui, ctx, &self.ui_palette, &mut host_action);
+                    strip.render_ui(ui, &self.ui_palette, &mut host_action);
                 });
         }
 

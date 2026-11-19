@@ -238,8 +238,42 @@ impl TextSession {
             .as_ref()
             .is_some_and(|editor| editor.pending.is_some() || editor.graphic_busy())
     }
-    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
+    pub fn tick(&mut self, ctx: &egui::Context) {
         let was_busy = self.busy();
+        if let Some(preview) = self.editor.as_mut().and_then(|editor| editor.poll(ctx)) {
+            self.preview = preview;
+        }
+        self.preview.tick(ctx);
+        if self.mode == Mode::Diagram
+            && let Some((_, preview)) = &mut self.diagram
+        {
+            preview.tick(ctx);
+        }
+        if self.close.is_some()
+            && was_busy
+            && !self.busy()
+            && self.editor.as_ref().is_some_and(|editor| {
+                editor.error.is_some()
+                    || editor
+                        .drawing
+                        .as_ref()
+                        .is_some_and(|drawing| drawing.failed())
+                    || editor
+                        .harness
+                        .as_ref()
+                        .is_some_and(|harness| harness.failed())
+                    || editor
+                        .mermaid
+                        .as_ref()
+                        .is_some_and(|mermaid| mermaid.failed())
+            })
+        {
+            self.close = Some(Default::default());
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         if (self.close.is_some() || self.editor.as_ref().is_some_and(|editor| editor.save_as))
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -255,33 +289,7 @@ impl TextSession {
         }
         self.render_editor(ui, palette, close);
         if self.close.is_some() {
-            // A close requested during delivery must not hide its failure, even
-            // when the original clipboard source itself had no unsaved changes.
-            if was_busy
-                && !self.busy()
-                && self.editor.as_ref().is_some_and(|editor| {
-                    editor.error.is_some()
-                        || editor
-                            .drawing
-                            .as_ref()
-                            .is_some_and(|drawing| drawing.failed())
-                        || editor
-                            .harness
-                            .as_ref()
-                            .is_some_and(|harness| harness.failed())
-                        || editor
-                            .mermaid
-                            .as_ref()
-                            .is_some_and(|mermaid| mermaid.failed())
-                })
-            {
-                self.close = Some(Default::default());
-                *close = false;
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            } else {
-                self.service_close(ui, palette, close);
-            }
+            self.service_close(ui, palette, close);
         }
     }
 
@@ -350,9 +358,6 @@ impl TextSession {
     fn render_editor(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         let ctx = ui.ctx().clone();
         if let Some(editor) = &mut self.editor {
-            if let Some(preview) = editor.poll(&ctx) {
-                self.preview = preview;
-            }
             let mut tabs = vec![
                 Tab::new(Mode::Preview, "Preview"),
                 Tab::new(Mode::Edit, "Edit text"),
@@ -1486,7 +1491,8 @@ mod tests {
         let mut close = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let output = editor_frame(
+            let logic = context.run_logic(&egui::RawInput::default(), |ctx| session.tick(ctx));
+            editor_frame(
                 &context,
                 &mut session,
                 &mut close,
@@ -1495,8 +1501,7 @@ mod tests {
             assert!(!close);
             if !session.busy() {
                 assert!(
-                    output.viewport_output[&egui::ViewportId::ROOT]
-                        .commands
+                    logic.viewport_commands[&egui::ViewportId::ROOT]
                         .iter()
                         .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
                 );

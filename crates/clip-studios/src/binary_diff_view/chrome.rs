@@ -1,19 +1,12 @@
 use super::*;
 
 impl BinaryDiffViewState {
-    pub fn render_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &AppPalette,
-        close_requested: &mut bool,
-    ) {
+    pub fn tick(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         self.poll_handoff(now, ctx);
 
-        // Check async receiver
         if self.is_computing {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
             if let Some(ref rx) = self.receiver {
                 match rx.try_recv() {
                     Ok(Ok((req_gen, res))) if req_gen == self.current_generation => {
@@ -54,7 +47,16 @@ impl BinaryDiffViewState {
                 }
             }
         }
+    }
 
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close_requested: &mut bool,
+    ) {
+        let now = ctx.input(|i| i.time);
         self.handle_global_shortcuts(ctx, close_requested);
 
         let l_size_str = format_bytes_size(self.left_bytes.len());

@@ -1390,17 +1390,18 @@ mod tests {
             },
         ));
 
-        assert!(!state.poll_session_snapshots());
+        assert!(!state.session_snapshots_ready());
         assert!(state.current_rgba.is_empty());
         assert!(state.save_job.is_some());
         assert!(state.copy_job.is_some());
 
         release_tx.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !state.poll_session_snapshots() && Instant::now() < deadline {
+        while !state.session_snapshots_ready() && Instant::now() < deadline {
+            state.poll_cached_jobs();
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(state.poll_session_snapshots());
+        assert!(state.session_snapshots_ready());
         assert!(Arc::ptr_eq(&state.current_rgba, &pixels));
         assert_eq!(
             state.current_rgba.get_pixel(0, 0),

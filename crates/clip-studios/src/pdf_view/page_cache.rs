@@ -52,6 +52,7 @@ impl PdfEditorState {
             }
             if self.decode_requests.len() < PAGE_DECODE_REQUEST_LIMIT {
                 self.decode_requests.push(page_num);
+                ctx.request_repaint_after(Duration::from_millis(20));
             }
         }
         let page = &mut self.pages[index];

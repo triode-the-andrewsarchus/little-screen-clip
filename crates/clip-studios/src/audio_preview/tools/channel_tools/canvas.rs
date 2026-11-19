@@ -9,7 +9,6 @@ impl AudioPreviewState {
         track: Rect,
     ) {
         let [ruler, _, _, _, scroll] = layout::AudioWorkspace::inspect_timeline_rects(track);
-        self.poll_derived_signals(ctx);
         if self.analysis.is_none() {
             return;
         }

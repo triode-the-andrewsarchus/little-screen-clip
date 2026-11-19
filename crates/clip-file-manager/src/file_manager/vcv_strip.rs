@@ -557,7 +557,7 @@ impl Viewer {
         });
     }
 
-    fn poll_panel_job(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn poll_panel_job(&mut self, ctx: &egui::Context) {
         let Some(job) = self.panel_job.as_mut() else {
             return;
         };
@@ -641,7 +641,6 @@ impl Viewer {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette) {
-        self.poll_panel_job(ui.ctx());
         StudioShell::new("VCV Rack", Icon::Midi, palette, close).render_header(ui, |ui| {
             ui.label(format!(
                 "{} · {}",

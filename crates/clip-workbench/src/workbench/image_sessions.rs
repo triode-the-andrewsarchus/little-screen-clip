@@ -8,7 +8,7 @@ impl WorkbenchApp {
             return false;
         }
         if let Some(ViewerSession::Image(state)) = self.viewer.as_mut()
-            && (!state.poll_session_snapshots() || state.file_write_pending())
+            && (!state.session_snapshots_ready() || state.file_write_pending())
         {
             return false;
         }

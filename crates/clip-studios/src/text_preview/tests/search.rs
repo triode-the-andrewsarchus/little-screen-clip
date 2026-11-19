@@ -87,17 +87,9 @@ fn pending_search_completes_when_find_toolbar_is_hidden() {
     assert!(!state.show_find);
 
     let context = egui::Context::default();
-    let palette = AppPalette::default();
-    let mut close = false;
     let deadline = Instant::now() + Duration::from_secs(2);
     while state.search_pending && Instant::now() < deadline {
-        let _ = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
-            ctx.root_ui(|ui| {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
-                })
-            });
-        });
+        let _ = context.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(!state.search_pending);

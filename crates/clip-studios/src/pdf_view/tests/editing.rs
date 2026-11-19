@@ -387,6 +387,7 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
             result: Err("synthetic worker failure".to_owned()),
         }))
         .unwrap();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
     let _ = clip_ui::test_support::run_frame(
         &ctx,
         egui::RawInput {

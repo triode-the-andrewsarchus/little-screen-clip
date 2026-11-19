@@ -84,7 +84,7 @@ impl Viewer {
             self.pending = None;
         }
     }
-    fn poll(&mut self, ui: &Ui) {
+    pub(in crate::file_manager) fn poll(&mut self, ctx: &egui::Context) {
         if self.document.cells.is_empty() {
             return;
         }
@@ -100,20 +100,20 @@ impl Viewer {
         }
         let Some(task) = &self.pending else { return };
         let Some(result) = task.poll() else {
-            ui.ctx().request_repaint_after(Duration::from_millis(40));
+            ctx.request_repaint_after(Duration::from_millis(40));
             return;
         };
         self.pending = None;
         match result {
             Err(little_clip_core::JobError::QueueFull) => {
                 self.submitted = None;
-                ui.ctx().request_repaint_after(Duration::from_millis(40));
+                ctx.request_repaint_after(Duration::from_millis(40));
             }
             result => match result
                 .map_err(|error| error.to_string())
                 .and_then(|result| result)
             {
-                Ok(prepared) => self.cell = Some(CellView::new(prepared, ui)),
+                Ok(prepared) => self.cell = Some(CellView::new(prepared, ctx)),
                 Err(error) => self.error = Some(error),
             },
         }
@@ -140,7 +140,6 @@ impl Viewer {
             self.select(index);
         }
         self.controls(ui, palette);
-        self.poll(ui);
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
             ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
@@ -277,7 +276,7 @@ fn metadata(ui: &mut Ui, label: &str, text: &str, palette: &AppPalette) {
     });
 }
 impl CellView {
-    fn new(prepared: Prepared, ui: &Ui) -> Self {
+    fn new(prepared: Prepared, ctx: &egui::Context) -> Self {
         let outputs = prepared
             .outputs
             .into_iter()
@@ -293,7 +292,7 @@ impl CellView {
                     text,
                     error,
                 },
-                PreparedOutput::Image(image) => OutputView::Image(ui.ctx().load_texture(
+                PreparedOutput::Image(image) => OutputView::Image(ctx.load_texture(
                     "notebook-output",
                     egui::ColorImage::from_rgba_premultiplied(
                         [image.width as usize, image.height as usize],
@@ -369,7 +368,7 @@ mod tests {
         assert!(viewer.submitted.is_none());
         let ctx = egui::Context::default();
         let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| viewer.poll(ui)));
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| viewer.poll(ui.ctx())));
         });
         assert_eq!(viewer.submitted, Some(0));
         assert!(viewer.pending.is_some() || viewer.cell.is_some());

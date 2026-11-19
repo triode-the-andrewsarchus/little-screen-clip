@@ -352,9 +352,48 @@ impl Viewers {
         }
     }
 
+    pub(super) fn tick(&mut self, ctx: &Context) {
+        self.poll(ctx);
+        match self.session.as_mut() {
+            Some(ViewerSession::Archive(state)) => state.tick(ctx),
+            Some(ViewerSession::System(state)) => state.poll(ctx),
+            Some(ViewerSession::Font(state)) => state.poll(ctx),
+            Some(ViewerSession::Notebook(state)) => state.poll(ctx),
+            Some(ViewerSession::Book(state)) => state.poll(ctx),
+            Some(ViewerSession::Database(state)) => state.poll(ctx),
+            Some(ViewerSession::Geography(state)) => state.poll_background(ctx),
+            Some(ViewerSession::VcvPatch(state)) => state.poll_panel_job(ctx),
+            Some(ViewerSession::Multisample(state)) => state.tick(ctx),
+            Some(ViewerSession::Image(state)) => state.tick(ctx),
+            Some(ViewerSession::Text(state)) => state.tick(ctx),
+            Some(ViewerSession::Audio(state)) => state.tick(ctx),
+            Some(ViewerSession::Pdf(state)) => state.tick(ctx),
+            Some(ViewerSession::Midi(state)) => state.tick(ctx),
+            Some(ViewerSession::Model(state)) => state.tick(ctx),
+            Some(ViewerSession::Scene(state)) => state.tick(ctx),
+            Some(ViewerSession::Video(state)) => state.tick(ctx),
+            Some(
+                ViewerSession::Mail(_)
+                | ViewerSession::Calendar(_)
+                | ViewerSession::Toolpath(_)
+                | ViewerSession::Sheet(_),
+            )
+            | None => {}
+        }
+        self.sync_session_path();
+        if let Some(ViewerSession::System(state)) = &mut self.session
+            && let Some(target) = state.take_browser_target()
+        {
+            self.system_navigation = Some(target);
+            self.request_close();
+        }
+        self.tick_gallery(ctx);
+        self.poll_file_source(ctx);
+        self.tick_rename(ctx);
+        self.poll_audio_return();
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
-        self.poll(ui.ctx());
-        self.poll_file_source(ui.ctx());
         let mut close = std::mem::take(&mut self.close_requested);
         // A popup owns Escape before either the studio or the host can close.
         if egui::Popup::is_any_open(ui.ctx())
@@ -380,7 +419,6 @@ impl Viewers {
         });
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
         self.rename_ui(ui, palette);
-        self.poll_audio_return();
         // Studios consume Escape when cancelling their own nested interaction.
         // Any remaining Escape uses the same guarded close as Back to folder,
         // including read-only viewers, loading/error screens and text edit mode.
@@ -476,27 +514,27 @@ impl Viewers {
     fn render_session(&mut self, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
         if let Some(viewer) = &mut self.session {
             render(viewer, ui, palette, close);
-            if let ViewerSession::System(state) = viewer
-                && let Some(target) = state.take_browser_target()
-            {
-                self.system_navigation = Some(target);
-                *close = true;
-            }
+        }
+    }
+
+    fn sync_session_path(&mut self) {
+        if let Some(viewer) = &self.session {
             match viewer {
                 ViewerSession::System(state) => self.path = Some(state.document.path.clone()),
-                ViewerSession::Image(state) => self.path = state.path.clone(),
+                ViewerSession::Image(state) => self.path.clone_from(&state.path),
                 ViewerSession::Text(state) => self.path = Some(state.path().to_path_buf()),
                 ViewerSession::Pdf(state) if !self.office_preview => {
                     self.path = Some(state.path.clone())
                 }
                 ViewerSession::Audio(state) => self.path = Some(state.path.clone()),
                 ViewerSession::Sheet(state) => self.path = state.path.clone(),
-                ViewerSession::Midi(state) => self.path = state.path.clone(),
-                ViewerSession::Model(state) => self.path = state.path.clone(),
+                ViewerSession::Midi(state) => self.path.clone_from(&state.path),
+                ViewerSession::Model(state) => self.path.clone_from(&state.path),
                 _ => {}
             }
         }
     }
+
     pub fn take_system_navigation(&mut self) -> Option<super::system::BrowserTarget> {
         self.system_navigation.take()
     }
@@ -504,9 +542,6 @@ impl Viewers {
         if self.rename.open {
             self.rename.open = false;
             return false;
-        }
-        if let Some(ViewerSession::Image(state)) = &mut self.session {
-            state.poll_cached_jobs();
         }
         if let Some(ViewerSession::VcvPatch(state)) = &self.session
             && state.panel_job_pending()

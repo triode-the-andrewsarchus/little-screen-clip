@@ -22,9 +22,38 @@ impl WorkbenchApp {
                 .is_some_and(|s| s.selected_region.is_some())
     }
 
+    pub(crate) fn tick_viewer(&mut self, ctx: &egui::Context) {
+        self.retire_hidden_rolling_audio();
+        if let Some(strip) = &mut self.rolling_audio_strip {
+            strip.tick(ctx);
+        }
+        match self.viewer.as_mut() {
+            Some(ViewerSession::Diff(state)) => state.tick(ctx),
+            Some(ViewerSession::BinaryDiff(state)) => state.tick(ctx),
+            Some(ViewerSession::Audio(state)) => state.tick(ctx),
+            Some(ViewerSession::Image(state)) => state.tick(ctx),
+            Some(ViewerSession::Pdf(state)) => state.tick(ctx),
+            Some(ViewerSession::Midi(state)) => state.tick(ctx),
+            Some(ViewerSession::Model3d(state)) => state.tick(ctx),
+            Some(ViewerSession::Splat(state)) => state.tick(ctx),
+            Some(ViewerSession::TextEditor(state)) => state.tick(ctx),
+            Some(ViewerSession::Text(state)) => state.tick(ctx),
+            Some(
+                ViewerSession::ImageLoading(_)
+                | ViewerSession::Spreadsheet(_)
+                | ViewerSession::ComponentGallery(_),
+            )
+            | None => {}
+        }
+        if let Some((_, state)) = self.retained_image_session.as_mut()
+            && state.poll_cached_jobs()
+        {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
     pub(crate) fn render_modal_viewers(&mut self, root: &mut egui::Ui) -> bool {
         let ctx = &root.ctx().clone();
-        self.retire_hidden_rolling_audio();
         if self.render_prompt_modal(ctx) {
             return true;
         }

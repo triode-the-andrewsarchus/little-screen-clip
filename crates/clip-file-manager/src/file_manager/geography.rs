@@ -218,7 +218,7 @@ impl Viewer {
         self.camera.fit_bounds(self.document.geographic_bounds);
     }
 
-    fn poll_background(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn poll_background(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.assets_job {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
             if let Some(result) = job.poll() {
@@ -244,7 +244,6 @@ impl Viewer {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
-        self.poll_background(ui.ctx());
         StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |_| {});
 
         let colors = WorkbenchColors::from_palette(palette);

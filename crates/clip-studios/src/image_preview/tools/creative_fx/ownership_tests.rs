@@ -1464,6 +1464,9 @@ fn creative_fx_parameter_debounce_requests_a_repaint_without_pointer_input() {
                 ..Default::default()
             },
             |ctx| {
+                if ctx.current_pass_index() == 0 {
+                    state.tick(ctx);
+                }
                 ctx.root_ui(|ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         state.render_ui(ui, ctx, &palette, &mut false);

@@ -2,6 +2,18 @@ use super::navigation::LeftTab;
 use super::*;
 
 impl PdfEditorState {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        let now = crate::ui_ext::feedback_time();
+        self.poll_existing_ocr(ctx, now);
+        self.poll_info_worker(ctx, now);
+        self.poll_preview_worker(ctx);
+        self.poll_edit_worker(ctx, now);
+        self.poll_document_tools(ctx, now);
+        self.tick_navigation(ctx);
+        self.poll_decode_worker(ctx);
+        self.schedule_page_decode(ctx);
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -10,11 +22,6 @@ impl PdfEditorState {
         close: &mut bool,
     ) {
         let now = crate::ui_ext::feedback_time();
-        self.poll_existing_ocr(ctx, now);
-        self.poll_info_worker(ctx, now);
-        self.poll_preview_worker(ctx);
-        self.poll_edit_worker(ctx, now);
-        self.poll_document_tools(ctx, now);
         let navigation_escape = self.navigation_shortcuts(ctx);
         if !navigation_escape
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -42,7 +49,6 @@ impl PdfEditorState {
         }
         self.texture_frame += 1;
         self.decode_requests.clear();
-        self.poll_decode_worker(ctx);
         if let Some(page) = self.selected_page {
             self.ensure_page_texture(page, ctx);
         }
@@ -74,7 +80,6 @@ impl PdfEditorState {
         if let Some(page) = self.selected_page {
             self.ensure_page_texture(page, ctx);
         }
-        self.schedule_page_decode(ctx);
         if self.file_write_pending() {
             *close = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

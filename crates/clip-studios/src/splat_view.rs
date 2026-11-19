@@ -200,6 +200,14 @@ impl SplatViewerState {
         }
     }
 
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        self.poll(ctx);
+        self.queue_render();
+        if self.job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
     fn queue_render(&mut self) {
         if self.job.is_some() || self.error.is_some() || self.completed == Some(self.desired) {
             return;
@@ -261,10 +269,8 @@ impl SplatViewerState {
                     self.render_canvas(ui);
                 });
             });
-        self.poll(ui.ctx());
-        self.queue_render();
-        if self.job.is_some() {
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        if self.error.is_none() && self.renderer.is_some() && self.completed != Some(self.desired) {
+            ui.ctx().request_repaint();
         }
     }
 

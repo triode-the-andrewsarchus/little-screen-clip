@@ -398,9 +398,7 @@ fn replacing_clipboard_source_waits_for_accepted_copy_completion() {
     let context = egui::Context::default();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let _ = clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |context| {
-            context.root_ui(|ui| app.render_modal_viewers(ui));
-        });
+        let _ = context.run_logic(&egui::RawInput::default(), |ctx| app.tick_viewer(ctx));
         let pending =
             matches!(&app.viewer, Some(ViewerSession::TextEditor(source)) if source.busy());
         if !pending {

@@ -23,6 +23,7 @@ pub(super) struct Collection {
     export_directory: String,
     status: Option<String>,
     reveal_active: bool,
+    visible_photos: Vec<PathBuf>,
 }
 impl Collection {
     fn new(
@@ -55,6 +56,7 @@ impl Collection {
             export_directory,
             status: None,
             reveal_active: true,
+            visible_photos: Vec::new(),
         }
     }
     pub(super) fn footer(&self, enabled: bool) -> crate::shell::file_editor::PhotoFooter {
@@ -122,19 +124,19 @@ impl Collection {
                 .is_some_and(ImagePreviewState::has_unsaved_changes)
         })
     }
-    fn pending(&mut self) -> bool {
-        let mut pending = self.writes_pending();
-        for photo in &mut self.photos {
-            if let Some(state) = &mut photo.session {
-                pending |= state.poll_cached_jobs();
-            }
-        }
-        pending
+    fn pending(&self) -> bool {
+        self.writes_pending()
+            || self.photos.iter().any(|photo| {
+                photo
+                    .session
+                    .as_deref()
+                    .is_some_and(ImagePreviewState::file_write_pending)
+            })
     }
 }
 impl Viewers {
-    pub(super) fn collection_pending(&mut self) -> bool {
-        self.gallery.as_mut().is_some_and(Collection::pending)
+    pub(super) fn collection_pending(&self) -> bool {
+        self.gallery.as_ref().is_some_and(Collection::pending)
     }
     pub(super) fn collection_modal(&self) -> bool {
         self.gallery
@@ -159,6 +161,30 @@ impl Viewers {
             .map(|index| Collection::new(paths, guards, index));
         self.open(path);
     }
+    pub(super) fn tick_gallery(&mut self, ctx: &Context) {
+        let Some(collection) = &mut self.gallery else {
+            return;
+        };
+        let active = match &mut self.session {
+            Some(ViewerSession::Image(state)) => Some(state.as_mut()),
+            _ => None,
+        };
+        collection.poll_export(ctx, active);
+        collection.previews.poll(ctx);
+        if let Some(error) = collection.ratings.poll(ctx, &collection.visible_photos) {
+            collection.status = Some(error);
+        }
+        self.saved_rating_paths
+            .append(&mut collection.ratings.saved_paths);
+        for photo in &mut collection.photos {
+            if let Some(state) = &mut photo.session
+                && state.poll_cached_jobs()
+            {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+        }
+    }
+
     pub(super) fn gallery_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let Some(mut collection) = self.gallery.take() else {
             return;
@@ -167,12 +193,10 @@ impl Viewers {
             Some(ViewerSession::Image(state)) => Some(state.as_mut()),
             _ => None,
         };
-        let mut active = active;
-        collection.poll_export(ui.ctx(), active.as_deref_mut());
-        let active_pending = active
-            .as_deref_mut()
-            .is_some_and(|state| state.poll_cached_jobs());
-        let pending = collection.pending() || active_pending;
+        let pending = collection.pending()
+            || active
+                .as_deref()
+                .is_some_and(ImagePreviewState::file_write_pending);
         let can_back = !self.confirm_close
             && !pending
             && !collection.export_open
@@ -185,8 +209,6 @@ impl Viewers {
                 .is_none_or(|state| !state.show_fallback_save_modal);
         let target = collection.controls(ui, ready, active.as_deref());
         collection.export_ui(ui, active, palette);
-        self.saved_rating_paths
-            .append(&mut collection.ratings.saved_paths);
         self.gallery = Some(collection);
         if let Some(target) = target {
             self.select_photo(target);
@@ -204,7 +226,7 @@ impl Viewers {
             return;
         }
         if let Some(ViewerSession::Image(state)) = &mut self.session {
-            if !state.poll_session_snapshots() {
+            if !state.session_snapshots_ready() {
                 self.error =
                     Some("Wait for the image snapshot to finish before changing photos.".into());
                 return;
@@ -245,7 +267,6 @@ impl Collection {
         ready: bool,
         active: Option<&ImagePreviewState>,
     ) -> Option<usize> {
-        self.previews.poll(ui.ctx());
         let mut target = None;
         let mut visible = Vec::new();
         let mut keep = BTreeSet::new();
@@ -304,8 +325,9 @@ impl Collection {
             });
         self.reveal_active = false;
         self.previews.retain(&keep);
-        if let Some(error) = self.ratings.poll(ui.ctx(), &visible) {
-            self.status = Some(error);
+        self.visible_photos = visible;
+        if self.ratings.busy() {
+            ui.ctx().request_repaint_after(Duration::from_millis(40));
         }
         if let Some(status) = &self.status {
             ui.label(status);

@@ -1,6 +1,199 @@
 use super::*;
 
 impl ImagePreviewState {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        self.poll_image_handoff_with(ctx, crate::shell::EscapeHatchLauncher::spawn_with_fallback);
+        if self.poll_cached_jobs() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        self.poll_ocr();
+        self.poll_barcode_scan(ctx);
+        if self.ocr_state.in_progress {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
+        self.poll_palette_extraction(ctx);
+
+        self.poll_decorrelation_stretch(ctx, BackgroundJobs::global());
+        self.poll_document_unwarp(ctx, BackgroundJobs::global());
+        if self.active_mode == ImageToolMode::DecorrelationStretch {
+            if let Some(retry_at) = self.dcs_state.retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else if self.dcs_state.is_computing {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+
+        self.tick_resize_jobs(ctx);
+        self.tick_segmentation_jobs(ctx);
+        self.tick_conversion_jobs(ctx);
+        self.tick_film_jobs(ctx);
+        self.tick_creative_jobs(ctx);
+    }
+
+    fn tick_resize_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_optimizer();
+        self.poll_pixel_resize(ctx, BackgroundJobs::global());
+        if self.pixel_resize_job.pending || self.resize_state.is_optimizing {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        if let Some(retry_at) = [self.pixel_resize_job.retry_at, self.optimizer_retry_at]
+            .into_iter()
+            .flatten()
+            .min()
+        {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
+    }
+
+    fn tick_segmentation_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_bg_removal();
+        if self.bg_removal_in_progress {
+            if let Some(retry_at) = self.bg_removal_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+
+        self.poll_lama_inpaint();
+        if self.redaction_state.inpaint_in_progress {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+
+        if self.active_mode == ImageToolMode::Redact
+            && self.redaction_state.tool_type == RedactToolType::LamaInpaint
+            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
+        {
+            self.poll_sam(ctx);
+        }
+    }
+
+    fn tick_conversion_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_conversion();
+        if self.active_mode == ImageToolMode::Convert {
+            if let Some(dirty_at) = self.convert_state.params_dirty_at
+                && !self.convert_state.is_encoding
+            {
+                let delay = std::time::Duration::from_millis(180);
+                if dirty_at.elapsed() >= delay {
+                    self.run_conversion_worker();
+                } else {
+                    ctx.request_repaint_after(delay.saturating_sub(dirty_at.elapsed()));
+                }
+            }
+            let retry_at = self
+                .convert_state
+                .render_retry_at
+                .into_iter()
+                .chain(self.convert_state.optipng_retry_at)
+                .min();
+            if let Some(retry_at) = retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else if self.convert_state.is_pending() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+    }
+
+    fn tick_film_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_film_sim();
+        if self.active_mode == ImageToolMode::FilmSim {
+            if self
+                .film_sim_state
+                .render_retry_at
+                .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+                && !self.film_sim_state.is_rendering
+            {
+                self.film_sim_state.render_retry_at = None;
+                self.run_film_sim_render();
+            }
+            if let Some(retry_at) = self.film_sim_state.render_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            }
+            if let Some(dirty_at) = self.film_sim_state.params_dirty_at
+                && !self.film_sim_state.is_rendering
+            {
+                let delay = std::time::Duration::from_millis(400);
+                if dirty_at.elapsed() >= delay {
+                    self.film_sim_state.params_dirty_at = None;
+                    self.run_film_sim_render();
+                } else {
+                    ctx.request_repaint_after(delay.saturating_sub(dirty_at.elapsed()));
+                }
+            }
+            if let Some(dirty_at) = self.film_sim_state.thumbnail_dirty_at
+                && !self.film_sim_state.is_generating_thumbnails
+            {
+                let delay = std::time::Duration::from_millis(500);
+                if dirty_at.elapsed() >= delay {
+                    self.film_sim_state.thumbnail_dirty_at = None;
+                    self.run_thumbnail_batch();
+                } else {
+                    ctx.request_repaint_after(delay.saturating_sub(dirty_at.elapsed()));
+                }
+            }
+            self.retry_thumbnail_batch_if_due(BackgroundJobs::global());
+            if let Some(retry_at) = self.film_sim_state.thumbnail_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            }
+            if self.film_sim_state.is_rendering || self.film_sim_state.is_generating_thumbnails {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+    }
+
+    fn tick_creative_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_creative_fx();
+        let state = &self.creative_fx_state;
+        if let Some(retry_at) = [
+            state.thumbnail_retry_at,
+            state.depth_retry_at,
+            state.alpha_retry_at,
+            state
+                .render_retry_at
+                .filter(|_| self.active_mode == ImageToolMode::CreativeFx),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
+        if self.active_mode == ImageToolMode::CreativeFx {
+            if let Some(dirty_at) = self.creative_fx_state.params_dirty_at
+                && !self.creative_fx_state.is_rendering
+            {
+                let debounce = std::time::Duration::from_millis(150);
+                if dirty_at.elapsed() >= debounce {
+                    self.creative_fx_state.params_dirty_at = None;
+                    self.run_creative_fx_render();
+                } else {
+                    ctx.request_repaint_after(debounce.saturating_sub(dirty_at.elapsed()));
+                }
+            }
+            if self.creative_fx_state.is_rendering
+                || self.creative_fx_state.is_generating_thumbnails
+            {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -10,8 +203,6 @@ impl ImagePreviewState {
     ) {
         let now = crate::ui_ext::feedback_time();
 
-        self.poll_image_handoff_with(ctx, crate::shell::EscapeHatchLauncher::spawn_with_fallback);
-        self.poll_text_copy_job();
         if self.text_copy_job.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -20,17 +211,12 @@ impl ImagePreviewState {
                 ui.label("Copying recognized text…");
             });
         }
-        self.poll_save_job();
         if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close, palette) {
             return;
         }
-        self.poll_copy_job();
         if self.copy_snapshot_pending() {
             self.render_copy_progress(ui, ctx, close, palette);
             return;
-        }
-        if self.copy_delivery_pending() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.rendering_frame = true;
 
@@ -333,174 +519,6 @@ impl ImagePreviewState {
                 } else if ui.input(|i| i.key_pressed(egui::Key::L)) {
                     self.set_tool_mode(ImageToolMode::FilmSim);
                 }
-            }
-        }
-
-        // Poll background file size optimizer if running
-        self.poll_palette_extraction(ctx);
-
-        self.poll_decorrelation_stretch(ctx, BackgroundJobs::global());
-        self.poll_document_unwarp(ctx, BackgroundJobs::global());
-        if self.active_mode == ImageToolMode::DecorrelationStretch {
-            if let Some(retry_at) = self.dcs_state.retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            } else if self.dcs_state.is_computing {
-                ctx.request_repaint_after(std::time::Duration::from_millis(16));
-            }
-        }
-
-        // Poll background file size optimizer if running
-        self.poll_optimizer();
-        self.poll_pixel_resize(ctx, BackgroundJobs::global());
-        if self.pixel_resize_job.pending {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
-        if let Some(retry_at) = self.pixel_resize_job.retry_at {
-            ctx.request_repaint_after(
-                retry_at.saturating_duration_since(std::time::Instant::now()),
-            );
-        }
-        if self.resize_state.is_optimizing {
-            ctx.request_repaint();
-        }
-        if let Some(retry_at) = self.optimizer_retry_at {
-            ctx.request_repaint_after(
-                retry_at.saturating_duration_since(std::time::Instant::now()),
-            );
-        }
-
-        // Poll background AI background removal if running
-        self.poll_bg_removal();
-        if self.bg_removal_in_progress {
-            if let Some(retry_at) = self.bg_removal_retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            } else {
-                ctx.request_repaint();
-            }
-        }
-
-        // Poll background LaMa AI inpainting if running
-        self.poll_lama_inpaint();
-        if self.redaction_state.inpaint_in_progress {
-            ctx.request_repaint();
-        }
-
-        // Poll Segment Anything point-to-select worker if active
-        if self.active_mode == ImageToolMode::Redact
-            && self.redaction_state.tool_type == RedactToolType::LamaInpaint
-            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
-        {
-            self.poll_sam(ctx);
-        }
-
-        // Poll format conversion and debounce costly full-resolution encodes.
-        self.poll_conversion();
-        if self.active_mode == ImageToolMode::Convert {
-            if let Some(dirty_at) = self.convert_state.params_dirty_at
-                && dirty_at.elapsed() >= std::time::Duration::from_millis(180)
-                && !self.convert_state.is_encoding
-            {
-                self.run_conversion_worker();
-            }
-            let retry_at = self
-                .convert_state
-                .render_retry_at
-                .into_iter()
-                .chain(self.convert_state.optipng_retry_at)
-                .min();
-            if let Some(retry_at) = retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            } else if self.convert_state.is_pending() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(16));
-            }
-        }
-
-        // Poll film sim background render + debounce
-        self.poll_film_sim();
-        if self.active_mode == ImageToolMode::FilmSim {
-            if self
-                .film_sim_state
-                .render_retry_at
-                .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
-                && !self.film_sim_state.is_rendering
-            {
-                self.film_sim_state.render_retry_at = None;
-                self.run_film_sim_render();
-            }
-            if let Some(retry_at) = self.film_sim_state.render_retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            }
-            // Debounce: fire render 400ms after last parameter change
-            if let Some(dirty_at) = self.film_sim_state.params_dirty_at
-                && dirty_at.elapsed() >= std::time::Duration::from_millis(400)
-                && !self.film_sim_state.is_rendering
-            {
-                self.film_sim_state.params_dirty_at = None;
-                self.run_film_sim_render();
-            }
-            // Debounce thumbnail batch: fire 500ms after last parameter change
-            if let Some(dirty_at) = self.film_sim_state.thumbnail_dirty_at
-                && dirty_at.elapsed() >= std::time::Duration::from_millis(500)
-                && !self.film_sim_state.is_generating_thumbnails
-            {
-                self.film_sim_state.thumbnail_dirty_at = None;
-                self.run_thumbnail_batch();
-            }
-            self.retry_thumbnail_batch_if_due(BackgroundJobs::global());
-            if let Some(retry_at) = self.film_sim_state.thumbnail_retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            }
-            if self.film_sim_state.is_rendering || self.film_sim_state.is_generating_thumbnails {
-                ctx.request_repaint();
-            }
-        }
-
-        // Poll creative fx background render + debounce
-        self.poll_creative_fx();
-        if let Some(retry_at) = self.creative_fx_state.thumbnail_retry_at {
-            ctx.request_repaint_after(
-                retry_at.saturating_duration_since(std::time::Instant::now()),
-            );
-        }
-        if let Some(retry_at) = self.creative_fx_state.depth_retry_at {
-            ctx.request_repaint_after(
-                retry_at.saturating_duration_since(std::time::Instant::now()),
-            );
-        }
-        if let Some(retry_at) = self.creative_fx_state.alpha_retry_at {
-            ctx.request_repaint_after(
-                retry_at.saturating_duration_since(std::time::Instant::now()),
-            );
-        }
-        if self.active_mode == ImageToolMode::CreativeFx {
-            if let Some(retry_at) = self.creative_fx_state.render_retry_at {
-                ctx.request_repaint_after(
-                    retry_at.saturating_duration_since(std::time::Instant::now()),
-                );
-            }
-            if let Some(dirty_at) = self.creative_fx_state.params_dirty_at {
-                let debounce = std::time::Duration::from_millis(150);
-                if dirty_at.elapsed() >= debounce && !self.creative_fx_state.is_rendering {
-                    self.creative_fx_state.params_dirty_at = None;
-                    self.run_creative_fx_render();
-                } else {
-                    ctx.request_repaint_after(debounce.saturating_sub(dirty_at.elapsed()));
-                }
-            }
-            if self.creative_fx_state.is_rendering
-                || self.creative_fx_state.is_generating_thumbnails
-            {
-                ctx.request_repaint();
             }
         }
 

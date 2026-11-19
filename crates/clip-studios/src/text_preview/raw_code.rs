@@ -288,22 +288,11 @@ impl TextPreviewState {
                             .clamp(0.0, 1.0);
                             self.minimap_content_height = output.content_size.y;
                             self.minimap_viewport_height = output.inner_rect.height();
-                            self.minimap_overflows =
-                                output.content_size.y > output.inner_rect.height();
-                            if self.minimap_overflows {
-                                self.minimap_lines.start(
-                                    Arc::clone(&self.content),
-                                    self.language.to_owned(),
-                                    BackgroundJobs::global(),
-                                );
-                                if self.minimap_lines.poll() {
-                                    ui.ctx().request_repaint();
-                                } else if !self.minimap_lines.ready && !self.minimap_lines.failed {
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(40),
-                                    );
-                                }
+                            let overflows = output.content_size.y > output.inner_rect.height();
+                            if overflows && !self.minimap_overflows {
+                                ui.ctx().request_repaint();
                             }
+                            self.minimap_overflows = overflows;
                         },
                     );
                     if show_minimap

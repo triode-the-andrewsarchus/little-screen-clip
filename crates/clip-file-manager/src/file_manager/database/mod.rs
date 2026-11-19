@@ -112,7 +112,7 @@ impl Viewer {
             },
         ));
     }
-    fn poll(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn poll(&mut self, ctx: &egui::Context) {
         let Some(task) = &self.task else {
             return;
         };
@@ -143,7 +143,6 @@ impl Viewer {
         }
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
-        self.poll(ui.ctx());
         StudioShell::new("Database", Icon::Text, palette, close).render_header(ui, |_| {});
         let tabs = [
             Tab::new(Mode::Rows, "Rows"),

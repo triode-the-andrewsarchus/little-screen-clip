@@ -413,6 +413,14 @@ impl AudioPreviewState {
             .map(|pos| waveform_scrub_time(pos.x, rect.min.x, rect.width(), duration_sec))
     }
 
+    pub(in crate::audio_preview) fn tick_stem_separation(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_stem_separation(ctx);
+        for stem in &mut self.stem_separation.stems {
+            stem.preview.poll_audio_analysis(ctx, now);
+        }
+        self.update_group_playback(ctx);
+    }
+
     pub(crate) fn render_stem_separation_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -420,13 +428,6 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
-        self.poll_stem_separation(ctx);
-        let now = ctx.input(|input| input.time);
-        for stem in &mut self.stem_separation.stems {
-            stem.preview.poll_audio_analysis(ctx, now);
-        }
-        self.update_group_playback(ctx);
-
         let viewport_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_salt("stem_tool_scroll")

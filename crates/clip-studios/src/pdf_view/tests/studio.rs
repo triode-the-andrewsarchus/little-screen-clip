@@ -515,6 +515,7 @@ fn accepted_pdf_edits_block_header_escape_and_viewport_close_until_completion() 
                 result: Err("controlled PDF failure".into()),
             }))
             .unwrap();
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
         let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             ctx.root_ui(|ui| {
                 egui::CentralPanel::default()

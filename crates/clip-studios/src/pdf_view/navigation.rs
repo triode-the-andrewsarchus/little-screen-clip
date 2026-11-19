@@ -348,9 +348,9 @@ impl PdfEditorState {
         self.navigation.result_cache = None;
     }
 
-    pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) -> bool {
+    pub(super) fn tick_navigation(&mut self, ctx: &egui::Context) {
         if self.source.read_only() {
-            return false;
+            return;
         }
         self.navigation.poll(ctx);
         if !self.navigation.attempted && self.info_job.is_none() {
@@ -360,6 +360,12 @@ impl PdfEditorState {
                 ctx,
                 self.read_check.clone(),
             );
+        }
+    }
+
+    pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) -> bool {
+        if self.source.read_only() {
+            return false;
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             self.navigation.right = Some(RightTab::Find);

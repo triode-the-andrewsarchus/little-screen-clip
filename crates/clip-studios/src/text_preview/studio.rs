@@ -85,6 +85,25 @@ impl TextPreviewState {
     }
 
     /// Renders the complete preview modal UI.
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        self.service_search_jobs(ctx, BackgroundJobs::global(), Instant::now());
+        if self.minimap_overflows && self.view_mode == TextViewMode::Raw {
+            self.minimap_lines.start(
+                Arc::clone(&self.content),
+                self.language.to_owned(),
+                BackgroundJobs::global(),
+            );
+            if self.minimap_lines.poll() {
+                ctx.request_repaint();
+            } else if !self.minimap_lines.ready && !self.minimap_lines.failed {
+                ctx.request_repaint_after(std::time::Duration::from_millis(40));
+            }
+        }
+        for preview in self.diagram_previews.values_mut() {
+            preview.tick(ctx);
+        }
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -99,7 +118,6 @@ impl TextPreviewState {
         let now = crate::ui_ext::feedback_time();
 
         self.handle_shortcuts(ctx, close);
-        self.service_search_jobs(ctx, BackgroundJobs::global(), Instant::now());
 
         let trailing = usize::from(self.content.ends_with(['\n', '\r']));
         let total_lines = self

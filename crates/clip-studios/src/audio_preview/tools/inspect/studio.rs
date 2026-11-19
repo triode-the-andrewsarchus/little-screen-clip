@@ -1,6 +1,24 @@
 use super::*;
 
 impl AudioPreviewState {
+    pub(in crate::audio_preview) fn tick_inspector(&mut self, ctx: &egui::Context) {
+        // Poll asynchronous folder browsing dialog if running
+        if let Some(ref rx) = self.browse_rx {
+            match rx.try_recv() {
+                Ok(res) => {
+                    if let Some(dir) = res {
+                        self.save_destination_dir = dir;
+                    }
+                    self.browse_rx = None;
+                }
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+                Err(TryRecvError::Disconnected) => self.browse_rx = None,
+            }
+        }
+    }
+
     pub(super) fn render_normalize_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -71,8 +89,6 @@ impl AudioPreviewState {
         let now = ctx.input(|i| i.time);
         let editor_start_y = ui.cursor().min.y;
 
-        self.poll_audio_analysis(ctx, now);
-
         // Advance playhead if playing
         if self.is_playing {
             ctx.request_repaint();
@@ -136,22 +152,6 @@ impl AudioPreviewState {
                     self.view_start_sec =
                         (self.current_time_sec - self.view_duration_sec * 0.1).max(0.0);
                 }
-            }
-        }
-
-        // Poll asynchronous folder browsing dialog if running
-        if let Some(ref rx) = self.browse_rx {
-            match rx.try_recv() {
-                Ok(res) => {
-                    if let Some(dir) = res {
-                        self.save_destination_dir = dir;
-                    }
-                    self.browse_rx = None;
-                }
-                Err(TryRecvError::Empty) => {
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                }
-                Err(TryRecvError::Disconnected) => self.browse_rx = None,
             }
         }
 

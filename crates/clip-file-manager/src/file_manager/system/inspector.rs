@@ -139,7 +139,7 @@ impl Inspector {
     pub fn take_browser_target(&mut self) -> Option<BrowserTarget> {
         self.browser_target.take()
     }
-    fn poll(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn poll(&mut self, ctx: &egui::Context) {
         if let Some(result) = self.pending.as_ref().and_then(|task| task.poll()) {
             self.pending = None;
             match result {
@@ -233,7 +233,6 @@ impl Inspector {
         palette: &little_clip_core::palette::AppPalette,
     ) {
         *close |= ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        self.poll(ui.ctx());
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(

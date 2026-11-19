@@ -1,6 +1,24 @@
 use super::*;
 
 impl AudioPreviewState {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|input| input.time);
+        self.poll_audio_analysis(ctx, now);
+        self.poll_session_edit(ctx);
+        self.poll_audio_editor(ctx);
+        self.poll_image_copy(ctx, now);
+        self.poll_slice_copy_job(ctx, now);
+        self.poll_save_job(ctx, now);
+        self.poll_digital_decode(ctx);
+        self.tick_inspector(ctx);
+        if self.active_mode == AudioToolMode::ChannelTools {
+            self.poll_derived_signals(ctx);
+        }
+        if self.active_mode == AudioToolMode::StemSeparation {
+            self.tick_stem_separation(ctx, now);
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn handle_studio_shortcuts(
         &mut self,
@@ -92,13 +110,6 @@ impl AudioPreviewState {
         mut start_stem_separation: impl FnMut(&mut Self),
     ) {
         let mode_before_frame = self.active_mode;
-        self.poll_file_playback(ctx);
-        self.poll_session_edit(ctx);
-        self.poll_audio_editor(ctx);
-        self.poll_image_copy(ctx, ctx.input(|input| input.time));
-        self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
-        self.poll_save_job(ctx, ctx.input(|input| input.time));
-        self.poll_digital_decode(ctx);
         if !self.handle_studio_shortcuts_with_start(
             ctx,
             close_requested,

@@ -393,7 +393,8 @@ impl AudioPreviewState {
         );
     }
 
-    fn poll_derived_signals(&mut self, ctx: &egui::Context) {
+    pub(in crate::audio_preview) fn poll_derived_signals(&mut self, ctx: &egui::Context) {
+        self.channel_tools.spectra.tick(ctx);
         let Some(source) = self.edited_waveform.as_ref().or(self.analysis.as_ref()) else {
             return;
         };

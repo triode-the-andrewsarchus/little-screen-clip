@@ -328,9 +328,6 @@ impl AudioPreviewState {
         palette: &AppPalette,
         _close_requested: &mut bool,
     ) {
-        let now = ctx.input(|i| i.time);
-        self.poll_audio_analysis(ctx, now);
-
         // Advance playhead if playing
         if self.is_playing {
             ctx.request_repaint();
@@ -1546,13 +1543,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         while state.digital_decode.in_progress && Instant::now() < deadline {
-            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        state.render_ui(ui, ctx, &palette, &mut close_requested);
-                    })
-                });
-            });
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
             thread::yield_now();
         }
         assert!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap());

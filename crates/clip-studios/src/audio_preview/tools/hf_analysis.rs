@@ -250,9 +250,6 @@ impl AudioPreviewState {
         palette: &AppPalette,
         _close_requested: &mut bool,
     ) {
-        let now = ctx.input(|i| i.time);
-        self.poll_audio_analysis(ctx, now);
-
         let sample_rate = self
             .analysis
             .as_ref()

@@ -118,6 +118,10 @@ pub(super) struct Previews {
 impl Previews {
     pub fn begin(&mut self, ctx: &egui::Context) {
         self.keep.clear();
+        self.tick(ctx);
+    }
+
+    fn tick(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
         if self.cache.has_pending() {
             ctx.request_repaint_after(Duration::from_millis(40));
@@ -220,9 +224,12 @@ impl Viewer {
             self.selected = (!directory).then_some(ordinal);
         }
     }
+    pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
+        self.previews.tick(ctx);
+    }
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
         StudioShell::new("Archive", Icon::Folder, palette, close).render_header(ui, |_| {});
-        self.previews.begin(ui.ctx());
+        self.previews.keep.clear();
         ui.horizontal_wrapped(|ui| {
             if ui.button("Archive root").clicked() {
                 self.folder.clear();

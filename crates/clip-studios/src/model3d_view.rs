@@ -284,13 +284,18 @@ impl Model3dViewerState {
         }
     }
 
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        self.poll_loader();
+        if self.rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
     pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             *close = true;
             return;
         }
-
-        self.poll_loader();
 
         let now = crate::ui_ext::feedback_time();
 

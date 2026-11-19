@@ -182,6 +182,12 @@ for cases that must deliver several native events in a single frame. Use the
 private Weston/Niri runner for compositor geometry, native file drag and drop,
 and clipboard protocol checks.
 
+The desktop hosts call the shared studio `tick` methods from `App::logic`.
+Poll receivers and admit debounced work there so the window can finish a job
+while hidden. Drawing can record visible demand, such as the pages needed by a
+PDF viewport. Admit that work from the next logic callback so repeated layout
+passes can revise the demand without starting additional jobs.
+
 Both desktop binaries support live inspection through the optional
 `ui-inspection` feature. With `egui-mcp` 0.3 installed, configure it as a
 stdio MCP server and attach to the port printed by the inspection build.

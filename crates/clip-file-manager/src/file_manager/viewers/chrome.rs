@@ -178,8 +178,14 @@ impl Viewers {
         }
     }
     pub(super) fn rename_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        if let Some((old, result)) = self.rename.ui(ui, palette) {
-            ui.ctx().request_repaint();
+        if let Some((_, Err(error))) = self.rename.ui(ui, palette) {
+            self.error = Some(format!("Rename: {error}"));
+        }
+    }
+
+    pub(super) fn tick_rename(&mut self, ctx: &Context) {
+        if let Some((old, result)) = self.rename.tick(ctx) {
+            ctx.request_repaint();
             match result {
                 Ok((path, source)) => {
                     if let Some(viewer) = &mut self.session {

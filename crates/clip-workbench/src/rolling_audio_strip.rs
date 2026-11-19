@@ -464,20 +464,22 @@ impl RollingAudioStripState {
         ui.add_space(2.0);
     }
 
-    pub fn render_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &AppPalette,
-        host_action: &mut Option<RollingAudioAction>,
-    ) {
+    pub(crate) fn tick(&mut self, ctx: &egui::Context) {
+        self.poll_copy(ctx);
         self.poll_snapshot(ctx);
         self.poll_playback(ctx);
         self.update_playback();
         if self.is_playing {
             ctx.request_repaint();
         }
+    }
 
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        host_action: &mut Option<RollingAudioAction>,
+    ) {
         let total_w = ui.available_width();
         let total_dur = self.duration_sec.max(0.1);
 
@@ -808,7 +810,7 @@ mod tests {
                                 egui::Panel::bottom("audio-test")
                                     .min_size(100.0)
                                     .show(ui, |ui| {
-                                        strip.render_ui(ui, ctx, &palette, &mut None);
+                                        strip.render_ui(ui, &palette, &mut None);
                                     })
                             });
                         },
@@ -992,7 +994,7 @@ mod tests {
                 |ctx| {
                     ctx.root_ui(|ui| {
                         egui::CentralPanel::default().show(ui, |ui| {
-                            strip.render_ui(ui, ctx, &palette, &mut action);
+                            strip.render_ui(ui, &palette, &mut action);
                         })
                     });
                 },

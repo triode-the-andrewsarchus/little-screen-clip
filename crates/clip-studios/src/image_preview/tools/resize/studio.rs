@@ -15,7 +15,6 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        self.poll_optimizer();
         if self.resize_state.is_optimizing {
             ctx.request_repaint();
         }
@@ -321,7 +320,6 @@ impl ImagePreviewState {
                     });
 
                 // Settings can change during this frame, after the top-level poll.
-                self.poll_optimizer();
 
                 ui.add_space(14.0);
                 if self.resize_state.is_optimizing {

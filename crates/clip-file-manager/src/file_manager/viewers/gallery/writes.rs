@@ -207,6 +207,11 @@ mod tests {
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while collection.pending() {
+            collection.photos[0]
+                .session
+                .as_mut()
+                .unwrap()
+                .poll_cached_jobs();
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }

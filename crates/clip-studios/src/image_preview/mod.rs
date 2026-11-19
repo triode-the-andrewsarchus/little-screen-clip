@@ -564,9 +564,8 @@ impl ImagePreviewState {
         self.file_write_pending()
     }
 
-    /// Restore worker-owned pixel snapshots before moving the editor out of the UI.
-    pub fn poll_session_snapshots(&mut self) -> bool {
-        self.poll_cached_jobs();
+    /// Whether the editor owns its pixel snapshots and can leave the UI.
+    pub fn session_snapshots_ready(&self) -> bool {
         !self.save_snapshot_pending()
             && !self.copy_snapshot_pending()
             && self.text_copy_job.is_none()

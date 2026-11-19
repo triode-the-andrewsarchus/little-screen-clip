@@ -261,7 +261,6 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        self.poll_barcode_scan(ctx);
         let b_low = hex_to_c32(&palette.colors.surface_recessed);
         let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);

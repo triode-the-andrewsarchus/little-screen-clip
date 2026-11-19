@@ -208,6 +208,7 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
         state.update_search();
     }
     let render_diff = |app: &mut WorkbenchApp| {
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.tick_viewer(ctx));
         clip_ui::test_support::run_frame(
             &ctx,
             egui::RawInput {

@@ -39,6 +39,7 @@ pub(super) struct ChannelSpectra {
     pub(super) textures: [Option<egui::TextureHandle>; 4],
     requested: Option<SpectrumRequest>,
     job: Option<SpectrumJob>,
+    needs_render: bool,
 }
 
 impl ChannelSpectra {
@@ -65,22 +66,31 @@ impl ChannelSpectra {
             .as_ref()
             .is_some_and(|old| old.matches(&request))
         {
+            self.requested = Some(request);
+            self.needs_render = true;
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn tick(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.needs_render)
+            && let Some(request) = self.requested.clone()
+        {
             self.job = None;
-            let worker_request = request.clone();
             let cancelled = Arc::new(AtomicBool::new(false));
             let worker_cancelled = cancelled.clone();
             let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
                 let mut images = Vec::with_capacity(4);
-                for samples in &worker_request.samples {
+                for samples in &request.samples {
                     if worker_cancelled.load(Ordering::Acquire) {
                         return None;
                     }
                     let (w, h, rgba) = render_hf_viewport_spectrogram(
                         samples,
-                        worker_request.sample_rate,
-                        worker_request.viewport.0 as f32 / 1000.0,
-                        worker_request.viewport.1 as f32 / 1000.0,
-                        worker_request.viewport.2,
+                        request.sample_rate,
+                        request.viewport.0 as f32 / 1000.0,
+                        request.viewport.1 as f32 / 1000.0,
+                        request.viewport.2,
                         HfSpectrogramConfig {
                             fft_size: 1024,
                             gain_db: 0.0,
@@ -92,7 +102,6 @@ impl ChannelSpectra {
                 }
                 Some(images)
             });
-            self.requested = Some(request);
             self.job = Some(SpectrumJob {
                 ticket,
                 cancelled,
@@ -140,6 +149,7 @@ mod tests {
             textures: std::array::from_fn(|_| Some(old_texture.clone())),
             requested: Some(request.clone()),
             job: None,
+            needs_render: false,
         };
         let (ticket, _) = BackgroundJobs::global().submit(Duration::MAX, || {});
         let (sender, receiver) = channel();
@@ -149,6 +159,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
         });
         spectra.update(&ctx, request.samples.clone(), 8000, 0.0, 0.01, 200.0);
+        spectra.tick(&ctx);
         assert!(spectra.job.is_some());
         assert!(
             spectra
@@ -166,6 +177,7 @@ mod tests {
             ])))
             .unwrap();
         spectra.update(&ctx, request.samples.clone(), 8000, 0.0, 0.01, 200.0);
+        spectra.tick(&ctx);
         assert!(spectra.job.is_none());
         assert!(
             spectra

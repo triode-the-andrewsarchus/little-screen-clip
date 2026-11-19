@@ -117,7 +117,7 @@ fn measure_prepared_audio_frames() {
                                     if kind == "studio" {
                                         studio.render_ui(ui, ctx, &palette, &mut false);
                                     } else {
-                                        rolling.render_ui(ui, ctx, &palette, &mut None);
+                                        rolling.render_ui(ui, &palette, &mut None);
                                     }
                                 })
                             });

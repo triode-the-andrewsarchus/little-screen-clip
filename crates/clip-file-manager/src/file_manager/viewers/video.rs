@@ -70,13 +70,36 @@ impl Video {
         self.player = None;
         self.stopped = true;
     }
+    pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
+        self.context = Some(ctx.clone());
+        if self.stopped {
+            return;
+        }
+        if self.player.is_none() {
+            self.player = Some(Session::new(
+                &self.prepared,
+                self.start_ms,
+                false,
+                1280,
+                ctx.clone(),
+                Default::default(),
+                little_clip_core::media_backend::playback::Options {
+                    subtitles_enabled: self.subtitles_enabled,
+                    ..Default::default()
+                },
+            ));
+        }
+        if let Some(player) = &mut self.player {
+            player.poll(ctx);
+        }
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         close: &mut bool,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        self.context = Some(ui.ctx().clone());
         if self.stopped {
             let mut shell =
                 crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
@@ -86,26 +109,16 @@ impl Video {
                 .clicked()
             {
                 self.stopped = false;
+                ui.ctx().request_repaint();
             }
             *close |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             return;
         }
-        if self.player.is_none() {
-            self.player = Some(Session::new(
-                &self.prepared,
-                self.start_ms,
-                false,
-                1280,
-                ui.ctx().clone(),
-                Default::default(),
-                little_clip_core::media_backend::playback::Options {
-                    subtitles_enabled: self.subtitles_enabled,
-                    ..Default::default()
-                },
-            ));
-        }
-        let player = self.player.as_mut().unwrap();
-        player.poll(ui.ctx());
+        let Some(player) = &mut self.player else {
+            ui.spinner();
+            ui.label("Opening video…");
+            return;
+        };
         if !self.fullscreen {
             let mut shell =
                 crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);

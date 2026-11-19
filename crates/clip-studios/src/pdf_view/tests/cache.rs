@@ -402,6 +402,7 @@ fn long_document_uploads_visible_thumbnails_and_selected_page_only() {
     state.selected_page = Some(100);
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
         let _ = clip_ui::test_support::run_frame(
             &ctx,
             egui::RawInput {
@@ -487,4 +488,41 @@ fn failed_page_raster_is_reported_instead_of_spinning_forever() {
     });
     assert_eq!(state.pages[0].error.as_deref(), Some("raster failed"));
     assert!(!state.previews_loading);
+}
+
+#[test]
+fn repeated_pdf_layout_only_reports_demand_once_before_lifecycle_admission() {
+    let mut state = raster_state(1, PAGE_RASTER_MAX_DIM);
+    let ctx = egui::Context::default();
+    let palette = little_clip_core::palette::AppPalette::default();
+    let mut passes = 0;
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(850.0, 600.0),
+        )),
+        ..Default::default()
+    };
+    let output = clip_ui::test_support::run_frame(&ctx, input.clone(), |ctx| {
+        passes += 1;
+        ctx.root_ui(|ui| state.render_ui(ui, ctx, &palette, &mut false));
+        assert!(
+            state.decode_job.is_none(),
+            "drawing must not start a decode"
+        );
+        if passes == 1 {
+            ctx.request_discard("exercise a repeated PDF layout");
+        }
+    });
+    assert_eq!(passes, 2);
+    assert_eq!(output.platform_output.num_completed_passes, 2);
+    assert_eq!(state.decode_requests, [1]);
+
+    let _ = ctx.run_logic(&input, |ctx| state.tick(ctx));
+    let admitted = Arc::clone(&state.decode_job.as_ref().unwrap().cancel);
+    let _ = ctx.run_logic(&input, |ctx| state.tick(ctx));
+    let job = state.decode_job.as_ref().unwrap();
+    assert_eq!(job.raster.page_num(), 1);
+    assert!(Arc::ptr_eq(&admitted, &job.cancel));
+    assert!(!job.cancelled);
 }

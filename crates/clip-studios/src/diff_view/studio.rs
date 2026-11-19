@@ -1,6 +1,16 @@
 use super::*;
 
 impl DiffViewerState {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        self.poll_handoff(now, ctx);
+        self.poll_copy_job(now);
+        self.poll_computation();
+        if self.is_computing() || self.copy_pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
+    }
+
     pub(super) fn handle_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             *close_requested = true;
@@ -37,17 +47,11 @@ impl DiffViewerState {
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
-        self.poll_handoff(now, ctx);
-        self.poll_copy_job(now);
 
         self.handle_shortcuts(ctx, close_requested);
 
         let is_img = self.is_image();
 
-        self.poll_computation();
-        if self.is_computing() {
-            ctx.request_repaint();
-        }
         if is_img {
             self.ensure_image_textures(ctx);
         }

@@ -28,6 +28,10 @@ impl Rename {
         if let Some(error) = self.dialog(ui, palette) {
             return Some((self.source.as_ref()?.0.clone(), Err(error)));
         }
+        None
+    }
+
+    pub fn tick(&mut self, ctx: &Context) -> Option<(PathBuf, RenameResult)> {
         if !self.requested {
             return None;
         }
@@ -37,7 +41,7 @@ impl Rename {
             system_route::tree(&check, &std::sync::atomic::AtomicBool::new(false))
         }) {
             Ok(false) => {
-                ui.ctx().request_repaint_after(Duration::from_millis(40));
+                ctx.request_repaint_after(Duration::from_millis(40));
                 return None;
             }
             Err(error) => {
@@ -56,12 +60,12 @@ impl Rename {
         }
         let result = match self.receiver.as_ref()?.try_recv() {
             Err(mpsc::TryRecvError::Empty) => {
-                ui.ctx().request_repaint_after(Duration::from_millis(40));
+                ctx.request_repaint_after(Duration::from_millis(40));
                 return None;
             }
             Ok(Err(JobError::QueueFull)) => {
                 self.receiver = None;
-                ui.ctx().request_repaint();
+                ctx.request_repaint();
                 return None;
             }
             result => result

@@ -79,7 +79,7 @@ impl Viewer {
             selected: None,
         })
     }
-    fn poll(&mut self, ui: &Ui) {
+    pub(in crate::file_manager) fn poll(&mut self, ctx: &egui::Context) {
         if self.submitted.as_ref() != Some(&self.request) {
             // Dropping obsolete work cancels its bounded rendering loop.
             self.task = None;
@@ -94,20 +94,20 @@ impl Viewer {
         }
         let Some(task) = &self.task else { return };
         let Some(result) = task.poll() else {
-            ui.ctx().request_repaint_after(Duration::from_millis(40));
+            ctx.request_repaint_after(Duration::from_millis(40));
             return;
         };
         self.task = None;
         if matches!(result, Err(little_clip_core::JobError::QueueFull)) {
             self.submitted = None;
-            ui.ctx().request_repaint_after(Duration::from_millis(40));
+            ctx.request_repaint_after(Duration::from_millis(40));
             return;
         }
         match result.map_err(|e| e.to_string()).and_then(|r| r) {
             Ok(rendered) => {
                 self.displayed = self.submitted.clone();
                 let texture = |name, image: ImageThumbnail| {
-                    ui.ctx().load_texture(
+                    ctx.load_texture(
                         name,
                         egui::ColorImage::from_rgba_premultiplied(
                             [image.width as usize, image.height as usize],
@@ -133,7 +133,6 @@ impl Viewer {
             self.specimen_controls(ui);
             self.block_controls(ui, palette);
             self.request.width = (ui.available_width().round() as u32).clamp(160, 4096);
-            self.poll(ui);
             if let Some(error) = &self.error {
                 ui.colored_label(colors.danger, error);
             }

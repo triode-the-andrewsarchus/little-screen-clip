@@ -256,7 +256,7 @@ impl Viewer {
             self.scroll_top = true;
         }
     }
-    fn poll(&mut self, ui: &egui::Ui) {
+    pub(in crate::file_manager) fn poll(&mut self, ctx: &egui::Context) {
         if self.loaded {
             return;
         }
@@ -270,7 +270,7 @@ impl Viewer {
             ));
         }
         let result = self.task.as_ref().and_then(Task::poll);
-        ui.ctx().request_repaint_after(Duration::from_millis(40));
+        ctx.request_repaint_after(Duration::from_millis(40));
         let Some(result) = result else { return };
         self.task = None;
         if matches!(result, Err(little_clip_core::JobError::QueueFull)) {
@@ -286,7 +286,7 @@ impl Viewer {
                         Element::Heading(level, text) => Display::Heading(level, text),
                         Element::Text(text) => Display::Text(text),
                         Element::Image(image, alt) => Display::Image(
-                            ui.ctx().load_texture(
+                            ctx.load_texture(
                                 format!("epub-{}-{i}", self.selected),
                                 egui::ColorImage::from_rgba_unmultiplied(
                                     [image.width() as usize, image.height() as usize],
@@ -305,7 +305,6 @@ impl Viewer {
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
         let mut shell = StudioShell::new("Book", Icon::Text, palette, close);
         shell.render_header(ui, |_| {});
-        self.poll(ui);
         if matches!(&*self.book, Publication::Epub(_)) {
             ui.label(format!(
                 "{} · {}",

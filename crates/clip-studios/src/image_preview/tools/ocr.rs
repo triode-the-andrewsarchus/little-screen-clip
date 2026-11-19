@@ -367,7 +367,6 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        self.poll_ocr();
         if self.ocr_state.in_progress {
             if let Some(retry_at) = self.ocr_retry_at {
                 ctx.request_repaint_after(
@@ -994,7 +993,7 @@ mod input_stamp_tests {
                 })
             },
         ));
-        assert!(!state.poll_session_snapshots());
+        assert!(!state.session_snapshots_ready());
         assert!(state.file_write_pending());
         state.push_text_to_hand_slot(HandSide::Left, "duplicate".into());
         state.start_copy_to_hand_slot(HandSide::Left, &jobs);
@@ -1005,7 +1004,7 @@ mod input_stamp_tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(state.poll_session_snapshots());
+        assert!(state.session_snapshots_ready());
         assert!(
             state
                 .status_toast

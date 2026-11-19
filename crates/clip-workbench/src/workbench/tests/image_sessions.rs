@@ -347,7 +347,7 @@ fn workbench_retirement_waits_for_copy_even_without_edits_or_owned_pixels() {
     );
     // Encoded copies never borrow the canvas, so snapshot readiness alone
     // must not allow the host to discard their completion receiver.
-    assert!(image.poll_session_snapshots());
+    assert!(image.session_snapshots_ready());
     let mut app = test_workbench_app(
         Some(ViewerSession::Image(Box::new(image))),
         Default::default(),

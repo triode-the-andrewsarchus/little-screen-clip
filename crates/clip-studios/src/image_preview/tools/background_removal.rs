@@ -1015,7 +1015,6 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        self.poll_bg_removal();
         if self.bg_removal_in_progress {
             if let Some(retry_at) = self.bg_removal_retry_at {
                 ctx.request_repaint_after(

@@ -411,6 +411,11 @@ impl Viewer {
             keys
         }
     }
+    pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
+        self.poll(ctx);
+        self.poll_midi(ctx);
+    }
+
     fn poll_midi(&mut self, ctx: &egui::Context) {
         self.midi.poll(
             ctx,
@@ -491,8 +496,6 @@ impl Viewer {
         }
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
-        self.poll(ui.ctx());
-        self.poll_midi(ui.ctx());
         StudioShell::new("Multisample", Icon::Midi, palette, close).render_header(ui, |_| {});
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {

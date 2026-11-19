@@ -323,6 +323,7 @@ fn binary_diff_queue_saturation_is_visible_and_recovers() {
 
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
+    state.tick(&ctx);
     let expected = "Binary diff failed: background job queue is full";
     let output = clip_ui::test_support::run_frame(
         &ctx,

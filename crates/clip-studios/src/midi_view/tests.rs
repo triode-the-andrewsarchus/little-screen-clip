@@ -1343,12 +1343,7 @@ fn midi_export_failure_uses_the_studios_display_clock() {
         .unwrap();
     state.export_job = Some(MidiExportJob { receiver });
     let ctx = egui::Context::default();
-    let palette = AppPalette::default();
-    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-        ctx.root_ui(|ui| {
-            egui::CentralPanel::default().show(ui, |ui| state.render_ui(ui, &palette, &mut false))
-        });
-    });
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| state.tick(ctx));
     let now = crate::ui_ext::feedback_time();
     assert_eq!(
         state.status_toast.message(now),

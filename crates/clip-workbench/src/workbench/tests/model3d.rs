@@ -389,3 +389,41 @@ fn ready_idle_3d_viewer_escape_returns_to_originating_workbench_view() {
     assert_eq!(app.view, originating_view);
     assert_eq!(app.selected_slots, originating_slots);
 }
+
+#[test]
+fn hidden_viewer_lifecycle_accepts_a_model_completion_without_a_layout_pass() {
+    let mut gallery = component_gallery::ComponentGalleryState::new().unwrap();
+    gallery.request_open(component_gallery::GalleryPreviewKind::Model3d);
+    let mut app = test_workbench_app(
+        Some(gallery_request_to_viewer_session(
+            gallery.take_pending_open().unwrap(),
+            &AppConfig::default(),
+        )),
+        VecDeque::new(),
+    );
+    let Some(ViewerSession::Model3d(state)) = &mut app.viewer else {
+        panic!("gallery should supply a 3D model");
+    };
+    let model = state.mesh.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    state.rx = Some(receive);
+    state.status = model3d_view::ModelLoadingStatus::Loading;
+    send.send(Ok(Ok(model))).unwrap();
+
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .minimized = Some(true);
+    let _ = ctx.run_logic(&input, |ctx| app.tick_viewer(ctx));
+
+    let Some(ViewerSession::Model3d(state)) = &app.viewer else {
+        panic!("completion should keep the same studio active");
+    };
+    assert!(state.rx.is_none());
+    assert_eq!(state.status, model3d_view::ModelLoadingStatus::Ready);
+    assert_eq!(state.mesh.as_ref().unwrap().name, "gallery-model.obj");
+    assert_eq!(ctx.cumulative_pass_nr(), 0);
+}

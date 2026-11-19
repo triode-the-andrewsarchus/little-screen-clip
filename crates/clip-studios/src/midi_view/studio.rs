@@ -1,6 +1,17 @@
 use super::*;
 
 impl MidiViewerState {
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        let now = crate::ui_ext::feedback_time();
+        self.poll_export(now, ctx);
+        self.update_playback();
+        if self.is_playing {
+            ctx.request_repaint();
+        } else if self.is_synthesizing {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -20,14 +31,6 @@ impl MidiViewerState {
         mut copy_dispatch: impl FnMut(&mut Self, f64),
     ) {
         let now = crate::ui_ext::feedback_time();
-        self.poll_export(now, ui.ctx());
-        self.update_playback();
-        if self.is_playing {
-            ui.ctx().request_repaint();
-        } else if self.is_synthesizing {
-            ui.ctx().request_repaint_after(Duration::from_millis(50));
-        }
-
         // 1. Hook up Escape key: clear selection first, or close if no selection
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.selected_region.is_some() {

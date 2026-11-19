@@ -483,29 +483,8 @@ impl FileManagerApp {
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
                 let closed = self.viewers.ui(ui, &self.palette);
-                self.follow_file_renames();
-                for path in self.viewers.saved_rating_paths.drain(..) {
-                    self.browser
-                        .gallery_previews
-                        .invalidate_gallery_rating(&path);
-                }
                 if closed {
-                    self.browser.focus_list = matches!(
-                        self.browser.view,
-                        super::BrowserView::List | super::BrowserView::Columns
-                    );
-                    ctx.request_repaint();
-                    if let Some(request) = self.pad_studio.take()
-                        && let Some(path) = self.viewers.take_audio_result()
-                    {
-                        self.browser.constellation.accept_studio_edit(request, path);
-                    }
-                    if let Some(target) = self.viewers.take_system_navigation() {
-                        self.browser.browse_system_target(target);
-                    } else {
-                        self.browser.refresh_after_transfer = true;
-                        self.browser.restore_scroll = true;
-                    }
+                    self.restore_browser_after_viewer(ctx);
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
@@ -647,6 +626,25 @@ impl FileManagerApp {
         }
     }
 
+    fn restore_browser_after_viewer(&mut self, ctx: &egui::Context) {
+        self.browser.focus_list = matches!(
+            self.browser.view,
+            super::BrowserView::List | super::BrowserView::Columns
+        );
+        ctx.request_repaint();
+        if let Some(request) = self.pad_studio.take()
+            && let Some(path) = self.viewers.take_audio_result()
+        {
+            self.browser.constellation.accept_studio_edit(request, path);
+        }
+        if let Some(target) = self.viewers.take_system_navigation() {
+            self.browser.browse_system_target(target);
+        } else {
+            self.browser.refresh_after_transfer = true;
+            self.browser.restore_scroll = true;
+        }
+    }
+
     fn request_app_close(&mut self, ctx: &egui::Context) {
         if self.viewers.active() && !self.viewers.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -724,7 +722,18 @@ impl eframe::App for FileManagerApp {
             return;
         }
         self.tick_external(ctx);
+        let was_active = self.viewers.active();
+        self.viewers.tick(ctx);
         let viewer_active = self.viewers.active();
+        self.follow_file_renames();
+        for path in self.viewers.saved_rating_paths.drain(..) {
+            self.browser
+                .gallery_previews
+                .invalidate_gallery_rating(&path);
+        }
+        if was_active && !viewer_active {
+            self.restore_browser_after_viewer(ctx);
+        }
         self.browser.search.images.set_suspended(viewer_active);
         self.browser.search.answers.set_suspended(viewer_active);
         self.browser

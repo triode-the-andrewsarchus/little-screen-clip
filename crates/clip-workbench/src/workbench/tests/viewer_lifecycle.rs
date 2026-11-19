@@ -24,9 +24,7 @@ fn hidden_rolling_audio_retires_on_view_switch_and_modal_entry() {
         component_gallery::ComponentGalleryState::new().unwrap(),
     ));
     let ctx = egui::Context::default();
-    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
-    });
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.tick_viewer(ctx));
     assert!(!app.rolling_audio_strip.as_ref().unwrap().is_playing);
 }
 
@@ -461,9 +459,7 @@ fn midi_escape_retains_accepted_export_and_handles_its_completion() {
             .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
     );
     complete("controlled host export failure".into());
-    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-        ctx.root_ui(|ui| app.render_modal_viewers(ui));
-    });
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.tick_viewer(ctx));
     let Some(ViewerSession::Midi(state)) = &app.viewer else {
         panic!("completion should remain inspectable");
     };
