@@ -29,9 +29,210 @@ impl<'a> MarkdownRun<'a> {
     }
 }
 
+struct TableDrawRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    clip_right: f32,
+    max_y: f32,
+}
+
 use super::*;
 
 impl ScreenRenderer {
+    fn styled_span_presentation(
+        &self,
+        css: crate::markdown::InlineCss,
+        has_url: bool,
+        default_color: Color,
+    ) -> (FontStyle, Color) {
+        let style = if css.monospace {
+            FontStyle::Mono
+        } else if css.bold && css.italic {
+            FontStyle::BoldItalic
+        } else if css.bold {
+            FontStyle::Bold
+        } else if css.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Regular
+        };
+        let color = if has_url {
+            self.color_from_hex(&self.palette.url_color)
+        } else if css.bold {
+            self.color_from_hex(&self.palette.colors.text_primary)
+        } else {
+            default_color
+        };
+        (style, color)
+    }
+
+    fn push_highlighted_inline_runs<'a>(
+        &self,
+        language: &str,
+        code: &'a str,
+        size: f32,
+        avail_width: f32,
+        occupied: &mut f32,
+        runs: &mut Vec<MarkdownRun<'a>>,
+    ) -> bool {
+        if language.is_empty() {
+            return false;
+        }
+        let Some(theme) = THEME_SET.themes.get("base16-eighties.dark") else {
+            return false;
+        };
+        let syntax = find_syntax(language);
+        let mut highlighter = HighlightLines::new(syntax, theme);
+        for line in code.split_inclusive('\n') {
+            for (style, token_str) in highlighter
+                .highlight_line(line, &SYNTAX_SET)
+                .unwrap_or_default()
+            {
+                if *occupied >= avail_width {
+                    return true;
+                }
+                let hex = self.palette.map_syntax_color_hex(
+                    style.foreground.r,
+                    style.foreground.g,
+                    style.foreground.b,
+                );
+                let fg = self.color_from_hex(hex);
+                let run = MarkdownRun::text(
+                    self,
+                    Cow::Owned(token_str.to_owned()),
+                    size,
+                    FontStyle::Mono,
+                    fg,
+                );
+                *occupied += run.width;
+                runs.push(run);
+            }
+        }
+        true
+    }
+
+    fn build_math_run<'a>(
+        &self,
+        source: &str,
+        display: bool,
+        size: f32,
+        default_color: Color,
+        avail_w: f32,
+        max_h: f32,
+    ) -> MarkdownRun<'a> {
+        let foreground = [
+            default_color.red(),
+            default_color.green(),
+            default_color.blue(),
+        ]
+        .map(|value| (value * 255.0).round() as u8);
+        let format = if display {
+            little_clip_core::diagram::Format::Math
+        } else {
+            little_clip_core::diagram::Format::MathInline
+        };
+        let result = self
+            .diagram_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .thumbnail_colored(format, source, Some(foreground))
+            .and_then(|preview| {
+                preview
+                    .math
+                    .map(|layout| (preview, layout))
+                    .ok_or_else(|| "Missing equation layout".into())
+            });
+        match result {
+            Ok((preview, layout)) => {
+                let scale = (avail_w / (layout.width_em * size).max(1.0))
+                    .min(max_h / (layout.height_em * size).max(1.0))
+                    .min(1.0);
+                MarkdownRun {
+                    text: "".into(),
+                    style: FontStyle::Regular,
+                    color: default_color,
+                    width: layout.width_em * size * scale,
+                    ascent: layout.baseline_em * size * scale,
+                    descent: (layout.height_em - layout.baseline_em) * size * scale,
+                    image: Some(preview),
+                }
+            }
+            Err(error) => MarkdownRun::text(
+                self,
+                format!("Math: {error}").into(),
+                size,
+                FontStyle::Mono,
+                default_color,
+            ),
+        }
+    }
+
+    fn draw_markdown_table(
+        &self,
+        pixmap: &mut Pixmap,
+        table: &crate::markdown::MarkdownTable,
+        area: TableDrawRect,
+        is_hero: bool,
+        body_color: Color,
+        border_color: Color,
+    ) -> f32 {
+        let cols = table
+            .headers
+            .len()
+            .max(table.rows.iter().map(Vec::len).max().unwrap_or(0))
+            .clamp(1, if is_hero { 4 } else { 3 });
+        let col_w = (area.width / cols as f32).max(20.0);
+        let row_h = if is_hero { 24.0 } else { 20.0 };
+        let font_size = if is_hero { 14.0 } else { 12.0 };
+        let panel_bg = self.color_from_hex(&self.palette.colors.surface_panel);
+        let recessed_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
+        let canvas_bg = self.color_from_hex(&self.palette.colors.canvas);
+        let all_rows = (!table.headers.is_empty())
+            .then_some((true, &table.headers))
+            .into_iter()
+            .chain(table.rows.iter().map(|r| (false, r)));
+        let mut y = area.y;
+        for (r_idx, (is_header, row)) in all_rows.enumerate() {
+            if y + row_h > area.max_y {
+                break;
+            }
+            let row_bg = if is_header {
+                panel_bg
+            } else if r_idx % 2 == 1 {
+                recessed_bg
+            } else {
+                canvas_bg
+            };
+            if let Some(rect) = Rect::from_xywh(area.x, y, area.width, row_h) {
+                let mut paint = Paint::default();
+                paint.set_color(row_bg);
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            }
+            let row_fg = self.contrast_color(
+                row_bg,
+                Some(if is_header { border_color } else { body_color }),
+            );
+            for (c_idx, cell) in row.iter().take(cols).enumerate() {
+                let cx = area.x + c_idx as f32 * col_w + 4.0;
+                let c_clip = (area.x + (c_idx + 1) as f32 * col_w - 4.0).min(area.clip_right);
+                self.draw_markdown_spans(
+                    pixmap,
+                    cell,
+                    cx,
+                    y + (row_h - font_size) * 0.5 - 1.0,
+                    font_size,
+                    row_fg,
+                    c_clip,
+                    row_h,
+                    None,
+                );
+            }
+            y += row_h;
+        }
+        (y - area.y) + 4.0
+    }
+
     /// Draws one inline row with a shared baseline, including native equations.
     #[expect(
         clippy::too_many_arguments,
@@ -57,201 +258,102 @@ impl ScreenRenderer {
             occupied += run.width;
             runs.push(run);
         }
+        let max_width = clip_right - x;
         for span in spans {
             if x + occupied >= clip_right {
                 break;
             }
-            let (text, style, color) = match span {
-                MarkdownSpan::Text(text) => (text.as_str(), FontStyle::Regular, default_color),
+            let (text, style, color): (Cow<'_, str>, FontStyle, Color) = match span {
+                MarkdownSpan::Text(text) => {
+                    (text.as_str().into(), FontStyle::Regular, default_color)
+                }
                 MarkdownSpan::Bold(text) => (
-                    text.as_str(),
+                    text.as_str().into(),
                     FontStyle::Bold,
                     self.color_from_hex(&self.palette.colors.text_primary),
                 ),
                 MarkdownSpan::Italic(text) => (
-                    text.as_str(),
+                    text.as_str().into(),
                     FontStyle::Italic,
                     self.color_from_hex_alpha(&self.palette.colors.text_muted, 240),
                 ),
                 MarkdownSpan::BoldItalic(text) => (
-                    text.as_str(),
+                    text.as_str().into(),
                     FontStyle::BoldItalic,
                     self.color_from_hex(&self.palette.colors.text_primary),
                 ),
                 MarkdownSpan::Strikethrough(text) => (
-                    text.as_str(),
+                    text.as_str().into(),
                     FontStyle::Regular,
                     self.color_from_hex_alpha(&self.palette.colors.text_muted, 200),
                 ),
                 MarkdownSpan::Code(text) => (
-                    text.as_str(),
+                    text.as_str().into(),
                     FontStyle::Mono,
                     self.color_from_hex(&self.palette.undo_border),
                 ),
                 MarkdownSpan::HighlightedCode { language, code } => {
-                    if !language.is_empty()
-                        && let Some(theme) = THEME_SET.themes.get("base16-eighties.dark")
-                    {
-                        let syntax = find_syntax(language);
-                        let mut highlighter = HighlightLines::new(syntax, theme);
-                        for line in code.split_inclusive('\n') {
-                            for (style, token_str) in highlighter
-                                .highlight_line(line, &SYNTAX_SET)
-                                .unwrap_or_default()
-                            {
-                                if x + occupied >= clip_right {
-                                    break;
-                                }
-                                let hex = self.palette.map_syntax_color_hex(
-                                    style.foreground.r,
-                                    style.foreground.g,
-                                    style.foreground.b,
-                                );
-                                let fg = self.color_from_hex(hex);
-                                let run = MarkdownRun::text(
-                                    self,
-                                    Cow::Owned(token_str.to_owned()),
-                                    size,
-                                    FontStyle::Mono,
-                                    fg,
-                                );
-                                occupied += run.width;
-                                runs.push(run);
-                            }
-                            if x + occupied >= clip_right {
-                                break;
-                            }
-                        }
+                    if self.push_highlighted_inline_runs(
+                        language,
+                        code,
+                        size,
+                        max_width,
+                        &mut occupied,
+                        &mut runs,
+                    ) {
                         continue;
                     }
                     (
-                        code.as_str(),
+                        code.as_str().into(),
                         FontStyle::Mono,
                         self.color_from_hex(&self.palette.undo_border),
                     )
                 }
                 MarkdownSpan::Styled { text, url, css } => {
-                    let style = if css.monospace {
-                        FontStyle::Mono
-                    } else if css.bold && css.italic {
-                        FontStyle::BoldItalic
-                    } else if css.bold {
-                        FontStyle::Bold
-                    } else if css.italic {
-                        FontStyle::Italic
-                    } else {
-                        FontStyle::Regular
-                    };
-                    let color = if url.is_some() {
-                        self.color_from_hex(&self.palette.url_color)
-                    } else if css.bold {
-                        self.color_from_hex(&self.palette.colors.text_primary)
-                    } else {
-                        default_color
-                    };
-                    (text.as_str(), style, color)
+                    let (style, color) =
+                        self.styled_span_presentation(*css, url.is_some(), default_color);
+                    (text.as_str().into(), style, color)
                 }
                 MarkdownSpan::Link { label, .. } => (
-                    label.as_str(),
+                    label.as_str().into(),
                     FontStyle::Regular,
                     self.color_from_hex(&self.palette.url_color),
                 ),
                 MarkdownSpan::Image { alt, .. } | MarkdownSpan::StyledImage { alt, .. } => {
-                    let label = if alt.is_empty() {
-                        "[image]".to_owned()
+                    let label: Cow<'_, str> = if alt.is_empty() {
+                        "[image]".into()
                     } else {
-                        format!("[image: {alt}]")
+                        format!("[image: {alt}]").into()
                     };
-                    let run = MarkdownRun::text(
-                        self,
-                        label.into(),
-                        size,
+                    (
+                        label,
                         FontStyle::Italic,
                         self.color_from_hex(&self.palette.colors.text_muted),
-                    );
-                    occupied += run.width;
-                    runs.push(run);
-                    continue;
+                    )
                 }
-                MarkdownSpan::Spoiler { .. } => {
-                    let run = MarkdownRun::text(
-                        self,
-                        "[spoiler]".into(),
-                        size,
-                        FontStyle::Italic,
-                        self.color_from_hex(&self.palette.colors.text_muted),
-                    );
-                    occupied += run.width;
-                    runs.push(run);
-                    continue;
-                }
-                MarkdownSpan::HardBreak => {
-                    let run = MarkdownRun::text(
-                        self,
-                        " ".into(),
-                        size,
-                        FontStyle::Regular,
-                        default_color,
-                    );
-                    occupied += run.width;
-                    runs.push(run);
-                    continue;
-                }
+                MarkdownSpan::Spoiler { .. } => (
+                    "[spoiler]".into(),
+                    FontStyle::Italic,
+                    self.color_from_hex(&self.palette.colors.text_muted),
+                ),
+                MarkdownSpan::HardBreak => (" ".into(), FontStyle::Regular, default_color),
                 MarkdownSpan::Math {
                     source, display, ..
                 } => {
-                    let foreground = [
-                        default_color.red(),
-                        default_color.green(),
-                        default_color.blue(),
-                    ]
-                    .map(|value| (value * 255.0).round() as u8);
-                    let format = if *display {
-                        little_clip_core::diagram::Format::Math
-                    } else {
-                        little_clip_core::diagram::Format::MathInline
-                    };
-                    let result = self
-                        .diagram_previews
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .thumbnail_colored(format, source, Some(foreground))
-                        .and_then(|preview| {
-                            preview
-                                .math
-                                .map(|layout| (preview, layout))
-                                .ok_or_else(|| "Missing equation layout".into())
-                        });
-                    let run = match result {
-                        Ok((preview, layout)) => {
-                            let scale = ((clip_right - x - occupied)
-                                / (layout.width_em * size).max(1.0))
-                            .min(max_height / (layout.height_em * size).max(1.0))
-                            .min(1.0);
-                            MarkdownRun {
-                                text: "".into(),
-                                style: FontStyle::Regular,
-                                color: default_color,
-                                width: layout.width_em * size * scale,
-                                ascent: layout.baseline_em * size * scale,
-                                descent: (layout.height_em - layout.baseline_em) * size * scale,
-                                image: Some(preview),
-                            }
-                        }
-                        Err(error) => MarkdownRun::text(
-                            self,
-                            format!("Math: {error}").into(),
-                            size,
-                            FontStyle::Mono,
-                            default_color,
-                        ),
-                    };
+                    let run = self.build_math_run(
+                        source,
+                        *display,
+                        size,
+                        default_color,
+                        max_width - occupied,
+                        max_height,
+                    );
                     occupied += run.width;
                     runs.push(run);
                     continue;
                 }
             };
-            let run = MarkdownRun::text(self, text.into(), size, style, color);
+            let run = MarkdownRun::text(self, text, size, style, color);
             occupied += run.width;
             runs.push(run);
         }
@@ -494,60 +596,20 @@ impl ScreenRenderer {
                         .max(if is_hero { 24.0 } else { 20.0 });
                 }
                 MarkdownLine::Table(table) => {
-                    let cols = table
-                        .headers
-                        .len()
-                        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0))
-                        .clamp(1, if is_hero { 4 } else { 3 });
-                    let col_w = (max_content_w / cols as f32).max(20.0);
-                    let row_h = if is_hero { 24.0 } else { 20.0 };
-                    let font_size = if is_hero { 14.0 } else { 12.0 };
-                    let panel_bg = self.color_from_hex(&self.palette.colors.surface_panel);
-                    let recessed_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
-                    let canvas_bg = self.color_from_hex(&self.palette.colors.canvas);
-                    let all_rows = (!table.headers.is_empty())
-                        .then_some((true, &table.headers))
-                        .into_iter()
-                        .chain(table.rows.iter().map(|r| (false, r)));
-                    for (r_idx, (is_header, row)) in all_rows.enumerate() {
-                        if y + row_h > max_y {
-                            break;
-                        }
-                        let row_bg = if is_header {
-                            panel_bg
-                        } else if r_idx % 2 == 1 {
-                            recessed_bg
-                        } else {
-                            canvas_bg
-                        };
-                        if let Some(rect) = Rect::from_xywh(content_x, y, max_content_w, row_h) {
-                            let mut paint = Paint::default();
-                            paint.set_color(row_bg);
-                            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
-                        }
-                        let row_fg = self.contrast_color(
-                            row_bg,
-                            Some(if is_header { border_color } else { body_color }),
-                        );
-                        for (c_idx, cell) in row.iter().take(cols).enumerate() {
-                            let cx = content_x + c_idx as f32 * col_w + 4.0;
-                            let c_clip =
-                                (content_x + (c_idx + 1) as f32 * col_w - 4.0).min(clip_right);
-                            self.draw_markdown_spans(
-                                pixmap,
-                                cell,
-                                cx,
-                                y + (row_h - font_size) * 0.5 - 1.0,
-                                font_size,
-                                row_fg,
-                                c_clip,
-                                row_h,
-                                None,
-                            );
-                        }
-                        y += row_h;
-                    }
-                    y += 4.0;
+                    y += self.draw_markdown_table(
+                        pixmap,
+                        table,
+                        TableDrawRect {
+                            x: content_x,
+                            y,
+                            width: max_content_w,
+                            clip_right,
+                            max_y,
+                        },
+                        is_hero,
+                        body_color,
+                        border_color,
+                    );
                 }
                 MarkdownLine::Numbered { number, spans } => {
                     let size = if is_hero { 18.0 } else { 15.0 };

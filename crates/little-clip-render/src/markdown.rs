@@ -586,25 +586,18 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
 
         if let Some((tag_name, mut buf, math_start)) = hugo_math.take() {
             let trimmed = raw_line.trim();
-            if hugo::is_closing_shortcode_line(trimmed, tag_name) {
-                sink(
-                    MarkdownLine::Paragraph {
-                        spans: vec![MarkdownSpan::Math {
-                            source: buf.trim().to_owned(),
-                            display: true,
-                            url: None,
-                        }],
-                    },
-                    math_start + bom..range.end + bom,
-                );
-                index += 1;
-                continue;
-            }
-            if let Some(before) = hugo::strip_closing_on_same_line(raw_line, tag_name) {
-                if !buf.is_empty() {
-                    buf.push('\n');
+            let closing_prefix = if hugo::is_closing_shortcode_line(trimmed, tag_name) {
+                Some("")
+            } else {
+                hugo::strip_closing_on_same_line(raw_line, tag_name)
+            };
+            if let Some(before) = closing_prefix {
+                if !before.is_empty() {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(before);
                 }
-                buf.push_str(before);
                 sink(
                     MarkdownLine::Paragraph {
                         spans: vec![MarkdownSpan::Math {
@@ -1264,6 +1257,273 @@ fn is_at_block_root(stack: &[OpenFrame]) -> bool {
     })
 }
 
+struct SegmentContext<'a> {
+    segment_rew_start: usize,
+    base: usize,
+    incomplete_fence_orig: Option<usize>,
+    prepared: Option<&'a hugo::PreparedShortcodes>,
+    top_range: Option<std::ops::Range<usize>>,
+}
+
+impl SegmentContext<'_> {
+    fn map_src(&self, rel: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        let rew = (self.segment_rew_start + rel.start)..(self.segment_rew_start + rel.end);
+        let orig = self.prepared.map_or(rew.clone(), |p| p.map_range(rew));
+        (orig.start + self.base)..(orig.end + self.base)
+    }
+
+    fn effective_src(&self, rel: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        self.top_range.clone().unwrap_or_else(|| self.map_src(rel))
+    }
+}
+
+fn flush_top_item(stack: &mut [OpenFrame], prepared: Option<&hugo::PreparedShortcodes>) {
+    if let Some(parent) = stack.last_mut() {
+        flush_item_inline(parent, prepared);
+    }
+}
+
+fn handle_segment_start<'a>(
+    tag: pulldown_cmark::Tag<'a>,
+    src: std::ops::Range<usize>,
+    iter: &mut pulldown_cmark::OffsetIter<'a>,
+    ctx: &SegmentContext<'_>,
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+) {
+    use pulldown_cmark::{CodeBlockKind, Tag};
+    match tag {
+        Tag::Table(alignments) => {
+            let mut table_events = std::iter::from_fn(|| iter.next().map(|(ev, _)| ev));
+            let table = consume_table(&mut table_events, alignments, ctx.prepared);
+            push_doc_block(
+                stack,
+                out,
+                MarkdownDocBlock::Table(Box::new(table)),
+                src,
+                false,
+            );
+        }
+        Tag::Heading { level, .. } => stack.push(OpenFrame::Heading {
+            level: level as usize,
+            spans: SpanBuilder::default(),
+        }),
+        Tag::Paragraph => {
+            flush_top_item(stack, ctx.prepared);
+            stack.push(OpenFrame::Paragraph {
+                spans: SpanBuilder::default(),
+            });
+        }
+        Tag::BlockQuote(kind) => {
+            flush_top_item(stack, ctx.prepared);
+            stack.push(OpenFrame::Quote {
+                kind: kind.map(map_quote_kind),
+                blocks: Vec::new(),
+            });
+        }
+        Tag::List(start) => {
+            flush_top_item(stack, ctx.prepared);
+            stack.push(OpenFrame::List {
+                ordered: start.is_some(),
+                start: start.unwrap_or(1),
+                items: Vec::new(),
+            });
+        }
+        Tag::Item => stack.push(OpenFrame::Item {
+            task: None,
+            blocks: Vec::new(),
+            inline: None,
+        }),
+        Tag::CodeBlock(kind) => {
+            flush_top_item(stack, ctx.prepared);
+            let language = match kind {
+                CodeBlockKind::Fenced(info) => {
+                    info.split_whitespace().next().unwrap_or("").to_owned()
+                }
+                CodeBlockKind::Indented => String::new(),
+            };
+            stack.push(OpenFrame::Code {
+                language,
+                text: String::new(),
+            });
+        }
+        Tag::FootnoteDefinition(label) => stack.push(OpenFrame::Footnote {
+            label: label.into_string(),
+            blocks: Vec::new(),
+        }),
+        Tag::HtmlBlock => stack.push(OpenFrame::Html {
+            text: String::new(),
+        }),
+        _ => {}
+    }
+}
+
+fn handle_segment_end(
+    end: pulldown_cmark::TagEnd,
+    src: std::ops::Range<usize>,
+    ctx: &SegmentContext<'_>,
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+) {
+    use pulldown_cmark::TagEnd;
+    match end {
+        TagEnd::Heading(_) => {
+            if let Some(OpenFrame::Heading { level, spans }) = stack.pop() {
+                let spans = spans.finish();
+                let text = plain_text_from_spans(&spans);
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::Heading { level, text, spans },
+                    src,
+                    false,
+                );
+            }
+        }
+        TagEnd::Paragraph => {
+            if let Some(OpenFrame::Paragraph { spans }) = stack.pop() {
+                let spans = spans.finish();
+                if !spans.is_empty() {
+                    for (block, incomplete) in hugo::split_paragraph_or_blocks(spans, ctx.prepared)
+                    {
+                        push_doc_block(stack, out, block, src.clone(), incomplete);
+                    }
+                }
+            }
+        }
+        TagEnd::BlockQuote(_) => {
+            close_trailing_html_containers(stack, out);
+            if let Some(OpenFrame::Quote { kind, blocks }) = stack.pop() {
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::Quote { kind, blocks },
+                    src,
+                    false,
+                );
+            }
+        }
+        TagEnd::List(_) => {
+            close_trailing_html_containers(stack, out);
+            if let Some(OpenFrame::List {
+                ordered,
+                start,
+                items,
+            }) = stack.pop()
+            {
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::List {
+                        ordered,
+                        start,
+                        items,
+                    },
+                    src,
+                    false,
+                );
+            }
+        }
+        TagEnd::Item => {
+            close_trailing_html_containers(stack, out);
+            if let Some(mut frame) = stack.pop() {
+                flush_item_inline(&mut frame, ctx.prepared);
+                if let OpenFrame::Item { task, blocks, .. } = frame
+                    && let Some(OpenFrame::List { items, .. }) = stack.last_mut()
+                {
+                    items.push(ListItem { task, blocks });
+                }
+            }
+        }
+        TagEnd::CodeBlock => {
+            if let Some(OpenFrame::Code { language, text }) = stack.pop() {
+                if language.is_empty()
+                    && let Some(rep) = ctx.prepared.and_then(|p| p.block_at(&text))
+                {
+                    for (block, incomplete) in rep.to_doc_blocks() {
+                        push_doc_block(stack, out, block, src.clone(), incomplete);
+                    }
+                } else {
+                    let incomplete_fence = ctx
+                        .incomplete_fence_orig
+                        .is_some_and(|start| src.start <= start && start < src.end);
+                    push_doc_block(
+                        stack,
+                        out,
+                        MarkdownDocBlock::Code { language, text },
+                        src,
+                        incomplete_fence,
+                    );
+                }
+            }
+        }
+        TagEnd::FootnoteDefinition => {
+            close_trailing_html_containers(stack, out);
+            if let Some(OpenFrame::Footnote { label, blocks }) = stack.pop() {
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::Footnote { label, blocks },
+                    src,
+                    false,
+                );
+            }
+        }
+        TagEnd::HtmlBlock => {
+            if let Some(OpenFrame::Html { text }) = stack.pop() {
+                apply_html_block(&text, src, ctx.prepared, stack, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_segment_leaf_event<'a>(
+    event: pulldown_cmark::Event<'a>,
+    range: std::ops::Range<usize>,
+    ctx: &SegmentContext<'_>,
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+) {
+    use pulldown_cmark::Event;
+    match event {
+        Event::TaskListMarker(checked) => {
+            if let Some(OpenFrame::Item { task, .. }) = stack.last_mut() {
+                *task = Some(checked);
+            }
+        }
+        Event::Rule => {
+            push_doc_block(
+                stack,
+                out,
+                MarkdownDocBlock::Rule,
+                ctx.effective_src(range),
+                false,
+            );
+        }
+        other => match stack.last_mut() {
+            Some(OpenFrame::Heading { spans, .. } | OpenFrame::Paragraph { spans }) => {
+                spans.push_event(other, ctx.prepared);
+            }
+            Some(OpenFrame::Item { inline, .. }) => {
+                inline
+                    .get_or_insert_with(SpanBuilder::default)
+                    .push_event(other, ctx.prepared);
+            }
+            Some(OpenFrame::Code { text, .. } | OpenFrame::Html { text }) => {
+                if let Event::Text(value) | Event::Html(value) = other {
+                    text.push_str(&value);
+                }
+            }
+            _ => {
+                if let Event::Html(value) | Event::InlineHtml(value) = other {
+                    apply_html_block(&value, ctx.map_src(range), ctx.prepared, stack, out);
+                }
+            }
+        },
+    }
+}
+
 fn parse_markdown_segment(
     segment: &str,
     segment_rew_start: usize,
@@ -1273,243 +1533,50 @@ fn parse_markdown_segment(
     stack: &mut Vec<OpenFrame>,
     out: &mut Vec<LocatedBlock>,
 ) {
-    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+    use pulldown_cmark::{Event, Parser, Tag};
     let mut iter = Parser::new_ext(segment, gfm_options()).into_offset_iter();
-    let mut top_range: Option<std::ops::Range<usize>> = None;
-    let map_src = |rel: std::ops::Range<usize>| {
-        let rew = (segment_rew_start + rel.start)..(segment_rew_start + rel.end);
-        let orig = prepared.map_or(rew.clone(), |p| p.map_range(rew));
-        (orig.start + base)..(orig.end + base)
+    let mut ctx = SegmentContext {
+        segment_rew_start,
+        base,
+        incomplete_fence_orig: incomplete_fence_rew_start
+            .map(|s| prepared.map_or(s, |p| p.map_offset(s)) + base),
+        prepared,
+        top_range: None,
     };
-    let incomplete_fence_orig =
-        incomplete_fence_rew_start.map(|s| prepared.map_or(s, |p| p.map_offset(s)) + base);
 
     while let Some((event, range)) = iter.next() {
         if is_at_block_root(stack) {
-            top_range = Some(map_src(range.clone()));
+            ctx.top_range = Some(ctx.map_src(range.clone()));
         }
         match event {
-            Event::Start(Tag::Table(alignments)) => {
-                let mut table_events = std::iter::from_fn(|| iter.next().map(|(ev, _)| ev));
-                let table = consume_table(&mut table_events, alignments, prepared);
-                let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                push_doc_block(
-                    stack,
-                    out,
-                    MarkdownDocBlock::Table(Box::new(table)),
-                    src,
-                    false,
-                );
+            Event::Start(
+                ref tag @ (Tag::Table(_)
+                | Tag::Heading { .. }
+                | Tag::Paragraph
+                | Tag::BlockQuote(_)
+                | Tag::List(_)
+                | Tag::Item
+                | Tag::CodeBlock(_)
+                | Tag::FootnoteDefinition(_)
+                | Tag::HtmlBlock),
+            ) => {
+                let src = ctx.effective_src(range);
+                let owned_tag = tag.clone();
+                handle_segment_start(owned_tag, src, &mut iter, &ctx, stack, out);
             }
-            Event::Start(Tag::Heading { level, .. }) => {
-                stack.push(OpenFrame::Heading {
-                    level: level as usize,
-                    spans: SpanBuilder::default(),
-                });
+            Event::End(
+                end @ (pulldown_cmark::TagEnd::Heading(_)
+                | pulldown_cmark::TagEnd::Paragraph
+                | pulldown_cmark::TagEnd::BlockQuote(_)
+                | pulldown_cmark::TagEnd::List(_)
+                | pulldown_cmark::TagEnd::Item
+                | pulldown_cmark::TagEnd::CodeBlock
+                | pulldown_cmark::TagEnd::FootnoteDefinition
+                | pulldown_cmark::TagEnd::HtmlBlock),
+            ) => {
+                handle_segment_end(end, ctx.effective_src(range), &ctx, stack, out);
             }
-            Event::End(TagEnd::Heading(_)) => {
-                if let Some(OpenFrame::Heading { level, spans }) = stack.pop() {
-                    let spans = spans.finish();
-                    let text = plain_text_from_spans(&spans);
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    push_doc_block(
-                        stack,
-                        out,
-                        MarkdownDocBlock::Heading { level, text, spans },
-                        src,
-                        false,
-                    );
-                }
-            }
-            Event::Start(Tag::Paragraph) => {
-                if let Some(parent) = stack.last_mut() {
-                    flush_item_inline(parent, prepared);
-                }
-                stack.push(OpenFrame::Paragraph {
-                    spans: SpanBuilder::default(),
-                });
-            }
-            Event::End(TagEnd::Paragraph) => {
-                if let Some(OpenFrame::Paragraph { spans }) = stack.pop() {
-                    let spans = spans.finish();
-                    if !spans.is_empty() {
-                        let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                        for (block, incomplete) in hugo::split_paragraph_or_blocks(spans, prepared)
-                        {
-                            push_doc_block(stack, out, block, src.clone(), incomplete);
-                        }
-                    }
-                }
-            }
-            Event::Start(Tag::BlockQuote(kind)) => {
-                if let Some(parent) = stack.last_mut() {
-                    flush_item_inline(parent, prepared);
-                }
-                stack.push(OpenFrame::Quote {
-                    kind: kind.map(map_quote_kind),
-                    blocks: Vec::new(),
-                });
-            }
-            Event::End(TagEnd::BlockQuote(_)) => {
-                close_trailing_html_containers(stack, out);
-                if let Some(OpenFrame::Quote { kind, blocks }) = stack.pop() {
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    push_doc_block(
-                        stack,
-                        out,
-                        MarkdownDocBlock::Quote { kind, blocks },
-                        src,
-                        false,
-                    );
-                }
-            }
-            Event::Start(Tag::List(start)) => {
-                if let Some(parent) = stack.last_mut() {
-                    flush_item_inline(parent, prepared);
-                }
-                stack.push(OpenFrame::List {
-                    ordered: start.is_some(),
-                    start: start.unwrap_or(1),
-                    items: Vec::new(),
-                });
-            }
-            Event::End(TagEnd::List(_)) => {
-                close_trailing_html_containers(stack, out);
-                if let Some(OpenFrame::List {
-                    ordered,
-                    start,
-                    items,
-                }) = stack.pop()
-                {
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    push_doc_block(
-                        stack,
-                        out,
-                        MarkdownDocBlock::List {
-                            ordered,
-                            start,
-                            items,
-                        },
-                        src,
-                        false,
-                    );
-                }
-            }
-            Event::Start(Tag::Item) => {
-                stack.push(OpenFrame::Item {
-                    task: None,
-                    blocks: Vec::new(),
-                    inline: None,
-                });
-            }
-            Event::End(TagEnd::Item) => {
-                close_trailing_html_containers(stack, out);
-                if let Some(mut frame) = stack.pop() {
-                    flush_item_inline(&mut frame, prepared);
-                    if let OpenFrame::Item { task, blocks, .. } = frame
-                        && let Some(OpenFrame::List { items, .. }) = stack.last_mut()
-                    {
-                        items.push(ListItem { task, blocks });
-                    }
-                }
-            }
-            Event::TaskListMarker(checked) => {
-                if let Some(OpenFrame::Item { task, .. }) = stack.last_mut() {
-                    *task = Some(checked);
-                }
-            }
-            Event::Start(Tag::CodeBlock(kind)) => {
-                if let Some(parent) = stack.last_mut() {
-                    flush_item_inline(parent, prepared);
-                }
-                let language = match kind {
-                    CodeBlockKind::Fenced(info) => {
-                        info.split_whitespace().next().unwrap_or("").to_owned()
-                    }
-                    CodeBlockKind::Indented => String::new(),
-                };
-                stack.push(OpenFrame::Code {
-                    language,
-                    text: String::new(),
-                });
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                if let Some(OpenFrame::Code { language, text }) = stack.pop() {
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    if language.is_empty()
-                        && let Some(rep) = prepared.and_then(|p| p.block_at(&text))
-                    {
-                        for (block, incomplete) in rep.to_doc_blocks() {
-                            push_doc_block(stack, out, block, src.clone(), incomplete);
-                        }
-                    } else {
-                        let incomplete_fence = incomplete_fence_orig
-                            .is_some_and(|start| src.start <= start && start < src.end);
-                        push_doc_block(
-                            stack,
-                            out,
-                            MarkdownDocBlock::Code { language, text },
-                            src,
-                            incomplete_fence,
-                        );
-                    }
-                }
-            }
-            Event::Start(Tag::FootnoteDefinition(label)) => {
-                stack.push(OpenFrame::Footnote {
-                    label: label.into_string(),
-                    blocks: Vec::new(),
-                });
-            }
-            Event::End(TagEnd::FootnoteDefinition) => {
-                close_trailing_html_containers(stack, out);
-                if let Some(OpenFrame::Footnote { label, blocks }) = stack.pop() {
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    push_doc_block(
-                        stack,
-                        out,
-                        MarkdownDocBlock::Footnote { label, blocks },
-                        src,
-                        false,
-                    );
-                }
-            }
-            Event::Start(Tag::HtmlBlock) => {
-                stack.push(OpenFrame::Html {
-                    text: String::new(),
-                });
-            }
-            Event::End(TagEnd::HtmlBlock) => {
-                if let Some(OpenFrame::Html { text }) = stack.pop() {
-                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                    apply_html_block(&text, src, prepared, stack, out);
-                }
-            }
-            Event::Rule => {
-                let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
-                push_doc_block(stack, out, MarkdownDocBlock::Rule, src, false);
-            }
-            other => match stack.last_mut() {
-                Some(OpenFrame::Heading { spans, .. } | OpenFrame::Paragraph { spans }) => {
-                    spans.push_event(other, prepared);
-                }
-                Some(OpenFrame::Item { inline, .. }) => {
-                    inline
-                        .get_or_insert_with(SpanBuilder::default)
-                        .push_event(other, prepared);
-                }
-                Some(OpenFrame::Code { text, .. } | OpenFrame::Html { text }) => {
-                    if let Event::Text(value) | Event::Html(value) = other {
-                        text.push_str(&value);
-                    }
-                }
-                _ => {
-                    if let Event::Html(value) | Event::InlineHtml(value) = other {
-                        let src = map_src(range);
-                        apply_html_block(&value, src, prepared, stack, out);
-                    }
-                }
-            },
+            other => handle_segment_leaf_event(other, range, &ctx, stack, out),
         }
     }
 
@@ -2026,40 +2093,74 @@ impl SpanBuilder {
         }
     }
 
+    fn push_image_event<'a>(
+        &mut self,
+        event: pulldown_cmark::Event<'a>,
+        prepared: Option<&hugo::PreparedShortcodes>,
+    ) {
+        use pulldown_cmark::{Event, TagEnd};
+        match event {
+            Event::End(TagEnd::Image) => {
+                let (url, alt) = self.image.take().expect("image buffer present");
+                if !self.is_suppressed() {
+                    if let Some(href) = self.active_url() {
+                        self.spans.push(MarkdownSpan::StyledImage {
+                            alt,
+                            url,
+                            href: Some(href.to_owned()),
+                            style: ImagePresentation::default(),
+                        });
+                    } else {
+                        self.spans.push(MarkdownSpan::Image { alt, url });
+                    }
+                }
+            }
+            Event::Text(v) | Event::Code(v) | Event::InlineHtml(v) | Event::Html(v) => {
+                let (_, alt) = self.image.as_mut().expect("image buffer present");
+                if let Some(p) = prepared {
+                    alt.push_str(&p.expand_plain_alt(&v));
+                } else {
+                    alt.push_str(&v);
+                }
+            }
+            Event::InlineMath(v) | Event::DisplayMath(v) => {
+                self.image
+                    .as_mut()
+                    .expect("image buffer present")
+                    .1
+                    .push_str(&v);
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                self.image
+                    .as_mut()
+                    .expect("image buffer present")
+                    .1
+                    .push(' ');
+            }
+            _ => {}
+        }
+    }
+
+    fn push_styled_span(&mut self, text: String, monospace: bool) {
+        if self.is_suppressed() {
+            return;
+        }
+        let mut css = self.effective_css();
+        if monospace {
+            css.monospace = true;
+        }
+        let url = self.active_url().map(str::to_owned);
+        html::push_styled_text(&mut self.spans, text, url.as_deref(), css);
+    }
+
     fn push_event<'a>(
         &mut self,
         event: pulldown_cmark::Event<'a>,
         prepared: Option<&hugo::PreparedShortcodes>,
     ) {
         use pulldown_cmark::{Event, Tag, TagEnd};
-        if let Some((_, alt)) = &mut self.image {
-            match event {
-                Event::End(TagEnd::Image) => {
-                    let (url, alt) = self.image.take().expect("image buffer present");
-                    if !self.is_suppressed() {
-                        if let Some(href) = self.active_url() {
-                            self.spans.push(MarkdownSpan::StyledImage {
-                                alt,
-                                url,
-                                href: Some(href.to_owned()),
-                                style: ImagePresentation::default(),
-                            });
-                        } else {
-                            self.spans.push(MarkdownSpan::Image { alt, url });
-                        }
-                    }
-                }
-                Event::Text(v) | Event::Code(v) | Event::InlineHtml(v) | Event::Html(v) => {
-                    if let Some(p) = prepared {
-                        alt.push_str(&p.expand_plain_alt(&v));
-                    } else {
-                        alt.push_str(&v);
-                    }
-                }
-                Event::InlineMath(v) | Event::DisplayMath(v) => alt.push_str(&v),
-                Event::SoftBreak | Event::HardBreak => alt.push(' '),
-                _ => {}
-            }
+        if self.image.is_some() {
+            self.push_image_event(event, prepared);
             return;
         }
 
@@ -2091,48 +2192,24 @@ impl SpanBuilder {
                     url: self.active_url().map(str::to_owned),
                 });
             }
-            Event::Code(source) => {
-                if !self.is_suppressed() {
-                    let mut css = self.effective_css();
-                    css.monospace = true;
-                    let url = self.active_url().map(str::to_owned);
-                    html::push_styled_text(
-                        &mut self.spans,
-                        source.into_string(),
-                        url.as_deref(),
-                        css,
-                    );
-                }
-            }
+            Event::Code(source) => self.push_styled_span(source.into_string(), true),
             Event::FootnoteReference(name) if !self.is_suppressed() => {
                 push_span(&mut self.spans, MarkdownSpan::Text(format!("[^{name}]")));
             }
-            Event::InlineHtml(value) => self.push_inline_html(&value),
-            Event::Html(value) => self.push_inline_html(&value),
+            Event::InlineHtml(value) | Event::Html(value) => self.push_inline_html(&value),
             Event::Text(value) => {
                 if self.is_suppressed() {
                     return;
                 }
-                let css = self.effective_css();
-                let url = self.active_url().map(str::to_owned);
                 if let Some(p) = prepared {
-                    p.expand_inline_text(&value, url.as_deref(), css, &mut self.spans);
-                } else {
-                    html::push_styled_text(
-                        &mut self.spans,
-                        value.into_string(),
-                        url.as_deref(),
-                        css,
-                    );
-                }
-            }
-            Event::SoftBreak => {
-                if !self.is_suppressed() {
                     let css = self.effective_css();
                     let url = self.active_url().map(str::to_owned);
-                    html::push_styled_text(&mut self.spans, " ".to_owned(), url.as_deref(), css);
+                    p.expand_inline_text(&value, url.as_deref(), css, &mut self.spans);
+                } else {
+                    self.push_styled_span(value.into_string(), false);
                 }
             }
+            Event::SoftBreak => self.push_styled_span(" ".to_owned(), false),
             Event::HardBreak if !self.is_suppressed() => {
                 self.spans.push(MarkdownSpan::HardBreak);
             }

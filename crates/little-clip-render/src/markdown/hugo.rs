@@ -7,8 +7,8 @@
 //! and escaped/fenced code intact and preserving UTF-8 source byte offsets.
 
 use super::{
-    BlockBoxStyle, InlineCss, LocatedBlock, MarkdownDocBlock, MarkdownSpan, MarkdownTab, QuoteKind,
-    TableAlignment, parse_located_body_inner, parse_markdown_spans, push_span,
+    BlockBoxStyle, InlineCss, MarkdownDocBlock, MarkdownSpan, MarkdownTab, QuoteKind,
+    parse_located_body_inner, parse_markdown_spans, push_span,
 };
 
 const MAX_SHORTCODE_DEPTH: usize = 16;
@@ -196,60 +196,24 @@ impl PreparedShortcodes {
     }
 
     pub(super) fn expand_span_list(&self, spans: Vec<MarkdownSpan>) -> Vec<MarkdownSpan> {
-        let has_inline = spans.iter().any(|span| self.span_contains_inline(span));
-        if !has_inline {
+        if !spans.iter().any(|span| self.span_contains_inline(span)) {
             return spans;
         }
         let mut out = Vec::with_capacity(spans.len());
         for span in spans {
-            match span {
-                MarkdownSpan::Text(t) if t.contains(self.inline_open) => {
-                    self.expand_inline_text(&t, None, InlineCss::default(), &mut out);
-                }
-                MarkdownSpan::Bold(t) if t.contains(self.inline_open) => {
-                    let css = InlineCss {
-                        bold: true,
-                        ..Default::default()
-                    };
-                    self.expand_inline_text(&t, None, css, &mut out);
-                }
-                MarkdownSpan::Italic(t) if t.contains(self.inline_open) => {
-                    let css = InlineCss {
-                        italic: true,
-                        ..Default::default()
-                    };
-                    self.expand_inline_text(&t, None, css, &mut out);
-                }
-                MarkdownSpan::BoldItalic(t) if t.contains(self.inline_open) => {
-                    let css = InlineCss {
-                        bold: true,
-                        italic: true,
-                        ..Default::default()
-                    };
-                    self.expand_inline_text(&t, None, css, &mut out);
-                }
-                MarkdownSpan::Strikethrough(t) if t.contains(self.inline_open) => {
-                    let css = InlineCss {
-                        strikethrough: true,
-                        ..Default::default()
-                    };
-                    self.expand_inline_text(&t, None, css, &mut out);
-                }
-                MarkdownSpan::Link { label, url } if label.contains(self.inline_open) => {
-                    self.expand_inline_text(&label, Some(&url), InlineCss::default(), &mut out);
-                }
-                MarkdownSpan::Styled { text, url, css } if text.contains(self.inline_open) => {
-                    self.expand_inline_text(&text, url.as_deref(), css, &mut out);
-                }
-                MarkdownSpan::Spoiler { spans } => {
-                    push_span(
-                        &mut out,
-                        MarkdownSpan::Spoiler {
-                            spans: self.expand_span_list(spans),
-                        },
-                    );
-                }
-                other => push_span(&mut out, other),
+            if let Some((text, url, css)) = inline_span_parts(&span)
+                && text.contains(self.inline_open)
+            {
+                self.expand_inline_text(text, url, css, &mut out);
+            } else if let MarkdownSpan::Spoiler { spans } = span {
+                push_span(
+                    &mut out,
+                    MarkdownSpan::Spoiler {
+                        spans: self.expand_span_list(spans),
+                    },
+                );
+            } else {
+                push_span(&mut out, span);
             }
         }
         out
@@ -257,86 +221,130 @@ impl PreparedShortcodes {
 
     fn span_contains_inline(&self, span: &MarkdownSpan) -> bool {
         match span {
-            MarkdownSpan::Text(t)
-            | MarkdownSpan::Bold(t)
-            | MarkdownSpan::Italic(t)
-            | MarkdownSpan::BoldItalic(t)
-            | MarkdownSpan::Strikethrough(t) => t.contains(self.inline_open),
-            MarkdownSpan::Link { label: text, .. } | MarkdownSpan::Styled { text, .. } => {
-                text.contains(self.inline_open)
-            }
             MarkdownSpan::Spoiler { spans } => spans.iter().any(|s| self.span_contains_inline(s)),
-            _ => false,
+            other => inline_span_parts(other).is_some_and(|(t, ..)| t.contains(self.inline_open)),
         }
     }
 
     pub(super) fn expand_block_spans(&self, block: &mut MarkdownDocBlock) {
-        match block {
-            MarkdownDocBlock::Heading { text, spans, .. } => {
-                *spans = self.expand_span_list(std::mem::take(spans));
-                *text = super::plain_text_from_spans(spans);
-            }
-            MarkdownDocBlock::Paragraph { spans } => {
-                *spans = self.expand_span_list(std::mem::take(spans));
-            }
-            MarkdownDocBlock::Quote { blocks, .. }
-            | MarkdownDocBlock::Footnote { blocks, .. }
-            | MarkdownDocBlock::StyledContainer { blocks, .. } => {
-                for inner in blocks {
-                    self.expand_block_spans(inner);
-                }
-            }
-            MarkdownDocBlock::PullQuote { source, blocks, .. } => {
-                *source = self.expand_span_list(std::mem::take(source));
-                for inner in blocks {
-                    self.expand_block_spans(inner);
-                }
-            }
-            MarkdownDocBlock::Details {
-                summary, blocks, ..
-            } => {
-                *summary = self.expand_span_list(std::mem::take(summary));
-                for inner in blocks {
-                    self.expand_block_spans(inner);
-                }
-            }
-            MarkdownDocBlock::Tabs { tabs } => {
-                for tab in tabs {
-                    for inner in &mut tab.blocks {
-                        self.expand_block_spans(inner);
-                    }
-                }
-            }
-            MarkdownDocBlock::Columns { columns, .. } => {
-                for col in columns {
-                    for inner in col {
-                        self.expand_block_spans(inner);
-                    }
-                }
-            }
-            MarkdownDocBlock::List { items, .. } => {
-                for item in items {
-                    for inner in &mut item.blocks {
-                        self.expand_block_spans(inner);
-                    }
-                }
-            }
-            MarkdownDocBlock::Table(table) => {
-                for cell in &mut table.headers {
-                    *cell = self.expand_span_list(std::mem::take(cell));
-                }
-                for row in &mut table.rows {
-                    for cell in row {
-                        *cell = self.expand_span_list(std::mem::take(cell));
-                    }
-                }
-                let _ = TableAlignment::None;
-            }
-            MarkdownDocBlock::FrontMatter(_)
-            | MarkdownDocBlock::Code { .. }
-            | MarkdownDocBlock::Rule
-            | MarkdownDocBlock::IncompleteMath { .. } => {}
+        transform_block_spans(block, &mut |spans| {
+            *spans = self.expand_span_list(std::mem::take(spans));
+        });
+    }
+}
+
+fn inline_span_parts(span: &MarkdownSpan) -> Option<(&str, Option<&str>, InlineCss)> {
+    match span {
+        MarkdownSpan::Text(t) => Some((t, None, InlineCss::default())),
+        MarkdownSpan::Bold(t) => Some((
+            t,
+            None,
+            InlineCss {
+                bold: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Italic(t) => Some((
+            t,
+            None,
+            InlineCss {
+                italic: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::BoldItalic(t) => Some((
+            t,
+            None,
+            InlineCss {
+                bold: true,
+                italic: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Strikethrough(t) => Some((
+            t,
+            None,
+            InlineCss {
+                strikethrough: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Link { label, url } => {
+            Some((label, Some(url.as_str()), InlineCss::default()))
         }
+        MarkdownSpan::Styled { text, url, css } => Some((text, url.as_deref(), *css)),
+        _ => None,
+    }
+}
+
+/// Applies `transform` to every inline span vector inside a `MarkdownDocBlock` tree,
+/// keeping heading plain-text summaries synchronized automatically.
+fn transform_block_spans(
+    block: &mut MarkdownDocBlock,
+    transform: &mut impl FnMut(&mut Vec<MarkdownSpan>),
+) {
+    match block {
+        MarkdownDocBlock::Heading { text, spans, .. } => {
+            transform(spans);
+            *text = super::plain_text_from_spans(spans);
+        }
+        MarkdownDocBlock::Paragraph { spans } => transform(spans),
+        MarkdownDocBlock::Quote { blocks, .. }
+        | MarkdownDocBlock::Footnote { blocks, .. }
+        | MarkdownDocBlock::StyledContainer { blocks, .. } => {
+            for inner in blocks {
+                transform_block_spans(inner, transform);
+            }
+        }
+        MarkdownDocBlock::PullQuote { source, blocks, .. } => {
+            transform(source);
+            for inner in blocks {
+                transform_block_spans(inner, transform);
+            }
+        }
+        MarkdownDocBlock::Details {
+            summary, blocks, ..
+        } => {
+            transform(summary);
+            for inner in blocks {
+                transform_block_spans(inner, transform);
+            }
+        }
+        MarkdownDocBlock::Tabs { tabs } => {
+            for tab in tabs {
+                for inner in &mut tab.blocks {
+                    transform_block_spans(inner, transform);
+                }
+            }
+        }
+        MarkdownDocBlock::Columns { columns, .. } => {
+            for col in columns {
+                for inner in col {
+                    transform_block_spans(inner, transform);
+                }
+            }
+        }
+        MarkdownDocBlock::List { items, .. } => {
+            for item in items {
+                for inner in &mut item.blocks {
+                    transform_block_spans(inner, transform);
+                }
+            }
+        }
+        MarkdownDocBlock::Table(table) => {
+            for cell in &mut table.headers {
+                transform(cell);
+            }
+            for row in &mut table.rows {
+                for cell in row {
+                    transform(cell);
+                }
+            }
+        }
+        MarkdownDocBlock::FrontMatter(_)
+        | MarkdownDocBlock::Code { .. }
+        | MarkdownDocBlock::Rule
+        | MarkdownDocBlock::IncompleteMath { .. } => {}
     }
 }
 
@@ -499,6 +507,70 @@ impl BlockReplacement {
     }
 }
 
+/// Scans one logical line for escaped characters, inline backtick runs, and supported shortcodes.
+/// Returns `(next_input_pos, had_shortcode_match)`.
+fn scan_prepared_line(
+    input: &str,
+    line_start: usize,
+    line_end: usize,
+    depth: usize,
+    prepared: &mut PreparedShortcodes,
+) -> (usize, bool) {
+    let bytes = input.as_bytes();
+    let mut pos = line_start;
+    let mut has_any = false;
+
+    while pos < line_end {
+        let b = bytes[pos];
+        if b == b'\\' && pos + 1 < line_end {
+            let next_len = input[pos + 1..line_end]
+                .chars()
+                .next()
+                .map_or(1, char::len_utf8);
+            let escaped_end = (pos + 1 + next_len).min(line_end);
+            prepared.rewritten.push_str(&input[pos..escaped_end]);
+            pos = escaped_end;
+            continue;
+        }
+        if b == b'`' {
+            let tick_run = bytes[pos..line_end]
+                .iter()
+                .take_while(|&&ch| ch == b'`')
+                .count();
+            if let Some(close_end) = find_inline_code_end(input, pos + tick_run, tick_run) {
+                prepared.rewritten.push_str(&input[pos..close_end]);
+                pos = close_end;
+                if pos > line_end {
+                    return (pos, has_any);
+                }
+                continue;
+            }
+            prepared.rewritten.push_str(&input[pos..pos + tick_run]);
+            pos += tick_run;
+            continue;
+        }
+        if has_tag_prefix(&bytes[pos..])
+            && let Some(parsed) = parse_shortcode_tag(input, pos)
+            && !parsed.close
+            && is_supported_name(&parsed.name)
+            && let Some(res) = handle_open_shortcode(input, &parsed, depth, prepared)
+        {
+            has_any = true;
+            pos = res.next_input_pos;
+            if pos > line_end {
+                return (pos, has_any);
+            }
+            continue;
+        }
+
+        let ch = input[pos..].chars().next().expect("valid utf8");
+        prepared.rewritten.push(ch);
+        pos += ch.len_utf8();
+    }
+
+    (pos, has_any)
+}
+
 /// Scans `input` for recognized Hugo shortcodes outside Markdown fences and
 /// backtick code spans, returning `None` immediately if no shortcode delimiters appear.
 pub(super) fn prepare_shortcodes(input: &str, depth: usize) -> Option<PreparedShortcodes> {
@@ -528,8 +600,8 @@ pub(super) fn prepare_shortcodes(input: &str, depth: usize) -> Option<PreparedSh
             .find('\n')
             .map_or(input.len(), |n| line_start + n + 1);
         let raw_line = input[line_start..line_end].trim_end_matches(['\r', '\n']);
-
         let is_real_line_start = line_start == 0 || bytes[line_start - 1] == b'\n';
+
         if let Some((marker, min_run)) = active_fence {
             if is_real_line_start && is_closing_fence(raw_line, marker, min_run) {
                 active_fence = None;
@@ -538,7 +610,6 @@ pub(super) fn prepare_shortcodes(input: &str, depth: usize) -> Option<PreparedSh
             cursor = line_end;
             continue;
         }
-
         if is_real_line_start && let Some((marker, run)) = opening_fence(raw_line) {
             active_fence = Some((marker, run));
             prepared.rewritten.push_str(&input[line_start..line_end]);
@@ -546,65 +617,10 @@ pub(super) fn prepare_shortcodes(input: &str, depth: usize) -> Option<PreparedSh
             continue;
         }
 
-        // Scan inline/block shortcodes starting from `cursor`, respecting backtick runs.
-        let mut pos = line_start;
-        while pos < line_end {
-            let b = bytes[pos];
-            if b == b'\\' && pos + 1 < line_end {
-                let next_len = input[pos + 1..line_end]
-                    .chars()
-                    .next()
-                    .map_or(1, char::len_utf8);
-                let escaped_end = (pos + 1 + next_len).min(line_end);
-                prepared.rewritten.push_str(&input[pos..escaped_end]);
-                pos = escaped_end;
-                continue;
-            }
-            if b == b'`' {
-                let tick_run = bytes[pos..line_end]
-                    .iter()
-                    .take_while(|&&ch| ch == b'`')
-                    .count();
-                if let Some(close_end) = find_inline_code_end(input, pos + tick_run, tick_run) {
-                    prepared.rewritten.push_str(&input[pos..close_end]);
-                    pos = close_end;
-                    cursor = close_end;
-                    if cursor > line_end {
-                        // Code span crossed newlines; re-sync outer loop past it.
-                        active_fence = None;
-                        break;
-                    }
-                    continue;
-                }
-                prepared.rewritten.push_str(&input[pos..pos + tick_run]);
-                pos += tick_run;
-                continue;
-            }
-
-            if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
-                && let Some(parsed) = parse_shortcode_tag(input, pos)
-                && !parsed.close
-                && is_supported_name(&parsed.name)
-                && let Some(res) = handle_open_shortcode(input, &parsed, depth, &mut prepared)
-            {
-                has_any = true;
-                cursor = res.next_input_pos;
-                pos = res.next_input_pos;
-                if cursor > line_end {
-                    break;
-                }
-                continue;
-            }
-
-            let ch = input[pos..].chars().next().expect("valid utf8");
-            prepared.rewritten.push(ch);
-            pos += ch.len_utf8();
-        }
-        if pos >= line_end && cursor < line_end {
-            cursor = line_end;
-        } else if cursor < pos {
-            cursor = pos;
-        }
+        let (next_pos, line_matched) =
+            scan_prepared_line(input, line_start, line_end, depth, &mut prepared);
+        has_any |= line_matched;
+        cursor = next_pos;
     }
 
     has_any.then_some(prepared)
@@ -614,337 +630,319 @@ struct MatchedShortcode {
     next_input_pos: usize,
 }
 
-fn handle_open_shortcode(
+fn parse_container_blocks(raw: &str, depth: usize) -> Vec<MarkdownDocBlock> {
+    let cleaned = clean_container_body(raw);
+    parse_located_body_inner(&cleaned, 0, depth + 1)
+        .into_iter()
+        .map(|b| b.block)
+        .collect()
+}
+
+fn push_block_replacement(
+    prepared: &mut PreparedShortcodes,
+    replacement: BlockReplacement,
+    orig_start: usize,
+    orig_end: usize,
+) -> MatchedShortcode {
+    let id = prepared.blocks.len();
+    prepared.blocks.push(replacement);
+    emit_sentinel_token(
+        prepared,
+        prepared.block_open,
+        id,
+        prepared.block_close,
+        orig_start,
+        orig_end,
+    );
+    MatchedShortcode {
+        next_input_pos: orig_end,
+    }
+}
+
+fn push_inline_replacement(
+    prepared: &mut PreparedShortcodes,
+    replacement: InlineReplacement,
+    orig_start: usize,
+    orig_end: usize,
+) -> MatchedShortcode {
+    let id = prepared.inlines.len();
+    prepared.inlines.push(replacement);
+    emit_sentinel_token(
+        prepared,
+        prepared.inline_open,
+        id,
+        prepared.inline_close,
+        orig_start,
+        orig_end,
+    );
+    MatchedShortcode {
+        next_input_pos: orig_end,
+    }
+}
+
+fn handle_raw_block_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    prepared: &mut PreparedShortcodes,
+) -> MatchedShortcode {
+    let language = if open.name == "mermaid" {
+        "mermaid".to_owned()
+    } else {
+        extract_code_language(&open.args)
+    };
+    let (raw_inner, orig_end, incomplete) = if let Some((close_start, close_end)) =
+        find_closing_tag(input, open.end, &open.name, false)
+    {
+        (&input[open.end..close_start], close_end, false)
+    } else {
+        (&input[open.end..], input.len(), true)
+    };
+    let text = clean_raw_block_body(raw_inner, open.name == "mermaid");
+    push_block_replacement(
+        prepared,
+        BlockReplacement::Code {
+            language,
+            text,
+            incomplete,
+        },
+        open.start,
+        orig_end,
+    )
+}
+
+fn handle_container_block_shortcode(
     input: &str,
     open: &ParsedTag,
     depth: usize,
     prepared: &mut PreparedShortcodes,
 ) -> Option<MatchedShortcode> {
-    let orig_start = open.start;
-    let body_start = open.end;
-    match open.name.as_str() {
-        "code" | "mermaid" => {
-            let language = if open.name == "mermaid" {
-                "mermaid".to_owned()
-            } else {
-                extract_code_language(&open.args)
-            };
-            let (raw_inner, orig_end, incomplete) = if let Some((close_start, close_end)) =
-                find_closing_tag(input, body_start, &open.name, false)
-            {
-                (&input[body_start..close_start], close_end, false)
-            } else {
-                (&input[body_start..], input.len(), true)
-            };
-            let text = clean_raw_block_body(raw_inner, open.name == "mermaid");
-            let id = prepared.blocks.len();
-            prepared.blocks.push(BlockReplacement::Code {
-                language,
-                text,
-                incomplete,
-            });
-            emit_block_token(prepared, id, orig_start, orig_end);
-            Some(MatchedShortcode {
-                next_input_pos: orig_end,
-            })
-        }
+    let (close_start, close_end) = find_closing_tag(input, open.end, &open.name, true)?;
+    let raw_slice = &input[open.end..close_start];
+    let doc_blocks = match open.name.as_str() {
         "details" => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, "details", true)?;
             let (summary_text, is_open) = extract_details_params(&open.args);
-            let summary = super::parse_markdown_spans_at_depth(&summary_text, depth + 1);
-            let raw_inner = clean_container_body(&input[body_start..close_start]);
-            let inner_located: Vec<LocatedBlock> =
-                parse_located_body_inner(&raw_inner, 0, depth + 1);
-            let blocks = inner_located.into_iter().map(|b| b.block).collect();
-            let id = prepared.blocks.len();
-            prepared
-                .blocks
-                .push(BlockReplacement::Doc(vec![MarkdownDocBlock::Details {
-                    summary,
-                    open: is_open,
-                    blocks,
-                }]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
+            vec![MarkdownDocBlock::Details {
+                summary: super::parse_markdown_spans_at_depth(&summary_text, depth + 1),
+                open: is_open,
+                blocks: parse_container_blocks(raw_slice, depth),
+            }]
         }
-        "hint" => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, "hint", true)?;
-            let kind = extract_hint_kind(&open.args);
-            let raw_inner = clean_container_body(&input[body_start..close_start]);
-            let blocks = parse_located_body_inner(&raw_inner, 0, depth + 1)
-                .into_iter()
-                .map(|b| b.block)
-                .collect();
-            let id = prepared.blocks.len();
-            prepared
-                .blocks
-                .push(BlockReplacement::Doc(vec![MarkdownDocBlock::Quote {
-                    kind,
-                    blocks,
-                }]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
+        "hint" => vec![MarkdownDocBlock::Quote {
+            kind: extract_hint_kind(&open.args),
+            blocks: parse_container_blocks(raw_slice, depth),
+        }],
         "quote" | "bigquote" => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, &open.name, true)?;
             let source_text = extract_quote_source(&open.args);
             let source = if source_text.is_empty() {
                 Vec::new()
             } else {
                 super::parse_markdown_spans_at_depth(&source_text, depth + 1)
             };
-            let raw_inner = clean_container_body(&input[body_start..close_start]);
-            let blocks = parse_located_body_inner(&raw_inner, 0, depth + 1)
-                .into_iter()
-                .map(|b| b.block)
-                .collect();
-            let id = prepared.blocks.len();
-            prepared
-                .blocks
-                .push(BlockReplacement::Doc(vec![MarkdownDocBlock::PullQuote {
-                    big: open.name == "bigquote",
-                    source,
-                    blocks,
-                }]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
-        "tabs" => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, "tabs", true)?;
-            let raw_inner = &input[body_start..close_start];
-            let tabs = parse_tabs_inner(raw_inner, depth);
-            let id = prepared.blocks.len();
-            if !tabs.is_empty() {
-                prepared
-                    .blocks
-                    .push(BlockReplacement::Doc(vec![MarkdownDocBlock::Tabs { tabs }]));
-            } else {
-                prepared.blocks.push(BlockReplacement::Doc(Vec::new()));
-            }
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
-        "tab" => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, "tab", true)?;
-            let title = extract_tab_title(&open.args, 0);
-            let raw_inner = clean_container_body(&input[body_start..close_start]);
-            let blocks = parse_located_body_inner(&raw_inner, 0, depth + 1)
-                .into_iter()
-                .map(|b| b.block)
-                .collect();
-            let id = prepared.blocks.len();
-            prepared
-                .blocks
-                .push(BlockReplacement::Doc(vec![MarkdownDocBlock::Tabs {
-                    tabs: vec![MarkdownTab { title, blocks }],
-                }]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
-        name if is_columns_name(name) => {
-            let (close_start, close_end) = find_closing_tag(input, body_start, name, true)?;
-            let raw_inner = &input[body_start..close_start];
-            let mut columns: Vec<Vec<MarkdownDocBlock>> = split_columns_inner(raw_inner)
-                .into_iter()
-                .map(|col_raw| {
-                    let cleaned = clean_container_body(col_raw);
-                    parse_located_body_inner(&cleaned, 0, depth + 1)
-                        .into_iter()
-                        .map(|b| b.block)
-                        .collect()
-                })
-                .collect();
-            while columns.len() > 1 && columns.last().is_some_and(Vec::is_empty) {
-                columns.pop();
-            }
-            let dividers = name == "columns3";
-            let bottom_rule = name == "columns2";
-            let id = prepared.blocks.len();
-            prepared
-                .blocks
-                .push(BlockReplacement::Doc(vec![MarkdownDocBlock::Columns {
-                    dividers,
-                    bottom_rule,
-                    columns,
-                }]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
+            vec![MarkdownDocBlock::PullQuote {
+                big: open.name == "bigquote",
+                source,
+                blocks: parse_container_blocks(raw_slice, depth),
+            }]
         }
         "attribution" => {
-            let (close_start, close_end) =
-                find_closing_tag(input, body_start, "attribution", true)?;
-            let raw_inner = clean_container_body(&input[body_start..close_start]);
-            let mut blocks: Vec<MarkdownDocBlock> =
-                parse_located_body_inner(&raw_inner, 0, depth + 1)
-                    .into_iter()
-                    .map(|b| b.block)
-                    .collect();
+            let mut blocks = parse_container_blocks(raw_slice, depth);
             let caption_css = InlineCss {
                 small: true,
                 muted: true,
                 ..Default::default()
             };
             style_doc_blocks_inline(&mut blocks, caption_css);
-            let id = prepared.blocks.len();
-            prepared.blocks.push(BlockReplacement::Doc(vec![
-                MarkdownDocBlock::StyledContainer {
-                    style: BlockBoxStyle {
-                        margin_bottom: 10.0,
-                        ..Default::default()
-                    },
-                    blocks,
-                },
-            ]));
-            emit_block_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
-        "spoiler" => {
-            let (close_start, close_end) =
-                find_closing_tag_within_paragraph(input, body_start, "spoiler", true)?;
-            let inner = input[body_start..close_start].trim();
-            let spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
-            let id = prepared.inlines.len();
-            prepared
-                .inlines
-                .push(InlineReplacement::Spans(vec![MarkdownSpan::Spoiler {
-                    spans,
-                }]));
-            emit_inline_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
-        }
-        "smalltext" => {
-            if let Some((close_start, close_end)) =
-                find_closing_tag_within_paragraph(input, body_start, "smalltext", true)
-            {
-                let inner = input[body_start..close_start].trim();
-                let mut spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
-                let small_css = InlineCss {
-                    small: true,
+            vec![MarkdownDocBlock::StyledContainer {
+                style: BlockBoxStyle {
+                    margin_bottom: 10.0,
                     ..Default::default()
-                };
-                spans = style_span_list(spans, small_css);
-                let id = prepared.inlines.len();
-                prepared.inlines.push(InlineReplacement::Spans(spans));
-                emit_inline_token(prepared, id, orig_start, close_end);
-                return Some(MatchedShortcode {
-                    next_input_pos: close_end,
-                });
-            }
-            if let Some((close_start, close_end)) =
-                find_closing_tag(input, body_start, "smalltext", true)
-            {
-                let raw_inner = clean_container_body(&input[body_start..close_start]);
-                let mut blocks: Vec<MarkdownDocBlock> =
-                    parse_located_body_inner(&raw_inner, 0, depth + 1)
-                        .into_iter()
-                        .map(|b| b.block)
-                        .collect();
-                style_doc_blocks_inline(
-                    &mut blocks,
-                    InlineCss {
-                        small: true,
-                        ..Default::default()
-                    },
-                );
-                let id = prepared.blocks.len();
-                prepared.blocks.push(BlockReplacement::Doc(blocks));
-                emit_block_token(prepared, id, orig_start, close_end);
-                return Some(MatchedShortcode {
-                    next_input_pos: close_end,
-                });
-            }
-            None
+                },
+                blocks,
+            }]
         }
-        "katex" | "latex" => {
-            let explicit_display = has_display_flag(&open.args);
-            if let Some((close_start, close_end)) =
-                find_closing_tag(input, body_start, &open.name, false)
-            {
-                let raw_inner = &input[body_start..close_start];
-                let line_before_empty = line_prefix_is_blank(input, orig_start);
-                let line_after_empty = line_suffix_is_blank(input, close_end);
-                let multiline = raw_inner.contains('\n');
-                let standalone = line_before_empty && line_after_empty;
-                let source = raw_inner.trim().to_owned();
-                if standalone && (explicit_display || multiline) {
-                    let id = prepared.blocks.len();
-                    prepared.blocks.push(BlockReplacement::Math {
-                        source,
-                        display: true,
-                    });
-                    emit_block_token(prepared, id, orig_start, close_end);
-                } else {
-                    let id = prepared.inlines.len();
-                    prepared.inlines.push(InlineReplacement::Math {
-                        source,
-                        display: explicit_display || (standalone && multiline),
-                    });
-                    emit_inline_token(prepared, id, orig_start, close_end);
-                }
-                return Some(MatchedShortcode {
-                    next_input_pos: close_end,
-                });
+        _ => return None,
+    };
+    Some(push_block_replacement(
+        prepared,
+        BlockReplacement::Doc(doc_blocks),
+        open.start,
+        close_end,
+    ))
+}
+
+fn handle_tabs_or_columns_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    depth: usize,
+    prepared: &mut PreparedShortcodes,
+) -> Option<MatchedShortcode> {
+    let (close_start, close_end) = find_closing_tag(input, open.end, &open.name, true)?;
+    let raw_inner = &input[open.end..close_start];
+    let doc_blocks = match open.name.as_str() {
+        "tabs" => {
+            let tabs = parse_tabs_inner(raw_inner, depth);
+            if tabs.is_empty() {
+                Vec::new()
+            } else {
+                vec![MarkdownDocBlock::Tabs { tabs }]
             }
-            // Standalone zero-body script loader call such as `{{< katex >}}` with no matching closing tag.
-            if line_prefix_is_blank(input, orig_start) && line_suffix_is_blank(input, open.end) {
-                emit_empty_replacement(prepared, orig_start, open.end);
-                return Some(MatchedShortcode {
-                    next_input_pos: open.end,
-                });
-            }
-            None
         }
+        "tab" => {
+            let title = extract_tab_title(&open.args, 0);
+            let blocks = parse_container_blocks(raw_inner, depth);
+            vec![MarkdownDocBlock::Tabs {
+                tabs: vec![MarkdownTab { title, blocks }],
+            }]
+        }
+        name => {
+            let mut columns: Vec<Vec<MarkdownDocBlock>> = split_columns_inner(raw_inner)
+                .into_iter()
+                .map(|col_raw| parse_container_blocks(col_raw, depth))
+                .collect();
+            while columns.len() > 1 && columns.last().is_some_and(Vec::is_empty) {
+                columns.pop();
+            }
+            vec![MarkdownDocBlock::Columns {
+                dividers: name == "columns3",
+                bottom_rule: name == "columns2",
+                columns,
+            }]
+        }
+    };
+    Some(push_block_replacement(
+        prepared,
+        BlockReplacement::Doc(doc_blocks),
+        open.start,
+        close_end,
+    ))
+}
+
+fn handle_smalltext_or_spoiler_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    depth: usize,
+    prepared: &mut PreparedShortcodes,
+) -> Option<MatchedShortcode> {
+    if open.name == "spoiler" {
+        let (close_start, close_end) =
+            find_closing_tag_within_paragraph(input, open.end, "spoiler", true)?;
+        let inner = input[open.end..close_start].trim();
+        let spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
+        return Some(push_inline_replacement(
+            prepared,
+            InlineReplacement::Spans(vec![MarkdownSpan::Spoiler { spans }]),
+            open.start,
+            close_end,
+        ));
+    }
+
+    let small_css = InlineCss {
+        small: true,
+        ..Default::default()
+    };
+    if let Some((close_start, close_end)) =
+        find_closing_tag_within_paragraph(input, open.end, "smalltext", true)
+    {
+        let inner = input[open.end..close_start].trim();
+        let spans = style_span_list(
+            super::parse_markdown_spans_at_depth(inner, depth + 1),
+            small_css,
+        );
+        return Some(push_inline_replacement(
+            prepared,
+            InlineReplacement::Spans(spans),
+            open.start,
+            close_end,
+        ));
+    }
+    let (close_start, close_end) = find_closing_tag(input, open.end, "smalltext", true)?;
+    let mut blocks = parse_container_blocks(&input[open.end..close_start], depth);
+    style_doc_blocks_inline(&mut blocks, small_css);
+    Some(push_block_replacement(
+        prepared,
+        BlockReplacement::Doc(blocks),
+        open.start,
+        close_end,
+    ))
+}
+
+fn handle_katex_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    prepared: &mut PreparedShortcodes,
+) -> Option<MatchedShortcode> {
+    let explicit_display = has_display_flag(&open.args);
+    if let Some((close_start, close_end)) = find_closing_tag(input, open.end, &open.name, false) {
+        let raw_inner = &input[open.end..close_start];
+        let standalone =
+            line_prefix_is_blank(input, open.start) && line_suffix_is_blank(input, close_end);
+        let multiline = raw_inner.contains('\n');
+        let source = raw_inner.trim().to_owned();
+        if standalone && (explicit_display || multiline) {
+            return Some(push_block_replacement(
+                prepared,
+                BlockReplacement::Math {
+                    source,
+                    display: true,
+                },
+                open.start,
+                close_end,
+            ));
+        }
+        return Some(push_inline_replacement(
+            prepared,
+            InlineReplacement::Math {
+                source,
+                display: explicit_display || (standalone && multiline),
+            },
+            open.start,
+            close_end,
+        ));
+    }
+    // Standalone zero-body script loader call such as `{{< katex >}}` with no matching closing tag.
+    if line_prefix_is_blank(input, open.start) && line_suffix_is_blank(input, open.end) {
+        emit_empty_replacement(prepared, open.start, open.end);
+        return Some(MatchedShortcode {
+            next_input_pos: open.end,
+        });
+    }
+    None
+}
+
+fn handle_hl_or_link_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    depth: usize,
+    prepared: &mut PreparedShortcodes,
+) -> Option<MatchedShortcode> {
+    match open.name.as_str() {
         "hl" => {
             let language = extract_hl_language(&open.args);
             if let Some((close_start, close_end)) =
-                find_closing_tag_within_paragraph(input, body_start, "hl", false)
+                find_closing_tag_within_paragraph(input, open.end, "hl", false)
             {
-                let code = input[body_start..close_start]
+                let code = input[open.end..close_start]
                     .trim_matches(['\r', '\n'])
                     .trim()
                     .to_owned();
-                let id = prepared.inlines.len();
-                prepared
-                    .inlines
-                    .push(InlineReplacement::HighlightedCode { language, code });
-                emit_inline_token(prepared, id, orig_start, close_end);
-                return Some(MatchedShortcode {
-                    next_input_pos: close_end,
-                });
+                return Some(push_inline_replacement(
+                    prepared,
+                    InlineReplacement::HighlightedCode { language, code },
+                    open.start,
+                    close_end,
+                ));
             }
-            if let Some(code_attr) = open
+            let code = open
                 .args
                 .iter()
                 .find(|arg| arg.key.as_deref() == Some("code"))
-                .map(|arg| arg.value.clone())
-            {
-                let id = prepared.inlines.len();
-                prepared.inlines.push(InlineReplacement::HighlightedCode {
-                    language,
-                    code: code_attr,
-                });
-                emit_inline_token(prepared, id, orig_start, open.end);
-                return Some(MatchedShortcode {
-                    next_input_pos: open.end,
-                });
-            }
-            None
+                .map(|arg| arg.value.clone())?;
+            Some(push_inline_replacement(
+                prepared,
+                InlineReplacement::HighlightedCode { language, code },
+                open.start,
+                open.end,
+            ))
         }
         "ref" | "relref" => {
             let target = open
@@ -956,21 +954,21 @@ fn handle_open_shortcode(
                 .map(|arg| arg.value.trim())
                 .filter(|v| !v.is_empty())?;
             let encoded = encode_link_target(target);
-            emit_literal_replacement(prepared, &encoded, orig_start, open.end);
+            emit_literal_replacement(prepared, &encoded, open.start, open.end);
             Some(MatchedShortcode {
                 next_input_pos: open.end,
             })
         }
         "button" => {
             let (close_start, close_end) =
-                find_closing_tag_within_paragraph(input, body_start, "button", true)?;
+                find_closing_tag_within_paragraph(input, open.end, "button", true)?;
             let target = open
                 .args
                 .iter()
                 .find(|arg| matches!(arg.key.as_deref(), Some("href" | "relref" | "ref")))
                 .map(|arg| arg.value.trim().to_owned())
                 .filter(|v| !v.is_empty());
-            let inner = input[body_start..close_start].trim();
+            let inner = input[open.end..close_start].trim();
             let mut spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
             if let Some(url) = target {
                 spans = spans
@@ -978,12 +976,38 @@ fn handle_open_shortcode(
                     .map(|span| style_single_span(span, Some(&url), InlineCss::default()))
                     .collect();
             }
-            let id = prepared.inlines.len();
-            prepared.inlines.push(InlineReplacement::Spans(spans));
-            emit_inline_token(prepared, id, orig_start, close_end);
-            Some(MatchedShortcode {
-                next_input_pos: close_end,
-            })
+            Some(push_inline_replacement(
+                prepared,
+                InlineReplacement::Spans(spans),
+                open.start,
+                close_end,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn handle_open_shortcode(
+    input: &str,
+    open: &ParsedTag,
+    depth: usize,
+    prepared: &mut PreparedShortcodes,
+) -> Option<MatchedShortcode> {
+    match open.name.as_str() {
+        "code" | "mermaid" => Some(handle_raw_block_shortcode(input, open, prepared)),
+        "details" | "hint" | "quote" | "bigquote" | "attribution" => {
+            handle_container_block_shortcode(input, open, depth, prepared)
+        }
+        "tabs" | "tab" => handle_tabs_or_columns_shortcode(input, open, depth, prepared),
+        name if is_columns_name(name) => {
+            handle_tabs_or_columns_shortcode(input, open, depth, prepared)
+        }
+        "spoiler" | "smalltext" => {
+            handle_smalltext_or_spoiler_shortcode(input, open, depth, prepared)
+        }
+        "katex" | "latex" => handle_katex_shortcode(input, open, prepared),
+        "hl" | "ref" | "relref" | "button" => {
+            handle_hl_or_link_shortcode(input, open, depth, prepared)
         }
         _ => None,
     }
@@ -1006,77 +1030,52 @@ fn encode_link_target(raw: &str) -> String {
     out
 }
 
+fn emit_replacement_segment(
+    prepared: &mut PreparedShortcodes,
+    orig_start: usize,
+    orig_end: usize,
+    write_rewritten: impl FnOnce(&mut String),
+) {
+    let rew_start = prepared.rewritten.len();
+    prepared.shifts.push(OffsetShift {
+        rew_pos: rew_start,
+        orig_pos: orig_start,
+    });
+    write_rewritten(&mut prepared.rewritten);
+    let rew_end = prepared.rewritten.len();
+    prepared.shifts.push(OffsetShift {
+        rew_pos: rew_end,
+        orig_pos: orig_end,
+    });
+}
+
 fn emit_literal_replacement(
     prepared: &mut PreparedShortcodes,
     literal: &str,
     orig_start: usize,
     orig_end: usize,
 ) {
-    let rew_start = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_start,
-        orig_pos: orig_start,
-    });
-    prepared.rewritten.push_str(literal);
-    let rew_end = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_end,
-        orig_pos: orig_end,
-    });
+    emit_replacement_segment(prepared, orig_start, orig_end, |out| out.push_str(literal));
 }
 
-fn emit_inline_token(
+fn emit_sentinel_token(
     prepared: &mut PreparedShortcodes,
+    open: char,
     id: usize,
+    close: char,
     orig_start: usize,
     orig_end: usize,
 ) {
-    let rew_start = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_start,
-        orig_pos: orig_start,
-    });
-    prepared.rewritten.push(prepared.inline_open);
-    prepared.rewritten.push_str(&id.to_string());
-    prepared.rewritten.push(prepared.inline_close);
-    let rew_end = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_end,
-        orig_pos: orig_end,
-    });
-}
-
-fn emit_block_token(
-    prepared: &mut PreparedShortcodes,
-    id: usize,
-    orig_start: usize,
-    orig_end: usize,
-) {
-    let rew_start = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_start,
-        orig_pos: orig_start,
-    });
-    prepared.rewritten.push(prepared.block_open);
-    prepared.rewritten.push_str(&id.to_string());
-    prepared.rewritten.push(prepared.block_close);
-    let rew_end = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos: rew_end,
-        orig_pos: orig_end,
+    emit_replacement_segment(prepared, orig_start, orig_end, |out| {
+        use std::fmt::Write as _;
+        out.push(open);
+        let _ = write!(out, "{id}");
+        out.push(close);
     });
 }
 
 fn emit_empty_replacement(prepared: &mut PreparedShortcodes, orig_start: usize, orig_end: usize) {
-    let rew_pos = prepared.rewritten.len();
-    prepared.shifts.push(OffsetShift {
-        rew_pos,
-        orig_pos: orig_start,
-    });
-    prepared.shifts.push(OffsetShift {
-        rew_pos,
-        orig_pos: orig_end,
-    });
+    emit_replacement_segment(prepared, orig_start, orig_end, |_| {});
 }
 
 fn choose_sentinels(input: &str) -> Option<(char, char, char, char)> {
@@ -1132,6 +1131,38 @@ pub(super) fn is_supported_name(name: &str) -> bool {
     ) || is_columns_name(name)
 }
 
+fn scan_shortcode_close_delim(body_slice: &str, close_delim: &[u8]) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let bytes = body_slice.as_bytes();
+    for (idx, &b) in bytes.iter().enumerate() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' && q != b'`' {
+                escaped = true;
+            } else if b == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(b, b'"' | b'\'' | b'`') {
+            quote = Some(b);
+            continue;
+        }
+        if b == b'\n'
+            && (bytes[idx + 1..].starts_with(b"\n") || bytes[idx + 1..].starts_with(b"\r\n"))
+        {
+            // Avoid matching stray `{{<` across blank lines if unclosed.
+            return None;
+        }
+        if bytes[idx..].starts_with(close_delim) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
 pub(super) fn parse_shortcode_tag(input: &str, start: usize) -> Option<ParsedTag> {
     let slice = &input[start..];
     let close_delim = if slice.starts_with("{{<") {
@@ -1149,43 +1180,7 @@ pub(super) fn parse_shortcode_tag(input: &str, start: usize) -> Option<ParsedTag
         return None;
     }
 
-    let mut quote: Option<u8> = None;
-    let mut escaped = false;
-    let bytes = body_slice.as_bytes();
-    let mut rel_close = None;
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if let Some(q) = quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' && q != b'`' {
-                escaped = true;
-            } else if b == q {
-                quote = None;
-            }
-            idx += 1;
-            continue;
-        }
-        if matches!(b, b'"' | b'\'' | b'`') {
-            quote = Some(b);
-            idx += 1;
-            continue;
-        }
-        if b == b'\n' {
-            // Avoid matching stray `{{<` across blank lines if unclosed.
-            if bytes[idx + 1..].starts_with(b"\n") || bytes[idx + 1..].starts_with(b"\r\n") {
-                return None;
-            }
-        }
-        if bytes[idx..].starts_with(close_delim.as_bytes()) {
-            rel_close = Some(idx);
-            break;
-        }
-        idx += 1;
-    }
-
-    let rel_close = rel_close?;
+    let rel_close = scan_shortcode_close_delim(body_slice, close_delim.as_bytes())?;
     let end = start + inner_start + rel_close + close_delim.len();
     let mut content = body_slice[..rel_close].trim();
     // Support Hugo trim hyphen `{{-` / `-}}` / `-%}` variants cleanly.
@@ -1196,10 +1191,9 @@ pub(super) fn parse_shortcode_tag(input: &str, start: usize) -> Option<ParsedTag
         content = stripped.trim_end();
     }
 
-    let (close, rest) = if let Some(after_slash) = content.strip_prefix('/') {
-        (true, after_slash.trim_start())
-    } else {
-        (false, content)
+    let (close, rest) = match content.strip_prefix('/') {
+        Some(after_slash) => (true, after_slash.trim_start()),
+        None => (false, content),
     };
 
     let name_end = rest
@@ -1411,6 +1405,80 @@ fn next_char_step(input: &str, pos: usize) -> (u8, usize) {
     (b, step)
 }
 
+#[inline]
+fn has_tag_prefix(slice: &[u8]) -> bool {
+    slice.starts_with(b"{{<") || slice.starts_with(b"{{%")
+}
+
+/// Shared cursor state for scanning shortcode bodies while ignoring fenced blocks,
+/// inline backtick spans, and raw `{{< code >}}` / `{{< mermaid >}}` payloads.
+struct BlockScanState {
+    pos: usize,
+    fence: Option<(u8, usize)>,
+    at_line_start: bool,
+}
+
+impl BlockScanState {
+    fn new(pos: usize, at_line_start: bool) -> Self {
+        Self {
+            pos,
+            fence: None,
+            at_line_start,
+        }
+    }
+
+    fn step_fence_or_code(&mut self, input: &str, active: bool) -> bool {
+        if !active {
+            return false;
+        }
+        if self.at_line_start {
+            let line_end = input[self.pos..]
+                .find('\n')
+                .map_or(input.len(), |n| self.pos + n + 1);
+            let raw_line = input[self.pos..line_end].trim_end_matches(['\r', '\n']);
+            if let Some((marker, min_run)) = self.fence {
+                if is_closing_fence(raw_line, marker, min_run) {
+                    self.fence = None;
+                }
+                self.pos = line_end;
+                return true;
+            }
+            if let Some((marker, run)) = opening_fence(raw_line) {
+                self.fence = Some((marker, run));
+                self.pos = line_end;
+                return true;
+            }
+        }
+        if let Some(next_pos) = advance_inline_code_span(input, self.pos) {
+            self.jump_to(input, next_pos);
+            return true;
+        }
+        false
+    }
+
+    fn try_skip_raw_shortcode(&mut self, input: &str, tag: &ParsedTag) -> bool {
+        if !tag.close
+            && matches!(tag.name.as_str(), "code" | "mermaid")
+            && let Some((_, end)) = find_closing_tag(input, tag.end, &tag.name, false)
+        {
+            self.jump_to(input, end);
+            return true;
+        }
+        false
+    }
+
+    fn jump_to(&mut self, input: &str, new_pos: usize) {
+        self.at_line_start = input.as_bytes().get(new_pos.saturating_sub(1)) == Some(&b'\n');
+        self.pos = new_pos;
+    }
+
+    fn step_char(&mut self, input: &str) {
+        let (b, step) = next_char_step(input, self.pos);
+        self.at_line_start = b == b'\n';
+        self.pos += step;
+    }
+}
+
 fn find_closing_tag(
     input: &str,
     from: usize,
@@ -1418,45 +1486,18 @@ fn find_closing_tag(
     track_nesting: bool,
 ) -> Option<(usize, usize)> {
     let bytes = input.as_bytes();
-    let mut pos = from;
     let mut depth = 1usize;
-    let mut fence: Option<(u8, usize)> = None;
-    let mut at_line_start = from == 0 || bytes.get(from - 1) == Some(&b'\n');
+    let at_line_start = from == 0 || bytes.get(from - 1) == Some(&b'\n');
+    let mut scan = BlockScanState::new(from, at_line_start);
 
-    while pos < input.len() {
-        if track_nesting && at_line_start {
-            let line_end = input[pos..].find('\n').map_or(input.len(), |n| pos + n + 1);
-            let raw_line = input[pos..line_end].trim_end_matches(['\r', '\n']);
-            if let Some((marker, min_run)) = fence {
-                if is_closing_fence(raw_line, marker, min_run) {
-                    fence = None;
-                }
-                pos = line_end;
-                continue;
-            }
-            if let Some((marker, run)) = opening_fence(raw_line) {
-                fence = Some((marker, run));
-                pos = line_end;
-                continue;
-            }
-        }
-
-        if track_nesting && let Some(next_pos) = advance_inline_code_span(input, pos) {
-            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
-            pos = next_pos;
+    while scan.pos < input.len() {
+        if scan.step_fence_or_code(input, track_nesting) {
             continue;
         }
-
-        if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
-            && let Some(tag) = parse_shortcode_tag(input, pos)
+        if has_tag_prefix(&bytes[scan.pos..])
+            && let Some(tag) = parse_shortcode_tag(input, scan.pos)
         {
-            if track_nesting
-                && !tag.close
-                && matches!(tag.name.as_str(), "code" | "mermaid")
-                && let Some((_, raw_end)) = find_closing_tag(input, tag.end, &tag.name, false)
-            {
-                at_line_start = bytes.get(raw_end.saturating_sub(1)) == Some(&b'\n');
-                pos = raw_end;
+            if track_nesting && scan.try_skip_raw_shortcode(input, &tag) {
                 continue;
             }
             if tag.name == name {
@@ -1469,14 +1510,10 @@ fn find_closing_tag(
                     depth += 1;
                 }
             }
-            pos = tag.end;
-            at_line_start = false;
+            scan.jump_to(input, tag.end);
             continue;
         }
-
-        let (b, step) = next_char_step(input, pos);
-        at_line_start = b == b'\n';
-        pos += step;
+        scan.step_char(input);
     }
     None
 }
@@ -1497,7 +1534,7 @@ fn find_closing_tag_within_paragraph(
             pos = next_pos;
             continue;
         }
-        if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
+        if has_tag_prefix(&bytes[pos..])
             && let Some(tag) = parse_shortcode_tag(input, pos)
             && tag.close
             && tag.name == name
@@ -1577,36 +1614,31 @@ fn is_closing_fence(raw_line: &str, marker: u8, min_run: usize) -> bool {
     run >= min_run && trimmed_start[run..].trim().is_empty()
 }
 
-pub(super) fn clean_raw_block_body(raw: &str, trim_blank_edges: bool) -> String {
-    let mut s = raw
+/// Trims a leading newline after the opening tag and trailing indentation on the closing-tag line.
+fn trim_shortcode_line_edges(raw: &str) -> &str {
+    let s = raw
         .strip_prefix("\r\n")
         .or_else(|| raw.strip_prefix('\n'))
         .unwrap_or(raw);
+    if let Some(last_nl) = s.rfind('\n')
+        && s[last_nl + 1..].trim().is_empty()
+    {
+        return &s[..last_nl];
+    }
+    s
+}
+
+pub(super) fn clean_raw_block_body(raw: &str, trim_blank_edges: bool) -> String {
+    let s = trim_shortcode_line_edges(raw);
     if trim_blank_edges {
         return s.trim_matches(['\r', '\n']).trim().to_owned();
     }
-    // Trim only whitespace on the closing-tag line (e.g. `    {{< /code >}}`),
-    // preserving meaningful indentation on actual code lines.
-    if let Some(last_nl) = s.rfind('\n')
-        && s[last_nl + 1..].trim().is_empty()
-    {
-        s = &s[..last_nl];
-    }
-    s = s.trim_end_matches('\r');
-    s.to_owned()
+    // Preserve meaningful indentation on actual code lines, stripping only trailing CR.
+    s.trim_end_matches('\r').to_owned()
 }
 
 fn clean_container_body(raw: &str) -> String {
-    let mut s = raw
-        .strip_prefix("\r\n")
-        .or_else(|| raw.strip_prefix('\n'))
-        .unwrap_or(raw);
-    if let Some(last_nl) = s.rfind('\n')
-        && s[last_nl + 1..].trim().is_empty()
-    {
-        s = &s[..last_nl];
-    }
-    s.to_owned()
+    trim_shortcode_line_edges(raw).to_owned()
 }
 
 fn line_prefix_is_blank(input: &str, pos: usize) -> bool {
@@ -1644,8 +1676,95 @@ pub(super) enum LineBlockStart {
     IgnoreLine,
 }
 
+fn classify_code_line(tag: &ParsedTag, rest: &str) -> Option<LineBlockStart> {
+    let tag_name = if tag.name == "mermaid" {
+        "mermaid"
+    } else {
+        "code"
+    };
+    let language = if tag_name == "mermaid" {
+        "mermaid".to_owned()
+    } else {
+        extract_code_language(&tag.args)
+    };
+    let inline_body = strip_closing_on_same_line(rest, tag_name).map(str::to_owned);
+    if inline_body.is_some() || rest.is_empty() {
+        Some(LineBlockStart::Code {
+            tag_name,
+            language,
+            inline_body,
+        })
+    } else {
+        None
+    }
+}
+
+fn classify_container_line(tag: &ParsedTag, rest: &str) -> Option<LineBlockStart> {
+    if tag.name == "details" {
+        let (summary_text, _) = extract_details_params(&tag.args);
+        let summary_spans = parse_markdown_spans(&summary_text);
+        let inline_body =
+            strip_closing_on_same_line(rest, "details").map(|body| body.trim().to_owned());
+        return (inline_body.is_some() || rest.is_empty()).then_some(LineBlockStart::Details {
+            summary_spans,
+            inline_body,
+        });
+    }
+    if let Some(inline_body) = strip_closing_on_same_line(rest, &tag.name) {
+        let inner = inline_body.trim();
+        let summary_spans = if inner.is_empty() {
+            Vec::new()
+        } else {
+            parse_markdown_spans(inner)
+        };
+        return Some(if summary_spans.is_empty() {
+            LineBlockStart::IgnoreLine
+        } else {
+            LineBlockStart::Details {
+                summary_spans,
+                inline_body: None,
+            }
+        });
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    if tag.name == "tab" {
+        let title = extract_tab_title(&tag.args, 0);
+        Some(LineBlockStart::Details {
+            summary_spans: vec![MarkdownSpan::Bold(title)],
+            inline_body: None,
+        })
+    } else {
+        Some(LineBlockStart::IgnoreLine)
+    }
+}
+
+fn classify_math_line(tag: &ParsedTag, rest: &str) -> Option<LineBlockStart> {
+    let tag_name = if tag.name == "katex" {
+        "katex"
+    } else {
+        "latex"
+    };
+    if let Some(inner) = strip_closing_on_same_line(rest, tag_name) {
+        Some(LineBlockStart::Math {
+            tag_name,
+            inline_source: Some(inner.trim().to_owned()),
+            display: has_display_flag(&tag.args),
+        })
+    } else if rest.is_empty() {
+        Some(LineBlockStart::Math {
+            tag_name,
+            inline_source: None,
+            display: true,
+        })
+    } else {
+        None
+    }
+}
+
 pub(super) fn classify_block_line(trimmed: &str) -> Option<LineBlockStart> {
-    if !(trimmed.starts_with("{{<") || trimmed.starts_with("{{%")) {
+    if !has_tag_prefix(trimmed.as_bytes()) {
         return None;
     }
     let tag = parse_shortcode_tag(trimmed, 0)?;
@@ -1657,108 +1776,11 @@ pub(super) fn classify_block_line(trimmed: &str) -> Option<LineBlockStart> {
         return rest.is_empty().then_some(LineBlockStart::IgnoreLine);
     }
     match tag.name.as_str() {
-        "code" | "mermaid" => {
-            let tag_name = if tag.name == "mermaid" {
-                "mermaid"
-            } else {
-                "code"
-            };
-            let language = if tag_name == "mermaid" {
-                "mermaid".to_owned()
-            } else {
-                extract_code_language(&tag.args)
-            };
-            if let Some(inline_body) = strip_closing_on_same_line(rest, tag_name) {
-                Some(LineBlockStart::Code {
-                    tag_name,
-                    language,
-                    inline_body: Some(inline_body.to_owned()),
-                })
-            } else if rest.is_empty() {
-                Some(LineBlockStart::Code {
-                    tag_name,
-                    language,
-                    inline_body: None,
-                })
-            } else {
-                None
-            }
-        }
-        "details" => {
-            let (summary_text, _) = extract_details_params(&tag.args);
-            let summary_spans = parse_markdown_spans(&summary_text);
-            if let Some(inline_body) = strip_closing_on_same_line(rest, "details") {
-                Some(LineBlockStart::Details {
-                    summary_spans,
-                    inline_body: Some(inline_body.trim().to_owned()),
-                })
-            } else if rest.is_empty() {
-                Some(LineBlockStart::Details {
-                    summary_spans,
-                    inline_body: None,
-                })
-            } else {
-                None
-            }
-        }
-        "hint" | "quote" | "bigquote" | "attribution" | "smalltext" | "tabs" | "tab" => {
-            if let Some(inline_body) = strip_closing_on_same_line(rest, &tag.name) {
-                let inner = inline_body.trim();
-                let summary_spans = if inner.is_empty() {
-                    Vec::new()
-                } else {
-                    parse_markdown_spans(inner)
-                };
-                if summary_spans.is_empty() {
-                    Some(LineBlockStart::IgnoreLine)
-                } else {
-                    Some(LineBlockStart::Details {
-                        summary_spans,
-                        inline_body: None,
-                    })
-                }
-            } else if tag.name == "tab" && rest.is_empty() {
-                let title = extract_tab_title(&tag.args, 0);
-                Some(LineBlockStart::Details {
-                    summary_spans: vec![MarkdownSpan::Bold(title)],
-                    inline_body: None,
-                })
-            } else if rest.is_empty() {
-                Some(LineBlockStart::IgnoreLine)
-            } else {
-                None
-            }
-        }
-        name if is_columns_name(name) => {
-            if rest.is_empty() {
-                Some(LineBlockStart::IgnoreLine)
-            } else {
-                None
-            }
-        }
-        "katex" | "latex" => {
-            let tag_name = if tag.name == "katex" {
-                "katex"
-            } else {
-                "latex"
-            };
-            let display = has_display_flag(&tag.args);
-            if let Some(inner) = strip_closing_on_same_line(rest, tag_name) {
-                Some(LineBlockStart::Math {
-                    tag_name,
-                    inline_source: Some(inner.trim().to_owned()),
-                    display,
-                })
-            } else if rest.is_empty() {
-                Some(LineBlockStart::Math {
-                    tag_name,
-                    inline_source: None,
-                    display: true,
-                })
-            } else {
-                None
-            }
-        }
+        "code" | "mermaid" => classify_code_line(&tag, rest),
+        "details" | "hint" | "quote" | "bigquote" | "attribution" | "smalltext" | "tabs"
+        | "tab" => classify_container_line(&tag, rest),
+        name if is_columns_name(name) => rest.is_empty().then_some(LineBlockStart::IgnoreLine),
+        "katex" | "latex" => classify_math_line(&tag, rest),
         _ => None,
     }
 }
@@ -1822,77 +1844,37 @@ fn extract_tab_title(args: &[ShortcodeArg], index: usize) -> String {
 }
 
 fn parse_tabs_inner(raw: &str, depth: usize) -> Vec<MarkdownTab> {
-    let bytes = raw.as_bytes();
     let mut tabs = Vec::new();
-    let mut pos = 0usize;
-    let mut fence: Option<(u8, usize)> = None;
-    let mut at_line_start = true;
+    let mut scan = BlockScanState::new(0, true);
 
-    while pos < raw.len() {
-        if at_line_start {
-            let line_end = raw[pos..].find('\n').map_or(raw.len(), |n| pos + n + 1);
-            let raw_line = raw[pos..line_end].trim_end_matches(['\r', '\n']);
-            if let Some((marker, min_run)) = fence {
-                if is_closing_fence(raw_line, marker, min_run) {
-                    fence = None;
-                }
-                pos = line_end;
-                continue;
-            }
-            if let Some((marker, run)) = opening_fence(raw_line) {
-                fence = Some((marker, run));
-                pos = line_end;
-                continue;
-            }
-        }
-
-        if let Some(next_pos) = advance_inline_code_span(raw, pos) {
-            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
-            pos = next_pos;
+    while scan.pos < raw.len() {
+        if scan.step_fence_or_code(raw, true) {
             continue;
         }
-
-        if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
-            && let Some(tag) = parse_shortcode_tag(raw, pos)
+        if has_tag_prefix(&raw.as_bytes()[scan.pos..])
+            && let Some(tag) = parse_shortcode_tag(raw, scan.pos)
             && !tag.close
         {
-            if matches!(tag.name.as_str(), "code" | "mermaid")
-                && let Some((_, end)) = find_closing_tag(raw, tag.end, &tag.name, false)
-            {
-                at_line_start = bytes.get(end.saturating_sub(1)) == Some(&b'\n');
-                pos = end;
+            if scan.try_skip_raw_shortcode(raw, &tag) {
                 continue;
             }
             if tag.name == "tab"
                 && let Some((close_start, close_end)) = find_closing_tag(raw, tag.end, "tab", true)
             {
                 let title = extract_tab_title(&tag.args, tabs.len());
-                let body = clean_container_body(&raw[tag.end..close_start]);
-                let blocks = parse_located_body_inner(&body, 0, depth + 1)
-                    .into_iter()
-                    .map(|b| b.block)
-                    .collect();
+                let blocks = parse_container_blocks(&raw[tag.end..close_start], depth);
                 tabs.push(MarkdownTab { title, blocks });
-                at_line_start = bytes.get(close_end.saturating_sub(1)) == Some(&b'\n');
-                pos = close_end;
+                scan.jump_to(raw, close_end);
                 continue;
             }
-            pos = tag.end;
-            at_line_start = false;
+            scan.jump_to(raw, tag.end);
             continue;
         }
-
-        let (b, step) = next_char_step(raw, pos);
-        at_line_start = b == b'\n';
-        pos += step;
+        scan.step_char(raw);
     }
 
     if tabs.is_empty() && !raw.trim().is_empty() {
-        let cleaned = clean_container_body(raw);
-        let blocks: Vec<MarkdownDocBlock> = parse_located_body_inner(&cleaned, 0, depth + 1)
-            .into_iter()
-            .map(|b| b.block)
-            .collect();
+        let blocks = parse_container_blocks(raw, depth);
         if !blocks.is_empty() {
             tabs.push(MarkdownTab {
                 title: "Content".to_owned(),
@@ -1907,44 +1889,17 @@ fn split_columns_inner(raw: &str) -> Vec<&str> {
     let bytes = raw.as_bytes();
     let mut parts = Vec::new();
     let mut start = 0usize;
-    let mut pos = 0usize;
-    let mut fence: Option<(u8, usize)> = None;
     let mut col_depth = 0usize;
-    let mut at_line_start = true;
+    let mut scan = BlockScanState::new(0, true);
 
-    while pos < raw.len() {
-        if at_line_start {
-            let line_end = raw[pos..].find('\n').map_or(raw.len(), |n| pos + n + 1);
-            let raw_line = raw[pos..line_end].trim_end_matches(['\r', '\n']);
-            if let Some((marker, min_run)) = fence {
-                if is_closing_fence(raw_line, marker, min_run) {
-                    fence = None;
-                }
-                pos = line_end;
-                continue;
-            }
-            if let Some((marker, run)) = opening_fence(raw_line) {
-                fence = Some((marker, run));
-                pos = line_end;
-                continue;
-            }
-        }
-
-        if let Some(next_pos) = advance_inline_code_span(raw, pos) {
-            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
-            pos = next_pos;
+    while scan.pos < raw.len() {
+        if scan.step_fence_or_code(raw, true) {
             continue;
         }
-
-        if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
-            && let Some(tag) = parse_shortcode_tag(raw, pos)
+        if has_tag_prefix(&bytes[scan.pos..])
+            && let Some(tag) = parse_shortcode_tag(raw, scan.pos)
         {
-            if !tag.close
-                && matches!(tag.name.as_str(), "code" | "mermaid")
-                && let Some((_, end)) = find_closing_tag(raw, tag.end, &tag.name, false)
-            {
-                at_line_start = bytes.get(end.saturating_sub(1)) == Some(&b'\n');
-                pos = end;
+            if scan.try_skip_raw_shortcode(raw, &tag) {
                 continue;
             }
             if is_columns_name(&tag.name) {
@@ -1954,26 +1909,64 @@ fn split_columns_inner(raw: &str) -> Vec<&str> {
                     col_depth += 1;
                 }
             }
-            at_line_start = false;
-            pos = tag.end;
+            scan.jump_to(raw, tag.end);
             continue;
         }
-
-        if col_depth == 0 && bytes[pos..].starts_with(b"<--->") {
-            parts.push(&raw[start..pos]);
-            pos += "<--->".len();
-            start = pos;
-            at_line_start = false;
+        if col_depth == 0 && bytes[scan.pos..].starts_with(b"<--->") {
+            parts.push(&raw[start..scan.pos]);
+            let next = scan.pos + "<--->".len();
+            start = next;
+            scan.jump_to(raw, next);
             continue;
         }
-
-        let (b, step) = next_char_step(raw, pos);
-        at_line_start = b == b'\n';
-        pos += step;
+        scan.step_char(raw);
     }
 
     parts.push(&raw[start..]);
     parts
+}
+
+fn simple_span_css(span: MarkdownSpan) -> Result<(String, InlineCss), MarkdownSpan> {
+    match span {
+        MarkdownSpan::Text(t) => Ok((t, InlineCss::default())),
+        MarkdownSpan::Bold(t) => Ok((
+            t,
+            InlineCss {
+                bold: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Italic(t) => Ok((
+            t,
+            InlineCss {
+                italic: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::BoldItalic(t) => Ok((
+            t,
+            InlineCss {
+                bold: true,
+                italic: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Strikethrough(t) => Ok((
+            t,
+            InlineCss {
+                strikethrough: true,
+                ..Default::default()
+            },
+        )),
+        MarkdownSpan::Code(t) => Ok((
+            t,
+            InlineCss {
+                monospace: true,
+                ..Default::default()
+            },
+        )),
+        other => Err(other),
+    }
 }
 
 fn style_single_span(
@@ -1981,96 +1974,55 @@ fn style_single_span(
     outer_url: Option<&str>,
     extra: InlineCss,
 ) -> MarkdownSpan {
-    match span {
-        MarkdownSpan::Text(t) => MarkdownSpan::Styled {
-            text: t,
+    match simple_span_css(span) {
+        Ok((text, base_css)) => MarkdownSpan::Styled {
+            text,
             url: outer_url.map(str::to_owned),
-            css: extra,
+            css: extra.merge(base_css),
         },
-        MarkdownSpan::Bold(t) => MarkdownSpan::Styled {
-            text: t,
-            url: outer_url.map(str::to_owned),
-            css: InlineCss {
-                bold: true,
-                ..extra
-            },
-        },
-        MarkdownSpan::Italic(t) => MarkdownSpan::Styled {
-            text: t,
-            url: outer_url.map(str::to_owned),
-            css: InlineCss {
-                italic: true,
-                ..extra
-            },
-        },
-        MarkdownSpan::BoldItalic(t) => MarkdownSpan::Styled {
-            text: t,
-            url: outer_url.map(str::to_owned),
-            css: InlineCss {
-                bold: true,
-                italic: true,
-                ..extra
-            },
-        },
-        MarkdownSpan::Strikethrough(t) => MarkdownSpan::Styled {
-            text: t,
-            url: outer_url.map(str::to_owned),
-            css: InlineCss {
-                strikethrough: true,
-                ..extra
-            },
-        },
-        MarkdownSpan::Code(t) => MarkdownSpan::Styled {
-            text: t,
-            url: outer_url.map(str::to_owned),
-            css: InlineCss {
-                monospace: true,
-                ..extra
-            },
-        },
-        MarkdownSpan::Link { label, url } => MarkdownSpan::Styled {
+        Err(MarkdownSpan::Link { label, url }) => MarkdownSpan::Styled {
             text: label,
             url: Some(url),
             css: extra,
         },
-        MarkdownSpan::Styled { text, url, css } => MarkdownSpan::Styled {
+        Err(MarkdownSpan::Styled { text, url, css }) => MarkdownSpan::Styled {
             text,
             url: url.or_else(|| outer_url.map(str::to_owned)),
             css: extra.merge(css),
         },
-        MarkdownSpan::Spoiler { spans } => MarkdownSpan::Spoiler {
+        Err(MarkdownSpan::Spoiler { spans }) => MarkdownSpan::Spoiler {
             spans: spans
                 .into_iter()
                 .map(|s| style_single_span(s, outer_url, extra))
                 .collect(),
         },
-        MarkdownSpan::Math {
+        Err(MarkdownSpan::Math {
             source,
             display,
             url,
-        } => MarkdownSpan::Math {
+        }) => MarkdownSpan::Math {
             source,
             display,
             url: url.or_else(|| outer_url.map(str::to_owned)),
         },
-        MarkdownSpan::Image { alt, url } if outer_url.is_some() => MarkdownSpan::StyledImage {
+        Err(MarkdownSpan::Image { alt, url }) if outer_url.is_some() => MarkdownSpan::StyledImage {
             alt,
             url,
             href: outer_url.map(str::to_owned),
             style: super::ImagePresentation::default(),
         },
-        MarkdownSpan::StyledImage {
+        Err(MarkdownSpan::StyledImage {
             alt,
             url,
             href,
             style,
-        } => MarkdownSpan::StyledImage {
+        }) => MarkdownSpan::StyledImage {
             alt,
             url,
             href: href.or_else(|| outer_url.map(str::to_owned)),
             style,
         },
-        other => other,
+        Err(other) => other,
     }
 }
 
@@ -2083,64 +2035,8 @@ fn style_span_list(spans: Vec<MarkdownSpan>, extra: InlineCss) -> Vec<MarkdownSp
 
 fn style_doc_blocks_inline(blocks: &mut [MarkdownDocBlock], extra: InlineCss) {
     for block in blocks {
-        match block {
-            MarkdownDocBlock::Paragraph { spans } => {
-                *spans = style_span_list(std::mem::take(spans), extra);
-            }
-            MarkdownDocBlock::Heading { text, spans, .. } => {
-                *spans = style_span_list(std::mem::take(spans), extra);
-                *text = super::plain_text_from_spans(spans);
-            }
-            MarkdownDocBlock::Quote { blocks: inner, .. }
-            | MarkdownDocBlock::Footnote { blocks: inner, .. }
-            | MarkdownDocBlock::StyledContainer { blocks: inner, .. } => {
-                style_doc_blocks_inline(inner, extra);
-            }
-            MarkdownDocBlock::PullQuote {
-                source,
-                blocks: inner,
-                ..
-            } => {
-                *source = style_span_list(std::mem::take(source), extra);
-                style_doc_blocks_inline(inner, extra);
-            }
-            MarkdownDocBlock::Details {
-                summary,
-                blocks: inner,
-                ..
-            } => {
-                *summary = style_span_list(std::mem::take(summary), extra);
-                style_doc_blocks_inline(inner, extra);
-            }
-            MarkdownDocBlock::Tabs { tabs } => {
-                for tab in tabs {
-                    style_doc_blocks_inline(&mut tab.blocks, extra);
-                }
-            }
-            MarkdownDocBlock::Columns { columns, .. } => {
-                for col in columns {
-                    style_doc_blocks_inline(col, extra);
-                }
-            }
-            MarkdownDocBlock::List { items, .. } => {
-                for item in items {
-                    style_doc_blocks_inline(&mut item.blocks, extra);
-                }
-            }
-            MarkdownDocBlock::Table(table) => {
-                for cell in &mut table.headers {
-                    *cell = style_span_list(std::mem::take(cell), extra);
-                }
-                for row in &mut table.rows {
-                    for cell in row {
-                        *cell = style_span_list(std::mem::take(cell), extra);
-                    }
-                }
-            }
-            MarkdownDocBlock::FrontMatter(_)
-            | MarkdownDocBlock::Code { .. }
-            | MarkdownDocBlock::Rule
-            | MarkdownDocBlock::IncompleteMath { .. } => {}
-        }
+        transform_block_spans(block, &mut |spans| {
+            *spans = style_span_list(std::mem::take(spans), extra);
+        });
     }
 }

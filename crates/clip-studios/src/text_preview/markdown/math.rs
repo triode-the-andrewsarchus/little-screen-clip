@@ -39,18 +39,7 @@ struct Atom {
 }
 
 impl Atom {
-    fn formatted(
-        ui: &egui::Ui,
-        text: String,
-        format: egui::TextFormat,
-        width: f32,
-        size: f32,
-        link: Option<LinkTarget>,
-    ) -> Self {
-        let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = width;
-        job.append(&text, 0.0, format);
-        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    fn from_galley(galley: Arc<egui::Galley>, size: f32, link: Option<LinkTarget>) -> Self {
         let ascent = galley
             .rows
             .first()
@@ -64,6 +53,21 @@ impl Atom {
             link,
             display: false,
         }
+    }
+
+    fn formatted(
+        ui: &egui::Ui,
+        text: &str,
+        format: egui::TextFormat,
+        width: f32,
+        size: f32,
+        link: Option<LinkTarget>,
+    ) -> Self {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = width;
+        job.append(text, 0.0, format);
+        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+        Self::from_galley(galley, size, link)
     }
 
     fn text(
@@ -79,19 +83,7 @@ impl Atom {
             width,
             FontId::proportional(size),
         );
-        let ascent = galley
-            .rows
-            .first()
-            .and_then(|row| row.glyphs.first())
-            .map_or(size, |glyph| glyph.pos.y);
-        Self {
-            width: galley.size().x,
-            ascent,
-            descent: (galley.size().y - ascent).max(0.0),
-            content: Content::Text(galley),
-            link,
-            display: false,
-        }
+        Self::from_galley(galley, size, link)
     }
 
     fn hard_break(size: f32) -> Self {
@@ -106,15 +98,16 @@ impl Atom {
     }
 }
 
-fn atom_with_link(
-    ui: &egui::Ui,
-    text: String,
-    format: egui::TextFormat,
-    width: f32,
-    size: f32,
-    link: Option<LinkTarget>,
-) -> Atom {
-    Atom::formatted(ui, text, format, width, size, link)
+fn row_metrics(row: &[Atom], base_size: f32) -> (f32, f32, f32) {
+    let mut ascent = base_size;
+    let mut descent = base_size * 0.2;
+    let mut occupied = 0.0_f32;
+    for atom in row {
+        ascent = ascent.max(atom.ascent);
+        descent = descent.max(atom.descent);
+        occupied += atom.width;
+    }
+    (ascent, descent, occupied)
 }
 
 struct LineContext<'a> {
@@ -154,15 +147,7 @@ pub(super) fn measure_spans_size(
     let mut max_w: f32 = 0.0;
     let mut total_h: f32 = 0.0;
     for row in rows {
-        let ascent = row
-            .iter()
-            .map(|atom| atom.ascent)
-            .fold(style.size, f32::max);
-        let descent = row
-            .iter()
-            .map(|atom| atom.descent)
-            .fold(style.size * 0.2, f32::max);
-        let occupied: f32 = row.iter().map(|atom| atom.width).sum();
+        let (ascent, descent, occupied) = row_metrics(&row, style.size);
         max_w = max_w.max(occupied);
         total_h += ascent + descent + 2.0;
     }
@@ -188,15 +173,7 @@ pub(super) fn show_spans(
     };
     let atoms = collect_atoms(ui, spans, &line, media);
     for (row_index, row) in wrap_atoms(atoms, line.width).into_iter().enumerate() {
-        let ascent = row
-            .iter()
-            .map(|atom| atom.ascent)
-            .fold(style.size, f32::max);
-        let descent = row
-            .iter()
-            .map(|atom| atom.descent)
-            .fold(style.size * 0.2, f32::max);
-        let occupied: f32 = row.iter().map(|atom| atom.width).sum();
+        let (ascent, descent, occupied) = row_metrics(&row, style.size);
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2(line.width, ascent + descent + 2.0),
             egui::Sense::hover(),
@@ -466,6 +443,139 @@ fn is_web_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+fn plain_span_text(span: &MarkdownSpan) -> &str {
+    match span {
+        MarkdownSpan::Text(t)
+        | MarkdownSpan::Bold(t)
+        | MarkdownSpan::Italic(t)
+        | MarkdownSpan::BoldItalic(t)
+        | MarkdownSpan::Strikethrough(t)
+        | MarkdownSpan::Code(t) => t,
+        MarkdownSpan::HighlightedCode { code, .. } => code,
+        MarkdownSpan::Styled { text, .. } => text,
+        MarkdownSpan::Link { label, .. } => label,
+        MarkdownSpan::Math { source, .. } => source,
+        MarkdownSpan::Image { .. }
+        | MarkdownSpan::StyledImage { .. }
+        | MarkdownSpan::Spoiler { .. }
+        | MarkdownSpan::HardBreak => "",
+    }
+}
+
+/// Splits `text` into word/character-wrapped `Atom`s, preserving single-glyph fallback.
+fn push_wrapped_text_atoms(
+    ui: &egui::Ui,
+    text: &str,
+    format: &egui::TextFormat,
+    max_width: f32,
+    size: f32,
+    link: Option<&LinkTarget>,
+    atoms: &mut Vec<Atom>,
+) {
+    for word in text.split_inclusive(char::is_whitespace) {
+        let atom = Atom::formatted(ui, word, format.clone(), max_width, size, link.cloned());
+        if atom.width <= max_width || word.chars().count() <= 1 {
+            atoms.push(atom);
+            continue;
+        }
+        // Break oversized whitespace-free tokens (CJK runs, long URLs) at char boundaries.
+        let mut chunk_start = 0usize;
+        for (idx, ch) in word.char_indices() {
+            let next_end = idx + ch.len_utf8();
+            let measured = Atom::formatted(
+                ui,
+                &word[chunk_start..next_end],
+                format.clone(),
+                max_width,
+                size,
+                link.cloned(),
+            );
+            if measured.width > max_width && idx > chunk_start {
+                atoms.push(Atom::formatted(
+                    ui,
+                    &word[chunk_start..idx],
+                    format.clone(),
+                    max_width,
+                    size,
+                    link.cloned(),
+                ));
+                chunk_start = idx;
+            }
+        }
+        if chunk_start < word.len() {
+            atoms.push(Atom::formatted(
+                ui,
+                &word[chunk_start..],
+                format.clone(),
+                max_width,
+                size,
+                link.cloned(),
+            ));
+        }
+    }
+}
+
+fn highlighted_code_atoms(
+    ui: &egui::Ui,
+    language: &str,
+    code: &str,
+    line: &LineContext<'_>,
+) -> Vec<Atom> {
+    let code_bg = hex_to_c32(&line.palette.colors.surface_panel);
+    let fallback_fg = super::inline_code_fg(line.palette);
+    let mono = FontId::monospace((line.size * 0.9).max(13.0));
+    let mut atoms = Vec::new();
+    for (token, fg) in
+        super::inline_highlighted_runs(code, language, code_bg, fallback_fg, line.palette)
+    {
+        let fmt = egui::TextFormat {
+            font_id: mono.clone(),
+            color: fg,
+            background: code_bg,
+            ..Default::default()
+        };
+        push_wrapped_text_atoms(ui, &token, &fmt, line.width, line.size, None, &mut atoms);
+    }
+    atoms
+}
+
+fn spoiler_atoms(
+    ui: &egui::Ui,
+    inner: &[MarkdownSpan],
+    span_index: usize,
+    line: &LineContext<'_>,
+) -> Vec<Atom> {
+    let open_id = egui::Id::new(("md_spoiler_open", line.block, span_index));
+    let hover_id = egui::Id::new(("md_spoiler_hover", line.block, span_index));
+    let revealed = ui.ctx().data(|d| {
+        d.get_temp::<bool>(open_id).unwrap_or(false)
+            || d.get_temp::<bool>(hover_id).unwrap_or(false)
+    });
+    let mask = super::spoiler_mask_color(line.palette);
+    let label_text: String = inner.iter().map(plain_span_text).collect();
+    let fmt = egui::TextFormat {
+        font_id: FontId::proportional(line.size),
+        color: if revealed { line.prose_color } else { mask },
+        background: if revealed {
+            hex_to_c32(&line.palette.colors.surface_panel)
+        } else {
+            mask
+        },
+        ..Default::default()
+    };
+    let mut atoms = Vec::new();
+    push_wrapped_text_atoms(
+        ui,
+        &label_text,
+        &fmt,
+        line.width,
+        line.size,
+        None,
+        &mut atoms,
+    );
+    atoms
+}
+
 fn prose_atoms(
     ui: &egui::Ui,
     span: &MarkdownSpan,
@@ -473,11 +583,14 @@ fn prose_atoms(
     line: &LineContext<'_>,
     media: &mut DocMedia<'_>,
 ) -> Vec<Atom> {
-    if matches!(span, MarkdownSpan::HardBreak) {
-        return vec![Atom::hard_break(line.size)];
-    }
-
     let (text, url, format) = match span {
+        MarkdownSpan::HardBreak => return vec![Atom::hard_break(line.size)],
+        MarkdownSpan::HighlightedCode { language, code } => {
+            return highlighted_code_atoms(ui, language, code, line);
+        }
+        MarkdownSpan::Spoiler { spans: inner } => {
+            return spoiler_atoms(ui, inner, span_index, line);
+        }
         MarkdownSpan::Text(text) => (
             text.as_str(),
             None,
@@ -539,81 +652,6 @@ fn prose_atoms(
                 ..Default::default()
             },
         ),
-        MarkdownSpan::HighlightedCode { language, code } => {
-            let code_bg = hex_to_c32(&line.palette.colors.surface_panel);
-            let fallback_fg = super::inline_code_fg(line.palette);
-            let mono = FontId::monospace((line.size * 0.9).max(13.0));
-            let mut atoms = Vec::new();
-            for (token, fg) in
-                super::inline_highlighted_runs(code, language, code_bg, fallback_fg, line.palette)
-            {
-                let fmt = egui::TextFormat {
-                    font_id: mono.clone(),
-                    color: fg,
-                    background: code_bg,
-                    ..Default::default()
-                };
-                for word in token.split_inclusive(char::is_whitespace) {
-                    let atom = Atom::formatted(
-                        ui,
-                        word.to_owned(),
-                        fmt.clone(),
-                        line.width,
-                        line.size,
-                        None,
-                    );
-                    atoms.push(atom);
-                }
-            }
-            return atoms;
-        }
-        MarkdownSpan::Spoiler { spans: inner } => {
-            let mut atoms = Vec::new();
-            let open_id = egui::Id::new(("md_spoiler_open", line.block, span_index));
-            let hover_id = egui::Id::new(("md_spoiler_hover", line.block, span_index));
-            let revealed = ui.ctx().data(|d| {
-                d.get_temp::<bool>(open_id).unwrap_or(false)
-                    || d.get_temp::<bool>(hover_id).unwrap_or(false)
-            });
-            let mask = super::spoiler_mask_color(line.palette);
-            let label_text: String = inner
-                .iter()
-                .map(|s| match s {
-                    MarkdownSpan::Text(t)
-                    | MarkdownSpan::Bold(t)
-                    | MarkdownSpan::Italic(t)
-                    | MarkdownSpan::BoldItalic(t)
-                    | MarkdownSpan::Strikethrough(t)
-                    | MarkdownSpan::Code(t) => t.clone(),
-                    MarkdownSpan::HighlightedCode { code, .. } => code.clone(),
-                    MarkdownSpan::Styled { text, .. } => text.clone(),
-                    MarkdownSpan::Link { label, .. } => label.clone(),
-                    MarkdownSpan::Math { source, .. } => source.clone(),
-                    _ => String::new(),
-                })
-                .collect();
-            let fmt = egui::TextFormat {
-                font_id: FontId::proportional(line.size),
-                color: if revealed { line.prose_color } else { mask },
-                background: if revealed {
-                    hex_to_c32(&line.palette.colors.surface_panel)
-                } else {
-                    mask
-                },
-                ..Default::default()
-            };
-            for word in label_text.split_inclusive(char::is_whitespace) {
-                atoms.push(Atom::formatted(
-                    ui,
-                    word.to_owned(),
-                    fmt.clone(),
-                    line.width,
-                    line.size,
-                    None,
-                ));
-            }
-            return atoms;
-        }
         MarkdownSpan::Link { label, url } => {
             let link_fg = super::link_color(line.palette);
             let target = media.resolve_target(url, link_fg);
@@ -654,60 +692,19 @@ fn prose_atoms(
         }
         MarkdownSpan::Image { .. }
         | MarkdownSpan::StyledImage { .. }
-        | MarkdownSpan::Math { .. }
-        | MarkdownSpan::HardBreak => return Vec::new(),
+        | MarkdownSpan::Math { .. } => return Vec::new(),
     };
 
     let mut atoms = Vec::new();
-    for word in text.split_inclusive(char::is_whitespace) {
-        let atom = atom_with_link(
-            ui,
-            word.to_owned(),
-            format.clone(),
-            line.width,
-            line.size,
-            url.clone(),
-        );
-        if atom.width <= line.width || word.chars().count() <= 1 {
-            atoms.push(atom);
-            continue;
-        }
-        // Break oversized whitespace-free tokens (CJK runs, long URLs) at char boundaries.
-        let mut chunk_start = 0usize;
-        for (idx, ch) in word.char_indices() {
-            let next_end = idx + ch.len_utf8();
-            let candidate = &word[chunk_start..next_end];
-            let measured = atom_with_link(
-                ui,
-                candidate.to_owned(),
-                format.clone(),
-                line.width,
-                line.size,
-                url.clone(),
-            );
-            if measured.width > line.width && idx > chunk_start {
-                atoms.push(atom_with_link(
-                    ui,
-                    word[chunk_start..idx].to_owned(),
-                    format.clone(),
-                    line.width,
-                    line.size,
-                    url.clone(),
-                ));
-                chunk_start = idx;
-            }
-        }
-        if chunk_start < word.len() {
-            atoms.push(atom_with_link(
-                ui,
-                word[chunk_start..].to_owned(),
-                format.clone(),
-                line.width,
-                line.size,
-                url.clone(),
-            ));
-        }
-    }
+    push_wrapped_text_atoms(
+        ui,
+        text,
+        &format,
+        line.width,
+        line.size,
+        url.as_ref(),
+        &mut atoms,
+    );
     atoms
 }
 
