@@ -161,7 +161,13 @@ impl Previews {
         colors: WorkbenchColors,
     ) {
         let library: Option<&Arc<BrushLibrary>> = ready.and_then(|ready| ready.data.brush.as_ref());
+        let count_in_columns = columns.is_some_and(|columns| {
+            columns
+                .metadata_fields()
+                .contains(&super::metadata::Field::BrushCount)
+        });
         let summary = library
+            .filter(|_| !count_in_columns)
             .map(|lib| {
                 if lib.total_count == 1 {
                     format!("{} · 1 brush", lib.format.label())

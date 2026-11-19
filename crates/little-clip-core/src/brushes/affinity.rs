@@ -9,19 +9,11 @@ pub(super) fn parse_afbrushes(
     max_brushes: usize,
     cancelled: &AtomicBool,
 ) -> Result<BrushLibrary, String> {
-    if !bytes.starts_with(b"\x00\xffKA") {
-        return Err("Unrecognized Affinity .afbrushes header".into());
-    }
     let mut brushes = Vec::new();
-    let mut remaining = bytes;
-    while brushes.len() < max_brushes {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
-        }
-        let Some((png, rest)) = mask::embedded_png(remaining) else {
+    for png in embedded_tips(bytes, cancelled)? {
+        if brushes.len() >= max_brushes {
             break;
-        };
-        remaining = rest;
+        }
         if let Some((tip, width, height)) = mask::png(png, mask::OpaqueCoverage::Light) {
             let idx = brushes.len() + 1;
             brushes.push(BrushPreset {
@@ -33,6 +25,9 @@ pub(super) fn parse_afbrushes(
         }
     }
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
     if brushes.is_empty() {
         return Err("No embedded tip rasters found in .afbrushes".into());
     }
@@ -42,4 +37,34 @@ pub(super) fn parse_afbrushes(
         brushes,
         total_count,
     })
+}
+
+pub(super) fn count(bytes: &[u8], cancelled: &AtomicBool) -> Result<usize, String> {
+    let count = embedded_tips(bytes, cancelled)?
+        .filter(|png| mask::png_reader(png).into_dimensions().is_ok())
+        .count();
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
+    if count == 0 {
+        return Err("No embedded tip rasters found in .afbrushes".into());
+    }
+    Ok(count)
+}
+
+fn embedded_tips<'a>(
+    mut bytes: &'a [u8],
+    cancelled: &'a AtomicBool,
+) -> Result<impl Iterator<Item = &'a [u8]>, String> {
+    if !bytes.starts_with(b"\x00\xffKA") {
+        return Err("Unrecognized Affinity .afbrushes header".into());
+    }
+    Ok(std::iter::from_fn(move || {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let (png, rest) = mask::embedded_png(bytes)?;
+        bytes = rest;
+        Some(png)
+    }))
 }

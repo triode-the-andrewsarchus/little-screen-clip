@@ -23,14 +23,18 @@ pub(super) enum OpaqueCoverage {
     Dark,
 }
 
-pub(super) fn png(bytes: &[u8], opaque: OpaqueCoverage) -> Option<(BrushTipKind, u32, u32)> {
+pub(super) fn png_reader(bytes: &[u8]) -> ImageReader<Cursor<&[u8]>> {
     let mut reader = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png);
     let mut limits = crate::item::raster_preview_limits();
     limits.max_image_width = Some(2048);
     limits.max_image_height = Some(2048);
     limits.max_alloc = Some(32 * 1024 * 1024);
     reader.limits(limits);
-    let rgba = reader.decode().ok()?.into_rgba8();
+    reader
+}
+
+pub(super) fn png(bytes: &[u8], opaque: OpaqueCoverage) -> Option<(BrushTipKind, u32, u32)> {
+    let rgba = png_reader(bytes).decode().ok()?.into_rgba8();
     let (width, height) = rgba.dimensions();
     let has_alpha = rgba.pixels().any(|pixel| pixel[3] < 250);
     let alpha = rgba

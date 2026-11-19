@@ -147,6 +147,42 @@ pub fn load_brush_library(
     max_brushes: usize,
     cancelled: &AtomicBool,
 ) -> Result<BrushLibrary, String> {
+    let (format, bytes) = read_brush_snapshot(path, cancelled)?;
+    let fallback_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Brush")
+        .to_owned();
+
+    load_brush_bytes(format, &bytes, &fallback_name, max_brushes, cancelled)
+}
+
+/// Counts the brushes represented by a supported file.
+///
+/// Photoshop and Procreate packs use their index. Affinity counts are based on
+/// recognizable embedded tip headers. Other formats reuse the first-preset
+/// parser and its reported library count.
+///
+/// # Errors
+/// Returns an error for an unreadable or unsupported file, an unrecognized
+/// brush library, or a cancelled request.
+pub fn count_brushes(path: &Path, cancelled: &AtomicBool) -> Result<usize, String> {
+    let (format, bytes) = read_brush_snapshot(path, cancelled)?;
+    let count = match format {
+        BrushFormat::Abr | BrushFormat::ProcreateBrushset => brushkit_count(format, &bytes)?,
+        BrushFormat::AffinityBrushes => affinity::count(&bytes, cancelled)?,
+        _ => load_brush_bytes(format, &bytes, "Brush", 1, cancelled)?.total_count,
+    };
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
+    Ok(count)
+}
+
+fn read_brush_snapshot(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<(BrushFormat, Vec<u8>), String> {
     let format =
         BrushFormat::from_path(path).ok_or_else(|| "Unsupported brush format".to_owned())?;
     if cancelled.load(Ordering::Relaxed) {
@@ -157,14 +193,7 @@ pub fn load_brush_library(
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }
-
-    let fallback_name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Brush")
-        .to_owned();
-
-    load_brush_bytes(format, &bytes, &fallback_name, max_brushes, cancelled)
+    Ok((format, bytes))
 }
 
 /// Parses brush presets from in-memory bytes.
@@ -203,20 +232,9 @@ fn load_via_brushkit(
     max_brushes: usize,
     cancelled: &AtomicBool,
 ) -> Result<BrushLibrary, String> {
-    let bk_format = match format {
-        BrushFormat::Abr => brushkit::preview::Format::Abr,
-        BrushFormat::ProcreateBrush => brushkit::preview::Format::Brush,
-        BrushFormat::ProcreateBrushset => brushkit::preview::Format::Brushset,
-        _ => return Err("Unsupported brushkit format".into()),
-    };
-    let opts = brushkit::preview::PreviewOptions {
-        max_cell: mask::PREVIEW_EDGE,
-    };
-    let preview = |take, keep_going: &mut dyn FnMut() -> bool| {
-        brushkit::preview::preview(bytes, bk_format, opts, take, keep_going)
-            .map_err(|error| format!("Invalid {} brush: {error}", format.label()))
-    };
-    let set = preview(
+    let set = brushkit_preview(
+        format,
+        bytes,
         brushkit::preview::Take::FirstAvailable(max_brushes),
         &mut || !cancelled.load(Ordering::Relaxed),
     )?;
@@ -256,9 +274,7 @@ fn load_via_brushkit(
     if brushes.is_empty() {
         return Err(format!("No readable brush tips in {}", format.label()));
     }
-    // A gate that stops before the first entry counts the index without decoding
-    // tips. FirstAvailable stops at its sample size without counting the rest.
-    let total_count = preview(brushkit::preview::Take::All, &mut || false)?.not_reached;
+    let total_count = brushkit_count(format, bytes)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }
@@ -267,6 +283,31 @@ fn load_via_brushkit(
         brushes,
         total_count,
     })
+}
+
+fn brushkit_preview(
+    format: BrushFormat,
+    bytes: &[u8],
+    take: brushkit::preview::Take,
+    keep_going: &mut dyn FnMut() -> bool,
+) -> Result<brushkit::preview::PreviewSet, String> {
+    let bk_format = match format {
+        BrushFormat::Abr => brushkit::preview::Format::Abr,
+        BrushFormat::ProcreateBrush => brushkit::preview::Format::Brush,
+        BrushFormat::ProcreateBrushset => brushkit::preview::Format::Brushset,
+        _ => return Err("Unsupported brushkit format".into()),
+    };
+    let opts = brushkit::preview::PreviewOptions {
+        max_cell: mask::PREVIEW_EDGE,
+    };
+    brushkit::preview::preview(bytes, bk_format, opts, take, keep_going)
+        .map_err(|error| format!("Invalid {} brush: {error}", format.label()))
+}
+
+fn brushkit_count(format: BrushFormat, bytes: &[u8]) -> Result<usize, String> {
+    // A gate that stops before the first entry counts the index without decoding
+    // tips. FirstAvailable stops at its sample size without counting the rest.
+    Ok(brushkit_preview(format, bytes, brushkit::preview::Take::All, &mut || false)?.not_reached)
 }
 
 #[cfg(test)]
@@ -403,6 +444,26 @@ mod tests {
             assert_eq!(library.brushes.len(), 1);
             assert_eq!(library.total_count, 2);
         }
+    }
+
+    #[test]
+    fn brushset_count_uses_the_pack_index_even_when_tips_are_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("indexed.brushset");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for folder in ["first", "second"] {
+            archive
+                .start_file(
+                    format!("{folder}/Brush.archive"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            archive.write_all(b"metadata-only fixture").unwrap();
+        }
+        archive.finish().unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert_eq!(count_brushes(&path, &cancelled).unwrap(), 2);
+        assert!(load_brush_library(&path, 1, &cancelled).is_err());
     }
 
     #[test]
