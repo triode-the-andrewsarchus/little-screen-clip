@@ -1,10 +1,10 @@
-use super::{BrushDynamics, BrushStrokeParams, DabCurve};
+use super::{BrushDynamics, BrushStrokeParams, BrushkitStroke, DabCurve};
 use brushkit::abr::{BrushDescriptor, SampledBrush, parse_abr_all_deferred_without_patterns};
 
 pub(super) fn settings(
     bytes: &[u8],
     indices: &[usize],
-) -> Result<(usize, Vec<BrushStrokeParams>), String> {
+) -> Result<(usize, Vec<BrushkitStroke>), String> {
     let deferred = parse_abr_all_deferred_without_patterns(bytes)
         .map_err(|error| format!("Invalid ABR brush: {error}"))?;
     let pack = &deferred.pack;
@@ -39,10 +39,12 @@ pub(super) fn settings(
 
     let settings = indices
         .iter()
-        .map(|&index| {
-            rows.get(index)
+        .map(|&index| BrushkitStroke {
+            params: rows
+                .get(index)
                 .and_then(|(_, descriptor)| *descriptor)
-                .map_or_else(BrushStrokeParams::default, stroke_params)
+                .map_or_else(BrushStrokeParams::default, stroke_params),
+            ..Default::default()
         })
         .collect();
     Ok((rows.len(), settings))

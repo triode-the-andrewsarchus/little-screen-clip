@@ -1,4 +1,4 @@
-use super::{BrushDynamics, BrushFormat, BrushStrokeParams, DabCurve};
+use super::{BrushDynamics, BrushFormat, BrushStrokeParams, BrushkitStroke, DabCurve};
 use brushkit::preview::procreate::{
     Zip, archive_objects_and_main, parse_brushset_plist, parse_plist_guarded,
 };
@@ -9,7 +9,7 @@ pub(super) fn settings(
     format: BrushFormat,
     indices: &[usize],
     cancelled: &AtomicBool,
-) -> Result<(usize, Vec<BrushStrokeParams>), String> {
+) -> Result<(usize, Vec<BrushkitStroke>), String> {
     let mut zip = Zip::open(bytes)?;
     // Use the same index as the tip previews, including repeated pack members.
     let members = if format == BrushFormat::ProcreateBrush {
@@ -38,7 +38,7 @@ pub(super) fn settings(
                     format!("{member}/Brush.archive")
                 };
                 let bytes = zip.read_plist(&path).ok()?;
-                archive_params(&bytes)
+                archive_settings(&bytes)
             })
             .unwrap_or_default();
         settings.push(params);
@@ -46,7 +46,7 @@ pub(super) fn settings(
     Ok((members.len(), settings))
 }
 
-fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
+fn archive_settings(bytes: &[u8]) -> Option<BrushkitStroke> {
     let archive = parse_plist_guarded(bytes, "Brush.archive").ok()?;
     let (objects, main) = archive_objects_and_main(&archive).ok()?;
     let value = |key| {
@@ -64,6 +64,7 @@ fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
             .map(|n| n as f32)
             .filter(|n| n.is_finite())
     };
+    let boolean = |key| value(key).and_then(|v| v.as_boolean()).unwrap_or(false);
     let unit = |key| number(key).unwrap_or(0.0).clamp(0.0, 1.0);
     let pressure = |key| {
         let strength = number(key).unwrap_or(0.0).clamp(-1.0, 1.0);
@@ -74,7 +75,7 @@ fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
         }
     };
 
-    Some(BrushStrokeParams {
+    let params = BrushStrokeParams {
         spacing: number("plotSpacing").unwrap_or(0.16).clamp(0.01, 5.0),
         angle_deg: number("shapeAngle")
             .unwrap_or(0.0)
@@ -91,9 +92,7 @@ fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
                 .to_degrees()
                 .clamp(0.0, 180.0),
             follow_direction: number("shapeRotation").unwrap_or(0.0).clamp(-1.0, 1.0),
-            random_start_angle: value("shapeRandomise")
-                .and_then(|v| v.as_boolean())
-                .unwrap_or(false),
+            random_start_angle: boolean("shapeRandomise"),
             scatter_along_stroke: true,
             taper_start: unit("taperStartLength"),
             taper_end: unit("taperEndLength"),
@@ -102,5 +101,9 @@ fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
             ..Default::default()
         },
         ..Default::default()
+    };
+    Some(BrushkitStroke {
+        params,
+        invert_mask: boolean("shapeInverted"),
     })
 }

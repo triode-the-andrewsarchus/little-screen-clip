@@ -258,11 +258,11 @@ fn load_via_brushkit(
     };
     let mut brushes = Vec::with_capacity(set.entries.len());
     let set_name = set.set_name.as_deref().filter(|s| !s.trim().is_empty());
-    for (entry, params) in set.entries.into_iter().zip(settings) {
+    for (entry, settings) in set.entries.into_iter().zip(settings) {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        if let Some(preset) = brushkit_preset(entry, params, set_name, fallback_name, format) {
+        if let Some(preset) = brushkit_preset(entry, settings, set_name, fallback_name, format) {
             brushes.push(preset);
         }
     }
@@ -280,14 +280,20 @@ fn load_via_brushkit(
     })
 }
 
+#[derive(Default)]
+struct BrushkitStroke {
+    params: BrushStrokeParams,
+    invert_mask: bool,
+}
+
 fn brushkit_preset(
     entry: brushkit::preview::PreviewEntry,
-    mut params: BrushStrokeParams,
+    settings: BrushkitStroke,
     set_name: Option<&str>,
     fallback_name: &str,
     format: BrushFormat,
 ) -> Option<BrushPreset> {
-    let brushkit::preview::TipPreview::Available(bitmap) = entry.tip else {
+    let brushkit::preview::TipPreview::Available(mut bitmap) = entry.tip else {
         return None;
     };
     let name = if !entry.name.trim().is_empty() {
@@ -302,6 +308,13 @@ fn brushkit_preset(
         .map_or((bitmap.width, bitmap.height), |dims| {
             (dims.width(), dims.height())
         });
+    let mut params = settings.params;
+    if settings.invert_mask {
+        bitmap
+            .data
+            .iter_mut()
+            .for_each(|value| *value = 255 - *value);
+    }
     if format != BrushFormat::Abr {
         params.size_px = width.max(height) as f32;
     }
@@ -498,7 +511,7 @@ mod tests {
 
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
-        let brush_archive = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>$objects</key><array><string>$null</string><dict><key>plotSpacing</key><real>0.55</real><key>shapeRotation</key><real>1.0</real><key>taperEndLength</key><real>0.2</real><key>taperSize</key><real>1.0</real></dict></array></dict></plist>"#;
+        let brush_archive = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>$objects</key><array><string>$null</string><dict><key>plotSpacing</key><real>0.55</real><key>shapeRotation</key><real>1.0</real><key>shapeInverted</key><true/><key>taperEndLength</key><real>0.2</real><key>taperSize</key><real>1.0</real></dict></array></dict></plist>"#;
         let shape = make_png(4, 4);
         for prefix in ["a", "b"] {
             archive
@@ -524,6 +537,8 @@ mod tests {
                 assert_eq!(params.spacing, 0.55);
                 assert_eq!(params.dynamics.follow_direction, 1.0);
                 assert_eq!(params.dynamics.taper(1.0), 1.0);
+                assert!(matches!(&library.brushes[0].tip,
+                    BrushTipKind::AlphaMask { alpha, .. } if alpha.iter().all(|&value| value == 0)));
             }
         }
     }
