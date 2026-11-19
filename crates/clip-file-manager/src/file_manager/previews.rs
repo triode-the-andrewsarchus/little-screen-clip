@@ -132,7 +132,7 @@ impl EntryPreviews {
             }
             *version = entry.revision;
             self.system_refresh.remove(id);
-            if entry.is_vcv_patch() {
+            if entry.is_vcv_patch() || entry.is_brush() {
                 *id = uuid::Uuid::new_v4();
             }
         }
@@ -323,7 +323,10 @@ impl EntryPreviews {
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
                 } else if entry.is_brush() {
-                    Source::Brush(entry.path.clone())
+                    Source::Brush {
+                        path: entry.path.clone(),
+                        revision: entry.revision,
+                    }
                 } else if entry.is_material() {
                     Source::Material(super::material_strip::Request::Library(entry.path.clone()))
                 } else if super::midi_strip::is_midi(&entry.path) {
@@ -1097,6 +1100,34 @@ mod tests {
         let denied = previews.music(&ctx, &entry, 1024).unwrap();
         assert!(denied.data.spectrum.is_none());
         assert!(denied.data.detail.contains("outside the published search"));
+    }
+
+    #[test]
+    fn changed_brush_gets_a_new_raster_identity_and_rejects_old_listing() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("tip.vbr");
+        std::fs::write(&path, "GIMP-VBR\n1.5\nOld\ncircle\n10\n20\n2\n0.7\n1\n0\n").unwrap();
+        let previous = single_entry(folder.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        let original = previews.identity(&previous);
+
+        std::fs::write(
+            &path,
+            "GIMP-VBR\n1.5\nUpdated\nsquare\n15\n24\n2\n0.9\n1\n0\n",
+        )
+        .unwrap();
+        let stale = await_listing(&mut previews, &ctx, &previous);
+        assert!(stale.data.brush.is_none());
+        assert!(stale.data.detail.contains("changed"));
+
+        let updated = single_entry(folder.path());
+        assert_ne!(previews.identity(&updated), original);
+        let ready = await_listing(&mut previews, &ctx, &updated);
+        assert_eq!(
+            ready.data.brush.as_ref().unwrap().brushes[0].name,
+            "Updated"
+        );
     }
 
     #[test]

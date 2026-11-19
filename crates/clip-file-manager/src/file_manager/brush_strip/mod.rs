@@ -38,6 +38,16 @@ impl StrokeRequest {
     }
 }
 
+pub(super) fn load_listing(path: &Path, revision: u64, token: &AtomicBool) -> PreviewData {
+    let check = || super::filesystem::check_revision(path, revision);
+    check()
+        .and_then(|()| {
+            let preview = load(path, token);
+            check().map(|()| preview)
+        })
+        .unwrap_or_else(|error| PreviewData::new(String::new(), error, Icon::Brush))
+}
+
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Brush".into(), Icon::Brush);
     match little_clip_core::brushes::load_brush_library(path, 64, token) {

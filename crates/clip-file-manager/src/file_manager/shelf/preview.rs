@@ -78,7 +78,10 @@ pub(in crate::file_manager) enum Source {
     },
     Midi(PathBuf),
     Blend(PathBuf),
-    Brush(PathBuf),
+    Brush {
+        path: PathBuf,
+        revision: u64,
+    },
     BrushStroke(super::super::brush_strip::StrokeRequest),
     Material(super::super::material_strip::Request),
     MidiRaster {
@@ -145,7 +148,7 @@ impl Source {
             | Self::Photo { .. }
             | Self::StudioPhoto { .. }
             | Self::Blend(_)
-            | Self::Brush(_)
+            | Self::Brush { .. }
             | Self::BrushStroke(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
             | Self::Markdown { .. }
@@ -222,7 +225,9 @@ impl Source {
                 super::super::music::preview::load(&path, spectrum, token)
             }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
-            Source::Brush(path) => super::super::brush_strip::load(&path, 64, token),
+            Source::Brush { path, revision } => {
+                super::super::brush_strip::load_listing(&path, revision, token)
+            }
             Source::BrushStroke(request) => request.render(),
             Source::Material(request) => request.load(token),
             Source::Handwritten(path) => {
