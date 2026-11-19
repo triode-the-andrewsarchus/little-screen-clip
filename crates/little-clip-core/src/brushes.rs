@@ -14,7 +14,8 @@ mod mypaint;
 mod procreate;
 pub mod render;
 
-pub use dynamics::{BrushDynamics, PressureCurve};
+pub use dynamics::BrushDynamics;
+use dynamics::DabCurve;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -421,6 +422,27 @@ mod tests {
             BrushTipKind::AlphaMask { width: 8, height: 4, alpha }
                 if alpha == &[200; 32]
         ));
+    }
+
+    #[test]
+    fn krita_reads_only_active_master_pressure_and_fuzzy_rotation() {
+        let xml = r#"<Preset name="Test" paintopid="paintbrush">
+          <param name="PressureSize">true</param>
+          <param name="SizeUseCurve">true</param>
+          <param name="SizeSensor"><![CDATA[<!DOCTYPE params> <params id="pressure"><curve>0,0.2;0.5,0.3;1,1;</curve></params>]]></param>
+          <param name="FlowUseCurve">false</param>
+          <param name="FlowSensor"><![CDATA[<params id="pressure"/>]]></param>
+          <param name="PressureRotation">true</param>
+          <param name="RotationUseCurve">true</param>
+          <param name="RotationSensor"><![CDATA[<params id="fuzzy"/>]]></param>
+          <param name="RotationValue">0.5</param>
+          <param name="MaskingBrush/Preset/SizeSensor">ignored</param>
+        </Preset>"#;
+        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let dynamics = preset.params.dynamics;
+        assert_eq!(dynamics.size.unwrap().at(0.5), 0.3);
+        assert!(dynamics.flow.is_none());
+        assert_eq!(dynamics.random_angle.unwrap().at(1.0), 90.0);
     }
 
     #[test]

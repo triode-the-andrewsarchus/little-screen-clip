@@ -1,6 +1,6 @@
 use super::{
-    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
-    bounded_label, gimp, mask,
+    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, DabCurve,
+    ParametricShape, bounded_label, gimp, mask,
 };
 use base64::Engine as _;
 use std::io::{Cursor, Read};
@@ -32,26 +32,15 @@ pub(super) fn parse_kpp_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
         .to_owned();
     let paintop = bounded_label(root.attribute("paintopid").unwrap_or("paintbrush"));
 
-    let mut params = BrushStrokeParams::default();
-    let mut brush_def_xml = None;
-    for node in doc.descendants() {
-        if node.tag_name().name() != "param" {
-            continue;
-        }
-        match node.attribute("name") {
-            Some("Opacity") => {
-                if let Some(val) = node.text().and_then(|t| t.trim().parse::<f32>().ok()) {
-                    params.opacity = val.clamp(0.05, 1.0);
-                }
-            }
-            Some("brush_definition") => {
-                brush_def_xml = node.text().map(str::to_owned);
-            }
-            _ => {}
-        }
-    }
+    let param = |name: &str| {
+        root.children()
+            .find(|node| node.has_tag_name("param") && node.attribute("name") == Some(name))
+            .and_then(|node| node.text())
+            .map(str::trim)
+    };
+    let mut params = paintbrush_params(&param);
 
-    let tip = if let Some(ref def_xml) = brush_def_xml
+    let tip = if let Some(def_xml) = param("brush_definition")
         && let Ok(def_doc) = roxmltree::Document::parse_with_options(def_xml, preset_xml_options())
     {
         parse_brush_definition(def_doc.root_element(), root, &mut params)
@@ -73,6 +62,82 @@ pub(super) fn parse_kpp_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
         params,
         detail,
     })
+}
+
+fn paintbrush_params<'a>(param: &impl Fn(&str) -> Option<&'a str>) -> BrushStrokeParams {
+    let number = |name, default| {
+        param(name)
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(default)
+            .clamp(0.0, 1.0)
+    };
+    let mut params = BrushStrokeParams {
+        opacity: number("OpacityValue", number("Opacity", 1.0)),
+        flow: number("FlowValue", 1.0),
+        ..Default::default()
+    };
+    if param("PressureSize") == Some("true") {
+        let strength = number("SizeValue", 1.0);
+        params.dynamics.size = sensor_curve(param, "Size", "pressure", |v| v * strength);
+    }
+    params.dynamics.opacity = sensor_curve(param, "Opacity", "pressure", |v| v);
+    params.dynamics.flow = sensor_curve(param, "Flow", "pressure", |v| v);
+    if param("PressureRotation") == Some("true") {
+        let strength = number("RotationValue", 1.0) * 180.0;
+        params.dynamics.random_angle =
+            sensor_curve(param, "Rotation", "fuzzy", |v| (2.0 * v - 1.0) * strength);
+        params.dynamics.angle = sensor_curve(param, "Rotation", "pressure", |v| {
+            (1.0 - 2.0 * v) * strength
+        });
+    }
+    params
+}
+
+fn sensor_curve<'a>(
+    param: &impl Fn(&str) -> Option<&'a str>,
+    property: &str,
+    sensor_id: &str,
+    scale: impl Fn(f32) -> f32,
+) -> Option<DabCurve> {
+    if param(&format!("{property}UseCurve")) != Some("true") {
+        return None;
+    }
+    let xml = param(&format!("{property}Sensor"))?;
+    let xml = xml
+        .strip_prefix("<!DOCTYPE params>")
+        .unwrap_or(xml)
+        .trim_start();
+    let doc = roxmltree::Document::parse_with_options(xml, preset_xml_options()).ok()?;
+    let sensor = doc.root_element();
+    if !sensor.has_tag_name("params") || sensor.attribute("id") != Some(sensor_id) {
+        return None;
+    }
+    let common = (param(&format!("{property}UseSameCurve")) == Some("true"))
+        .then(|| param(&format!("{property}commonCurve")))
+        .flatten();
+    let curve = common.or_else(|| {
+        sensor
+            .children()
+            .find(|node| node.has_tag_name("curve"))
+            .and_then(|node| node.text())
+    });
+    let Some(curve) = curve else {
+        return Some(DabCurve::linear(scale(0.0), scale(1.0)));
+    };
+    let points = curve
+        .trim()
+        .trim_end_matches(';')
+        .split(';')
+        .take(65)
+        .map(|point| {
+            let (x, y) = point.split_once(',')?;
+            let x = x.trim().parse().ok()?;
+            let y: f32 = y.trim().parse().ok()?;
+            (0.0..=1.0).contains(&y).then(|| (x, scale(y)))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    DabCurve::from_points(points.into_iter())
 }
 
 fn preset_xml_options() -> roxmltree::ParsingOptions {

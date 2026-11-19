@@ -1,4 +1,4 @@
-use super::{BrushDynamics, BrushStrokeParams, PressureCurve};
+use super::{BrushDynamics, BrushStrokeParams, DabCurve};
 use brushkit::abr::{BrushDescriptor, SampledBrush, parse_abr_all_deferred_without_patterns};
 
 pub(super) fn settings(
@@ -60,10 +60,10 @@ fn stroke_params(desc: &BrushDescriptor) -> BrushStrokeParams {
         scatter: number(desc.scatter_amount_pct, 0.0, 1000.0, 0.0) / 50.0,
         dynamics: BrushDynamics {
             size: (desc.pressure_size_control == PEN_PRESSURE)
-                .then(|| PressureCurve::linear(unit(desc.minimum_diameter_pct), 1.0)),
+                .then(|| DabCurve::linear(unit(desc.minimum_diameter_pct), 1.0)),
             opacity: (desc.pressure_opacity_control == PEN_PRESSURE)
-                .then(|| PressureCurve::linear(0.0, 1.0)),
-            flow: (desc.flow_control == PEN_PRESSURE).then(|| PressureCurve::linear(0.0, 1.0)),
+                .then(|| DabCurve::linear(0.0, 1.0)),
+            flow: (desc.flow_control == PEN_PRESSURE).then(|| DabCurve::linear(0.0, 1.0)),
             size_jitter: unit(desc.size_jitter_pct),
             angle_jitter_deg: unit(desc.angle_jitter_pct) * 180.0,
             opacity_jitter: unit(desc.opacity_jitter_pct),

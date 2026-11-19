@@ -1,4 +1,4 @@
-use super::{BrushPreset, BrushTipKind, ParametricShape, PressureCurve};
+use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape};
 use crate::ImageThumbnail;
 use std::f32::consts::PI;
 
@@ -168,7 +168,7 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
     let params = &preset.params;
     let dynamics = &params.dynamics;
     let pressure = (sample.t * PI).sin().max(0.0).powf(0.65);
-    let response = |curve: &Option<PressureCurve>, fallback| {
+    let response = |curve: &Option<DabCurve>, fallback| {
         curve.as_ref().map_or(fallback, |curve| curve.at(pressure))
     };
     let random = |channel| signed_random(sample.seed, channel);
@@ -187,6 +187,10 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
         + response(&dynamics.angle, 0.0)
         + sample.direction.to_degrees() * dynamics.follow_direction
         + random(4) * dynamics.angle_jitter_deg
+        + dynamics
+            .random_angle
+            .as_ref()
+            .map_or(0.0, |curve| curve.at((random(9) + 1.0) * 0.5))
         + signed_random(sample.start_seed, 7) * 180.0 * f32::from(dynamics.random_start_angle);
     let (sin, cos) = sample.direction.sin_cos();
     let scatter = params.scatter.clamp(0.0, 4.0) * radius;
@@ -387,7 +391,7 @@ mod tests {
             position: (0.0, 0.0),
         };
         assert_eq!(sample_dab(&preset, 10.0, sample(0.0)).radius, 10.0);
-        preset.params.dynamics.size = Some(PressureCurve::linear(0.3, 1.0));
+        preset.params.dynamics.size = Some(DabCurve::linear(0.3, 1.0));
         preset.params.dynamics.taper_start = 0.25;
         preset.params.dynamics.taper_opacity = 1.0;
         let start = sample_dab(&preset, 10.0, sample(0.0));

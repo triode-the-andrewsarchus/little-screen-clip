@@ -1,4 +1,4 @@
-use super::{BrushDynamics, BrushFormat, BrushStrokeParams, PressureCurve};
+use super::{BrushDynamics, BrushFormat, BrushStrokeParams, DabCurve};
 use brushkit::preview::procreate::{
     Zip, archive_objects_and_main, parse_brushset_plist, parse_plist_guarded,
 };
@@ -68,8 +68,8 @@ fn archive_params(bytes: &[u8]) -> Option<BrushStrokeParams> {
     let pressure = |key| {
         let strength = number(key).unwrap_or(0.0).clamp(-1.0, 1.0);
         match strength {
-            strength if strength > 0.0 => Some(PressureCurve::linear(1.0 - strength, 1.0)),
-            strength if strength < 0.0 => Some(PressureCurve::linear(1.0, 1.0 + strength)),
+            strength if strength > 0.0 => Some(DabCurve::linear(1.0 - strength, 1.0)),
+            strength if strength < 0.0 => Some(DabCurve::linear(1.0, 1.0 + strength)),
             _ => None,
         }
     };

@@ -1,8 +1,8 @@
-/// A sampled dab property as a function of pen pressure.
+/// A piecewise-linear response to a normalized brush input.
 #[derive(Clone, Debug)]
-pub struct PressureCurve(Vec<(f32, f32)>);
+pub(super) struct DabCurve(Vec<(f32, f32)>);
 
-impl PressureCurve {
+impl DabCurve {
     pub(super) fn linear(min: f32, max: f32) -> Self {
         Self(vec![(0.0, min), (1.0, max)])
     }
@@ -20,15 +20,15 @@ impl PressureCurve {
         Some(Self(points))
     }
 
-    pub(super) fn at(&self, pressure: f32) -> f32 {
-        let end = self.0.partition_point(|point| point.0 < pressure);
+    pub(super) fn at(&self, input: f32) -> f32 {
+        let end = self.0.partition_point(|point| point.0 < input);
         match end {
             0 => self.0[0].1,
             end if end == self.0.len() => self.0[end - 1].1,
             end => {
                 let (x0, y0) = self.0[end - 1];
                 let (x1, y1) = self.0[end];
-                y0 + (y1 - y0) * ((pressure - x0) / (x1 - x0))
+                y0 + (y1 - y0) * ((input - x0) / (x1 - x0))
             }
         }
     }
@@ -37,12 +37,13 @@ impl PressureCurve {
 /// Optional dab behavior recovered from a brush preset for preview rendering.
 #[derive(Clone, Debug, Default)]
 pub struct BrushDynamics {
-    pub(super) size: Option<PressureCurve>,
-    pub(super) opacity: Option<PressureCurve>,
-    pub(super) flow: Option<PressureCurve>,
-    pub(super) angle: Option<PressureCurve>,
-    pub(super) hardness: Option<PressureCurve>,
-    pub(super) aspect: Option<PressureCurve>,
+    pub(super) size: Option<DabCurve>,
+    pub(super) opacity: Option<DabCurve>,
+    pub(super) flow: Option<DabCurve>,
+    pub(super) angle: Option<DabCurve>,
+    pub(super) random_angle: Option<DabCurve>,
+    pub(super) hardness: Option<DabCurve>,
+    pub(super) aspect: Option<DabCurve>,
     pub(super) size_jitter: f32,
     pub(super) opacity_jitter: f32,
     pub(super) flow_jitter: f32,
