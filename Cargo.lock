@@ -6445,6 +6445,7 @@ dependencies = [
  "roxmltree 0.20.0",
  "rquickjs",
  "rustix 1.1.6",
+ "scraper",
  "serde",
  "serde_json",
  "structurizr-core",

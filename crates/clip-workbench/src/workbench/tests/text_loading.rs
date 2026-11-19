@@ -411,3 +411,82 @@ fn replacing_clipboard_source_waits_for_accepted_copy_completion() {
     app.replace_viewer(None);
     assert!(app.viewer.is_none());
 }
+
+#[test]
+fn clicking_internal_hugo_link_in_workbench_viewer_navigates_to_target_document() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let content = temp_dir.path().join("content");
+    let first = content.join("webdev.md");
+    let target = content.join("Engineering/Engineering.md");
+    std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&first, "See [Engineering](/engineering/engineering).\n").unwrap();
+    std::fs::write(&target, "# Engineering\nOpened target doc.\n").unwrap();
+
+    let mut app = test_workbench_app(None, VecDeque::new());
+    app.open_slot_file_preview(&first, false);
+    wait_for_text_load(&mut app);
+
+    let ctx = egui::Context::default();
+    let run_modal = |app: &mut WorkbenchApp, events: Vec<egui::Event>| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1024.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = app.render_modal_viewers(ctx);
+            },
+        )
+    };
+
+    let output = run_modal(&mut app, Vec::new());
+    let link_shape = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text().contains("Engineering") => Some(shape),
+            _ => None,
+        })
+        .expect("internal link text shape");
+    let byte_start = link_shape.galley.text().find("Engineering").unwrap();
+    let char_idx = link_shape.galley.text()[..byte_start].chars().count() + 2;
+    let cursor = link_shape
+        .galley
+        .from_ccursor(egui::text::CCursor::new(char_idx));
+    let click_pos = link_shape.pos
+        + link_shape
+            .galley
+            .pos_from_cursor(&cursor)
+            .center()
+            .to_vec2();
+
+    let _ = run_modal(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(click_pos),
+            egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    wait_for_text_load(&mut app);
+    let Some(ViewerSession::Text(state)) = &app.viewer else {
+        panic!("expected navigated Text viewer in workbench");
+    };
+    assert_eq!(state.path.as_deref(), Some(target.as_path()));
+    assert!(state.content.contains("Opened target doc."));
+}

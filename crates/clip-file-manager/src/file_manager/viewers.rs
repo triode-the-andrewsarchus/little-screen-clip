@@ -123,6 +123,8 @@ pub(super) struct Viewers {
     video_start_seconds: f64,
     document_start: Option<super::DocumentPosition>,
     system_navigation: Option<super::system::BrowserTarget>,
+    document_navigation: Option<PathBuf>,
+    pending_navigation_target: Option<(PathBuf, Option<super::search::SourceGuard>)>,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -453,6 +455,7 @@ impl Viewers {
                             .clicked()
                         {
                             self.confirm_close = false;
+                            self.pending_navigation_target = None;
                         }
                         if ui
                             .add(clip_ui::buttons::ButtonRole::Destructive.button(
@@ -465,8 +468,15 @@ impl Viewers {
                             ))
                             .clicked()
                         {
-                            self.clear();
-                            self.gallery = None;
+                            if let Some((target, guard)) = self.pending_navigation_target.take() {
+                                self.clear();
+                                self.gallery = None;
+                                self.source_guard = guard;
+                                self.open(target);
+                            } else {
+                                self.clear();
+                                self.gallery = None;
+                            }
                         }
                     });
                 });
@@ -481,6 +491,11 @@ impl Viewers {
             {
                 self.system_navigation = Some(target);
                 *close = true;
+            }
+            if let ViewerSession::Text(state) = viewer
+                && let Some(target) = state.take_pending_navigation()
+            {
+                self.document_navigation = Some(target);
             }
             match viewer {
                 ViewerSession::System(state) => self.path = Some(state.document.path.clone()),
@@ -499,6 +514,28 @@ impl Viewers {
     }
     pub fn take_system_navigation(&mut self) -> Option<super::system::BrowserTarget> {
         self.system_navigation.take()
+    }
+    pub(in crate::file_manager) fn take_document_navigation(&mut self) -> Option<PathBuf> {
+        self.document_navigation.take()
+    }
+    pub(in crate::file_manager) fn navigate_to_document(
+        &mut self,
+        path: PathBuf,
+        source_guard: Option<super::search::SourceGuard>,
+    ) {
+        if self.rename.busy() || self.collection_pending() || self.writes_pending() {
+            self.error = Some("Wait for file save, export or copy to finish.".into());
+            return;
+        }
+        if self.session_dirty() || self.collection_dirty() {
+            self.pending_navigation_target = Some((path, source_guard));
+            self.confirm_close = true;
+            return;
+        }
+        self.clear();
+        self.gallery = None;
+        self.source_guard = source_guard;
+        self.open(path);
     }
     pub fn request_close(&mut self) -> bool {
         if self.rename.open {
@@ -549,6 +586,8 @@ impl Viewers {
         self.pad_trim = None;
         self.audio_return_saving = false;
         self.video_start_seconds = 0.0;
+        self.document_navigation = None;
+        self.pending_navigation_target = None;
     }
     fn open_external(&mut self) {
         if let Some(ViewerSession::Video(state)) = &mut self.session {
@@ -1444,6 +1483,36 @@ mod tests {
             "expected Pdf or Text viewer session for office document"
         );
         assert_eq!(viewers.path.as_ref(), Some(&rtf_path));
+        assert!(viewers.request_close());
+        assert!(!viewers.active());
+    }
+
+    #[test]
+    fn internal_document_navigation_opens_target_and_guards_unsaved_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = dir.path().join("content");
+        let first = content.join("webdev.md");
+        let second = content.join("Engineering/Engineering.md");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(&first, "# First\n[Eng](/engineering/engineering)\n").unwrap();
+        std::fs::write(&second, "# Engineering\nSecond body.\n").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut viewers = Viewers::default();
+        viewers.open(first.clone());
+        finish_loading(&mut viewers, &ctx);
+        assert_eq!(viewers.path.as_ref(), Some(&first));
+
+        // Clean session navigates straight to the target document.
+        viewers.navigate_to_document(second.clone(), None);
+        finish_loading(&mut viewers, &ctx);
+        assert_eq!(viewers.path.as_ref(), Some(&second));
+        let Some(ViewerSession::Text(state)) = &viewers.session else {
+            panic!("expected Text viewer session for target markdown");
+        };
+        assert_eq!(state.path(), second);
+
         assert!(viewers.request_close());
         assert!(!viewers.active());
     }

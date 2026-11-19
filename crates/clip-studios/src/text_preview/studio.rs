@@ -261,26 +261,26 @@ impl TextPreviewState {
             }
         }
 
-        let wrap_label = if self.wrap_lines {
-            "Wrap: ON"
-        } else {
-            "Wrap: OFF"
-        };
-        let wrap_btn = crate::ui_ext::mode_tab_button_icon(
-            Some(Icon::Wrap),
-            wrap_label,
-            self.wrap_lines,
-            palette,
-        );
-        if ui
-            .add(wrap_btn)
-            .on_hover_text("Toggle line-wrapping on/off")
-            .clicked()
-        {
-            self.wrap_lines = !self.wrap_lines;
-        }
-
         if self.view_mode == TextViewMode::Raw {
+            let wrap_label = if self.wrap_lines {
+                "Wrap: ON"
+            } else {
+                "Wrap: OFF"
+            };
+            let wrap_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(Icon::Wrap),
+                wrap_label,
+                self.wrap_lines,
+                palette,
+            );
+            if ui
+                .add(wrap_btn)
+                .on_hover_text("Toggle line-wrapping on/off")
+                .clicked()
+            {
+                self.wrap_lines = !self.wrap_lines;
+            }
+
             let num_label = if self.show_line_numbers {
                 "Lines: ON"
             } else {

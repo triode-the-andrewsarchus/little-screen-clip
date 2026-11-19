@@ -499,6 +499,25 @@ impl FileManagerApp {
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
                 let closed = self.viewers.ui(ui, &self.palette);
+                if !closed && let Some(target) = self.viewers.take_document_navigation() {
+                    if self.viewers.archive_export_directory.is_some() {
+                        self.viewers.external_error(
+                            "Close the archive viewer before opening linked files.".into(),
+                        );
+                    } else if self.viewers.source_guard.is_some()
+                        || self.browser.search.has_result_sources()
+                    {
+                        if let Some(guard) = self.browser.search_source_guard(&target) {
+                            self.viewers.navigate_to_document(target, Some(guard));
+                        } else {
+                            self.viewers.external_error(
+                                "Linked document is outside published search results.".into(),
+                            );
+                        }
+                    } else {
+                        self.viewers.navigate_to_document(target, None);
+                    }
+                }
                 self.follow_file_renames();
                 for path in self.viewers.saved_rating_paths.drain(..) {
                     self.browser

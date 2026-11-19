@@ -67,7 +67,10 @@ impl Hover {
             .as_ref()
             .is_none_or(|(old, _)| !Arc::ptr_eq(old, &data))
         {
-            self.view = Some((data.clone(), MarkdownExcerptView::new(data.clone())));
+            self.view = Some((
+                data.clone(),
+                MarkdownExcerptView::new(data.clone()).with_base_path(source.path().to_path_buf()),
+            ));
         }
         ui.label(format!(
             "Markdown · lines {}–{}",

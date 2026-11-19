@@ -251,7 +251,14 @@ impl WorkbenchApp {
                 title,
                 path,
             })) => {
-                let mut state = TextPreviewState::from_text(content, Some(title), &self.config);
+                let mut state = TextPreviewState::from_data(
+                    crate::text_preview::TextPreviewData::from_source(
+                        std::sync::Arc::new(content),
+                        Some("md"),
+                    ),
+                    Some(title),
+                    &self.config,
+                );
                 state.path = Some(path);
                 state.view_mode = crate::text_preview::TextViewMode::RenderedMarkdown;
                 self.replace_viewer(Some(ViewerSession::Text(state)));

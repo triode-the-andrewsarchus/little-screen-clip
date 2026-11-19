@@ -67,6 +67,7 @@ impl WorkbenchApp {
         let mut close = self.pending_image_close;
         let mut pdf_dirty = false;
         let mut gallery_open_request = None;
+        let mut text_open_request = None;
         match viewer {
             ViewerSession::Diff(state) => {
                 show_viewer_panel(ctx, |ui| {
@@ -133,11 +134,26 @@ impl WorkbenchApp {
             }
             ViewerSession::TextEditor(state) => {
                 show_viewer_panel(ctx, |ui| state.ui(ui, &self.ui_palette, &mut close));
+                if !close && let Some(target) = state.take_pending_navigation() {
+                    if state.dirty() || state.busy() {
+                        state.preview.status_toast.set(
+                            clip_studios::ui_ext::StatusMessage::error(
+                                "Save or discard active edits before following a link.",
+                            ),
+                            clip_studios::ui_ext::feedback_time(),
+                        );
+                    } else {
+                        text_open_request = Some(target);
+                    }
+                }
             }
             ViewerSession::Text(state) => {
                 show_viewer_panel(ctx, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
+                if !close && let Some(target) = state.take_pending_navigation() {
+                    text_open_request = Some(target);
+                }
             }
             ViewerSession::ComponentGallery(state) => {
                 if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -154,6 +170,11 @@ impl WorkbenchApp {
         if !close && let Some(request) = gallery_open_request {
             self.viewer = Some(gallery_request_to_viewer_session(request, &self.config));
             self.active_image_key = None;
+            ctx.request_repaint();
+            return true;
+        }
+        if !close && let Some(target) = text_open_request {
+            self.open_slot_file_preview(&target, false);
             ctx.request_repaint();
             return true;
         }

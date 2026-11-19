@@ -37,6 +37,7 @@ pub mod presentation {
     pub mod timestamps;
     pub mod units;
 }
+pub mod markdown_assets;
 pub mod markdown_metadata;
 pub mod media_backend;
 pub mod media_stream;

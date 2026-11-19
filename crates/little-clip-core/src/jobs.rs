@@ -78,7 +78,9 @@ impl BackgroundJobs {
                         Ok(job) => job,
                         Err(_) => return,
                     };
-                    job();
+                    // Contain unexpected worker panics so one failing task cancels only itself
+                    // without permanently reducing the pool's thread count.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
                 }
             });
         }
@@ -116,18 +118,28 @@ impl BackgroundJobs {
                 return;
             }
             let started = Instant::now();
-            let value = operation();
-            let result = if cancelled.load(Ordering::Acquire) {
-                Err(JobError::Cancelled)
-            } else if started.elapsed() > timeout {
-                Err(JobError::TimedOut)
-            } else {
-                Ok(value)
+            let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+                Ok(value) => {
+                    if cancelled.load(Ordering::Acquire) {
+                        Err(JobError::Cancelled)
+                    } else if started.elapsed() > timeout {
+                        Err(JobError::TimedOut)
+                    } else {
+                        Ok(value)
+                    }
+                }
+                Err(_) => Err(JobError::Cancelled),
             };
             let _ = worker_sender.send(result);
         });
-        if self.sender.try_send(job).is_err() {
-            let _ = result_sender.send(Err(JobError::QueueFull));
+        match self.sender.try_send(job) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                let _ = result_sender.send(Err(JobError::QueueFull));
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                let _ = result_sender.send(Err(JobError::Cancelled));
+            }
         }
         (ticket, result_receiver)
     }
@@ -199,6 +211,26 @@ mod tests {
         assert_eq!(
             result.recv_timeout(Duration::from_secs(5)).unwrap(),
             Err(JobError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn worker_panic_cancels_only_panicking_job_and_keeps_pool_alive() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (_, panicking_result) = jobs.submit(Duration::MAX, || -> i32 {
+            panic!("simulated worker failure");
+        });
+        assert_eq!(
+            panicking_result
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            Err(JobError::Cancelled)
+        );
+
+        let (_, next_result) = jobs.submit(Duration::MAX, || 42);
+        assert_eq!(
+            next_result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(42)
         );
     }
 }

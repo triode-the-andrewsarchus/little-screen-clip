@@ -18,7 +18,7 @@ use search::*;
 
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
-use crate::ui_ext::{BODY_FONT_SIZE, HEADING_FONT_SIZE, MONO_FONT_SIZE, SUBHEADING_FONT_SIZE};
+use crate::ui_ext::{BODY_FONT_SIZE, MONO_FONT_SIZE};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
@@ -465,6 +465,9 @@ pub struct TextPreviewState {
     character_count: usize,
     markdown: Arc<OnceLock<Vec<markdown::MarkdownBlock>>>,
     diagram_previews: markdown::Previews,
+    md_images: markdown::ImageCache,
+    md_links: markdown::LinkCache,
+    pending_navigation: Option<PathBuf>,
     pub path: Option<PathBuf>,
     pub language: &'static str,
     pub is_markdown: bool,
@@ -555,6 +558,11 @@ impl TextPreviewState {
             self.view_mode = TextViewMode::SubtitleTimeline;
         }
     }
+
+    /// Consumes a clicked internal Markdown document link target requested by the user.
+    pub fn take_pending_navigation(&mut self) -> Option<PathBuf> {
+        self.pending_navigation.take()
+    }
     fn show_subtitle_source(&mut self) {
         self.center_source_line = self
             .subtitle_view
@@ -609,6 +617,9 @@ impl TextPreviewState {
             character_count: data.character_count,
             markdown: Arc::clone(&data.markdown),
             diagram_previews: Default::default(),
+            md_images: Default::default(),
+            md_links: Default::default(),
+            pending_navigation: None,
             path,
             language: data.language,
             is_markdown: data.is_markdown,
