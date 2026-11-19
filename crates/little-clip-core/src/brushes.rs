@@ -11,6 +11,7 @@ mod gimp;
 mod krita;
 mod mask;
 mod mypaint;
+mod procreate;
 pub mod render;
 
 pub use dynamics::{BrushDynamics, PressureCurve};
@@ -252,11 +253,8 @@ fn load_via_brushkit(
     let (total_count, settings) = if format == BrushFormat::Abr {
         abr::settings(bytes, &indices)?
     } else {
-        (brushkit_count(format, bytes)?, Vec::new())
+        procreate::settings(bytes, format, &indices, cancelled)?
     };
-    let settings = settings
-        .into_iter()
-        .chain(std::iter::repeat_with(BrushStrokeParams::default));
     let mut brushes = Vec::with_capacity(entries.len());
     for (entry, mut params) in entries.into_iter().zip(settings) {
         if cancelled.load(Ordering::Relaxed) {
@@ -446,7 +444,7 @@ mod tests {
 
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
-        let brush_archive = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>$objects</key><array><string>$null</string><dict/></array></dict></plist>"#;
+        let brush_archive = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>$objects</key><array><string>$null</string><dict><key>plotSpacing</key><real>0.55</real><key>shapeRotation</key><real>1.0</real><key>taperEndLength</key><real>0.2</real><key>taperSize</key><real>1.0</real></dict></array></dict></plist>"#;
         let shape = make_png(4, 4);
         for prefix in ["a", "b"] {
             archive
@@ -467,6 +465,12 @@ mod tests {
             let library = load_brush_bytes(format, &bytes, "fallback", 1, &token).unwrap();
             assert_eq!(library.brushes.len(), 1);
             assert_eq!(library.total_count, 2);
+            if format == BrushFormat::ProcreateBrushset {
+                let params = &library.brushes[0].params;
+                assert_eq!(params.spacing, 0.55);
+                assert_eq!(params.dynamics.follow_direction, 1.0);
+                assert_eq!(params.dynamics.taper(1.0), 1.0);
+            }
         }
     }
 
