@@ -1,6 +1,7 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
 mod geometry;
 pub(super) mod gpu;
+mod overlay;
 mod river_coverage;
 mod terrain_download;
 mod tiles;
@@ -109,6 +110,7 @@ struct Hit {
 
 pub(super) struct Viewer {
     document: Document,
+    overlay: overlay::Overlay,
     selected: usize,
     current: Option<Hit>,
     camera: GlobeCamera,
@@ -155,6 +157,7 @@ impl Viewer {
         });
 
         let mut viewer = Self {
+            overlay: overlay::Overlay::prepare(&document),
             document,
             selected,
             current: None,
@@ -304,18 +307,7 @@ impl Viewer {
             self.contour_interval_m = self.tiles.contour;
             self.local_elev_range = self.tiles.range;
 
-            let hit = paint_globe_map(
-                ui,
-                rect,
-                &self.document,
-                Some(self.selected),
-                &self.camera,
-                self.assets.as_deref().filter(|_| self.show_city_names),
-                self.contour_interval_m,
-                self.local_elev_range,
-                self.config.geography.units,
-                colors,
-            );
+            let hit = self.paint_globe_map(ui, rect, colors);
             if response.clicked()
                 && let Some(hit) = hit
             {
@@ -393,6 +385,65 @@ impl Viewer {
                 ui.ctx().request_repaint();
             }
         });
+    }
+
+    fn paint_globe_map(
+        &self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        colors: WorkbenchColors,
+    ) -> Option<Hit> {
+        let painter = ui.painter_at(rect);
+        let pointer = super::ui::preview_hovered(ui, rect)
+            .then(|| ui.input(|i| i.pointer.hover_pos()))
+            .flatten();
+        let mut hit: Option<(Hit, f32)> = None;
+        let camera = &self.camera;
+        let flat = camera.globe_blend() == 0.0;
+        let period = camera.world_width_px(rect.width(), rect.height());
+        let cities = self.assets.as_deref().filter(|_| self.show_city_names);
+        for copy in camera.world_shifts(rect.width(), rect.height()) {
+            if copy != 0
+                && (!flat || (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0)
+            {
+                continue;
+            }
+            let offset = (copy as f64 * period) as f32;
+            if let Some(assets) = cities {
+                paint_cities(ui, &painter, rect, camera, assets, offset);
+            }
+            let projection = overlay::Projection {
+                camera,
+                rect,
+                offset,
+            };
+            if let Some(candidate) =
+                self.overlay
+                    .paint_copy(&painter, projection, Some(self.selected), colors, pointer)
+                && hit.is_none_or(|(_, distance)| candidate.1 < distance)
+            {
+                hit = Some(candidate);
+            }
+        }
+        let hit = hit.map(|(hit, _)| hit);
+        if let Some(hit) = hit
+            && let Some(sample) = self.sample(hit)
+        {
+            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+                ui.label(&self.document.features[hit.feature].name);
+                ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+            });
+        }
+        paint_scale_and_contour_overlay(
+            ui,
+            &painter,
+            rect,
+            camera,
+            self.contour_interval_m,
+            self.local_elev_range,
+            self.config.geography.units,
+        );
+        hit
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -843,208 +894,66 @@ fn yes_no(v: bool) -> &'static str {
     if v { "ok" } else { "missing" }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Renders projected basemap raster, coastlines, cities, and GeoJSON/GPX overlay"
-)]
-fn paint_globe_map(
+fn paint_cities(
     ui: &mut egui::Ui,
+    painter: &egui::Painter,
     rect: egui::Rect,
-    doc: &Document,
-    selected: Option<usize>,
     camera: &GlobeCamera,
-    assets: Option<&BasemapAssets>,
-    contour_interval_m: Option<f32>,
-    local_elev_range: [f32; 2],
-    units: Units,
-    colors: WorkbenchColors,
-) -> Option<Hit> {
-    let mut hit = None;
-    let flat = camera.globe_blend() == 0.0;
-    for copy in camera.world_shifts(rect.width(), rect.height()) {
-        let period = camera.world_width_px(rect.width(), rect.height());
-        if (!flat && copy != 0)
-            || (flat
-                && copy != 0
-                && (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0)
-        {
+    assets: &BasemapAssets,
+    offset: f32,
+) {
+    // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
+    let min_pop = if camera.zoom < 3.0 {
+        250_000
+    } else if camera.zoom < 8.0 {
+        50_000
+    } else {
+        0
+    };
+    let mut occupied: Vec<egui::Rect> = Vec::new();
+    for city in &assets.cities {
+        if city.pop_max < min_pop {
+            break;
+        }
+        let Some([px, py]) = camera.project(city.lat, city.lon, rect.width(), rect.height()) else {
+            continue;
+        };
+        let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
+        if !rect.contains(pos) {
             continue;
         }
-        let offset = if flat {
-            copy as f32 * camera.world_width_px(rect.width(), rect.height()) as f32
+        let font_size = if city.pop_max >= 1_000_000 {
+            13.5
         } else {
-            0.0
+            12.0
         };
-        hit = paint_globe_copy(ui, rect, doc, selected, camera, assets, colors, offset).or(hit);
-    }
-    if let Some(hit) = hit {
-        let sample = &doc.features[hit.feature].paths[hit.path][hit.point];
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
-            ui.label(&doc.features[hit.feature].name);
-            ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
+        let galley = ui.fonts(|f| {
+            f.layout_no_wrap(
+                city.name.clone(),
+                egui::FontId::proportional(font_size),
+                egui::Color32::from_rgb(248, 250, 252),
+            )
         });
-    }
-    paint_scale_and_contour_overlay(
-        ui,
-        &ui.painter_at(rect),
-        rect,
-        camera,
-        contour_interval_m,
-        local_elev_range,
-        units,
-    );
-    hit
-}
-
-fn paint_globe_copy(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    doc: &Document,
-    selected: Option<usize>,
-    camera: &GlobeCamera,
-    assets: Option<&BasemapAssets>,
-    colors: WorkbenchColors,
-    offset: f32,
-) -> Option<Hit> {
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
-    if let Some(assets) = assets
-        && !assets.cities.is_empty()
-    {
-        let min_pop = if camera.zoom < 3.0 {
-            250_000
-        } else if camera.zoom < 8.0 {
-            50_000
-        } else {
-            0
-        };
-        let mut occupied: Vec<egui::Rect> = Vec::new();
-        for city in &assets.cities {
-            if city.pop_max < min_pop {
-                break;
-            }
-            let Some([px, py]) = camera.project(city.lat, city.lon, rect.width(), rect.height())
-            else {
-                continue;
-            };
-            let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
-            if !rect.contains(pos) {
-                continue;
-            }
-            let font_size = if city.pop_max >= 1_000_000 {
-                13.5
-            } else {
-                12.0
-            };
-            let galley = ui.fonts(|f| {
-                f.layout_no_wrap(
-                    city.name.clone(),
-                    egui::FontId::proportional(font_size),
-                    egui::Color32::from_rgb(248, 250, 252),
-                )
-            });
-            let label_pos = pos + egui::vec2(6.0, -galley.size().y * 0.5);
-            let pill_rect =
-                egui::Rect::from_min_size(label_pos, galley.size()).expand2(egui::vec2(4.0, 1.5));
-            let box_rect = pill_rect.expand(4.0);
-            if occupied.iter().any(|r| r.intersects(box_rect)) {
-                continue;
-            }
-            occupied.push(box_rect);
-            painter.circle_filled(pos, 3.0, egui::Color32::from_rgb(255, 214, 96));
-            painter.circle_stroke(
-                pos,
-                3.0,
-                egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(180)),
-            );
-            painter.rect_filled(pill_rect, 3.0, egui::Color32::from_black_alpha(150));
-            painter.galley(label_pos, galley, egui::Color32::from_rgb(248, 250, 252));
-            if occupied.len() >= 56 {
-                break;
-            }
+        let label_pos = pos + egui::vec2(6.0, -galley.size().y * 0.5);
+        let pill_rect =
+            egui::Rect::from_min_size(label_pos, galley.size()).expand2(egui::vec2(4.0, 1.5));
+        let box_rect = pill_rect.expand(4.0);
+        if occupied.iter().any(|r| r.intersects(box_rect)) {
+            continue;
+        }
+        occupied.push(box_rect);
+        painter.circle_filled(pos, 3.0, egui::Color32::from_rgb(255, 214, 96));
+        painter.circle_stroke(
+            pos,
+            3.0,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(180)),
+        );
+        painter.rect_filled(pill_rect, 3.0, egui::Color32::from_black_alpha(150));
+        painter.galley(label_pos, galley, egui::Color32::from_rgb(248, 250, 252));
+        if occupied.len() >= 56 {
+            break;
         }
     }
-
-    // User GeoJSON / GPX features
-    let pointer = super::ui::preview_hovered(ui, rect)
-        .then(|| ui.input(|i| i.pointer.hover_pos()))
-        .flatten();
-    let mut nearest = 64.0;
-    let mut hit = None;
-    for (index, feature) in doc.features.iter().enumerate() {
-        let color = if selected == Some(index) {
-            colors.accent
-        } else {
-            colors.text_primary.gamma_multiply(0.85)
-        };
-        for (path_index, path) in feature.paths.iter().enumerate() {
-            let mut positions = Vec::with_capacity(path.len());
-            let mut sample_indices = Vec::with_capacity(path.len());
-            for (s_idx, sample) in path.iter().enumerate() {
-                if let Some([px, py]) = camera.project(
-                    sample.point.lat,
-                    sample.point.lon,
-                    rect.width(),
-                    rect.height(),
-                ) {
-                    positions.push(egui::pos2(rect.left() + px + offset, rect.top() + py));
-                    sample_indices.push(s_idx);
-                } else if positions.len() > 1 && matches!(feature.kind, Kind::Line | Kind::Polygon)
-                {
-                    painter.add(egui::Shape::line(
-                        std::mem::take(&mut positions),
-                        egui::Stroke::new(
-                            if selected == Some(index) {
-                                3.0_f32
-                            } else {
-                                1.75_f32
-                            },
-                            color,
-                        ),
-                    ));
-                    sample_indices.clear();
-                } else {
-                    positions.clear();
-                    sample_indices.clear();
-                }
-            }
-            if matches!(feature.kind, Kind::Line | Kind::Polygon) && positions.len() > 1 {
-                painter.add(egui::Shape::line(
-                    positions.clone(),
-                    egui::Stroke::new(
-                        if selected == Some(index) {
-                            3.0_f32
-                        } else {
-                            1.75_f32
-                        },
-                        color,
-                    ),
-                ));
-            }
-            if feature.kind == Kind::Point || path.len() == 1 {
-                for position in &positions {
-                    painter.circle_filled(*position, 4.5, color);
-                }
-            }
-            if let Some(pointer) = pointer
-                && let Some((pos_idx, distance)) = nearest_on_path(
-                    &positions,
-                    pointer,
-                    matches!(feature.kind, Kind::Line | Kind::Polygon),
-                )
-                && distance < nearest
-                && let Some(&orig_point) = sample_indices.get(pos_idx)
-            {
-                nearest = distance;
-                hit = Some(Hit {
-                    feature: index,
-                    path: path_index,
-                    point: orig_point,
-                });
-            }
-        }
-    }
-    hit
 }
 
 fn paint_scale_and_contour_overlay(

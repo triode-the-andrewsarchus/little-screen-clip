@@ -2082,13 +2082,26 @@ impl GlobeCamera {
     /// Projects `(lat, lon)` in degrees into viewport pixel coordinates `[x, y]`.
     /// Returns `None` if behind the visible hemisphere of the 3D globe.
     pub fn project(&self, lat: f64, lon: f64, width: f32, height: f32) -> Option<[f32; 2]> {
+        self.project_relative(lat, wrap_lon_delta(lon - self.center_lon), width, height)
+    }
+
+    /// Projects a latitude and an already chosen longitude offset from the camera.
+    ///
+    /// Connected geometry can choose its longitude interval before projection,
+    /// including both copies of the seam at ±180°.
+    pub fn project_relative(
+        &self,
+        lat: f64,
+        d_lon: f64,
+        width: f32,
+        height: f32,
+    ) -> Option<[f32; 2]> {
         let blend = self.globe_blend();
         let scale = self.scale_px(width, height);
         let cx = width as f64 * 0.5;
         let cy = height as f64 * 0.5;
 
         // 2D local equirectangular/cosine-corrected tangent map centered at (center_lat, center_lon)
-        let d_lon = wrap_lon_delta(lon - self.center_lon);
         let d_lat = lat - self.center_lat;
         let cos_c = self.center_lat.to_radians().cos().abs().max(0.25);
         let rad_per_deg = std::f64::consts::PI / 180.0;
