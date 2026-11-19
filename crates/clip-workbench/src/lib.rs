@@ -1095,7 +1095,6 @@ fn run_prompt_modal(
         Box::new(move |cc| {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
             ui_appearance::apply_visuals(&cc.egui_ctx, &palette);
-            egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(PromptApp::new(
                 title,
                 message,
@@ -1232,7 +1231,6 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
         options,
         Box::new(move |cc| {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
-            egui_extras::install_image_loaders(&cc.egui_ctx);
             let vector_runtime =
                 cc.gl
                     .as_ref()

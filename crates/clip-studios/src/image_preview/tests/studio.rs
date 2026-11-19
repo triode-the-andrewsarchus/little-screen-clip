@@ -142,23 +142,7 @@ fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales(
         };
         let reset = control_bounds("Reset");
         let pixel = control_bounds("1:1");
-        let percentage = output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text)
-                    if text.pos.y >= viewport.bottom()
-                        && text
-                            .galley
-                            .text()
-                            .strip_suffix('%')
-                            .is_some_and(|value| value.parse::<u32>().is_ok()) =>
-                {
-                    Some(text.galley.rect.translate(text.pos.to_vec2()))
-                }
-                _ => None,
-            })
-            .expect("footer zoom percentage");
+        let percentage = control_bounds(&format!("{:.0}%", state.zoom * 100.0));
         for bounds in [reset, pixel, percentage] {
             assert!(root.contains(bounds.min) && root.contains(bounds.max));
             assert!(

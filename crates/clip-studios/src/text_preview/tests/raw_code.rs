@@ -386,11 +386,16 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
 
     state.scroll_to_line = Some(first_row);
     let mut frame = render(&mut state, &mut time, Vec::new());
-    // This row is near EOF. Let egui clamp the requested top row to
-    // the final viewport before capturing positions for pointer input.
-    for _ in 0..3 {
+    // Near EOF, scroll bounds depend on the measured document height.
+    // Complete the bounded measurement before sampling pointer positions.
+    for _ in 0..=state.code_fragments.len() {
         frame = render(&mut state, &mut time, Vec::new());
+        if state.code_rows.next_measurement == state.code_fragments.len() {
+            frame = render(&mut state, &mut time, Vec::new());
+            break;
+        }
     }
+    assert_eq!(state.code_rows.next_measurement, state.code_fragments.len());
     let previous = state.code_fragments[first_row - 1];
     let line_start = previous.end_byte - 3;
     let line_end = first.start_byte + 9;

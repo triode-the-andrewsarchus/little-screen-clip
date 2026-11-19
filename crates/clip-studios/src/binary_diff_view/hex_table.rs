@@ -33,6 +33,7 @@ impl BinaryDiffViewState {
 
         let (cell_w, _cell_h, font_size, ascii_char_w, offset_w, row_height) =
             self.layout_metrics(res.bytes_per_row, ui.available_width());
+        let row_height = row_height.max(ui.spacing().interact_size.y);
         let total_rows = res.rows.len();
         let bpr = res.bytes_per_row;
 

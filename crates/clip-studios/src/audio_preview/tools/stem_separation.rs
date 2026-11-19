@@ -1046,7 +1046,8 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
                     |ctx| {
                         ctx.root_ui(|ui| {
                             egui::CentralPanel::default().show(ui, |ui| {
-                                scroll_id = ui.make_persistent_id("stem_tool_scroll");
+                                scroll_id =
+                                    ui.make_persistent_id(egui::IdSalt::new("stem_tool_scroll"));
                                 state.render_stem_separation_ui(ui, ctx, &palette, &mut false);
                             })
                         });

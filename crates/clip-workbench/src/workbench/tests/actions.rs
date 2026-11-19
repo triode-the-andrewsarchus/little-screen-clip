@@ -207,18 +207,30 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
         state.search_query = "fixture".to_owned();
         state.update_search();
     }
+    let render_diff = |app: &mut WorkbenchApp| {
+        clip_ui::test_support::run_frame(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
+        )
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while ctx.read_response(search_id).is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Binary Diff search must render"
+        );
+        render_diff(&mut app);
+        std::thread::yield_now();
+    }
     ctx.memory_mut(|memory| memory.request_focus(search_id));
-    let _ = clip_ui::test_support::run_frame(
-        &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(900.0, 700.0),
-            )),
-            ..Default::default()
-        },
-        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
-    );
+    render_diff(&mut app);
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
     let Some(ViewerSession::BinaryDiff(state)) = app.viewer.as_ref() else {
         panic!("Binary Diff should remain open while search is focused");

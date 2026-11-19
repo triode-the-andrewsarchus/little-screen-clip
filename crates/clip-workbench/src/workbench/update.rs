@@ -22,21 +22,6 @@ impl eframe::App for WorkbenchApp {
             strip.poll_copy(ctx);
         }
         self.poll_daemon_mutation(ctx);
-    }
-
-    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = &root.ctx().clone();
-        self.handle_appearance_shortcut(ctx);
-        root.set_style(ctx.global_style());
-
-        if self.daemon_mutation.is_some() {
-            egui::Panel::bottom("daemon_mutation_progress").show(root, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Waiting for daemon operation to finish…");
-                });
-            });
-        }
 
         while let Ok(result) = self.state_rx.try_recv() {
             match result {
@@ -64,10 +49,8 @@ impl eframe::App for WorkbenchApp {
         self.poll_palette_ops(ctx);
 
         self.appearance_sync.poll(ctx);
-        self.appearance_sync.render(ctx, &self.ui_palette);
 
         self.poll_rolling_editor_load(ctx);
-        self.render_rolling_editor_status(ctx);
         if let Some((_, state)) = self.retained_image_session.as_mut()
             && state.poll_cached_jobs()
         {
@@ -89,6 +72,24 @@ impl eframe::App for WorkbenchApp {
                 self.poll_midi_load(ctx);
             }
         }
+    }
+
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
+        self.handle_appearance_shortcut(ctx);
+        root.set_style(ctx.global_style());
+
+        if self.daemon_mutation.is_some() {
+            egui::Panel::bottom("daemon_mutation_progress").show(root, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Waiting for daemon operation to finish…");
+                });
+            });
+        }
+
+        self.appearance_sync.render(ctx, &self.ui_palette);
+        self.render_rolling_editor_status(ctx);
         if self.render_modal_viewers(root) {
             self.palette_search_needs_focus = true;
             return;

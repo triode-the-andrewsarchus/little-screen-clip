@@ -333,6 +333,7 @@ pub fn clamp_overlay_rect(ideal_min: Pos2, size: Vec2, bounds: Rect) -> Rect {
 /// Set readable workbench defaults. Secondary text uses color and weight for
 /// hierarchy; `.small()` must remain as legible as ordinary control labels.
 pub fn configure_workbench_style(ctx: &egui::Context) {
+    egui_extras::install_image_loaders(ctx);
     // Add portable CJK and broad monochrome emoji fallbacks after Latin fonts.
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(

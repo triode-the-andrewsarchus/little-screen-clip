@@ -120,10 +120,10 @@ impl TextPreviewState {
                             } else {
                                 f32::INFINITY
                             };
-                            // egui rounds scroll offsets to physical pixels. A
-                            // rounded boundary must still anchor the following
-                            // source row when preceding estimates are updated.
-                            let rounding_tolerance = 0.5 / ui.ctx().pixels_per_point();
+                            // Scroll offsets can settle within one physical pixel of a
+                            // row boundary. Preserve the following source row as the
+                            // anchor when preceding rows are remeasured.
+                            let rounding_tolerance = 1.0 / ui.pixels_per_point();
                             let anchor_row = self
                                 .code_rows
                                 .row_at(self.code_scroll_offset + rounding_tolerance);
@@ -157,7 +157,12 @@ impl TextPreviewState {
                                         .map(|line| self.code_rows.offset(line.saturating_sub(1)))
                                         .unwrap_or(anchored_offset)
                                 });
-                            scroll_area = scroll_area.vertical_scroll_offset(requested_offset);
+                            // A jump near EOF must stay inside the document so the scroll
+                            // physics do not start a rebound during text selection.
+                            let max_offset =
+                                (self.code_rows.total_height() - ui.available_height()).max(0.0);
+                            scroll_area = scroll_area
+                                .vertical_scroll_offset(requested_offset.clamp(0.0, max_offset));
                             let output = scroll_area.show_viewport(ui, |ui, viewport| {
                                 let origin = ui.max_rect().min;
                                 let mut row =
@@ -269,9 +274,8 @@ impl TextPreviewState {
                                 if released {
                                     self.code_selection_dragging = false;
                                 }
-                                // `put` advances the layout cursor to the visible
-                                // rows. Reserve the document from its origin,
-                                // rather than adding its height after that cursor.
+                                // Keep scrolling proportional to the full document,
+                                // including rows outside the viewport.
                                 ui.expand_to_include_rect(egui::Rect::from_min_size(
                                     origin,
                                     egui::vec2(0.0, self.code_rows.total_height()),

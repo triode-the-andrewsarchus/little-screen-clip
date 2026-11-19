@@ -135,6 +135,8 @@ fn gallery_requests_map_to_each_shared_source_full_viewer() {
 
 #[test]
 fn visible_gallery_actions_open_full_studios() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
     for (label, kind) in [
         (
             "Open Image Studio",
@@ -168,71 +170,17 @@ fn visible_gallery_actions_open_full_studios() {
         let viewer = ViewerSession::ComponentGallery(
             component_gallery::ComponentGalleryState::new().unwrap(),
         );
-        let mut app = test_workbench_app(Some(viewer), VecDeque::new());
-        let ctx = egui::Context::default();
-        let input = |events| egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(2240.0, 1280.0),
-            )),
-            events,
-            ..Default::default()
-        };
-        let mut first_frame = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
-            assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
-        });
-        for _ in 0..12 {
-            let action_is_visible = first_frame.shapes.iter().any(|shape| {
-                matches!(
-                    &shape.shape,
-                    egui::Shape::Text(text) if text.galley.job.text == label
-                )
-            });
-            if action_is_visible {
-                break;
-            }
-            first_frame = clip_ui::test_support::run_frame(
-                &ctx,
-                input(vec![
-                    egui::Event::PointerMoved(egui::pos2(640.0, 540.0)),
-                    clip_ui::test_support::scroll(egui::vec2(0.0, -500.0)),
-                ]),
-                |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
-            );
-        }
-        let action_position = first_frame
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == label => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("{label} should be visible in the gallery"));
-        let pointer_event = |pressed| egui::Event::PointerButton {
-            pos: action_position,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        let _ = clip_ui::test_support::run_frame(
-            &ctx,
-            input(vec![
-                egui::Event::PointerMoved(action_position),
-                pointer_event(true),
-            ]),
-            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
-        );
-        let _ = clip_ui::test_support::run_frame(
-            &ctx,
-            input(vec![
-                egui::Event::PointerMoved(action_position),
-                pointer_event(false),
-            ]),
-            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
-        );
-        let opened_expected_studio = match (kind, app.viewer.as_ref()) {
+        let app = test_workbench_app(Some(viewer), VecDeque::new());
+        let mut harness = Harness::builder()
+            .with_size([2240.0, 1680.0])
+            .with_context_setup(crate::ui_ext::configure_workbench_style)
+            .build_ui_state(|ui, app| assert!(app.render_modal_viewers(ui)), app);
+        harness
+            .get_by_role_and_label(egui::Role::Button, label)
+            .click();
+        harness.run();
+
+        let opened_expected_studio = match (kind, harness.state().viewer.as_ref()) {
             (component_gallery::GalleryPreviewKind::Image, Some(ViewerSession::Image(_)))
             | (component_gallery::GalleryPreviewKind::Text, Some(ViewerSession::Text(_)))
             | (

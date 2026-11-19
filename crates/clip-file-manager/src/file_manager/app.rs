@@ -93,7 +93,6 @@ impl FileManagerApp {
         let palette = ui_appearance::palette(config.workbench.appearance);
         ui_ext::configure_workbench_style(ctx);
         ui_appearance::apply_visuals(ctx, &palette);
-        egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
         browser
             .constellation
@@ -730,23 +729,6 @@ impl eframe::App for FileManagerApp {
         self.browser.search.answers.set_suspended(viewer_active);
         self.browser
             .tick(little_clip_core::BackgroundJobs::global());
-        self.browser.schedule_repaints(ctx);
-
-        if ctx.input(|input| input.viewport().close_requested()) {
-            self.request_app_close(ctx);
-        }
-    }
-
-    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = &root.ctx().clone();
-        if self.closing {
-            egui::CentralPanel::default().show(root, |ui| {
-                ui.spinner();
-                ui.label("Closing...");
-            });
-            return;
-        }
-        self.preview_keys(ctx);
         self.browser.retire_constellation_audition();
         if self.browser.view == super::BrowserView::Constellation {
             let constellation = &mut self.browser.constellation;
@@ -764,6 +746,23 @@ impl eframe::App for FileManagerApp {
                 .tick(ctx, &mut self.browser.music_selection);
         }
         self.browser.midi.tick(ctx);
+        self.browser.schedule_repaints(ctx);
+
+        if ctx.input(|input| input.viewport().close_requested()) {
+            self.request_app_close(ctx);
+        }
+    }
+
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
+        if self.closing {
+            egui::CentralPanel::default().show(root, |ui| {
+                ui.spinner();
+                ui.label("Closing...");
+            });
+            return;
+        }
+        self.preview_keys(ctx);
         if self.viewers.active() {
             // Browser file-reference shortcuts must not suppress studio text clipboard events.
             ctx.data_mut(|data| {

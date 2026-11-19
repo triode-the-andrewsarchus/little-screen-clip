@@ -33,8 +33,8 @@ impl ConstellationState {
             return;
         }
         let presses: Vec<_> = if native.is_empty() {
-            // Also support synthetic egui input. Native input above retains full
-            // logical punctuation, including apostrophes absent from egui::Key.
+            // Synthetic egui input covers the characters represented by Key.
+            // Native input also keeps punctuation outside that set.
             ctx.input(|input| {
                 input
                     .events

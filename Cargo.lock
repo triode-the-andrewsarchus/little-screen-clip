@@ -1741,6 +1741,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "egui_kittest",
  "hound",
  "image 0.25.10",
  "libc",
