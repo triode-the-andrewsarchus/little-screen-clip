@@ -3,6 +3,8 @@ use super::{
     ParametricShape, bounded_label, mask,
 };
 
+use std::sync::Arc;
+
 const MAX_GIMP_DIM: u32 = 4096;
 
 pub(super) fn parse_gbr_library(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
@@ -150,11 +152,66 @@ pub(super) fn parse_gih(
     if brushes.is_empty() {
         return Err("No valid cells in GIMP .gih hose".into());
     }
+    if let Some(selection) = hose_selection(&header_line, brushes.len()) {
+        let tips: Arc<[BrushTipKind]> = brushes.iter().map(|brush| brush.tip.clone()).collect();
+        for (index, brush) in brushes.iter_mut().enumerate() {
+            brush.params.dynamics.tip_sequence = Some(TipSequence {
+                tips: tips.clone(),
+                selection,
+                index,
+            });
+        }
+    }
     Ok(BrushLibrary {
         format: BrushFormat::GimpGih,
         brushes,
         total_count: ncells,
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HoseSelection {
+    Incremental,
+    Pressure,
+    Random,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TipSequence {
+    tips: Arc<[BrushTipKind]>,
+    selection: HoseSelection,
+    index: usize,
+}
+
+impl TipSequence {
+    pub(super) fn tip_for_dab(&self, dab: usize, pressure: f32, seed: u64) -> &BrushTipKind {
+        let count = self.tips.len();
+        let index = match self.selection {
+            HoseSelection::Incremental => (self.index + dab) % count,
+            HoseSelection::Pressure => (pressure * (count - 1) as f32).round() as usize,
+            HoseSelection::Random => (seed % count as u64) as usize,
+        };
+        &self.tips[index]
+    }
+}
+
+fn hose_selection(header: &str, available: usize) -> Option<HoseSelection> {
+    let field = |key: &str| {
+        header
+            .split_ascii_whitespace()
+            .filter_map(|token| token.split_once(':'))
+            .find_map(|(name, value)| (name == key).then_some(value))
+    };
+    let rank = field("rank0")?.parse::<usize>().ok()?;
+    if field("dim") != Some("1") || rank < 2 || rank != available {
+        return None;
+    }
+    match field("sel0") {
+        Some("incremental") => Some(HoseSelection::Incremental),
+        Some("pressure") => Some(HoseSelection::Pressure),
+        Some("random") => Some(HoseSelection::Random),
+        _ => None,
+    }
 }
 
 pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {

@@ -17,6 +17,7 @@ pub mod render;
 pub use dynamics::BrushDynamics;
 use dynamics::DabCurve;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_BRUSH_FILE_BYTES: usize = 128 * 1024 * 1024;
@@ -94,7 +95,7 @@ pub enum BrushTipKind {
     AlphaMask {
         width: u32,
         height: u32,
-        alpha: Vec<u8>,
+        alpha: Arc<[u8]>,
     },
     /// Parametric dab shape.
     Parametric {
@@ -287,7 +288,7 @@ fn load_via_brushkit(
                 tip: BrushTipKind::AlphaMask {
                     width: bitmap.width,
                     height: bitmap.height,
-                    alpha: bitmap.data,
+                    alpha: bitmap.data.into(),
                 },
                 params,
                 detail,
@@ -420,7 +421,7 @@ mod tests {
         assert!(matches!(
             &tip.tip,
             BrushTipKind::AlphaMask { width: 8, height: 4, alpha }
-                if alpha == &[200; 32]
+                if alpha.as_ref() == &[200; 32]
         ));
     }
 
@@ -551,7 +552,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &lib.brushes[0].tip,
-            BrushTipKind::AlphaMask { alpha, .. } if alpha == &[255; 16]
+            BrushTipKind::AlphaMask { alpha, .. } if alpha.as_ref() == &[255; 16]
         ));
     }
 
@@ -599,10 +600,21 @@ mod tests {
                 .any(|p| p[3] > 0)
         );
 
-        let mut gih = b"Hose\n2 ncells:2\n".to_vec();
+        let mut gih = b"Hose\n2 ncells:2 dim:1 rank0:2 sel0:incremental\n".to_vec();
         gih.extend_from_slice(&make_gbr("Cell A", 4, 4, 15, 200));
         gih.extend_from_slice(&make_gbr("Cell B", 4, 4, 15, 180));
         let gih_lib = load_brush_bytes(BrushFormat::GimpGih, &gih, "hose", 8, &cancel).unwrap();
+        let cells = gih_lib.brushes[0]
+            .params
+            .dynamics
+            .tip_sequence
+            .as_ref()
+            .unwrap();
+        let first = cells.tip_for_dab(0, 0.0, 0);
+        let second = cells.tip_for_dab(1, 0.0, 0);
+        assert!(matches!(first, BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 200));
+        assert!(matches!(second, BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 180));
+
         assert_eq!(gih_lib.brushes.len(), 2);
 
         let vbr = b"GIMP-VBR\n1.5\nStar Tip\ncircle\n15\n24\n5\n0.75\n1.0\n0.0\n";

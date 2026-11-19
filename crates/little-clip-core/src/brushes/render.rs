@@ -137,7 +137,13 @@ fn draw_stroke(
             position: path.point(t),
         };
         let dab = sample_dab(preset, radius, sample);
-        stamp_tip(coverage, dimensions, &preset.tip, dab);
+        let tip = dynamics
+            .tip_sequence
+            .as_ref()
+            .map_or(&preset.tip, |sequence| {
+                sequence.tip_for_dab(index, pen_pressure(t), sample.seed)
+            });
+        stamp_tip(coverage, dimensions, tip, dab);
         let count = (f32::from(count)
             * (1.0 - (signed_random(sample.seed, 8) + 1.0) * 0.5 * dynamics.count_jitter))
             .round() as u8;
@@ -149,7 +155,7 @@ fn draw_stroke(
             stamp_tip(
                 coverage,
                 dimensions,
-                &preset.tip,
+                tip,
                 sample_dab(preset, radius, sample),
             );
         }
@@ -166,10 +172,14 @@ struct StrokeSample {
     position: (f32, f32),
 }
 
+fn pen_pressure(t: f32) -> f32 {
+    (t * PI).sin().max(0.0).powf(0.65)
+}
+
 fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
     let params = &preset.params;
     let dynamics = &params.dynamics;
-    let pressure = (sample.t * PI).sin().max(0.0).powf(0.65);
+    let pressure = pen_pressure(sample.t);
     let response = |curve: &Option<DabCurve>, fallback| {
         curve.as_ref().map_or(fallback, |curve| curve.at(pressure))
     };
@@ -351,7 +361,7 @@ mod tests {
         let tip = BrushTipKind::AlphaMask {
             width: 8,
             height: 2,
-            alpha: vec![255; 16],
+            alpha: [255; 16].into(),
         };
         let mut coverage = vec![0.0; 32 * 32];
         stamp_tip(

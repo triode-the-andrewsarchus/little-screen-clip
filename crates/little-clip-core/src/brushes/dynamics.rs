@@ -66,6 +66,7 @@ pub struct BrushDynamics {
     pub(super) scatter_along_stroke: bool,
     pub(super) scatter_count: u8,
     pub(super) count_jitter: f32,
+    pub(super) tip_sequence: Option<super::gimp::TipSequence>,
     pub(super) taper_start: f32,
     pub(super) taper_end: f32,
     pub(super) taper_size: f32,

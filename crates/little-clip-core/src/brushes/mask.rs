@@ -67,6 +67,6 @@ pub(super) fn raster(width: u32, height: u32, alpha: Vec<u8>) -> Option<BrushTip
     Some(BrushTipKind::AlphaMask {
         width: gray.width(),
         height: gray.height(),
-        alpha: gray.into_raw(),
+        alpha: gray.into_raw().into(),
     })
 }
