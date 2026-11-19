@@ -270,21 +270,40 @@ pub(super) fn parse_vbr_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
     let detail = format!("Ø {:.0}px · hardness {:.2}", radius * 2.0, hardness);
     Ok(BrushPreset {
         name,
-        tip: BrushTipKind::Parametric {
-            shape,
-            hardness,
-            aspect_ratio,
-            angle_deg,
-            spikes,
-        },
+        tip: generated_vbr_tip(shape, hardness, aspect_ratio, spikes),
         params: BrushStrokeParams {
             size_px: radius * 2.0,
             spacing,
-            angle_deg,
+            angle_deg: -angle_deg,
             hardness,
             ..Default::default()
         },
         detail,
+    })
+}
+
+fn generated_vbr_tip(
+    shape: ParametricShape,
+    hardness: f32,
+    aspect: f32,
+    spikes: u8,
+) -> BrushTipKind {
+    let short_axis = aspect.recip();
+    let (extent, ratio) = match (spikes > 2, shape) {
+        (false, _) => (1.0, short_axis),
+        (true, ParametricShape::Square) => (1.0_f32.hypot(short_axis), 1.0),
+        (true, _) => (1.0, 1.0),
+    };
+    let exponent = 0.4 / (1.0 - hardness).max(0.000_000_4);
+    mask::generated(ratio, |x, y| {
+        let (x, y) = mask::fold_spikes(x * extent, y * extent * ratio, spikes);
+        let distance = mask::shape_distance(shape, x, y * aspect);
+        let falloff = distance.min(1.0).powf(exponent);
+        if falloff <= 0.5 {
+            1.0 - 2.0 * falloff * falloff
+        } else {
+            2.0 * (1.0 - falloff).powi(2)
+        }
     })
 }
 
@@ -293,4 +312,39 @@ fn vbr_number(value: Option<&str>, name: &str) -> Result<f32, String> {
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite())
         .ok_or_else(|| format!("Invalid .vbr brush {name}"))
+}
+
+#[cfg(test)]
+mod generated_tests {
+    use super::*;
+
+    #[test]
+    fn vbr_hardness_is_a_radial_falloff_and_spikes_repeat_the_tip_profile() {
+        let BrushTipKind::AlphaMask {
+            width,
+            height,
+            alpha,
+        } = generated_vbr_tip(ParametricShape::Circle, 0.0, 1.0, 2)
+        else {
+            panic!("expected raster tip")
+        };
+        let y = (height / 2 * width) as usize;
+        assert_eq!(alpha[y + (width / 2) as usize], 255);
+        assert!((20..=45).contains(&alpha[y + (width * 3 / 4) as usize]));
+        let plain = generated_vbr_tip(ParametricShape::Circle, 0.8, 1.0, 2);
+        let spiked = generated_vbr_tip(ParametricShape::Circle, 0.8, 1.0, 6);
+        let (
+            BrushTipKind::AlphaMask { alpha: plain, .. },
+            BrushTipKind::AlphaMask { alpha: spiked, .. },
+        ) = (plain, spiked)
+        else {
+            panic!("expected raster tips")
+        };
+        assert!(
+            plain
+                .iter()
+                .zip(spiked.iter())
+                .all(|(a, b)| a.abs_diff(*b) <= 1)
+        );
+    }
 }

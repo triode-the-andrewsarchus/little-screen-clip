@@ -1,4 +1,4 @@
-use super::BrushTipKind;
+use super::{BrushTipKind, ParametricShape};
 use image::{DynamicImage, GrayImage, ImageFormat, ImageReader};
 use std::io::Cursor;
 
@@ -69,4 +69,38 @@ pub(super) fn raster(width: u32, height: u32, alpha: Vec<u8>) -> Option<BrushTip
         height: gray.height(),
         alpha: gray.into_raw().into(),
     })
+}
+
+pub(super) fn generated(ratio: f32, coverage: impl Fn(f32, f32) -> f32) -> BrushTipKind {
+    let width = PREVIEW_EDGE - 1;
+    let height = ((width as f32 * ratio).round() as u32).clamp(3, width) | 1;
+    let axis = |pixel, length| 2.0 * pixel as f32 / (length - 1) as f32 - 1.0;
+    let alpha = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (axis(x, width), axis(y, height))))
+        .map(|(x, y)| (255.0 * coverage(x, y).clamp(0.0, 1.0)).round() as u8)
+        .collect();
+    BrushTipKind::AlphaMask {
+        width,
+        height,
+        alpha,
+    }
+}
+
+pub(super) fn shape_distance(shape: ParametricShape, x: f32, y: f32) -> f32 {
+    match shape {
+        ParametricShape::Circle => (x * x + y * y).sqrt(),
+        ParametricShape::Square => x.abs().max(y.abs()),
+        ParametricShape::Diamond => x.abs() + y.abs(),
+    }
+}
+
+pub(super) fn fold_spikes(x: f32, y: f32, spikes: u8) -> (f32, f32) {
+    if spikes <= 2 {
+        return (x, y);
+    }
+    let sector = std::f32::consts::TAU / f32::from(spikes);
+    let angle = (y.atan2(x) + sector * 0.5).rem_euclid(sector) - sector * 0.5;
+    let (sin, cos) = angle.sin_cos();
+    let radius = x.hypot(y);
+    (radius * cos, radius * sin)
 }

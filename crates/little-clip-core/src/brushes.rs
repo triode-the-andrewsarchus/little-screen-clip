@@ -617,13 +617,12 @@ mod tests {
         assert_eq!(brush.params.spacing, 0.30);
         assert_eq!(brush.params.size_px, 56.0);
         assert_eq!(brush.params.hardness, 0.65);
-        assert_eq!(brush.params.angle_deg, 15.0);
+        assert_eq!(brush.params.angle_deg, -15.0);
         assert!(matches!(
             brush.tip,
-            BrushTipKind::Parametric {
-                shape: ParametricShape::Circle,
-                aspect_ratio: 1.4,
-                spikes: 2,
+            BrushTipKind::AlphaMask {
+                width: 191,
+                height: 137,
                 ..
             }
         ));

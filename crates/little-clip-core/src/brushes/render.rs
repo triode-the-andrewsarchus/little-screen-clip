@@ -1,4 +1,4 @@
-use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape};
+use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape, mask};
 use crate::ImageThumbnail;
 use std::f32::consts::PI;
 
@@ -314,11 +314,7 @@ fn sample_parametric(
 ) -> f32 {
     let sx = lx;
     let sy = ly * aspect_ratio.max(1.0);
-    let mut dist = match shape {
-        ParametricShape::Circle => (sx * sx + sy * sy).sqrt(),
-        ParametricShape::Square => sx.abs().max(sy.abs()),
-        ParametricShape::Diamond => sx.abs() + sy.abs(),
-    };
+    let mut dist = mask::shape_distance(shape, sx, sy);
     if spikes > 2 {
         let theta = sy.atan2(sx);
         let mod_factor = 0.72 + 0.28 * (theta * f32::from(spikes)).cos();
