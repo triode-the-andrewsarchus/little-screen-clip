@@ -115,8 +115,7 @@ fn jpeg_preview(
 
 fn raw_thumbnail(path: &Path, edge: u32, cancelled: &AtomicBool) -> Option<ImageThumbnail> {
     use crate::raw_image::EmbeddedPixels;
-    let preview = crate::raw_image::embedded_preview(path, edge, cancelled)?;
-    match preview.pixels {
+    crate::raw_image::embedded_preview(path, edge, cancelled, |preview| match preview.pixels {
         EmbeddedPixels::Encoded(bytes, mime) => {
             raster(&bytes, mime, edge, preview.orientation, cancelled)
         }
@@ -130,7 +129,7 @@ fn raw_thumbnail(path: &Path, edge: u32, cancelled: &AtomicBool) -> Option<Image
                 cancelled,
             )
         }
-    }
+    })
 }
 
 fn exiftool_thumbnail(

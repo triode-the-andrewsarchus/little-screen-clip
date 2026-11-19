@@ -126,30 +126,53 @@ pub(crate) struct EmbeddedPreview {
     pub orientation: u8,
 }
 
-pub(crate) fn embedded_preview(
+pub(crate) fn embedded_preview<T>(
     path: &Path,
     edge: u32,
     cancelled: &AtomicBool,
-) -> Option<EmbeddedPreview> {
+    accept: impl FnMut(EmbeddedPreview) -> Option<T>,
+) -> Option<T> {
     if cancelled.load(Ordering::Relaxed) {
         return None;
     }
     let bytes = crate::file_source::read_file_snapshot(path, PREVIEW_SOURCE_MAX_BYTES).ok()?;
+    select_embedded_preview(&bytes, edge, cancelled, accept)
+}
+
+fn select_embedded_preview<T>(
+    bytes: &[u8],
+    edge: u32,
+    cancelled: &AtomicBool,
+    mut accept: impl FnMut(EmbeddedPreview) -> Option<T>,
+) -> Option<T> {
     if cancelled.load(Ordering::Relaxed) {
         return None;
     }
-    let raw = FlashRaw::open_with(bytes.as_slice(), raw_limits()).ok()?;
-    let (preview, data, _) = raw
+    let raw = FlashRaw::open_with(bytes, raw_limits()).ok()?;
+    let mut candidates: Vec<_> = raw
         .previews()
         .iter()
         .filter_map(|preview| preview_candidate(&raw, preview))
-        .min_by_key(|(_, _, size)| {
-            if *size >= edge {
-                (false, *size)
-            } else {
-                (true, u32::MAX - *size)
-            }
-        })?;
+        .collect();
+    candidates.sort_by_key(|(_, _, size)| {
+        if *size >= edge {
+            (false, *size)
+        } else {
+            (true, u32::MAX - *size)
+        }
+    });
+    for (preview, data, _) in candidates {
+        if cancelled.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(result) = materialize_preview(preview, data).and_then(&mut accept) {
+            return (!cancelled.load(Ordering::Relaxed)).then_some(result);
+        }
+    }
+    None
+}
+
+fn materialize_preview(preview: &PreviewInfo, data: &[u8]) -> Option<EmbeddedPreview> {
     let pixels = match preview.encoding {
         PreviewEncoding::Jpeg => EmbeddedPixels::Encoded(data.to_vec(), "image/jpeg"),
         PreviewEncoding::JpegXl => EmbeddedPixels::Encoded(data.to_vec(), "image/jxl"),
@@ -160,7 +183,7 @@ pub(crate) fn embedded_preview(
         )?),
         _ => return None,
     };
-    (!cancelled.load(Ordering::Relaxed)).then_some(EmbeddedPreview {
+    Some(EmbeddedPreview {
         pixels,
         orientation: preview.orientation.exif() as u8,
     })
@@ -203,17 +226,15 @@ fn preview_candidate<'a>(
 /// Returns an error when no usable preview can be produced.
 pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
     let cancelled = AtomicBool::new(false);
-    if let Some(preview) = embedded_preview(path, u32::MAX, &cancelled)
-        && let Some(encoded) = clipboard_jpeg(preview)
-    {
+    if let Some(encoded) = embedded_preview(path, u32::MAX, &cancelled, clipboard_jpeg) {
         return Ok(encoded);
     }
 
     for tag in ["-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"] {
         if let Some(bytes) = exiftool_preview(path, tag, &cancelled)
-            && let Some(dimensions) = preview_dimensions(&bytes)
+            && let Some(image) = decode_preview(&bytes, None)
         {
-            return Ok((bytes, dimensions.0, dimensions.1));
+            return Ok((bytes, image.width(), image.height()));
         }
     }
 
@@ -228,9 +249,9 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
     if let Ok(output) = output
         && output.status.success()
         && !output.stdout_truncated
-        && let Some((width, height)) = preview_dimensions(&output.stdout)
+        && let Some(image) = decode_preview(&output.stdout, Some("image/jpeg"))
     {
-        return Ok((output.stdout, width, height));
+        return Ok((output.stdout, image.width(), image.height()));
     }
     Err(format!(
         "Could not extract camera RAW preview from {path:?}"
@@ -239,14 +260,12 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
 
 fn clipboard_jpeg(preview: EmbeddedPreview) -> Option<(Vec<u8>, u32, u32)> {
     let mut image = match preview.pixels {
-        EmbeddedPixels::Encoded(bytes, "image/jpeg") if preview.orientation == 1 => {
-            let (width, height) = preview_dimensions(&bytes)?;
-            return Some((bytes, width, height));
-        }
         EmbeddedPixels::Encoded(bytes, mime) => {
-            let mut reader = crate::item::image_reader(&bytes, Some(mime)).ok()?;
-            reader.limits(crate::item::raster_preview_limits());
-            reader.decode().ok()?
+            let image = decode_preview(&bytes, Some(mime))?;
+            if mime == "image/jpeg" && preview.orientation == 1 {
+                return Some((bytes, image.width(), image.height()));
+            }
+            image
         }
         EmbeddedPixels::Rgb(image) => DynamicImage::ImageRgb8(image),
     };
@@ -257,6 +276,12 @@ fn clipboard_jpeg(preview: EmbeddedPreview) -> Option<(Vec<u8>, u32, u32)> {
     let mut jpeg = Cursor::new(Vec::new());
     image.write_to(&mut jpeg, ImageFormat::Jpeg).ok()?;
     Some((jpeg.into_inner(), image.width(), image.height()))
+}
+
+fn decode_preview(bytes: &[u8], mime: Option<&str>) -> Option<DynamicImage> {
+    let mut reader = crate::item::image_reader(bytes, mime).ok()?;
+    reader.limits(crate::item::raster_preview_limits());
+    reader.decode().ok()
 }
 
 pub(crate) fn exiftool_preview(path: &Path, tag: &str, cancelled: &AtomicBool) -> Option<Vec<u8>> {
