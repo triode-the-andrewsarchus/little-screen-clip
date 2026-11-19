@@ -212,14 +212,17 @@ fn load_via_brushkit(
     let opts = brushkit::preview::PreviewOptions {
         max_cell: mask::PREVIEW_EDGE,
     };
-    let set = brushkit::preview::preview(
-        bytes,
-        bk_format,
-        opts,
+    let preview = |take, keep_going: &mut dyn FnMut() -> bool| {
+        brushkit::preview::preview(bytes, bk_format, opts, take, keep_going)
+            .map_err(|error| format!("Invalid {} brush: {error}", format.label()))
+    };
+    let set = preview(
         brushkit::preview::Take::FirstAvailable(max_brushes),
         &mut || !cancelled.load(Ordering::Relaxed),
-    )
-    .map_err(|error| format!("Invalid {} brush: {error}", format.label()))?;
+    )?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
 
     let mut brushes = Vec::with_capacity(set.entries.len());
     for entry in set.entries {
@@ -253,7 +256,12 @@ fn load_via_brushkit(
     if brushes.is_empty() {
         return Err(format!("No readable brush tips in {}", format.label()));
     }
-    let total_count = brushes.len() + set.not_reached;
+    // A gate that stops before the first entry counts the index without decoding
+    // tips. FirstAvailable stops at its sample size without counting the rest.
+    let total_count = preview(brushkit::preview::Take::All, &mut || false)?.not_reached;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
     Ok(BrushLibrary {
         format,
         brushes,
@@ -350,6 +358,51 @@ mod tests {
             BrushTipKind::AlphaMask { width: 8, height: 4, alpha }
                 if alpha == &[200; 32]
         ));
+    }
+
+    #[test]
+    fn abr_and_procreate_totals_include_brushes_beyond_the_preview_limit() {
+        let token = AtomicBool::new(false);
+        let mut samples = Vec::new();
+        for coverage in [200, 220] {
+            let mut sample = vec![0; 4];
+            for bound in [0_i32, 0, 4, 4] {
+                sample.extend_from_slice(&bound.to_be_bytes());
+            }
+            sample.extend_from_slice(&[0, 8, 0]);
+            sample.extend([coverage; 16]);
+            samples.extend_from_slice(&(sample.len() as u32).to_be_bytes());
+            samples.extend(sample);
+            samples.resize(samples.len().next_multiple_of(4), 0);
+        }
+        let mut abr = b"\0\x06\0\x028BIMsamp".to_vec();
+        abr.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+        abr.extend_from_slice(&samples);
+
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let brush_archive = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>$objects</key><array><string>$null</string><dict/></array></dict></plist>"#;
+        let shape = make_png(4, 4);
+        for prefix in ["a", "b"] {
+            archive
+                .start_file(format!("{prefix}/Brush.archive"), options)
+                .unwrap();
+            archive.write_all(brush_archive).unwrap();
+            archive
+                .start_file(format!("{prefix}/Shape.png"), options)
+                .unwrap();
+            archive.write_all(&shape).unwrap();
+        }
+        let brushset = archive.finish().unwrap().into_inner();
+
+        for (format, bytes) in [
+            (BrushFormat::Abr, abr),
+            (BrushFormat::ProcreateBrushset, brushset),
+        ] {
+            let library = load_brush_bytes(format, &bytes, "fallback", 1, &token).unwrap();
+            assert_eq!(library.brushes.len(), 1);
+            assert_eq!(library.total_count, 2);
+        }
     }
 
     #[test]
