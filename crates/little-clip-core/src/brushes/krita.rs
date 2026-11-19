@@ -368,22 +368,20 @@ fn generated_tip(
         .children()
         .find(|node| node.has_tag_name("MaskGenerator"))?;
     // Krita's legacy "radius" field also stores a diameter.
-    params.size_px = attribute_number(mask, "diameter")
-        .or_else(|| attribute_number(mask, "radius"))
+    params.size_px = attribute_number(mask, "radius")
+        .or_else(|| attribute_number(mask, "diameter"))
         .unwrap_or(24.0)
         .clamp(1.0, 4000.0);
     let ratio = attribute_number(mask, "ratio")
         .unwrap_or(1.0)
         .clamp(0.05, 1.0);
-    let horizontal = attribute_number(mask, "hfade");
-    let vertical = attribute_number(mask, "vfade");
-    // The preview uses one hardness value for both axes.
-    let hardness = match (horizontal, vertical) {
-        (Some(horizontal), Some(vertical)) => (horizontal + vertical) * 0.5,
-        (Some(fade), None) | (None, Some(fade)) => fade,
-        (None, None) => 1.0 - attribute_number(mask, "fade").unwrap_or(0.5) * 0.5,
-    }
-    .clamp(0.02, 1.0);
+    let fade = attribute_number(mask, "fade").map_or(0.0, |value| 1.0 - value * 0.5);
+    let horizontal = attribute_number(mask, "hfade")
+        .unwrap_or(fade)
+        .clamp(0.0, 1.0);
+    let vertical = attribute_number(mask, "vfade")
+        .unwrap_or(fade)
+        .clamp(0.0, 1.0);
     let shape = match mask.attribute("type") {
         Some("rct" | "rect") => ParametricShape::Square,
         _ => ParametricShape::Circle,
@@ -391,15 +389,95 @@ fn generated_tip(
     let spikes = mask
         .attribute("spikes")
         .and_then(|value| value.parse::<u8>().ok())
-        .unwrap_or(2);
-    params.hardness = hardness;
-    Some(BrushTipKind::Parametric {
-        shape,
-        hardness,
-        aspect_ratio: ratio.recip(),
-        angle_deg: params.angle_deg,
-        spikes: spikes.clamp(2, 20),
-    })
+        .unwrap_or(2)
+        .clamp(2, 20);
+    params.hardness = (horizontal + vertical) * 0.5;
+
+    let softness = match mask.attribute("id").unwrap_or("default") {
+        "default" => None,
+        "soft" => parse_curve(mask.attribute("softness_curve").unwrap_or("0,0;1,1"), |y| y),
+        _ => {
+            return Some(BrushTipKind::Parametric {
+                shape,
+                hardness: params.hardness,
+                aspect_ratio: ratio.recip(),
+                angle_deg: params.angle_deg,
+                spikes,
+            });
+        }
+    };
+    let aa = matches!(mask.attribute("antialiasEdges"), Some("1" | "true"));
+    let pixel_x = 2.0 / params.size_px;
+    let pixel_y = pixel_x / ratio;
+    let fade_x = if horizontal > 0.0 {
+        horizontal
+    } else {
+        pixel_x
+    };
+    let fade_y = if vertical > 0.0 { vertical } else { pixel_y };
+    let mask_ratio = if spikes > 2 { 1.0 } else { ratio };
+    Some(mask::generated(mask_ratio, |x, y| {
+        let (x, y) = mask::fold_spikes(x, y * mask_ratio, spikes);
+        let (x, y) = (x.abs(), y.abs() / ratio);
+        if let Some(softness) = &softness {
+            soft_coverage(shape, x, y, softness)
+        } else {
+            let aa_x = pixel_x * f32::from(aa);
+            let aa_y = pixel_y * f32::from(aa);
+            default_coverage(shape, (x, y), (x + aa_x, y + aa_y), (fade_x, fade_y))
+        }
+    }))
+}
+
+fn default_coverage(
+    shape: ParametricShape,
+    (x, y): (f32, f32),
+    (soft_x, soft_y): (f32, f32),
+    (fade_x, fade_y): (f32, f32),
+) -> f32 {
+    if shape == ParametricShape::Square {
+        let axis = |position: f32, softened: f32, hard_edge: f32| {
+            let fade = softened / hard_edge;
+            if fade <= 1.0 {
+                1.0
+            } else {
+                fade * (1.0 - position) / (fade - position)
+            }
+        };
+        if x >= 1.0 || y >= 1.0 {
+            return 0.0;
+        }
+        return axis(x, soft_x, fade_x).min(axis(y, soft_y, fade_y));
+    }
+
+    let distance = x * x + y * y;
+    if distance >= 1.0 {
+        return 0.0;
+    }
+    let fade = (soft_x / fade_x).powi(2) + (soft_y / fade_y).powi(2);
+    if fade <= 1.0 {
+        1.0
+    } else {
+        fade * (1.0 - distance) / (fade - distance)
+    }
+}
+
+fn soft_coverage(shape: ParametricShape, x: f32, y: f32, curve: &DabCurve) -> f32 {
+    if shape == ParametricShape::Square {
+        let axis = |position: f32| curve.at(position) * (1.0 - curve.at(1.0 - position));
+        if x >= 1.0 || y >= 1.0 {
+            0.0
+        } else {
+            1.0 - axis(x) * axis(y)
+        }
+    } else {
+        let distance = x * x + y * y;
+        if distance >= 1.0 {
+            0.0
+        } else {
+            1.0 - curve.at(distance)
+        }
+    }
 }
 
 fn attribute_number(node: roxmltree::Node<'_, '_>, name: &str) -> Option<f32> {

@@ -414,15 +414,18 @@ mod tests {
         .unwrap();
         let tip = &lib.brushes[0];
         assert_eq!(tip.params.size_px, 42.0);
-        assert!(matches!(
-            tip.tip,
-            BrushTipKind::Parametric {
-                shape: ParametricShape::Square,
-                hardness: 0.5,
-                aspect_ratio: 2.0,
-                ..
-            }
-        ));
+        let BrushTipKind::AlphaMask {
+            width,
+            height,
+            alpha,
+        } = &tip.tip
+        else {
+            panic!("expected generated Krita raster")
+        };
+        assert!((*width as f32 / *height as f32 - 2.0).abs() < 0.04);
+        let alpha_at = |x: u32, y: u32| alpha[(y * width + x) as usize];
+        assert_eq!(alpha_at(width / 2, height / 2), 255);
+        assert!(alpha_at(width * 4 / 5, height / 2) < alpha_at(width / 2, height * 4 / 5));
 
         let encoded =
             base64::engine::general_purpose::STANDARD.encode(make_gbr("Tip", 8, 4, 20, 200));
