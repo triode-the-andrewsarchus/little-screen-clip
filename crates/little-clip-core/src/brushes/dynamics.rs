@@ -40,6 +40,7 @@ impl DabCurve {
 #[derive(Clone, Debug, Default)]
 pub struct BrushDynamics {
     pub(super) size: Option<DabCurve>,
+    pub(super) vector_texture: bool,
     pub(super) opacity: Option<DabCurve>,
     pub(super) opacity_fade: Option<super::krita::OpacityFade>,
     pub(super) krita_smudge: Option<super::krita::LegacySmudge>,

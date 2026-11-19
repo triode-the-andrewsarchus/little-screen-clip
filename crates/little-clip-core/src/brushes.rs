@@ -167,8 +167,8 @@ pub fn load_brush_library(
 
 /// Counts the brushes represented by a supported file.
 ///
-/// Photoshop and Procreate packs use their index. Affinity counts are based on
-/// recognizable embedded tip headers. Other formats reuse the first-preset
+/// Photoshop, Procreate and native Affinity vector packs use their index.
+/// PNG-based Affinity packs use recognizable tip headers. Other formats reuse the first-preset
 /// parser and its reported library count.
 ///
 /// # Errors

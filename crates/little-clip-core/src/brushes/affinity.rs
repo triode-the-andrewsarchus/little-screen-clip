@@ -1,14 +1,20 @@
+mod archive;
+mod vector;
+
 use super::{BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, mask};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Best-effort extraction for Affinity `.afbrushes` files by scanning embedded PNG tip rasters.
+/// Previews native vector textures and older embedded PNG brush tips.
 pub(super) fn parse_afbrushes(
     bytes: &[u8],
     fallback_name: &str,
     max_brushes: usize,
     cancelled: &AtomicBool,
 ) -> Result<BrushLibrary, String> {
+    if is_vector_library(bytes) {
+        return vector::load(bytes, fallback_name, max_brushes, cancelled).map_err(str::to_owned);
+    }
     let mut brushes = Vec::new();
     for png in embedded_tips(bytes, cancelled)? {
         if brushes.len() >= max_brushes {
@@ -43,6 +49,9 @@ pub(super) fn parse_afbrushes(
 }
 
 pub(super) fn count(bytes: &[u8], cancelled: &AtomicBool) -> Result<usize, String> {
+    if is_vector_library(bytes) {
+        return vector::count(bytes, cancelled).map_err(str::to_owned);
+    }
     let count = embedded_tips(bytes, cancelled)?
         .filter(|png| mask::png_reader(png).into_dimensions().is_ok())
         .count();
@@ -53,6 +62,10 @@ pub(super) fn count(bytes: &[u8], cancelled: &AtomicBool) -> Result<usize, Strin
         return Err("No embedded tip rasters found in .afbrushes".into());
     }
     Ok(count)
+}
+
+fn is_vector_library(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x00\xffKA") && bytes.get(8..12) == Some(b"rArB")
 }
 
 fn embedded_tips<'a>(

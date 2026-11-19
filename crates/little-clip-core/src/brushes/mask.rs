@@ -56,10 +56,19 @@ pub(super) fn png(bytes: &[u8], opaque: OpaqueCoverage) -> Option<(BrushTipKind,
 }
 
 pub(super) fn raster(width: u32, height: u32, alpha: Vec<u8>) -> Option<BrushTipKind> {
+    raster_at_edge(width, height, alpha, PREVIEW_EDGE)
+}
+
+pub(super) fn raster_at_edge(
+    width: u32,
+    height: u32,
+    alpha: Vec<u8>,
+    edge: u32,
+) -> Option<BrushTipKind> {
     let gray = GrayImage::from_raw(width, height, alpha)?;
-    let gray = if width.max(height) > PREVIEW_EDGE {
+    let gray = if width.max(height) > edge {
         DynamicImage::ImageLuma8(gray)
-            .thumbnail(PREVIEW_EDGE, PREVIEW_EDGE)
+            .thumbnail(edge, edge)
             .into_luma8()
     } else {
         gray
