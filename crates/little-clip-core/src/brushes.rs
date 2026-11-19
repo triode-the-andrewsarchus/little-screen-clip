@@ -447,6 +447,26 @@ mod tests {
     }
 
     #[test]
+    fn krita_opacity_combines_pressure_with_the_saved_dab_fade() {
+        let xml = r#"<Preset name="Fade">
+          <param name="OpacityUseCurve">true</param>
+          <param name="OpacityUseSameCurve">false</param>
+          <param name="OpacitycurveMode">0</param>
+          <param name="OpacitySensor"><![CDATA[<!DOCTYPE params> <params id="sensorslist">
+            <ChildSensor id="fade" length="16" periodic="1"/>
+            <ChildSensor id="pressure"><curve>0,0;1,1;</curve></ChildSensor>
+          </params>]]></param>
+        </Preset>"#;
+        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let settings = preset.params.dynamics;
+        let pressure = settings.opacity.unwrap().at(0.5);
+        let fade = settings.opacity_fade.unwrap();
+        assert_eq!(fade.at(8, pressure), 0.25);
+        assert_eq!(fade.at(16, pressure), 0.0);
+        assert_eq!(fade.at(24, pressure), 0.25);
+    }
+
+    #[test]
     fn krita_bundle_uses_its_own_tip_resource_for_the_preset() {
         let xml = r#"<Preset name="Stamp"><param name="brush_definition"><![CDATA[<Brush type="gbr_brush" filename="seeds.gbr" scale="2"/>]]></param></Preset>"#;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

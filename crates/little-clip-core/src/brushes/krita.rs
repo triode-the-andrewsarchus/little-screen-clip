@@ -90,7 +90,9 @@ fn paintbrush_params<'a>(param: &impl Fn(&str) -> Option<&'a str>) -> BrushStrok
         let strength = number("SizeValue", 1.0);
         params.dynamics.size = sensor_curve(param, "Size", "pressure", |v| v * strength);
     }
-    params.dynamics.opacity = sensor_curve(param, "Opacity", "pressure", |v| v);
+    let (opacity, fade) = opacity_sensors(param);
+    params.dynamics.opacity = opacity;
+    params.dynamics.opacity_fade = fade;
     params.dynamics.flow = sensor_curve(param, "Flow", "pressure", |v| v);
     if param("PressureRotation") == Some("true") {
         let strength = number("RotationValue", 1.0) * 180.0;
@@ -110,7 +112,18 @@ fn sensor_curve<'a>(
     sensor_id: &str,
     scale: impl Fn(f32) -> f32,
 ) -> Option<DabCurve> {
-    if param(&format!("{property}UseCurve")) != Some("true") {
+    let doc = sensor_document(param, property)?;
+    let sensor = doc.root_element();
+    (sensor.attribute("id") == Some(sensor_id))
+        .then(|| curve_for_sensor(sensor, common_curve(param, property), scale))
+        .flatten()
+}
+
+fn sensor_document<'a>(
+    param: &impl Fn(&str) -> Option<&'a str>,
+    property: &str,
+) -> Option<roxmltree::Document<'a>> {
+    if param(&format!("{property}UseCurve")) == Some("false") {
         return None;
     }
     let xml = param(&format!("{property}Sensor"))?;
@@ -118,24 +131,132 @@ fn sensor_curve<'a>(
         .strip_prefix("<!DOCTYPE params>")
         .unwrap_or(xml)
         .trim_start();
-    let doc = roxmltree::Document::parse_with_options(xml, preset_xml_options()).ok()?;
-    let sensor = doc.root_element();
-    if !sensor.has_tag_name("params") || sensor.attribute("id") != Some(sensor_id) {
-        return None;
-    }
-    let common = (param(&format!("{property}UseSameCurve")) == Some("true"))
+    let document = roxmltree::Document::parse_with_options(xml, preset_xml_options()).ok()?;
+    document
+        .root_element()
+        .has_tag_name("params")
+        .then_some(document)
+}
+
+fn common_curve<'a>(param: &impl Fn(&str) -> Option<&'a str>, property: &str) -> Option<&'a str> {
+    (param(&format!("{property}UseSameCurve")) != Some("false"))
         .then(|| param(&format!("{property}commonCurve")))
-        .flatten();
+        .flatten()
+}
+
+fn curve_for_sensor(
+    sensor: roxmltree::Node<'_, '_>,
+    common: Option<&str>,
+    scale: impl Fn(f32) -> f32,
+) -> Option<DabCurve> {
     let curve = common.or_else(|| {
         sensor
             .children()
             .find(|node| node.has_tag_name("curve"))
             .and_then(|node| node.text())
     });
-    let Some(curve) = curve else {
-        return Some(DabCurve::linear(scale(0.0), scale(1.0)));
+    match curve {
+        Some(curve) => parse_curve(curve, scale),
+        None => Some(DabCurve::linear(scale(0.0), scale(1.0))),
+    }
+}
+
+fn opacity_sensors<'a>(
+    param: &impl Fn(&str) -> Option<&'a str>,
+) -> (Option<DabCurve>, Option<OpacityFade>) {
+    let Some(doc) = sensor_document(param, "Opacity") else {
+        return (None, None);
     };
-    parse_curve(curve, scale)
+    let root = doc.root_element();
+    let common = common_curve(param, "Opacity");
+    match root.attribute("id") {
+        Some("pressure") => (curve_for_sensor(root, common, |v| v), None),
+        Some("fade") => (None, OpacityFade::read(root, common, None)),
+        Some("sensorslist") => pressure_with_fade(root, common, param("OpacitycurveMode")),
+        _ => (None, None),
+    }
+}
+
+fn pressure_with_fade(
+    root: roxmltree::Node<'_, '_>,
+    common: Option<&str>,
+    mode: Option<&str>,
+) -> (Option<DabCurve>, Option<OpacityFade>) {
+    let mut sensors = root
+        .children()
+        .filter(|node| node.has_tag_name("ChildSensor"));
+    let (Some(first), Some(second), None) = (sensors.next(), sensors.next(), sensors.next()) else {
+        return (None, None);
+    };
+    let (pressure, fade) = match (first.attribute("id"), second.attribute("id")) {
+        (Some("pressure"), Some("fade")) => (first, second),
+        (Some("fade"), Some("pressure")) => (second, first),
+        _ => return (None, None),
+    };
+    let combination = match mode {
+        Some("1") => FadeMode::Add,
+        Some("2") => FadeMode::Maximum,
+        Some("3") => FadeMode::Minimum,
+        Some("4") => FadeMode::Difference,
+        _ => FadeMode::Multiply,
+    };
+    let pressure = curve_for_sensor(pressure, common, |v| v);
+    let fade = OpacityFade::read(fade, common, Some(combination));
+    match (pressure, fade) {
+        (Some(pressure), Some(fade)) => (Some(pressure), Some(fade)),
+        _ => (None, None),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FadeMode {
+    Multiply,
+    Add,
+    Maximum,
+    Minimum,
+    Difference,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct OpacityFade {
+    length: usize,
+    periodic: bool,
+    curve: DabCurve,
+    mode: Option<FadeMode>,
+}
+
+impl OpacityFade {
+    fn read(
+        node: roxmltree::Node<'_, '_>,
+        common: Option<&str>,
+        mode: Option<FadeMode>,
+    ) -> Option<Self> {
+        let length = node.attribute("length")?.parse::<u32>().ok()?;
+        Some(Self {
+            length: usize::try_from(length.max(1)).ok()?,
+            periodic: matches!(node.attribute("periodic"), Some("1" | "true")),
+            curve: curve_for_sensor(node, common, |v| v)?,
+            mode,
+        })
+    }
+
+    pub(super) fn at(&self, dab: usize, pressure_opacity: f32) -> f32 {
+        let progress = if self.periodic {
+            dab % self.length
+        } else {
+            dab.min(self.length)
+        };
+        let fade = self.curve.at(progress as f32 / self.length as f32);
+        match self.mode {
+            None => fade,
+            Some(FadeMode::Multiply) => pressure_opacity * fade,
+            Some(FadeMode::Add) => pressure_opacity + fade,
+            Some(FadeMode::Maximum) => pressure_opacity.max(fade),
+            Some(FadeMode::Minimum) => pressure_opacity.min(fade),
+            Some(FadeMode::Difference) => (pressure_opacity - fade).abs(),
+        }
+        .clamp(0.0, 1.0)
+    }
 }
 
 fn parse_curve(curve: &str, scale: impl Fn(f32) -> f32) -> Option<DabCurve> {

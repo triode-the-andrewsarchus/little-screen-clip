@@ -132,6 +132,7 @@ fn draw_stroke(
             / (distances[end] - distances[end - 1]).max(f32::EPSILON);
         let t = (end as f32 - 1.0 + fraction) / PATH_SEGMENTS as f32;
         let sample = StrokeSample {
+            index,
             t,
             direction: (-path.amplitude * 2.0 * PI * (t * 2.0 * PI).cos()).atan2(path.x1 - path.x0),
             seed: mix_hash(seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)),
@@ -203,6 +204,7 @@ fn dab_gap(preset: &BrushPreset, dab: Dab, base_radius: f32, direction: f32) -> 
 
 #[derive(Clone, Copy)]
 struct StrokeSample {
+    index: usize,
     t: f32,
     direction: f32,
     seed: u64,
@@ -226,8 +228,15 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
     let size = response(&dynamics.size, 1.0)
         * (1.0 + random(1) * dynamics.size_jitter)
         * (1.0 - taper * dynamics.taper_size);
+    let pressure_opacity = response(&dynamics.opacity, 1.0);
+    let opacity_response = dynamics
+        .opacity_fade
+        .as_ref()
+        .map_or(pressure_opacity, |fade| {
+            fade.at(sample.index, pressure_opacity)
+        });
     let opacity = params.opacity
-        * response(&dynamics.opacity, 1.0)
+        * opacity_response
         * (1.0 - (random(2) + 1.0) * 0.5 * dynamics.opacity_jitter)
         * (1.0 - taper * dynamics.taper_opacity);
     let flow = params.flow
@@ -497,6 +506,7 @@ mod tests {
             detail: String::new(),
         };
         let sample = |t| StrokeSample {
+            index: 0,
             t,
             direction: 0.0,
             seed: 1,
