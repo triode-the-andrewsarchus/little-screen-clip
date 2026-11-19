@@ -135,19 +135,75 @@ fn sensor_curve<'a>(
     let Some(curve) = curve else {
         return Some(DabCurve::linear(scale(0.0), scale(1.0)));
     };
-    let points = curve
+    parse_curve(curve, scale)
+}
+
+fn parse_curve(curve: &str, scale: impl Fn(f32) -> f32) -> Option<DabCurve> {
+    let mut points = curve
         .trim()
-        .trim_end_matches(';')
-        .split(';')
+        .split_terminator(';')
         .take(65)
         .map(|point| {
-            let (x, y) = point.split_once(',')?;
-            let x = x.trim().parse().ok()?;
-            let y: f32 = y.trim().parse().ok()?;
-            (0.0..=1.0).contains(&y).then(|| (x, scale(y)))
+            let mut fields = point.split(',').map(str::trim);
+            let x = fields.next()?.parse::<f64>().ok()?;
+            let y = fields.next()?.parse::<f64>().ok()?;
+            let corner = fields.next() == Some("is_corner");
+            ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)).then_some(CurvePoint {
+                x,
+                y,
+                corner,
+            })
         })
         .collect::<Option<Vec<_>>>()?;
-    DabCurve::from_points(points.into_iter())
+    points.sort_by(|a, b| a.x.total_cmp(&b.x));
+    if !(2..=64).contains(&points.len())
+        || points.windows(2).any(|span| span[1].x - span[0].x < 1.0e-7)
+    {
+        return None;
+    }
+    let second = spline_second_derivatives(&points);
+    Some(DabCurve::lookup(256, |input| {
+        let x = f64::from(input).clamp(points[0].x, points[points.len() - 1].x);
+        let upper = points.partition_point(|point| point.x < x).max(1);
+        let (left, right) = (points[upper - 1], points[upper]);
+        let width = right.x - left.x;
+        let b = (x - left.x) / width;
+        let a = 1.0 - b;
+        let linear = a * left.y + b * right.y;
+        let curvature = (a * a * a - a) * second[upper - 1] + (b * b * b - b) * second[upper];
+        scale((linear + width * width * curvature / 6.0).clamp(0.0, 1.0) as f32)
+    }))
+}
+
+#[derive(Clone, Copy)]
+struct CurvePoint {
+    x: f64,
+    y: f64,
+    corner: bool,
+}
+
+fn spline_second_derivatives(points: &[CurvePoint]) -> Vec<f64> {
+    // Endpoints and corners have zero second derivative. Between them the
+    // natural cubic spline has continuous first and second derivatives.
+    let count = points.len();
+    let mut upper = vec![0.0; count];
+    let mut second = vec![0.0; count];
+    for (i, span) in points.windows(3).enumerate() {
+        let index = i + 1;
+        if span[1].corner {
+            continue;
+        }
+        let left = span[1].x - span[0].x;
+        let right = span[2].x - span[1].x;
+        let slope_change = (span[2].y - span[1].y) / right - (span[1].y - span[0].y) / left;
+        let diagonal = 2.0 * (left + right) - left * upper[index - 1];
+        upper[index] = right / diagonal;
+        second[index] = (6.0 * slope_change - left * second[index - 1]) / diagonal;
+    }
+    for index in (1..count - 1).rev() {
+        second[index] -= upper[index] * second[index + 1];
+    }
+    second
 }
 
 fn preset_xml_options() -> roxmltree::ParsingOptions {
@@ -477,4 +533,19 @@ fn read_bundle_entry(entry: impl Read, size: u64, remaining: &mut u64) -> Option
     let mut buf = Vec::with_capacity(size as usize);
     entry.take(size + 1).read_to_end(&mut buf).ok()?;
     (buf.len() as u64 == size).then_some(buf)
+}
+
+#[cfg(test)]
+mod curve_tests {
+    use super::*;
+
+    #[test]
+    fn krita_curves_use_splines_and_keep_marked_corners() {
+        let smooth = parse_curve("0,0;0.5,1;1,0;", |y| y).unwrap();
+        let corner = parse_curve("0,0;0.5,1,is_corner;1,0;", |y| y).unwrap();
+        assert_eq!(smooth.at(0.25), 0.6875);
+        assert_eq!(corner.at(0.25), 0.5);
+        assert_eq!(smooth.at(0.5), 1.0);
+        assert!(parse_curve("0.5,0;0.5,1", |y| y).is_none());
+    }
 }

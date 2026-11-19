@@ -7,24 +7,15 @@ impl DabCurve {
         Self(vec![(0.0, min), (1.0, max)])
     }
 
-    pub(super) fn from_points(points: impl Iterator<Item = (f32, f32)>) -> Option<Self> {
-        let points: Vec<_> = points.take(65).collect();
-        if !(2..=64).contains(&points.len())
-            || !points
-                .iter()
-                .all(|(x, y)| (0.0..=1.0).contains(x) && y.is_finite())
-            || !points.windows(2).all(|pair| pair[0].0 < pair[1].0)
-        {
-            return None;
-        }
-        Some(Self(points))
+    pub(super) fn sampled(f: impl Fn(f32) -> f32) -> Self {
+        Self::lookup(32, f)
     }
 
-    pub(super) fn sampled(f: impl Fn(f32) -> f32) -> Self {
+    pub(super) fn lookup(segments: u16, f: impl Fn(f32) -> f32) -> Self {
         Self(
-            (0..=32)
+            (0..=segments)
                 .map(|index| {
-                    let input = index as f32 / 32.0;
+                    let input = f32::from(index) / f32::from(segments);
                     (input, f(input))
                 })
                 .collect(),
