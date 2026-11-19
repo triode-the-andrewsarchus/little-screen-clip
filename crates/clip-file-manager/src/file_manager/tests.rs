@@ -212,26 +212,34 @@ fn listing_orders_folders_first_and_preserves_unreadable_metadata() {
 #[test]
 fn photo_collection_excludes_hidden_and_nonimages_without_filtering_browser_entries() {
     let temp = tempfile::tempdir().unwrap();
-    for name in ["a.png", "b.JPG", ".hidden.png", "notes.txt", "music.wav"] {
+    for name in [
+        "a.png",
+        "b.JPG",
+        "z.DNG",
+        ".hidden.png",
+        ".hidden.NEF",
+        "notes.txt",
+        "music.wav",
+    ] {
         std::fs::write(temp.path().join(name), b"fixture").unwrap();
     }
     std::fs::create_dir(temp.path().join("folder.png")).unwrap();
     let (mut manager, _jobs) = loaded(temp.path());
     let image = temp.path().join("a.png");
-    assert_eq!(manager.photo_collection(&image).len(), 2);
+    let raw = temp.path().join("z.DNG");
+    assert_eq!(manager.photo_collection(&image).len(), 3);
     manager.set_view(BrowserView::Photos);
-    assert_eq!(
-        manager.photo_collection(&image),
-        vec![image.clone(), temp.path().join("b.JPG")]
-    );
-    assert_eq!(manager.visible.len(), 5);
+    let collection = vec![image.clone(), temp.path().join("b.JPG"), raw.clone()];
+    assert_eq!(manager.photo_collection(&image), collection);
+    assert_eq!(manager.photo_collection(&raw), collection);
+    assert_eq!(manager.visible.len(), 6);
     assert!(
         manager
             .photo_collection(&temp.path().join("notes.txt"))
             .is_empty()
     );
     manager.toggle_hidden();
-    assert_eq!(manager.photo_collection(&image).len(), 3);
+    assert_eq!(manager.photo_collection(&image).len(), 5);
     manager.toggle_hidden();
     manager.gallery_columns = 2;
     manager.select(image);

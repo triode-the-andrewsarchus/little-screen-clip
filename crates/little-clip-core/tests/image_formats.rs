@@ -367,3 +367,73 @@ fn invalid_heif_is_rejected_and_signatures_override_hints() {
             .is_ok()
     );
 }
+
+#[test]
+fn raw_image_formats_are_detected_and_handled() {
+    use little_clip_core::raw_image::{develop, is_raw_image_bytes, is_raw_image_path};
+
+    let sample_extensions = [
+        "raw", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf", "dng", "raf", "orf", "rw2",
+        "pef", "srw", "iiq", "mos", "3fr", "fff", "mrw", "x3f", "kdc", "dcr", "dcs", "erf", "mef",
+        "mdc", "ari",
+    ];
+
+    for ext in sample_extensions {
+        assert!(
+            is_raw_image_path(Path::new(&format!("test_photo.{}", ext.to_uppercase()))),
+            "Failed to detect extension {ext}"
+        );
+        assert!(
+            is_raw_image_path(Path::new(&format!("test_photo.{ext}"))),
+            "Failed to detect extension {ext}"
+        );
+    }
+
+    assert!(!is_raw_image_path(Path::new("not_raw.png")));
+    assert!(!is_raw_image_path(Path::new("not_raw.jpg")));
+    assert!(!is_raw_image_path(Path::new("not_raw.txt")));
+
+    assert!(!is_raw_image_bytes(b""));
+    assert!(!is_raw_image_bytes(b"plain text bytes"));
+    assert!(!is_raw_image_bytes(b"\x89PNG\r\n\x1a\n"));
+
+    assert!(develop(b"corrupt raw bytes").is_err());
+    let fixture = include_bytes!("fixtures/raw/oriented-preview.dng");
+    assert!(is_raw_image_bytes(fixture));
+    let developed = develop(fixture).unwrap();
+    assert_eq!(developed.pixels.dimensions(), (20, 32));
+    assert_eq!(developed.metadata.model, "Synthetic DNG");
+}
+
+#[test]
+#[ignore = "requires a camera RAW corpus selected via RAW_SAMPLES_DIR"]
+fn camera_raw_corpus_has_developable_frames_and_embedded_previews() {
+    use little_clip_core::{gallery_image, raw_image};
+    let root =
+        std::env::var_os("RAW_SAMPLES_DIR").expect("set RAW_SAMPLES_DIR to a camera RAW corpus");
+    let mut count = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if !raw_image::is_raw_image_path(&path) {
+            continue;
+        }
+        let bytes =
+            little_clip_core::file_source::read_file_snapshot(&path, raw_image::DEVELOP_MAX_BYTES)
+                .unwrap();
+        let developed = raw_image::develop(&bytes)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let thumbnail = gallery_image::thumbnail::load(
+            &path,
+            256,
+            1,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap_or_else(|| panic!("{}: embedded preview unavailable", path.display()));
+        assert!(
+            developed.pixels.width().max(developed.pixels.height())
+                >= thumbnail.width.max(thumbnail.height)
+        );
+        count += 1;
+    }
+    assert!(count > 0, "no camera RAW files found");
+}

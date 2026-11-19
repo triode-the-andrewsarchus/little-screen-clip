@@ -282,3 +282,60 @@ fn clipped_inline_image_preview_defers_texture_upload() {
 
     assert!(preview.texture.is_some());
 }
+
+#[test]
+fn raw_format_is_recognized_and_handled_in_decoded_image_data() {
+    let dummy_raw_path = PathBuf::from("sample_camera_photo.NEF");
+    let result = DecodedImageData::from_bytes(
+        b"corrupt-or-unsupported-raw-payload".to_vec(),
+        "image/x-nikon-nef".to_string(),
+        Some(dummy_raw_path),
+    );
+    match result {
+        Err(err) => assert!(err.contains("RAW")),
+        Ok(_) => panic!("Expected error decoding invalid RAW payload"),
+    }
+}
+
+#[test]
+fn opens_sensor_data_and_camera_metadata_from_a_raw_file() {
+    let fixture =
+        include_bytes!("../../../../little-clip-core/tests/fixtures/raw/oriented-preview.dng");
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("sensor.dng");
+    std::fs::write(&path, fixture).unwrap();
+    let decoded = DecodedImageData::from_path(&path).unwrap();
+    assert_eq!(decoded.original_rgba.dimensions(), (20, 32));
+    assert_eq!(decoded.encoded_bytes.as_ref(), fixture);
+    assert_eq!(
+        decoded.metadata.unwrap().model.as_deref(),
+        Some("Synthetic DNG")
+    );
+}
+
+#[test]
+fn keeps_encoded_preview_for_a_clipboard_image_that_refers_to_a_raw_path() {
+    let embedded = image::RgbImage::from_pixel(6, 4, image::Rgb([40, 80, 120]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    embedded
+        .write_to(&mut bytes, image::ImageFormat::Jpeg)
+        .unwrap();
+    let decoded = DecodedImageData::from_bytes(
+        bytes.into_inner(),
+        "image/x-camera-raw".into(),
+        Some(PathBuf::from("different.CR2")),
+    )
+    .unwrap();
+    assert_eq!(decoded.original_rgba.dimensions(), (6, 4));
+}
+
+#[test]
+fn a_rendered_tiff_with_camera_tags_stays_a_raster_image() {
+    let fixture =
+        include_bytes!("../../../../little-clip-core/tests/fixtures/raw/camera-tagged.tiff");
+    assert!(!little_clip_core::raw_image::is_raw_image_bytes(fixture));
+    let decoded =
+        DecodedImageData::from_bytes(fixture.to_vec(), "image/tiff".into(), None).unwrap();
+    assert_eq!(decoded.original_rgba.dimensions(), (6, 4));
+    assert_eq!(decoded.mime, "image/tiff");
+}

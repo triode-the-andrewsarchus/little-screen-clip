@@ -213,7 +213,16 @@ impl Viewers {
             return;
         }
         if let Some(ViewerSession::Image(state)) = self.session.take() {
-            collection.photos[collection.index].session = Some(state);
+            let photo = &mut collection.photos[collection.index];
+            // Navigating through RAW images can otherwise hold every developed
+            // frame in memory. Keep edit and undo/redo state available.
+            if !little_clip_core::raw_image::is_raw_image_path(&photo.path)
+                || state.has_collection_edits()
+                || !state.undo_stack.is_empty()
+                || !state.redo_stack.is_empty()
+            {
+                photo.session = Some(state);
+            }
         }
         collection.index = target;
         collection.reveal_active = true;
@@ -551,6 +560,54 @@ mod tests {
         assert_eq!(state.current_rgba, original);
         assert_eq!(state.redo_stack.len(), 1);
     }
+    #[test]
+    fn raw_collection_reloads_clean_images_and_retains_edits() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture =
+            include_bytes!("../../../../little-clip-core/tests/fixtures/raw/oriented-preview.dng");
+        let paths: Vec<_> = ["a.dng", "b.dng"]
+            .into_iter()
+            .map(|name| {
+                let path = directory.path().join(name);
+                std::fs::write(&path, fixture).unwrap();
+                path
+            })
+            .collect();
+        let mut viewers = Viewers::default();
+        viewers.open_collection(paths[0].clone(), paths.clone(), Default::default());
+        finish_loading(&mut viewers);
+        assert!(matches!(viewers.session, Some(ViewerSession::Image(_))));
+
+        viewers.select_photo(1);
+        assert!(
+            viewers.gallery.as_ref().unwrap().photos[0]
+                .session
+                .is_none()
+        );
+        finish_loading(&mut viewers);
+        assert_eq!(viewers.path.as_ref(), Some(&paths[1]));
+
+        viewers.select_photo(0);
+        finish_loading(&mut viewers);
+        let Some(ViewerSession::Image(state)) = &mut viewers.session else {
+            panic!("expected reloaded RAW image");
+        };
+        std::sync::Arc::make_mut(&mut state.current_rgba).put_pixel(
+            0,
+            0,
+            image::Rgba([255, 0, 0, 255]),
+        );
+        state.mark_pixels_changed();
+        viewers.select_photo(1);
+        finish_loading(&mut viewers);
+        viewers.select_photo(0);
+        let Some(ViewerSession::Image(state)) = &viewers.session else {
+            panic!("expected retained RAW edits");
+        };
+        assert_eq!(state.current_rgba.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert!(state.has_unsaved_changes());
+    }
+
     #[test]
     fn exported_edits_remain_available_for_export_to_another_folder() {
         let (_dir, mut viewers) = ready_collection();

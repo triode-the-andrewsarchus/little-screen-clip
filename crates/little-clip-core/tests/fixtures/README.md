@@ -55,3 +55,7 @@ RLE-escaped indices. They include non-zero window origins, odd pixel widths, pad
 and RLE-escaped padding. Tests verify every pixel against the generated colors;
 Pillow independently verifies the RGB, VGA-indexed, monochrome and four-plane
 EGA files. These fixtures share the repository license.
+
+`raw/oriented-preview.dng` is a synthetic 32 × 20 Bayer frame with EXIF orientation 6 and two solid-color, uncompressed RGB previews. All pixels and camera metadata are generated for testing.
+
+`raw/camera-tagged.tiff` is a synthetic 6 × 4 rendered RGB TIFF with a Nikon camera make tag. It exercises the distinction between a RAW file and a standard TIFF carrying camera metadata.

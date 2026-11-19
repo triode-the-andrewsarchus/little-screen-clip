@@ -11,7 +11,6 @@ type ExportResult = Vec<(usize, ImageInputStamp, Result<PathBuf, String>)>;
 struct ExportInput {
     index: usize,
     stem: std::ffi::OsString,
-    source: FileSource,
     snapshot: crate::image_preview::DisplayImageSnapshotRequest,
     stamp: ImageInputStamp,
 }
@@ -91,13 +90,9 @@ impl Collection {
                     photo.session.as_deref()
                 };
                 if let Some(state) = state.filter(|state| state.has_collection_edits()) {
-                    let Some(source) = state.file_source() else {
-                        continue;
-                    };
                     inputs.push_back(ExportInput {
                         index,
                         stem: photo.path.file_stem().unwrap_or_default().to_os_string(),
-                        source,
                         snapshot: state.display_image_snapshot_request(),
                         stamp: state.input_stamp(),
                     });
@@ -178,7 +173,7 @@ fn export(mut inputs: VecDeque<ExportInput>, directory: PathBuf) -> ExportResult
                 .map_err(|e| e.to_string())?;
             let destination = parent.join(name);
             let bytes = input.snapshot.compose_png().map_err(|e| e.to_string())?;
-            input.source.write_in(&destination, &bytes, directory)?;
+            crate::file_source::create_file_in(&destination, &bytes, directory)?;
             Ok(destination)
         })();
         results.push((input.index, input.stamp, result));
@@ -243,7 +238,6 @@ mod tests {
             inputs.push_back(ExportInput {
                 index,
                 stem: path.file_stem().unwrap().to_os_string(),
-                source: state.file_source().unwrap(),
                 snapshot: state.display_image_snapshot_request(),
                 stamp: state.input_stamp(),
             });
@@ -268,5 +262,34 @@ mod tests {
         assert_eq!(saved.get_pixel(0, 0).0, [255, 0, 0, 255]);
         let original = image::open(dir.path().join("b.png")).unwrap().to_rgba8();
         assert_eq!(original.get_pixel(0, 0).0, [40, 80, 120, 255]);
+    }
+
+    #[test]
+    fn collection_export_refuses_to_replace_the_raw_source_behind_an_alias() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("photo_edit.png");
+        let alias = directory.path().join("photo.dng");
+        let original = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/raw/oriented-preview.dng"
+        ));
+        std::fs::write(&source, original).unwrap();
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let guard = FileSource::capture(&alias).unwrap();
+        assert_eq!(guard.path(), source);
+        let mut state = ImagePreviewState::from_path(alias.clone(), &AppConfig::default())
+            .unwrap()
+            .with_file_source(guard);
+        state.mark_pixels_changed();
+        let inputs = VecDeque::from([ExportInput {
+            index: 0,
+            stem: alias.file_stem().unwrap().to_os_string(),
+            snapshot: state.display_image_snapshot_request(),
+            stamp: state.input_stamp(),
+        }]);
+
+        let results = export(inputs, directory.path().into());
+        assert!(results[0].2.is_err());
+        assert_eq!(std::fs::read(source).unwrap(), original);
     }
 }

@@ -902,22 +902,26 @@ impl ImagePreviewState {
                         path_field.request_focus();
                         self.fallback_save_needs_focus = false;
                     }
+                    let new_destination_only = self.save_requires_unused_destination();
+                    let confirm_overwrite =
+                        self.fallback_save_confirm_overwrite && !new_destination_only;
                     if self.fallback_save_confirm_overwrite {
+                        let message = if new_destination_only {
+                            "Choose an unused filename for this RAW export."
+                        } else {
+                            "A file at this path already exists. Replace it?"
+                        };
                         ui.label(
-                            egui::RichText::new("A file at this path already exists. Replace it?")
+                            egui::RichText::new(message)
                                 .color(hex_to_c32(&palette.harmonies.warm_attention)),
                         );
                     }
                     ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.horizontal(|ui| {
-                        let save_label = if self.fallback_save_confirm_overwrite {
-                            "Replace"
-                        } else {
-                            "Save"
-                        };
+                        let save_label = if confirm_overwrite { "Replace" } else { "Save" };
                         if ui
                             .add(
-                                (if self.fallback_save_confirm_overwrite {
+                                (if confirm_overwrite {
                                     clip_ui::buttons::ButtonRole::Destructive
                                 } else {
                                     clip_ui::buttons::ButtonRole::Primary
@@ -931,7 +935,7 @@ impl ImagePreviewState {
                             .clicked()
                         {
                             let p = PathBuf::from(&self.fallback_save_path);
-                            if p.exists() && !self.fallback_save_confirm_overwrite {
+                            if p.exists() && !confirm_overwrite {
                                 self.fallback_save_confirm_overwrite = true;
                             } else {
                                 self.save_image_to_path(&p);

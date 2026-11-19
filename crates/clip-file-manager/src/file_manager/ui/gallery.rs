@@ -540,7 +540,9 @@ impl FileManager {
     }
 
     pub(in crate::file_manager) fn photo_collection(&self, path: &std::path::Path) -> Vec<PathBuf> {
-        if !little_clip_core::item::is_image_path(path) {
+        if !little_clip_core::item::is_image_path(path)
+            && !little_clip_core::raw_image::is_raw_image_path(path)
+        {
             return Vec::new();
         }
         if self.view == super::super::BrowserView::Photos
@@ -558,7 +560,7 @@ impl FileManager {
                 self.visible
                     .iter()
                     .map(|i| &directory.entries[*i])
-                    .filter(|e| !e.directory && little_clip_core::item::is_image_path(&e.path))
+                    .filter(|entry| entry.is_photo())
                     .map(|e| e.path.clone())
                     .collect()
             })

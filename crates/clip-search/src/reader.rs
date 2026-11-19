@@ -670,7 +670,7 @@ fn extract(
                 ..Default::default()
             });
         }
-        return photo(entry, file, &held);
+        return photo(entry, file);
     }
     if little_clip_core::audio::is_audio_path(&entry.path) {
         return audio(&held, cursor, entry.size_bytes);
@@ -777,49 +777,36 @@ fn pdf(path: &Path, cursor: usize, text_only: bool) -> Result<Prepared, String> 
     })
 }
 
-fn photo(entry: &Entry, file: &mut std::fs::File, held: &Path) -> Result<Prepared, String> {
+fn photo(entry: &Entry, file: &mut std::fs::File) -> Result<Prepared, String> {
     use image::ImageDecoder;
-    let mime = little_clip_core::item::guess_image_mime(&entry.path);
-    let bytes = if little_clip_core::raw_image::is_raw_image_path(&entry.path) {
-        let output = CommandRequest::new("exiftool")
-            .die_with_parent()
-            .args(["-b", "-PreviewImage"])
-            .arg_content_file(held)
-            .map_err(|e| e.to_string())?
-            .max_output_bytes(16 * 1024 * 1024)
-            .run()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() || output.stdout_truncated {
-            return Err("RAW embedded preview unavailable".into());
-        }
-        output.stdout
+    const EDGE: u32 = 1024;
+    let image = if little_clip_core::raw_image::is_raw_image_path(&entry.path) {
+        let cancelled = AtomicBool::new(false);
+        little_clip_core::raw_image::decode_embedded_preview(file, EDGE, 1, &cancelled)
+            .ok_or("RAW embedded preview unavailable")?
     } else {
         let mut bytes = Vec::new();
         file.take(256 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        bytes
+        if little_clip_core::item::is_svg_bytes(&bytes) {
+            return svg::prepare(&bytes);
+        }
+        let mime = little_clip_core::item::guess_image_mime(&entry.path);
+        let mut reader =
+            little_clip_core::item::image_reader(&bytes, Some(&mime)).map_err(|e| e.to_string())?;
+        reader.limits(little_clip_core::item::raster_preview_limits());
+        let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+        let orientation = decoder
+            .orientation()
+            .unwrap_or(image::metadata::Orientation::NoTransforms);
+        let mut raster = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+        raster.apply_orientation(orientation);
+        raster
     };
-    if little_clip_core::item::is_svg_bytes(&bytes) {
-        return svg::prepare(&bytes);
-    }
-    let hint = if little_clip_core::raw_image::is_raw_image_path(&entry.path) {
-        "image/jpeg"
-    } else {
-        &mime
-    };
-    let mut reader =
-        little_clip_core::item::image_reader(&bytes, Some(hint)).map_err(|e| e.to_string())?;
-    reader.limits(little_clip_core::item::raster_preview_limits());
-    let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
-    let orientation = decoder
-        .orientation()
-        .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut image = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
-    image.apply_orientation(orientation);
     let mut encoded = std::io::Cursor::new(Vec::new());
     image
-        .thumbnail(1024.min(image.width()), 1024.min(image.height()))
+        .thumbnail(EDGE.min(image.width()), EDGE.min(image.height()))
         .write_to(&mut encoded, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     Ok(Prepared {
@@ -894,6 +881,24 @@ mod tests {
             _ => panic!("Unexpected extraction reply"),
         }
     }
+    #[test]
+    fn search_extracts_oriented_rgb_preview_from_a_raw_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("camera.dng");
+        std::fs::write(
+            &path,
+            include_bytes!("../../little-clip-core/tests/fixtures/raw/oriented-preview.dng"),
+        )
+        .unwrap();
+        let (root, entry) = only_source(folder.path());
+        let prepared = prepared_source(&root, &entry, false);
+        assert_eq!(prepared.modality, "image");
+        let bytes = STANDARD.decode(prepared.data.unwrap()).unwrap();
+        let image = image::load_from_memory(&bytes).unwrap().into_rgb8();
+        assert_eq!(image.dimensions(), (6, 12));
+        assert_eq!(image.get_pixel(0, 0).0, [20, 40, 200]);
+    }
+
     #[test]
     fn full_fingerprint_hashes_verified_bytes_and_skips_large_payloads() {
         use sha2::{Digest, Sha256};

@@ -97,6 +97,8 @@ fn image_editor_hatch(
     )
 }
 
+const CAMERA_RAW_MIME: &str = "image/x-camera-raw";
+
 pub struct ImagePreviewState {
     pub path: Option<PathBuf>,
     pub title: String,
@@ -104,6 +106,7 @@ pub struct ImagePreviewState {
     pub file_size_bytes: usize,
     pub is_svg: bool,
     pub raw_bytes: Arc<Vec<u8>>,
+    raw_origin: bool,
 
     // Committed revisions are shared until an in-place edit calls Arc::make_mut.
     pub original_rgba: Arc<RgbaImage>,
@@ -283,8 +286,17 @@ impl DecodedImageData {
     /// `max_bytes` are rejected before decoding; raster decoding retains the
     /// image library's default allocation limits.
     pub fn from_path_bounded(path: &Path, max_bytes: usize) -> Result<Self, String> {
-        let bytes = crate::file_source::read_file_bytes(path, max_bytes, true, true)
-            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
+        use little_clip_core::raw_image;
+        let bytes = if raw_image::is_raw_image_path(path) {
+            crate::file_source::read_file_snapshot_with_source(
+                path,
+                max_bytes.min(raw_image::DEVELOP_MAX_BYTES),
+            )
+            .map(|(bytes, _)| bytes)
+        } else {
+            crate::file_source::read_file_bytes(path, max_bytes, true, true)
+        }
+        .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
         Self::from_bytes(
             bytes,
             little_clip_core::item::guess_image_mime(path),
@@ -293,6 +305,17 @@ impl DecodedImageData {
     }
 
     pub fn from_bytes(bytes: Vec<u8>, mime: String, path: Option<PathBuf>) -> Result<Self, String> {
+        use little_clip_core::raw_image;
+        // A clipboard item can contain a JPEG preview and still refer to a RAW path.
+        if raw_image::is_raw_image_bytes(&bytes)
+            || (path.as_deref().is_some_and(raw_image::is_raw_image_path)
+                && matches!(
+                    image::guess_format(&bytes),
+                    Err(_) | Ok(image::ImageFormat::Tiff)
+                ))
+        {
+            return Self::from_raw_bytes(bytes);
+        }
         let svg = little_clip_core::svg_image::document(&bytes);
         let is_svg = svg.is_ok()
             || mime.contains("svg")
@@ -337,6 +360,46 @@ impl DecodedImageData {
             original_rgba: Arc::new(rgba),
             is_svg,
             metadata: metadata.has_any_metadata().then_some(metadata),
+            layer_document,
+        })
+    }
+
+    fn from_raw_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        let decoded = little_clip_core::raw_image::develop(&bytes)?;
+        let raw = decoded.metadata;
+        let present = |text: String| (!text.trim().is_empty()).then(|| text.trim().to_owned());
+        let metadata = ImageMetadataSummary {
+            make: present(raw.make),
+            model: present(raw.model),
+            lens_model: raw.lens.model.and_then(present),
+            date_time: raw.capture_time.and_then(present),
+            iso: raw.exposure.iso,
+            f_number: raw.exposure.f_number,
+            exposure_time: raw
+                .exposure
+                .exposure_time
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .map(|s| {
+                    if s <= 0.5 {
+                        format!("1/{:.0} s", s.recip())
+                    } else {
+                        format!("{s:.2} s")
+                    }
+                }),
+            focal_length: raw.exposure.focal_length,
+            software: raw.software.and_then(present),
+            gps_latitude: raw.gps.as_ref().and_then(|gps| gps.latitude),
+            gps_longitude: raw.gps.as_ref().and_then(|gps| gps.longitude),
+            gps_altitude: raw.gps.as_ref().and_then(|gps| gps.altitude),
+            has_exif: false,
+        };
+        let layer_document = layers::Document::from_bytes(&bytes, &decoded.pixels)?;
+        Ok(Self {
+            mime: CAMERA_RAW_MIME.into(),
+            encoded_bytes: Arc::new(bytes),
+            original_rgba: Arc::new(decoded.pixels),
+            is_svg: false,
+            metadata: Some(metadata),
             layer_document,
         })
     }
@@ -571,6 +634,7 @@ impl ImagePreviewState {
         Self {
             path,
             title,
+            raw_origin: mime == CAMERA_RAW_MIME,
             mime,
             file_size_bytes,
             is_svg,
@@ -826,20 +890,23 @@ impl ImagePreviewState {
             .is_some_and(|saved| *saved != self.input_stamp())
     }
 
+    fn save_requires_unused_destination(&self) -> bool {
+        // A file-backed session can replace its new raster output after Save As
+        // advances the source guard. Clipboard sessions have no such guard.
+        self.raw_origin && (self.mime == CAMERA_RAW_MIME || self.file_source.is_none())
+    }
+
     pub fn open_save_dialog(&mut self) {
         let default_target = if let Some(p) = &self.path {
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
             let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("png");
-            let ext = if ext.eq_ignore_ascii_case("pcx")
+            let raw = self.mime == CAMERA_RAW_MIME;
+            let writable = ext.eq_ignore_ascii_case("pcx")
                 || image::ImageFormat::from_extension(ext)
-                    .is_some_and(|format| format.writing_enabled())
-            {
-                ext
-            } else {
-                "png"
-            };
+                    .is_some_and(|format| format.writing_enabled());
+            let ext = if !raw && writable { ext } else { "png" };
             let parent = p.parent().unwrap_or_else(|| Path::new("."));
-            if self.undo_stack.is_empty() {
+            if !raw && self.undo_stack.is_empty() {
                 parent.join(format!("{}.{}", stem, ext))
             } else {
                 parent.join(format!("{}_edit.{}", stem, ext))

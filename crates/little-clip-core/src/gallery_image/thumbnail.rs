@@ -4,7 +4,6 @@ use image::ImageDecoder;
 use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 
 /// Loads a source-validated, resolution-specific thumbnail on a worker.
@@ -18,6 +17,9 @@ pub fn load(
     orientation: u8,
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     let source = crate::file_source::FileSource::capture(path).ok()?;
     let cache = super::thumbnail_cache::path(&source, edge, orientation);
     if let Some(image) = cache
@@ -43,7 +45,9 @@ pub fn load(
     }
     let result = decode_source(path, edge, orientation, cancelled);
     source.check().ok()?;
-    if crate::file_source::FileSource::capture(path).ok()? != source {
+    if cancelled.load(Ordering::Relaxed)
+        || crate::file_source::FileSource::capture(path).ok()? != source
+    {
         return None;
     }
     if let (Some(path), Some(image)) = (cache, &result) {
@@ -67,11 +71,19 @@ fn decode_source(
         );
     }
     if crate::raw_image::is_raw_image_path(path) {
-        return raw_preview(path, edge, orientation, cancelled);
+        let mut file = crate::file_source::open_regular_file(path, true).ok()?;
+        let decoded =
+            crate::raw_image::decode_embedded_preview(&mut file, edge, orientation, cancelled)?;
+        return thumbnail_image(decoded, edge, cancelled);
     }
     let embedded = match mime.as_str() {
         "image/jpeg" | "image/jpg" => jpeg_preview(path, edge, orientation, cancelled),
-        "image/tiff" => raw_preview(path, edge, orientation, cancelled),
+        "image/tiff" => crate::file_source::open_regular_file(path, true)
+            .ok()
+            .and_then(|file| {
+                crate::raw_image::exiftool_raster(&file, edge, orientation, false, cancelled)
+            })
+            .and_then(|image| thumbnail_image(image, edge, cancelled)),
         _ => None,
     };
     if embedded.is_some() {
@@ -106,38 +118,6 @@ fn jpeg_preview(
     }
     let orientation = field(exif::Tag::Orientation).map_or(orientation, |value| value as u8);
     raster(bytes, "image/jpeg", edge, orientation, cancelled)
-}
-
-fn raw_preview(
-    path: &Path,
-    edge: u32,
-    orientation: u8,
-    cancelled: &AtomicBool,
-) -> Option<ImageThumbnail> {
-    let mut largest = None;
-    for tag in ["-ThumbnailImage", "-PreviewImage", "-JpgFromRaw"] {
-        if cancelled.load(Ordering::Relaxed) {
-            return None;
-        }
-        let output = crate::process::CommandRequest::new("exiftool")
-            .arg("-b")
-            .arg(tag)
-            .arg_content_file(path)
-            .ok()?
-            .timeout(Duration::from_secs(5))
-            .max_output_bytes(16 * 1024 * 1024)
-            .run()
-            .ok()?;
-        if let Ok(size) = imagesize::blob_size(&output.stdout) {
-            if size.width.max(size.height) >= edge as usize {
-                return raster(&output.stdout, "image/jpeg", edge, orientation, cancelled);
-            }
-            largest = Some(output.stdout);
-        }
-    }
-    largest
-        .filter(|_| crate::raw_image::is_raw_image_path(path))
-        .and_then(|bytes| raster(&bytes, "image/jpeg", edge, orientation, cancelled))
 }
 
 fn raster(
@@ -182,7 +162,21 @@ fn raster(
         return None;
     }
     let mut decoded = image::DynamicImage::from_decoder(decoder).ok()?;
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     decoded.apply_orientation(orientation);
+    thumbnail_image(decoded, edge, cancelled)
+}
+
+fn thumbnail_image(
+    decoded: image::DynamicImage,
+    edge: u32,
+    cancelled: &AtomicBool,
+) -> Option<ImageThumbnail> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     let small = decoded
         .thumbnail(edge.min(decoded.width()), edge.min(decoded.height()))
         .to_rgba8();

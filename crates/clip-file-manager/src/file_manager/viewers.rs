@@ -576,7 +576,7 @@ impl Viewers {
 enum Kind {
     Archive,
     Document(Format),
-    Image,
+    Image { max_bytes: usize },
     Audio,
     Pdf,
     OfficeDoc,
@@ -588,6 +588,17 @@ enum Kind {
     Video,
     External,
 }
+fn image_kind(path: &Path) -> Option<Kind> {
+    let max_bytes = if little_clip_core::raw_image::is_raw_image_path(path) {
+        little_clip_core::raw_image::DEVELOP_MAX_BYTES
+    } else if little_clip_core::item::is_image_path(path) {
+        64 * 1024 * 1024
+    } else {
+        return None;
+    };
+    Some(Kind::Image { max_bytes })
+}
+
 fn kind(path: &Path) -> Kind {
     if super::container_preview::inventory::archive(path) {
         Kind::Archive
@@ -603,8 +614,8 @@ fn kind(path: &Path) -> Kind {
         Kind::Document(format)
     } else if super::midi_strip::is_midi(path) {
         Kind::Midi
-    } else if little_clip_core::item::is_image_path(path) {
-        Kind::Image
+    } else if let Some(image) = image_kind(path) {
+        image
     } else if little_clip_core::audio::is_audio_path(path) {
         Kind::Audio
     } else if little_clip_core::is_video_path(path) {
@@ -693,7 +704,7 @@ fn load(
     }
     let kind = kind(path);
     let limit = match kind {
-        Kind::Image => 64 * 1024 * 1024,
+        Kind::Image { max_bytes } => max_bytes as u64,
         Kind::Sheet | Kind::Midi | Kind::Document(Format::Notebook) => 32 * 1024 * 1024,
         _ => u64::MAX,
     };
@@ -729,9 +740,9 @@ fn load(
         Kind::Document(Format::Font) => {
             super::font_strip::viewer::Viewer::load(path).map(Loaded::Font)
         }
-        Kind::Image => {
+        Kind::Image { max_bytes } => {
             let source = FileSource::capture(path)?;
-            let decoded = DecodedImageData::from_path_bounded(path, 64 * 1024 * 1024)?;
+            let decoded = DecodedImageData::from_path_bounded(path, max_bytes)?;
             if FileSource::capture(path)? != source {
                 return Err("Source changed while opening; open it again.".into());
             }
@@ -1349,6 +1360,27 @@ mod tests {
         viewers.clear();
         assert!(!viewers.active());
         assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn opens_camera_raw_in_picture_studio() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("camera.dng");
+        std::fs::write(
+            &path,
+            include_bytes!("../../../little-clip-core/tests/fixtures/raw/oriented-preview.dng"),
+        )
+        .unwrap();
+        let loaded = load(
+            &path,
+            &AppConfig::default(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let Loaded::Image(_, source) = loaded else {
+            panic!("expected Picture Studio");
+        };
+        assert_eq!(source.path(), path);
     }
 
     #[test]

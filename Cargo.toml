@@ -46,6 +46,7 @@ serde_yaml = "0.9"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 rayon = "1.12"
 regex = "1.13"
+flashraw = { version = "0.3.1", default-features = false, features = ["rayon", "simd"] }
 
 
 # Keep local builds bounded: this workspace's incremental cache can exceed the

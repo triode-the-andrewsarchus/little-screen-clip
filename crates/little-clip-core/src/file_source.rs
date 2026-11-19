@@ -3,7 +3,7 @@ mod rename;
 pub use rename::{rename_at_noreplace, rename_noreplace};
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -406,9 +406,24 @@ pub fn read_file_snapshot_with_source(
     limit: usize,
 ) -> std::io::Result<(Vec<u8>, FileSource)> {
     let mut file = open_regular_file(path, true)?;
-    let source = FileSource::capture_file(&file).map_err(std::io::Error::other)?;
+    let (bytes, source) = read_held_snapshot(&mut file, limit)?;
+    source.check().map_err(std::io::Error::other)?;
+    Ok((bytes, source))
+}
+
+pub(crate) fn read_held_snapshot(
+    file: &mut File,
+    limit: usize,
+) -> std::io::Result<(Vec<u8>, FileSource)> {
+    let source = FileSource::capture_file(file).map_err(std::io::Error::other)?;
+    if file.metadata()?.len() > limit as u64 {
+        return Err(std::io::Error::other(
+            "Preview source exceeds its read limit",
+        ));
+    }
+    file.rewind()?;
     let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
+    std::io::Read::by_ref(file)
         .take((limit as u64).saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > limit {
@@ -416,10 +431,9 @@ pub fn read_file_snapshot_with_source(
             "Preview source exceeds its read limit",
         ));
     }
-    if FileSource::capture_file(&file).map_err(std::io::Error::other)? != source {
+    if FileSource::capture_file(file).map_err(std::io::Error::other)? != source {
         return Err(std::io::Error::other("Source changed while reading"));
     }
-    source.check().map_err(std::io::Error::other)?;
     Ok((bytes, source))
 }
 
