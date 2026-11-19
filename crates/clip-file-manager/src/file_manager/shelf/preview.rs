@@ -78,6 +78,11 @@ pub(in crate::file_manager) enum Source {
     },
     Midi(PathBuf),
     Blend(PathBuf),
+    Brush {
+        path: PathBuf,
+        revision: u64,
+    },
+    BrushStroke(super::super::brush_strip::StrokeRequest),
     Material(super::super::material_strip::Request),
     MidiRaster {
         document: Arc<super::super::midi_strip::Document>,
@@ -142,7 +147,9 @@ impl Source {
             | Self::PdfPage { .. }
             | Self::Photo { .. }
             | Self::StudioPhoto { .. }
-            | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
+            | Self::Blend(_)
+            | Self::Brush { .. }
+            | Self::BrushStroke(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
             | Self::Markdown { .. }
             | Self::Font(_)
@@ -218,6 +225,10 @@ impl Source {
                 super::super::music::preview::load(&path, spectrum, token)
             }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
+            Source::Brush { path, revision } => {
+                super::super::brush_strip::load_listing(&path, revision, token)
+            }
+            Source::BrushStroke(request) => request.render(),
             Source::Material(request) => request.load(token),
             Source::Handwritten(path) => {
                 if little_clip_core::notebook::has_header(&path, token).unwrap_or(false) {
@@ -435,17 +446,29 @@ impl HoverRaster {
         edge: u32,
         source: Source,
     ) -> Option<&Ready> {
+        self.request_with(identity, position, edge, |_| source)
+    }
+
+    pub fn request_with(
+        &mut self,
+        identity: uuid::Uuid,
+        position: usize,
+        edge: u32,
+        source: impl FnOnce(uuid::Uuid) -> Source,
+    ) -> Option<&Ready> {
         self.seen = true;
-        if !self
+        let active = self
             .key
-            .is_some_and(|key| key.0 == identity && key.1 == position && key.2 == edge)
-        {
+            .filter(|key| key.0 == identity && key.1 == position);
+        let id = active.map_or_else(uuid::Uuid::new_v4, |key| key.3);
+        if active.is_none_or(|key| key.2 != edge) {
+            // Clearing the old receiver retires its result while keeping the
+            // seed for an ongoing hover stable across raster sizes.
             self.cache.clear();
-            self.key = Some((identity, position, edge, uuid::Uuid::new_v4()));
+            self.key = Some((identity, position, edge, id));
         }
-        let id = self.key.unwrap().3;
         if self.cache.needs(id) {
-            self.cache.request(id, source);
+            self.cache.request(id, source(id));
         }
         self.cache.get(id)
     }
@@ -487,8 +510,17 @@ impl Previews {
     }
 
     pub fn retain(&mut self, ids: &BTreeSet<uuid::Uuid>) {
-        self.ready.retain(|id, _| ids.contains(id));
-        self.pending.retain(|id, _| ids.contains(id));
+        self.retain_with_ready(ids, |_| false);
+    }
+
+    pub fn retain_with_ready(
+        &mut self,
+        visible: &BTreeSet<uuid::Uuid>,
+        keep_ready: impl Fn(uuid::Uuid) -> bool,
+    ) {
+        self.ready
+            .retain(|id, _| visible.contains(id) || keep_ready(*id));
+        self.pending.retain(|id, _| visible.contains(id));
     }
 
     pub fn get(&self, id: uuid::Uuid) -> Option<&Ready> {
@@ -880,7 +912,12 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         return;
     }
     data.icon = Icon::Text;
-    if little_clip_core::item::is_image_path(path) {
+    if little_clip_core::brushes::is_brush_file(path) {
+        let loaded = super::super::brush_strip::load(path, &AtomicBool::new(false));
+        data.icon = Icon::Brush;
+        data.detail = loaded.detail;
+        data.image = loaded.image;
+    } else if little_clip_core::item::is_image_path(path) {
         data.icon = Icon::Image;
         data.image = crate::file_source::read_file_bytes(path, 8 * 1024 * 1024, true, false)
             .ok()

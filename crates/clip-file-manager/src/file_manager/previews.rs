@@ -38,6 +38,7 @@ pub(super) struct EntryPreviews {
     markdown_hover: super::markdown_hover::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
+    brushes: super::brush_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
     pub(super) geography: super::geography::Strips,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
@@ -53,6 +54,7 @@ impl EntryPreviews {
             self.image_hover.context = context.clone();
             self.scenes.set_context(context);
             self.materials.context = context.clone();
+            self.brushes.context = context.clone();
         }
     }
     pub(super) fn cached_dhash(&self, entry: &Entry) -> Option<u64> {
@@ -131,7 +133,10 @@ impl EntryPreviews {
             }
             *version = entry.revision;
             self.system_refresh.remove(id);
-            if entry.is_vcv_patch() {
+            if entry.is_brush() {
+                self.brushes.forget(*id);
+            }
+            if entry.is_vcv_patch() || entry.is_brush() {
                 *id = uuid::Uuid::new_v4();
             }
         }
@@ -157,6 +162,7 @@ impl EntryPreviews {
         self.markdown_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
+        self.brushes.poll(ctx);
         let now = std::time::Instant::now();
 
         let systems = self
@@ -239,11 +245,18 @@ impl EntryPreviews {
         self.pdf_pages.retain(visible);
         self.image_hover.retain(visible);
         self.scenes.retain(visible);
-        self.identities.retain(|path, _| visible.contains(path));
+        let ids: BTreeSet<_> = self
+            .identities
+            .iter()
+            .filter(|(path, _)| visible.contains(*path))
+            .map(|(_, (_, id))| *id)
+            .collect();
+        let recent_brushes = self.brushes.retain(&ids);
+        self.identities
+            .retain(|_, (_, id)| ids.contains(id) || recent_brushes.contains(id));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
-            .retain(&self.identities.values().map(|(_, id)| *id).collect());
-        let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
+            .retain_with_ready(&ids, |id| recent_brushes.contains(&id));
         self.vcv_hover.retain(&ids);
         self.materials.retain(&ids);
         self.markdown_hover.retain(&ids);
@@ -299,6 +312,7 @@ impl EntryPreviews {
         self.markdown_hover.clear();
         self.scenes.clear();
         self.materials.clear();
+        self.brushes.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
         self.rasters.clear();
@@ -321,6 +335,11 @@ impl EntryPreviews {
                     Source::for_document(format, entry.path.clone())
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
+                } else if entry.is_brush() {
+                    Source::Brush {
+                        path: entry.path.clone(),
+                        revision: entry.revision,
+                    }
                 } else if entry.is_material() {
                     Source::Material(super::material_strip::Request::Library(entry.path.clone()))
                 } else if super::midi_strip::is_midi(&entry.path) {
@@ -479,6 +498,9 @@ impl EntryPreviews {
             }
         } else if entry.is_blend() {
             super::blend_preview::show(ui, row, entry, columns, self.cache.get(id), colors);
+        } else if entry.is_brush() {
+            self.brushes
+                .show(ui, row, entry, columns, id, self.cache.get(id), colors);
         } else if entry.is_material() {
             self.materials
                 .show(ui, row, entry, columns, id, self.cache.get(id), colors);
@@ -1101,6 +1123,84 @@ mod tests {
         let denied = previews.music(&ctx, &entry, 1024).unwrap();
         assert!(denied.data.spectrum.is_none());
         assert!(denied.data.detail.contains("outside the published search"));
+    }
+
+    #[test]
+    fn scrolling_reuses_completed_brushes_and_retires_unseen_work() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("tip.vbr");
+        std::fs::write(&path, "GIMP-VBR\n1.0\nRound\n10\n20\n0.7\n1\n0\n").unwrap();
+        let entry = single_entry(folder.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        let first_texture = await_listing(&mut previews, &ctx, &entry)
+            .texture
+            .as_ref()
+            .unwrap()
+            .id();
+        let id = previews.identity(&entry);
+
+        let palette = little_clip_core::palette::AppPalette::default();
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let row = egui::Rect::from_min_size(ui.min_rect().min, egui::vec2(400.0, 120.0));
+                previews.show_visual(ui, row, &entry, None, colors, &palette);
+            });
+        });
+
+        let mut pending = entry.clone();
+        pending.path = folder.path().join("unseen.vbr");
+        let pending_id = previews.identity(&pending);
+        previews.listing(&pending);
+        assert!(!previews.cache.needs(pending_id));
+        let mut other = entry.clone();
+        other.path = folder.path().join("other.txt");
+        previews.identity(&other);
+        previews.retain(&BTreeSet::from([other.path]));
+        assert!(previews.cache.needs(pending_id));
+
+        assert_eq!(previews.identity(&entry), id);
+        assert_eq!(
+            previews
+                .listing(&entry)
+                .unwrap()
+                .texture
+                .as_ref()
+                .unwrap()
+                .id(),
+            first_texture
+        );
+        previews.retire();
+        assert!(previews.cached(&entry).is_none());
+    }
+
+    #[test]
+    fn changed_brush_gets_a_new_raster_identity_and_rejects_old_listing() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("tip.vbr");
+        std::fs::write(&path, "GIMP-VBR\n1.5\nOld\ncircle\n10\n20\n2\n0.7\n1\n0\n").unwrap();
+        let previous = single_entry(folder.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        let original = previews.identity(&previous);
+
+        std::fs::write(
+            &path,
+            "GIMP-VBR\n1.5\nUpdated\nsquare\n15\n24\n2\n0.9\n1\n0\n",
+        )
+        .unwrap();
+        let stale = await_listing(&mut previews, &ctx, &previous);
+        assert!(stale.data.brush.is_none());
+        assert!(stale.data.detail.contains("changed"));
+
+        let updated = single_entry(folder.path());
+        assert_ne!(previews.identity(&updated), original);
+        let ready = await_listing(&mut previews, &ctx, &updated);
+        assert_eq!(
+            ready.data.brush.as_ref().unwrap().brushes[0].name,
+            "Updated"
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ pub(super) enum Field {
     Title,
     Author,
     Pages,
+    BrushCount,
     Filename,
 }
 impl Field {
@@ -46,6 +47,7 @@ impl Field {
             Category::Image => &[Self::Width, Self::Height, Self::Pixels],
             Category::Video => &[Self::Duration, Self::Width, Self::Height, Self::Codec],
             Category::Document => &[Self::Title, Self::Author, Self::Pages],
+            Category::Brushes => &[Self::BrushCount],
             _ => &[],
         }
     }
@@ -65,6 +67,7 @@ impl Field {
             Self::Title => "Title",
             Self::Author => "Author",
             Self::Pages => "Pages",
+            Self::BrushCount => "Brush count",
             Self::Filename => "Filename",
         }
     }
@@ -84,6 +87,7 @@ struct Summary {
     title: String,
     author: String,
     pages: Option<u64>,
+    brush_count: Option<u64>,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Value {
@@ -115,6 +119,7 @@ impl Summary {
                 .zip(self.height)
                 .map(|(width, height)| u64::from(width) * u64::from(height)),
             Field::Pages => self.pages,
+            Field::BrushCount => self.brush_count,
             _ => None,
         }
     }

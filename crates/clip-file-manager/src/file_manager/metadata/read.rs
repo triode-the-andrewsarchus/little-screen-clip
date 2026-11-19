@@ -16,6 +16,7 @@ pub(super) fn supported(entry: &Entry) -> bool {
         || entry.is_vcv_patch()
         || entry.is_photo()
         || entry.is_video()
+        || entry.is_brush()
         || little_clip_core::pdf::is_pdf_path(&entry.path)
         || epub(entry)
         || little_clip_core::notebook::is_candidate_path(&entry.path)
@@ -32,6 +33,12 @@ pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
         Category::Image => photo(entry, cancel)?,
         Category::Video => video(entry, cancel)?,
         Category::Document => document(entry, cancel)?,
+        Category::Brushes => Summary {
+            brush_count: Some(
+                little_clip_core::brushes::count_brushes(&entry.path, cancel)? as u64,
+            ),
+            ..Default::default()
+        },
         _ => return Err("No metadata header reader for this content family".into()),
     };
     source.check()?;

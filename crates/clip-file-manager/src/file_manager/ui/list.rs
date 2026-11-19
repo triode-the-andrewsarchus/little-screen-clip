@@ -254,6 +254,7 @@ impl<'a> ListPreviews<'a> {
             self.files
                 .show_scene(ui, rect, entry, Some(self.columns), colors, palette);
         } else if entry.is_photo()
+            || entry.is_brush()
             || entry.is_material()
             || entry.is_blend()
             || (entry.regular_file && super::super::font_strip::known(&entry.path))
@@ -636,6 +637,101 @@ mod tests {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing visible heading {label}"))
+    }
+
+    #[test]
+    fn brush_family_shows_and_sorts_library_counts() {
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+
+        const VBR: &[u8] = b"GIMP-VBR\n1.0\nRound\n10\n20\n0.7\n1\n0\n";
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        std::fs::write(path.join("zulu.vbr"), VBR).unwrap();
+        std::fs::write(path.join("broken.afbrushes"), b"invalid brush pack").unwrap();
+        let mut bundle =
+            zip::ZipWriter::new(std::fs::File::create(path.join("alpha.bundle")).unwrap());
+        for name in ["first.vbr", "second.vbr"] {
+            bundle
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            bundle.write_all(VBR).unwrap();
+        }
+        bundle.finish().unwrap();
+        std::fs::write(path.join("notes.txt"), "Mixed listing").unwrap();
+
+        let mut manager = FileManager {
+            pending: None,
+            ..Default::default()
+        };
+        manager.commit(
+            filesystem::read_directory(path, &std::sync::atomic::AtomicBool::new(false)).unwrap(),
+            Navigation::New,
+        );
+        manager.sort_by(Column::Type);
+        assert!(
+            manager
+                .list_groups
+                .iter()
+                .any(|(_, family)| *family == Category::Brushes)
+        );
+
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let output = loop {
+            let output = list_frame(&mut manager, &ctx, vec![]);
+            if manager
+                .metadata
+                .status(Category::Brushes)
+                .starts_with("Metadata 3/3")
+            {
+                break output;
+            }
+            assert!(Instant::now() < deadline, "brush counts did not complete");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        heading_position(&output, "Brushes");
+        let point = heading_position(&output, "Brush count") + vec2(10.0, 7.0);
+        for pressed in [true, false] {
+            let _ = list_frame(
+                &mut manager,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            manager.metadata.sort(Category::Brushes),
+            Some((Field::BrushCount, false))
+        );
+        let entries = &manager.directory.as_ref().unwrap().entries;
+        let brush_cells: Vec<_> = manager
+            .visible
+            .iter()
+            .map(|&index| &entries[index])
+            .filter(|entry| entry.is_brush())
+            .map(|entry| {
+                (
+                    entry.name.as_str(),
+                    manager.metadata.cell(entry, Field::BrushCount),
+                )
+            })
+            .collect();
+        assert_eq!(
+            brush_cells,
+            [
+                ("zulu.vbr", "1".into()),
+                ("alpha.bundle", "2".into()),
+                ("broken.afbrushes", "Unavailable".into()),
+            ]
+        );
     }
 
     #[test]

@@ -45,6 +45,7 @@ impl Entry {
             || self.is_scene()
             || self.is_blend()
             || self.is_material()
+            || self.is_brush()
             || self.is_photo()
             || self.document_format().is_some()
     }
@@ -107,6 +108,9 @@ impl Entry {
     }
     pub fn is_material(&self) -> bool {
         self.regular_file && crate::model3d::materials::is_material_file(&self.path)
+    }
+    pub fn is_brush(&self) -> bool {
+        self.regular_file && crate::brushes::is_brush_file(&self.path)
     }
     pub fn is_video(&self) -> bool {
         self.regular_file && !self.typescript && crate::animation::is_video_path(&self.path)

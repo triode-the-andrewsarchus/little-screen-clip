@@ -1,21 +1,11 @@
 //! Bounded SQLite snapshots. SQL is generated here, never accepted from the database or UI.
 use crate::file_source::read_file_snapshot;
-use rusqlite::{
-    Connection, DatabaseName,
-    config::DbConfig,
-    hooks::{AuthAction, AuthContext, Authorization},
-    limits::Limit,
-    serialize::OwnedData,
-    types::ValueRef,
-};
-use std::{
-    path::Path,
-    ptr::NonNull,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use little_clip_core::sqlite_snapshot;
+use rusqlite::{Connection, types::ValueRef};
+use std::{path::Path, sync::Arc};
 
 const MAX_BYTES: usize = 128 * 1024 * 1024;
+const MAX_VALUE_BYTES: i32 = 1_048_576;
 pub(super) const PAGE_ROWS: usize = 200;
 const MAX_COLUMNS: usize = 32;
 #[derive(Clone)]
@@ -58,7 +48,8 @@ impl Document {
             return Err("Not a SQLite 3 database".into());
         }
         let wal = bytes[18] == 2 || bytes[19] == 2;
-        let connection = open(&bytes).map_err(|e| e.to_string())?;
+        let connection =
+            sqlite_snapshot::open(&bytes, MAX_VALUE_BYTES).map_err(|e| e.to_string())?;
         let user_version = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
@@ -99,16 +90,9 @@ impl Document {
         if offset > 1_000_000 {
             return Err("Row browsing stops at the 1,000,000-row offset limit".into());
         }
-        let connection = open(&self.bytes).map_err(|e| e.to_string())?;
-        connection.authorizer(Some(|context: AuthContext<'_>| {
-            if context.accessor.is_some() {
-                return Authorization::Deny;
-            }
-            match context.action {
-                AuthAction::Read { .. } | AuthAction::Select => Authorization::Allow,
-                _ => Authorization::Deny,
-            }
-        }));
+        let connection =
+            sqlite_snapshot::open(&self.bytes, MAX_VALUE_BYTES).map_err(|e| e.to_string())?;
+        sqlite_snapshot::authorize_reads(&connection);
         let sql = format!(
             "SELECT {} FROM {} LIMIT {} OFFSET {}",
             columns
@@ -140,69 +124,6 @@ impl Document {
             columns,
         })
     }
-}
-fn open(bytes: &[u8]) -> rusqlite::Result<Connection> {
-    let mut connection = Connection::open_in_memory()?;
-    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
-    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
-    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_VIEW, false)?;
-    for (limit, value) in [
-        (Limit::SQLITE_LIMIT_LENGTH, 1_048_576),
-        (Limit::SQLITE_LIMIT_SQL_LENGTH, 65_536),
-        (Limit::SQLITE_LIMIT_COLUMN, 256),
-        (Limit::SQLITE_LIMIT_EXPR_DEPTH, 20),
-        (Limit::SQLITE_LIMIT_COMPOUND_SELECT, 3),
-        (Limit::SQLITE_LIMIT_VDBE_OP, 100_000),
-        (Limit::SQLITE_LIMIT_FUNCTION_ARG, 8),
-        (Limit::SQLITE_LIMIT_ATTACHED, 0),
-        (Limit::SQLITE_LIMIT_TRIGGER_DEPTH, 0),
-        (Limit::SQLITE_LIMIT_WORKER_THREADS, 0),
-    ] {
-        connection.set_limit(limit, value)?;
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut steps = 0;
-    connection.progress_handler(
-        1000,
-        Some(move || {
-            steps += 1000;
-            steps > 2_000_000 || Instant::now() >= deadline
-        }),
-    );
-    // https://www.sqlite.org/c3ref/deserialize.html advises a 20-byte allocation
-    // margin for untrusted content. The safe stream loader allocates only len.
-    let allocation_size = bytes
-        .len()
-        .checked_add(20)
-        .filter(|size| *size <= isize::MAX as usize)
-        .ok_or(rusqlite::Error::InvalidQuery)?;
-    // SAFETY: the scalar size is bounded above; SQLite returns null or a new
-    // allocation of that size, subsequently transferred once through OwnedData.
-    let pointer = NonNull::new(
-        unsafe { rusqlite::ffi::sqlite3_malloc64(allocation_size as u64) }.cast::<u8>(),
-    )
-    .ok_or(rusqlite::Error::InvalidQuery)?;
-    {
-        // SAFETY: the checked non-null allocation owns allocation_size writable
-        // bytes, within isize::MAX and disjoint from bytes. This borrow ends
-        // before ownership is handed to SQLite, including its cleanup authority.
-        let buffer = unsafe { std::slice::from_raw_parts_mut(pointer.as_ptr(), allocation_size) };
-        buffer.fill(0);
-        buffer[..bytes.len()].copy_from_slice(bytes);
-        // Inspect only the checkpointed main file, without opening sidecars.
-        if bytes.len() > 19 {
-            buffer[18..20].fill(1);
-        }
-    }
-    // SAFETY: pointer is uniquely SQLite-allocated, len bytes plus an initialized
-    // margin. OwnedData transfers it exactly once; FREEONCLOSE frees it on native
-    // failure too. DatabaseName::Main cannot fail schema-name conversion.
-    let snapshot = unsafe { OwnedData::from_raw_nonnull(pointer, bytes.len()) };
-    connection.deserialize(DatabaseName::Main, snapshot, true)?;
-    connection.execute_batch(
-        "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-4096;",
-    )?;
-    Ok(connection)
 }
 fn schema_tables(connection: &Connection) -> rusqlite::Result<Vec<Table>> {
     let mut tables = Vec::new();
@@ -273,6 +194,7 @@ fn cell(value: ValueRef<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::DatabaseName;
     fn document(sql: &str) -> Document {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(sql).unwrap();
@@ -312,7 +234,7 @@ mod tests {
     #[test]
     fn snapshot_connection_refuses_mutation_and_additional_databases() {
         let document = document("CREATE TABLE data(value TEXT); INSERT INTO data VALUES('kept');");
-        let connection = open(&document.bytes).unwrap();
+        let connection = sqlite_snapshot::open(&document.bytes, MAX_VALUE_BYTES).unwrap();
         assert!(connection.execute_batch("DELETE FROM data").is_err());
         assert!(
             connection

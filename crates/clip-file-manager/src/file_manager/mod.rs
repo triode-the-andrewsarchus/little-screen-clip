@@ -5,6 +5,7 @@ mod archive_browse;
 mod binary_strip;
 mod blend_preview;
 mod bookmarks;
+mod brush_strip;
 mod calendar;
 pub(super) mod constellation;
 mod container_preview;

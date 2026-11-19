@@ -5,6 +5,7 @@
 pub mod animation;
 pub mod audio;
 pub mod blend_image;
+pub mod brushes;
 pub mod calendar;
 pub mod clipboard;
 pub mod color;
@@ -51,6 +52,7 @@ pub mod psd_image;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
+pub mod sqlite_snapshot;
 pub mod staging;
 pub mod subtitles;
 pub mod svg_image;

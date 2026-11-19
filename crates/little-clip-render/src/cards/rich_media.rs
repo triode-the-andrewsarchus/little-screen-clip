@@ -342,4 +342,111 @@ impl ScreenRenderer {
             }
         }
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
+    )]
+    pub(super) fn draw_brush_card(
+        &self,
+        pixmap: &mut Pixmap,
+        library: &little_clip_core::brushes::BrushLibrary,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        let badge_bg = self.color_from_hex(&self.palette.harmonies.base);
+        let badge_fg = self.contrast_color(
+            badge_bg,
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
+        );
+        let badge_label = format!("{} BRUSH", library.format.label());
+        self.draw_pill_badge(
+            pixmap,
+            &badge_label,
+            content_x,
+            y,
+            14.0,
+            badge_fg,
+            badge_bg,
+            clip_right,
+        );
+        y += 28.0;
+
+        let count_label = if library.total_count == 1 {
+            library.brushes.first().map_or_else(
+                || "1 brush".to_owned(),
+                |b| format!("{} · {}", b.name, b.detail),
+            )
+        } else {
+            format!("{} brushes", library.total_count)
+        };
+        self.draw_text_clipped(
+            pixmap,
+            &count_label,
+            content_x,
+            y,
+            if is_hero { 15.0 } else { 13.0 },
+            self.color_from_hex(&self.palette.colors.text_secondary),
+            false,
+            clip_right,
+        );
+        y += 22.0;
+
+        let box_w = (clip_right - content_x).max(40.0);
+        let box_h = (ry + rh - 18.0 - y).max(40.0);
+        if self
+            .draw_card_viewport_frame(pixmap, content_x, y, box_w, box_h)
+            .is_none()
+        {
+            return;
+        }
+
+        let fg = self.color_from_hex(&self.palette.colors.text_primary);
+        let fg_rgb = [
+            (fg.red() * 255.0).round() as u8,
+            (fg.green() * 255.0).round() as u8,
+            (fg.blue() * 255.0).round() as u8,
+        ];
+        let shown = library.brushes.len().clamp(1, if is_hero { 4 } else { 3 });
+        let row_h = (box_h / shown as f32).max(24.0);
+        for (idx, brush) in library.brushes.iter().take(shown).enumerate() {
+            let row_y = y + idx as f32 * row_h;
+            let stroke_h = (row_h - if shown > 1 { 16.0 } else { 8.0 }).max(16.0) as u32;
+            let stroke_w = (box_w - 12.0).max(24.0) as u32;
+            let thumb = little_clip_core::brushes::render::render_brush_preview(
+                brush, stroke_w, stroke_h, fg_rgb, true,
+            );
+            if let Some(pixmap_ref) =
+                PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height)
+            {
+                pixmap.draw_pixmap(
+                    0,
+                    0,
+                    pixmap_ref,
+                    &PixmapPaint::default(),
+                    Transform::from_translate(content_x + 6.0, row_y + 4.0),
+                    None,
+                );
+            }
+            if shown > 1 {
+                self.draw_text_clipped(
+                    pixmap,
+                    &brush.name,
+                    content_x + 8.0,
+                    row_y + row_h - 14.0,
+                    11.0,
+                    self.color_from_hex(&self.palette.colors.text_muted),
+                    false,
+                    clip_right - 6.0,
+                );
+            }
+        }
+    }
 }

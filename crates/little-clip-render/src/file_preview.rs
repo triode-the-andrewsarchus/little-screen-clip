@@ -1,6 +1,7 @@
 //! File previews prepared by the frame worker before card rasterization.
 use little_clip_core::{
     ClipItem, ClipPayload, ImageThumbnail,
+    brushes::BrushLibrary,
     file_source::FileSource,
     midi::MidiData,
     spreadsheet::{self, SpreadsheetSheet},
@@ -28,6 +29,7 @@ pub(crate) enum Preview {
         sheet: SpreadsheetSheet,
     },
     Midi(MidiData),
+    Brush(BrushLibrary),
     Text {
         contents: String,
         extension: Option<String>,
@@ -40,6 +42,7 @@ enum Kind {
     Office,
     Spreadsheet,
     Midi,
+    Brush,
     Text,
 }
 
@@ -68,6 +71,8 @@ impl crate::ScreenRenderer {
             value.eq_ignore_ascii_case("mid") || value.eq_ignore_ascii_case("midi")
         }) {
             Kind::Midi
+        } else if little_clip_core::brushes::is_brush_file(path) {
+            Kind::Brush
         } else if documents && little_clip_core::document::is_office_document(path) {
             Kind::Office
         } else if documents && little_clip_core::pdf::is_pdf_path(path) {
@@ -140,6 +145,12 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
                 score.notes = score.notes.into_iter().step_by(stride).collect();
             }
             Some(Preview::Midi(score))
+        }
+        Kind::Brush => {
+            let cancelled = std::sync::atomic::AtomicBool::new(false);
+            little_clip_core::brushes::load_brush_library(path, 6, &cancelled)
+                .ok()
+                .map(Preview::Brush)
         }
         Kind::Text => {
             let contents = little_clip_core::kernel_interface::read_content_to_string_bounded(

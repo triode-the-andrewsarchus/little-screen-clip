@@ -80,6 +80,7 @@ pub(super) enum Category {
     Audio,
     VcvRack,
     Image,
+    Brushes,
     Video,
     Scene,
     Font,
@@ -96,6 +97,8 @@ pub(super) fn family(entry: &Entry) -> Category {
         Category::Folder
     } else if entry.system.is_some() || !entry.regular_file {
         Category::System
+    } else if entry.is_brush() {
+        Category::Brushes
     } else {
         format_family(entry)
     }
@@ -162,6 +165,7 @@ impl Category {
             Self::Audio => "Audio",
             Self::VcvRack => "VCV Rack",
             Self::Image => "Images",
+            Self::Brushes => "Brushes",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",
