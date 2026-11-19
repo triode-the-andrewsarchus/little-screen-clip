@@ -1,3 +1,5 @@
+mod smudge;
+
 use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape, mask};
 use crate::{
     ImageThumbnail,
@@ -78,20 +80,20 @@ pub fn render_brush_hover_preview(
     let w = (h as f32 * BRUSH_HOVER_ASPECT_RATIO).round() as u32;
     let white = render_brush_preview(preset, h * 3, h, [242, 242, 245], true);
     let overlap_w = w - white.width;
-    let [lower, upper] = crossed_coverage(preset, overlap_w as usize, h as usize);
-    let linear = colors.map(|rgb| rgb.map(|channel| srgb_to_linear(f32::from(channel) / 255.0)));
+    let (ow, oh) = (overlap_w as usize, h as usize);
+    let overlap = match &preset.params.dynamics.krita_smudge {
+        Some(settings) => smudge::render(preset, settings, (ow, oh), colors),
+        None => render_overlap(preset, ow, oh, colors),
+    };
 
     let mut premultiplied_rgba = Vec::with_capacity(w as usize * h as usize * 4);
-    for ((white, lower), upper) in white
+    for (white, overlap) in white
         .premultiplied_rgba
         .chunks_exact(white.width as usize * 4)
-        .zip(lower.chunks_exact(overlap_w as usize))
-        .zip(upper.chunks_exact(overlap_w as usize))
+        .zip(overlap.chunks_exact(ow))
     {
         premultiplied_rgba.extend_from_slice(white);
-        for (&lower, &upper) in lower.iter().zip(upper) {
-            premultiplied_rgba.extend_from_slice(&overlap_pixel(colors, linear, lower, upper));
-        }
+        premultiplied_rgba.extend_from_slice(overlap.as_flattened());
     }
     ImageThumbnail {
         width: w,
@@ -100,22 +102,35 @@ pub fn render_brush_hover_preview(
     }
 }
 
-fn crossed_coverage(preset: &BrushPreset, w: usize, h: usize) -> [Vec<f32>; 2] {
+fn render_overlap(preset: &BrushPreset, w: usize, h: usize, colors: [[u8; 3]; 2]) -> Vec<[u8; 4]> {
+    let radius = overlap_radius(preset, h);
+    let [lower, upper] = crossed_paths(w, h, radius).map(|path| {
+        let mut coverage = vec![0.0; w * h];
+        draw_stroke(&mut coverage, (w, h), preset, path, radius);
+        coverage
+    });
+    let linear = colors.map(|rgb| rgb.map(|channel| srgb_to_linear(f32::from(channel) / 255.0)));
+    lower
+        .into_iter()
+        .zip(upper)
+        .map(|(lower, upper)| overlap_pixel(colors, linear, lower, upper))
+        .collect()
+}
+
+fn overlap_radius(preset: &BrushPreset, h: usize) -> f32 {
+    preview_radius(preset.params.size_px, h as f32).min(h as f32 * 0.18)
+}
+
+fn crossed_paths(w: usize, h: usize, radius: f32) -> [StrokePath; 2] {
     let (width, height) = (w as f32, h as f32);
-    let radius = preview_radius(preset.params.size_px, height).min(height * 0.18);
     let y_start = (radius + 2.0).max(height * 0.13);
     let center = width * 0.5;
     let span = width * 0.24;
     let bow = width * 0.09;
-    [1.0, -1.0].map(|direction| {
-        let path = StrokePath::Bow {
-            start: (center - (span + bow) * direction, y_start),
-            end: (center + (span - bow) * direction, height - y_start),
-            bend: bow * direction,
-        };
-        let mut coverage = vec![0.0; w * h];
-        draw_stroke(&mut coverage, (w, h), preset, path, radius);
-        coverage
+    [1.0, -1.0].map(|direction| StrokePath::Bow {
+        start: (center - (span + bow) * direction, y_start),
+        end: (center + (span - bow) * direction, height - y_start),
+        bend: bow * direction,
     })
 }
 
@@ -398,16 +413,13 @@ fn visit_tip_pixels(
     dab: Dab,
     mut visit: impl FnMut(usize, usize, f32),
 ) {
-    let (rx, ry) = match tip {
-        BrushTipKind::AlphaMask { width, height, .. } => {
-            let scale = dab.radius / (*width).max(*height).max(1) as f32;
-            (scale * *width as f32, scale * *height as f32)
-        }
-        BrushTipKind::Parametric { .. } => (dab.radius, dab.radius),
-    };
-    let (sin, cos) = dab.angle.to_radians().sin_cos();
-    let extent_x = rx * cos.abs() + ry * sin.abs();
-    let extent_y = rx * sin.abs() + ry * cos.abs();
+    let TipGeometry {
+        rx,
+        ry,
+        sin,
+        cos,
+        half_extent: (extent_x, extent_y),
+    } = tip_geometry(tip, dab);
     let x0 = ((dab.x - extent_x).floor() as i32).clamp(0, w as i32) as usize;
     let x1 = ((dab.x + extent_x).ceil() as i32).clamp(0, w as i32) as usize;
     let y0 = ((dab.y - extent_y).floor() as i32).clamp(0, h as i32) as usize;
@@ -442,6 +454,34 @@ fn visit_tip_pixels(
             };
             visit(px, py, sample);
         }
+    }
+}
+
+struct TipGeometry {
+    rx: f32,
+    ry: f32,
+    sin: f32,
+    cos: f32,
+    half_extent: (f32, f32),
+}
+
+fn tip_geometry(tip: &BrushTipKind, dab: Dab) -> TipGeometry {
+    let (rx, ry) = match tip {
+        BrushTipKind::AlphaMask { width, height, .. } => {
+            let scale = dab.radius / (*width).max(*height).max(1) as f32;
+            (scale * *width as f32, scale * *height as f32)
+        }
+        BrushTipKind::Parametric { .. } => (dab.radius, dab.radius),
+    };
+    let (sin, cos) = dab.angle.to_radians().sin_cos();
+    let extent_x = rx * cos.abs() + ry * sin.abs();
+    let extent_y = rx * sin.abs() + ry * cos.abs();
+    TipGeometry {
+        rx,
+        ry,
+        sin,
+        cos,
+        half_extent: (extent_x, extent_y),
     }
 }
 

@@ -42,6 +42,7 @@ pub struct BrushDynamics {
     pub(super) size: Option<DabCurve>,
     pub(super) opacity: Option<DabCurve>,
     pub(super) opacity_fade: Option<super::krita::OpacityFade>,
+    pub(super) krita_smudge: Option<super::krita::LegacySmudge>,
     pub(super) flow: Option<DabCurve>,
     pub(super) spacing: Option<DabCurve>,
     pub(super) axis_spacing: bool,

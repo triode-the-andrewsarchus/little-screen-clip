@@ -52,7 +52,12 @@ fn kpp_with_resources(
     let tip = if let Some(def_xml) = param("brush_definition")
         && let Ok(def_doc) = roxmltree::Document::parse_with_options(def_xml, preset_xml_options())
     {
-        parse_brush_definition(def_doc.root_element(), root, &mut params, load_resource)
+        let definition = def_doc.root_element();
+        let tip = parse_brush_definition(definition, root, &mut params, load_resource);
+        if tip.is_some() {
+            params.dynamics.krita_smudge = legacy_smudge(paintop, definition, &param);
+        }
+        tip
     } else {
         None
     }
@@ -104,6 +109,96 @@ fn paintbrush_params<'a>(param: &impl Fn(&str) -> Option<&'a str>) -> BrushStrok
     }
     params.dynamics.axis_spacing = param("Spacing/Isotropic") != Some("true");
     params
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum SmudgeMode {
+    Smear,
+    Dull,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LegacySmudge {
+    pub(super) mode: SmudgeMode,
+    pub(super) length: SmudgeControl,
+    pub(super) color: SmudgeControl,
+    pub(super) radius: SmudgeControl,
+    pub(super) maximum_length: f32,
+    pub(super) smear_alpha: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SmudgeControl {
+    pub(super) strength: f32,
+    pressure: Option<DabCurve>,
+}
+
+impl SmudgeControl {
+    pub(super) fn at(&self, pressure: f32) -> f32 {
+        self.strength
+            * self
+                .pressure
+                .as_ref()
+                .map_or(1.0, |curve| curve.at(pressure))
+    }
+}
+
+fn legacy_smudge<'a>(
+    paintop: &str,
+    definition: roxmltree::Node<'_, '_>,
+    param: &impl Fn(&str) -> Option<&'a str>,
+) -> Option<LegacySmudge> {
+    let enabled = |name: &str| matches!(param(name), Some("true" | "1"));
+    if paintop != "colorsmudge"
+        || enabled("SmudgeRateUseNewEngine")
+        || enabled("MergedPaint")
+        || !matches!(param("CompositeOp"), None | Some("normal"))
+        || !matches!(definition.attribute("brushApplication"), None | Some("0"))
+        || !matches!(param("Texture/Pattern/Enabled"), None | Some("false" | "0"))
+    {
+        return None;
+    }
+    let mode = match param("SmudgeRateMode") {
+        None | Some("0") => SmudgeMode::Smear,
+        Some("1") => SmudgeMode::Dull,
+        _ => return None,
+    };
+    let control = |property: &str, strength, inactive| {
+        if !enabled(&format!("Pressure{property}")) {
+            return SmudgeControl {
+                strength: inactive,
+                pressure: None,
+            };
+        }
+        let pressure = sensor_curve(param, property, "pressure", |value| value).or_else(|| {
+            (param(&format!("{property}UseCurve")) != Some("false")
+                && param(&format!("{property}Sensor")).is_none())
+            .then(|| DabCurve::linear(0.0, 1.0))
+        });
+        SmudgeControl { strength, pressure }
+    };
+    let number = |name, default| {
+        param(name)
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(default)
+    };
+    let maximum_length = number("SmudgeRateValue", 1.0).clamp(0.0, 1.0);
+    let color = number("ColorRateValue", 1.0).clamp(0.0, 1.0);
+    let radius_scale = if number("SmudgeRadiusVersion", 1.0) < 2.0 {
+        0.01
+    } else {
+        1.0
+    };
+    let radius = (number("SmudgeRadiusValue", 3.0) * radius_scale).clamp(0.0, 3.0);
+    Some(LegacySmudge {
+        mode,
+        length: control("SmudgeRate", maximum_length, 1.0),
+        color: control("ColorRate", color, 0.0),
+        radius: control("SmudgeRadius", radius, 0.0),
+        maximum_length,
+        smear_alpha: !matches!(param("SmudgeRateSmearAlpha"), Some("false" | "0")),
+    })
 }
 
 fn sensor_curve<'a>(

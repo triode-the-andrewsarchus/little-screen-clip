@@ -450,6 +450,60 @@ mod tests {
     }
 
     #[test]
+    fn krita_reads_legacy_smudge_controls_and_keeps_new_engine_separate() {
+        let xml = r#"<Preset name="Wet" paintopid="colorsmudge">
+          <param name="brush_definition"><![CDATA[<Brush type="auto_brush"><MaskGenerator diameter="40" hfade="1" vfade="1"/></Brush>]]></param>
+          <param name="SmudgeRateMode">1</param>
+          <param name="PressureSmudgeRate">true</param>
+          <param name="SmudgeRateValue">0.8</param>
+          <param name="SmudgeRateSensor"><![CDATA[<params id="pressure"><curve>0,0;1,1;</curve></params>]]></param>
+          <param name="PressureColorRate">false</param>
+          <param name="ColorRateValue">1</param>
+          <param name="PressureSmudgeRadius">true</param>
+          <param name="SmudgeRadiusUseCurve">false</param>
+          <param name="SmudgeRadiusValue">80</param>
+          <param name="SmudgeRateSmearAlpha">false</param>
+        </Preset>"#;
+        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let legacy = preset.params.dynamics.krita_smudge.unwrap();
+        assert!(matches!(legacy.mode, krita::SmudgeMode::Dull));
+        assert_eq!(legacy.length.at(0.5), 0.4);
+        assert_eq!(legacy.maximum_length, 0.8);
+        assert_eq!(legacy.color.at(1.0), 0.0);
+        assert!((legacy.radius.at(1.0) - 0.8).abs() < 1.0e-6);
+        assert!(!legacy.smear_alpha);
+
+        let newer = xml.replace(
+            "</Preset>",
+            r#"<param name="SmudgeRateUseNewEngine">true</param></Preset>"#,
+        );
+        let preset = krita::parse_kpp_preset(&make_kpp(&newer), "fallback").unwrap();
+        assert!(preset.params.dynamics.krita_smudge.is_none());
+    }
+
+    #[test]
+    fn pigment_free_krita_blender_drags_paint_past_the_swatch_boundary() {
+        let xml = r#"<Preset name="Dry blender" paintopid="colorsmudge">
+          <param name="brush_definition"><![CDATA[<Brush type="auto_brush" spacing="0.1"><MaskGenerator diameter="40" hfade="1" vfade="1"/></Brush>]]></param>
+          <param name="PressureSmudgeRate">true</param>
+          <param name="SmudgeRateUseCurve">false</param>
+          <param name="SmudgeRateValue">0.8</param>
+          <param name="PressureColorRate">false</param>
+        </Preset>"#;
+        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let image = render::render_brush_hover_preview(&preset, 100, [[200, 0, 0], [0, 0, 220]]);
+        let pixel = |x, y| {
+            let index = (y * image.width as usize + x) * 4;
+            &image.premultiplied_rgba[index..index + 4]
+        };
+        assert_eq!(pixel(390, 25), &[0, 0, 220, 255], "untouched upper swatch");
+        assert!(
+            pixel(390, 50)[0] > 10,
+            "the dab carries red into the blue side"
+        );
+    }
+
+    #[test]
     fn krita_opacity_combines_pressure_with_the_saved_dab_fade() {
         let xml = r#"<Preset name="Fade">
           <param name="OpacityUseCurve">true</param>
