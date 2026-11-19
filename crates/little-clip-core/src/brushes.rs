@@ -250,62 +250,70 @@ fn load_via_brushkit(
         return Err("Cancelled".into());
     }
 
-    let entries = set.entries;
-    let indices: Vec<_> = entries.iter().map(|entry| entry.index).collect();
+    let indices: Vec<_> = set.entries.iter().map(|entry| entry.index).collect();
     let (total_count, settings) = if format == BrushFormat::Abr {
         abr::settings(bytes, &indices)?
     } else {
         procreate::settings(bytes, format, &indices, cancelled)?
     };
-    let mut brushes = Vec::with_capacity(entries.len());
-    for (entry, mut params) in entries.into_iter().zip(settings) {
+    let mut brushes = Vec::with_capacity(set.entries.len());
+    let set_name = set.set_name.as_deref().filter(|s| !s.trim().is_empty());
+    for (entry, params) in set.entries.into_iter().zip(settings) {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        if let brushkit::preview::TipPreview::Available(bitmap) = entry.tip {
-            let name = if entry.name.trim().is_empty() {
-                set.set_name
-                    .clone()
-                    .filter(|s| !s.trim().is_empty())
-                    .map(|s| bounded_label(&s).to_owned())
-                    .unwrap_or_else(|| format!("{fallback_name} #{}", entry.index + 1))
-            } else {
-                bounded_label(&entry.name).to_owned()
-            };
-            if format != BrushFormat::Abr {
-                params.size_px = entry
-                    .source_dimensions
-                    .map_or(bitmap.width.max(bitmap.height), |dims| {
-                        dims.width().max(dims.height())
-                    }) as f32;
-            }
-            let detail = entry.source_dimensions.map_or_else(
-                || format!("{}×{} tip", bitmap.width, bitmap.height),
-                |dims| format!("{}×{} tip", dims.width(), dims.height()),
-            );
-            brushes.push(BrushPreset {
-                name,
-                tip: BrushTipKind::AlphaMask {
-                    width: bitmap.width,
-                    height: bitmap.height,
-                    alpha: bitmap.data.into(),
-                },
-                params,
-                detail,
-            });
+        if let Some(preset) = brushkit_preset(entry, params, set_name, fallback_name, format) {
+            brushes.push(preset);
         }
     }
 
-    if brushes.is_empty() {
-        return Err(format!("No readable brush tips in {}", format.label()));
-    }
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
+    }
+    if brushes.is_empty() {
+        return Err(format!("No readable brush tips in {}", format.label()));
     }
     Ok(BrushLibrary {
         format,
         brushes,
         total_count,
+    })
+}
+
+fn brushkit_preset(
+    entry: brushkit::preview::PreviewEntry,
+    mut params: BrushStrokeParams,
+    set_name: Option<&str>,
+    fallback_name: &str,
+    format: BrushFormat,
+) -> Option<BrushPreset> {
+    let brushkit::preview::TipPreview::Available(bitmap) = entry.tip else {
+        return None;
+    };
+    let name = if !entry.name.trim().is_empty() {
+        bounded_label(&entry.name).to_owned()
+    } else if let Some(set_name) = set_name {
+        bounded_label(set_name).to_owned()
+    } else {
+        format!("{fallback_name} #{}", entry.index + 1)
+    };
+    let (width, height) = entry
+        .source_dimensions
+        .map_or((bitmap.width, bitmap.height), |dims| {
+            (dims.width(), dims.height())
+        });
+    if format != BrushFormat::Abr {
+        params.size_px = width.max(height) as f32;
+    }
+    Some(BrushPreset {
+        name,
+        tip: BrushTipKind::AlphaMask {
+            width: bitmap.width,
+            height: bitmap.height,
+            alpha: bitmap.data.into(),
+        },
+        params,
+        detail: format!("{width}×{height} tip"),
     })
 }
 
