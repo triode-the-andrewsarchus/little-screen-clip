@@ -150,7 +150,8 @@ pub(super) fn click_text_smart_copy_action(source_text: &str, button_label: &str
         app: &mut WorkbenchApp,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -161,8 +162,10 @@ pub(super) fn click_text_smart_copy_action(source_text: &str, button_label: &str
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    app.render_text_smart_preview_actions(ui);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        app.render_text_smart_preview_actions(ui);
+                    })
                 });
             },
         )
@@ -202,7 +205,7 @@ pub(super) fn click_text_smart_copy_action(source_text: &str, button_label: &str
         &mut app,
         vec![egui::Event::PointerMoved(pos), pointer_button(false)],
     );
-    clicked.platform_output.copied_text
+    clip_ui::test_support::copied_text(&clicked.platform_output).to_owned()
 }
 
 pub(super) fn viewport_close_command_count(output: &egui::FullOutput) -> usize {

@@ -449,7 +449,7 @@ impl Viewer {
         let mut chosen = None;
         if let Some(instrument) = self.document.instruments.get(self.instrument) {
             egui::ScrollArea::vertical()
-                .id_source("velocity-layers")
+                .id_salt("velocity-layers")
                 .max_height(130.0)
                 .show(ui, |ui| {
                     for (index, region) in instrument
@@ -496,12 +496,12 @@ impl Viewer {
         StudioShell::new("Multisample", Icon::Midi, palette, close).render_header(ui, |_| {});
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.details(ui);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let colors = WorkbenchColors::from_palette(palette);
             self.explorer_ui(ui, palette);
@@ -624,10 +624,10 @@ impl Viewer {
         let regions = &document.instruments[self.instrument].regions;
         let columns = ((rect.width() / 150.0) as usize).max(1);
         let mut selected = None;
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             egui::ScrollArea::vertical()
-                .id_source("sampler-pads")
+                .id_salt("sampler-pads")
                 .show_rows(ui, 72.0, regions.len().div_ceil(columns), |ui, rows| {
                     for row in rows {
                         let width = (ui.available_width()
@@ -652,7 +652,7 @@ impl Viewer {
                                 );
                                 layout.wrap.max_rows = 2;
                                 layout.wrap.break_anywhere = true;
-                                let label = ui.fonts(|fonts| fonts.layout_job(layout));
+                                let label = ui.fonts_mut(|fonts| fonts.layout_job(layout));
                                 let (r, g, b) = palette.midi_note_color(0, 0, 1, region.root, 100);
                                 if ui
                                     .add_sized(
@@ -750,7 +750,7 @@ impl Viewer {
     fn details(&mut self, ui: &mut egui::Ui) {
         ui.label(format!("{} instruments", self.document.instruments.len()));
         let mut instrument = self.instrument;
-        egui::ComboBox::from_id_source("multisample-instrument")
+        egui::ComboBox::from_id_salt("multisample-instrument")
             .width(ui.available_width() - 10.0)
             .selected_text(
                 self.document
@@ -782,7 +782,7 @@ impl Viewer {
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut selected = self.selected;
         egui::ScrollArea::vertical()
-            .id_source("multisample-regions")
+            .id_salt("multisample-regions")
             .max_height((ui.available_height() * 0.28).max(height))
             .min_scrolled_height(0.0)
             .show_rows(ui, height, instrument.regions.len(), |ui, rows| {
@@ -809,7 +809,7 @@ impl Viewer {
         ui.separator();
         self.layers(ui);
         egui::ScrollArea::vertical()
-            .id_source("multisample-properties")
+            .id_salt("multisample-properties")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -819,7 +819,7 @@ impl Viewer {
                 if !self.document.notes.is_empty() {
                     ui.collapsing("Format notes", |ui| {
                         for note in &self.document.notes {
-                            ui.add(egui::Label::new(note).wrap(true));
+                            ui.add(egui::Label::new(note).wrap());
                         }
                     });
                 }
@@ -847,7 +847,7 @@ fn region_details(ui: &mut egui::Ui, region: &Region) {
         "Velocity {}–{}",
         region.velocity[0], region.velocity[1]
     ));
-    ui.add(egui::Label::new(&region.sample).wrap(true));
+    ui.add(egui::Label::new(&region.sample).wrap());
     ui.label(format!("Sample start {} frames", region.start));
     if let Some(end) = region.end {
         ui.label(format!("Sample end {end} (exclusive)"));
@@ -867,7 +867,7 @@ fn region_details(ui: &mut egui::Ui, region: &Region) {
     ui.collapsing("Source properties", |ui| {
         for (key, value) in &region.properties {
             ui.strong(key);
-            ui.add(egui::Label::new(value).wrap(true));
+            ui.add(egui::Label::new(value).wrap());
         }
     });
 }

@@ -97,7 +97,7 @@ pub(in crate::file_manager) fn show(
         if !super::super::ui::popup_open(ui.ctx()) {
             ui.interact(
                 tag,
-                Id::new(("image_strip_tags", &entry.path)),
+                Id::unique(("image_strip_tags", &entry.path)),
                 Sense::hover(),
             )
             .on_hover_text("Image tags");
@@ -147,12 +147,16 @@ fn hilbert_strip_ui(
         painter.rect_filled(stripe, 0.0, seg.color);
     }
 
-    ui.painter()
-        .rect_stroke(rect, 2.0, Stroke::new(1.0_f32, colors.recessed));
+    ui.painter().rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0_f32, colors.recessed),
+        egui::StrokeKind::Middle,
+    );
 
     let response = ui.interact(
         rect,
-        Id::new(("image_strip_hilbert", &entry.path)),
+        Id::unique(("image_strip_hilbert", &entry.path)),
         Sense::click_and_drag(),
     );
 
@@ -190,13 +194,12 @@ fn hilbert_strip_ui(
             marker_rect,
             0.0,
             Stroke::new(1.5_f32, marker_color),
+            egui::StrokeKind::Middle,
         );
 
         let hex = format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b());
         if response.clicked() {
-            ui.output_mut(|output| {
-                output.copied_text = hex.clone();
-            });
+            ui.ctx().copy_text(hex.clone());
         }
         response.on_hover_text(format!("Click to copy color\n{hex}"));
     }
@@ -243,9 +246,9 @@ fn histogram_ui(ui: &Ui, rect: Rect, analysis: &Analysis, colors: WorkbenchColor
     if !super::super::ui::popup_open(ui.ctx()) {
         ui.interact(
             rect,
-            Id::new((
+            Id::unique((
                 "image_rgb_histogram",
-                ui.id(),
+                ui.scope_id(),
                 rect.min.x.to_bits(),
                 rect.min.y.to_bits(),
             )),
@@ -291,7 +294,7 @@ fn hash_ui(
         }
         let response = ui.interact(
             rect,
-            Id::new(("image_strip_hash", &entry.path, half)),
+            Id::unique(("image_strip_hash", &entry.path, half)),
             if value.is_some() {
                 Sense::click()
             } else {
@@ -300,7 +303,7 @@ fn hash_ui(
         );
         if let Some(hash) = value {
             if response.clicked() {
-                ui.output_mut(|output| output.copied_text = hash.to_owned());
+                ui.ctx().copy_text(hash.to_owned());
             }
             let explanation = if half == 0 {
                 "If these are the exact same for two images, it means the images are pixel-for-pixel identical.\nSHA-256 hashes the entire file, including encoding and metadata. Images with identical pixels can still have different file hashes."
@@ -370,7 +373,7 @@ fn metadata_ui(ui: &Ui, rect: Rect, entry: &Entry, analysis: &Analysis, colors: 
         details.extend(meta.software.iter().cloned());
         ui.interact(
             rect,
-            Id::new(("image_strip_exif", &entry.path)),
+            Id::unique(("image_strip_exif", &entry.path)),
             Sense::hover(),
         )
         .on_hover_text(details.join("\n"));

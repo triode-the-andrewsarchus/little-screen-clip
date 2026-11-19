@@ -720,7 +720,8 @@ mod tests {
                 &AppPalette::for_appearance(appearance),
             );
             let context = egui::Context::default();
-            let output = context.run(
+            let output = clip_ui::test_support::run_frame(
+                &context,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -729,8 +730,10 @@ mod tests {
                     ..Default::default()
                 },
                 |context| {
-                    egui::CentralPanel::default().show(context, |ui| {
-                        buses::paint(ui, strip, &topology, colors);
+                    context.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            buses::paint(ui, strip, &topology, colors);
+                        })
                     });
                 },
             );

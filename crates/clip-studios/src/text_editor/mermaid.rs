@@ -340,7 +340,7 @@ impl MermaidEditor {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
-                        .id_source("mermaid_inspector")
+                        .id_salt("mermaid_inspector")
                         .min_scrolled_height(0.0)
                         .max_height(height)
                         .show(ui, |ui| {
@@ -350,7 +350,7 @@ impl MermaidEditor {
             );
         });
         egui::ScrollArea::vertical()
-            .id_source("mermaid_notices")
+            .id_salt("mermaid_notices")
             .min_scrolled_height(0.0)
             .max_height(70.0)
             .show(ui, |ui| {
@@ -446,7 +446,12 @@ impl MermaidEditor {
                     continue;
                 }
                 let bounds = self.camera.screen_rect(bounds, rect);
-                painter.rect_stroke(bounds.expand(2.0), 2.0, Stroke::new(2.0_f32, accent));
+                painter.rect_stroke(
+                    bounds.expand(2.0),
+                    2.0,
+                    Stroke::new(2.0_f32, accent),
+                    egui::StrokeKind::Middle,
+                );
             }
         }
     }
@@ -464,7 +469,7 @@ impl MermaidEditor {
     fn add_panel(&mut self, ui: &mut egui::Ui, palette: &AppPalette, model: &Model) {
         ui.strong("Add step");
         ui.add(egui::TextEdit::singleline(&mut self.new_label).desired_width(ui.available_width()));
-        egui::ComboBox::from_id_source("mermaid_new_shape")
+        egui::ComboBox::from_id_salt("mermaid_new_shape")
             .selected_text(self.shape.name())
             .show_ui(ui, |ui| {
                 for shape in [Shape::Box, Shape::Rounded, Shape::Decision] {
@@ -700,14 +705,30 @@ mod tests {
             vector: None,
             geometry: None,
         };
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(400.0, 250.0), Sense::click_and_drag());
-                editor.camera.fit(old_layout, rect);
-                let old_mapping = editor.camera.image_rect(old_layout, rect);
-                editor.camera.fitted = false; // The existing toolbar Fit request.
-                for _ in 0..2 {
+        let _ = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(400.0, 250.0), Sense::click_and_drag());
+                    editor.camera.fit(old_layout, rect);
+                    let old_mapping = editor.camera.image_rect(old_layout, rect);
+                    editor.camera.fitted = false; // The existing toolbar Fit request.
+                    for _ in 0..2 {
+                        editor.canvas(
+                            ui,
+                            rect,
+                            &response,
+                            Some(&frame),
+                            false,
+                            &AppPalette::default(),
+                        );
+                        assert!(!editor.camera.fitted);
+                        assert_eq!(editor.camera.image_rect(old_layout, rect), old_mapping);
+                    }
+                    frame.layout = new_layout;
+                    frame.fresh = true;
+                    // Fresh source-only families can Fit even without an editable
+                    // flowchart model or semantic hit-test readiness.
                     editor.canvas(
                         ui,
                         rect,
@@ -716,26 +737,12 @@ mod tests {
                         false,
                         &AppPalette::default(),
                     );
-                    assert!(!editor.camera.fitted);
-                    assert_eq!(editor.camera.image_rect(old_layout, rect), old_mapping);
-                }
-                frame.layout = new_layout;
-                frame.fresh = true;
-                // Fresh source-only families can Fit even without an editable
-                // flowchart model or semantic hit-test readiness.
-                editor.canvas(
-                    ui,
-                    rect,
-                    &response,
-                    Some(&frame),
-                    false,
-                    &AppPalette::default(),
-                );
-                assert!(editor.camera.fitted);
-                let fitted = editor.camera.image_rect(new_layout, rect);
-                assert!(rect.contains_rect(fitted));
-                assert!((fitted.center() - rect.center()).length() < 0.01);
-                assert!(fitted.width() > rect.width() * 0.9);
+                    assert!(editor.camera.fitted);
+                    let fitted = editor.camera.image_rect(new_layout, rect);
+                    assert!(rect.contains_rect(fitted));
+                    assert!((fitted.center() - rect.center()).length() < 0.01);
+                    assert!(fitted.width() > rect.width() * 0.9);
+                })
             });
         });
     }

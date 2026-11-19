@@ -179,6 +179,7 @@ fn map(
                 cell.shrink(1.0),
                 2.0,
                 egui::Stroke::new(2.0_f32, colors.focus),
+                egui::StrokeKind::Middle,
             );
         }
         if pointer.is_some_and(|point| cell.contains(point)) {
@@ -187,21 +188,23 @@ fn map(
     }
     if let Some(index) = hovered {
         let span = &summary.spans[index];
-        egui::show_tooltip_at_pointer(
-            ui.ctx(),
-            egui::Id::new(("notebook-map", rect.min.x.to_bits(), rect.min.y.to_bits())),
-            |ui| {
-                ui.label(format!(
-                    "Cells {}–{} · first: {} · {} lines · {} outputs",
-                    span.first + 1,
-                    span.end,
-                    span.kind.label(),
-                    span.lines,
-                    span.outputs
-                ));
-                ui.label(&span.excerpt);
-            },
-        );
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique(("notebook-map", rect.min.x.to_bits(), rect.min.y.to_bits())),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            ui.label(format!(
+                "Cells {}–{} · first: {} · {} lines · {} outputs",
+                span.first + 1,
+                span.end,
+                span.kind.label(),
+                span.lines,
+                span.outputs
+            ));
+            ui.label(&span.excerpt);
+        });
         return Some(span.first);
     }
     None

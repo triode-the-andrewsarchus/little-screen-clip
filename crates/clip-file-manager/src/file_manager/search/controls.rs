@@ -144,7 +144,7 @@ impl Controls {
             return None;
         }
         ui.label("Build a search command");
-        egui::ComboBox::from_id_source("search_control_mode")
+        egui::ComboBox::from_id_salt("search_control_mode")
             .selected_text(mode_name(self.mode))
             .show_ui(ui, |ui| {
                 for mode in [
@@ -193,7 +193,7 @@ impl Controls {
         self.sort_ui(ui);
         if self.mode == Mode::Question {
             ui.label("Answer type (current folder only)");
-            egui::ComboBox::from_id_source("search_control_answer_type")
+            egui::ComboBox::from_id_salt("search_control_answer_type")
                 .selected_text(self.answer_type.name())
                 .show_ui(ui, |ui| {
                     for (label, kind) in AnswerType::OPTIONS {
@@ -232,14 +232,14 @@ impl Controls {
             ] {
                 if ui.button(selector).clicked() {
                     self.append_filter(selector);
-                    ui.close_menu();
+                    ui.close();
                 }
             }
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
             for key in ["modified", "created"] {
                 if ui.button(format!("{key} since today")).clicked() {
                     self.append_filter(&format!("{key}:>={today}"));
-                    ui.close_menu();
+                    ui.close();
                 }
             }
         });
@@ -253,7 +253,7 @@ impl Controls {
     fn sort_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Sort");
-            egui::ComboBox::from_id_source("search_control_sort")
+            egui::ComboBox::from_id_salt("search_control_sort")
                 .selected_text(if self.sort.is_empty() {
                     "Relevance / existing order"
                 } else {

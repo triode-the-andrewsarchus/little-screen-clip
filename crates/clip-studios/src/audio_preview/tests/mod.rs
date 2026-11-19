@@ -38,18 +38,24 @@ pub(super) fn render_inspect_frame_with_modifiers(
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
             time: Some(time),
-            modifiers,
-            events,
+
+            events: [egui::Event::ModifiersChanged(modifiers)]
+                .into_iter()
+                .chain(events)
+                .collect(),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut close_requested = false;
-                state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut close_requested = false;
+                    state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                })
             });
         },
     );
@@ -59,7 +65,7 @@ pub(super) fn render_inspect_frame_with_modifiers(
         .find_map(|clipped| match &clipped.shape {
             Shape::Rect(rect)
                 if rect.fill == canvas_fill
-                    && rect.rounding == egui::Rounding::same(8.0)
+                    && rect.corner_radius == egui::CornerRadius::same(8)
                     && rect.rect.width() > 500.0
                     && rect.rect.height() > 100.0 =>
             {

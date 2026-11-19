@@ -168,14 +168,16 @@ impl Preview {
         } else {
             Vec::new()
         };
-        let id = ui.id().with((&entry.path, entry.revision, "inline-keys"));
+        let id = ui
+            .scope_id()
+            .with((&entry.path, entry.revision, "inline-keys"));
         let mut hit = None;
         ui.push_id(id, |ui| {
             let controls = egui::Rect::from_min_size(
                 rect.min,
                 egui::vec2(165.0_f32.min(rect.width() * 0.3), rect.height()),
             );
-            ui.allocate_ui_at_rect(controls, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
                 ui.set_clip_rect(controls.intersect(ui.clip_rect()));
                 self.controls(ui, bounds, active, colors, palette);
             });
@@ -190,7 +192,13 @@ impl Preview {
                         .and_then(|v| v.error.clone().or_else(|| v.midi.error()))
                 })
             {
-                egui::show_tooltip(ui.ctx(), ui.id().with("sampler-error"), |ui| {
+                egui::Tooltip::always_open(
+                    ui.ctx().clone(),
+                    ui.layer_id(),
+                    ui.scope_id().with("sampler-error"),
+                    egui::PopupAnchor::Pointer,
+                )
+                .show(|ui| {
                     ui.colored_label(colors.danger, error);
                 });
             }
@@ -216,7 +224,7 @@ mod tests {
             clicked: true,
             ..Default::default()
         };
-        ctx.begin_frame(egui::RawInput {
+        ctx.begin_pass(egui::RawInput {
             events: vec![egui::Event::PointerButton {
                 pos: egui::pos2(20.0, 20.0),
                 button: egui::PointerButton::Primary,
@@ -230,6 +238,6 @@ mod tests {
         // The same press without an instrument claiming it retires routing.
         preview.finish_frame(&ctx);
         assert!(!preview.focused);
-        let _ = ctx.end_frame();
+        ctx.end_pass().drop_without_applying_deltas();
     }
 }

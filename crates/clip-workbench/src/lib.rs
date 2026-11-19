@@ -134,7 +134,7 @@ fn show_workbench_footer(
         WorkbenchView::AutoActions => "[Click] Toggle Setting  |  [Esc] Dismiss",
     };
     let wrap_width = ui.available_width().max(1.0);
-    let hint_galley = ui.fonts(|fonts| {
+    let hint_galley = ui.fonts_mut(|fonts| {
         fonts.layout(
             hint.to_owned(),
             egui::FontId::proportional(BODY_FONT_SIZE),
@@ -143,7 +143,7 @@ fn show_workbench_footer(
         )
     });
     let status_galley = status_msg.map(|message| {
-        ui.fonts(|fonts| {
+        ui.fonts_mut(|fonts| {
             fonts.layout(
                 message.to_owned(),
                 egui::FontId::proportional(BODY_FONT_SIZE),
@@ -164,13 +164,16 @@ fn show_workbench_footer(
         + 12.0)
         .ceil();
     let mut captions_rect = egui::Rect::NOTHING;
-    egui::TopBottomPanel::bottom("workbench_footer_panel")
-        .exact_height(footer_height)
+    egui::Panel::bottom("workbench_footer_panel")
+        .show_separator_line(false)
+        .exact_size(footer_height)
         .frame(
-            egui::Frame::none()
-                .inner_margin(egui::Margin::symmetric(0.0, crate::ui_ext::FOOTER_INSET_Y)),
+            egui::Frame::NONE.inner_margin(egui::Margin::from(egui::vec2(
+                0.0,
+                crate::ui_ext::FOOTER_INSET_Y,
+            ))),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             if let Some(galley) = &status_galley {
                 let (rect, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), galley.size().y),
@@ -346,10 +349,10 @@ impl ImageSessionKey {
     }
 }
 
-fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) {
+fn show_viewer_panel(root: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::none().fill(ctx.style().visuals.panel_fill))
-        .show(ctx, contents);
+        .frame(egui::Frame::NONE.fill(root.visuals().panel_fill))
+        .show(root, contents);
 }
 
 pub(crate) fn is_office_document_clip_item(item: &ClipItem) -> bool {
@@ -783,11 +786,11 @@ fn render_auto_actions(
     egui::ScrollArea::vertical().show(ui, |ui| {
         let card_bg = hex_to_c32(&palette.colors.surface_raised);
         let card_stroke = hex_to_c32(&palette.chrome_border);
-        let card = egui::Frame::none()
+        let card = egui::Frame::NONE
             .fill(card_bg)
             .stroke(egui::Stroke::new(1.0_f32, card_stroke))
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(16, 14))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let mut trim = config.auto_actions.trim_link_tracking;
@@ -824,10 +827,10 @@ fn render_auto_actions(
                             )
                         };
                         let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), palette);
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(badge_bg)
-                            .rounding(egui::Rounding::same(4.0))
-                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                            .corner_radius(egui::CornerRadius::same(4))
+                            .inner_margin(egui::Margin::symmetric(8, 3))
                             .show(ui, |ui| {
                                 layout.status = ui
                                     .label(
@@ -869,7 +872,7 @@ fn render_auto_actions(
 
 fn audio_strip_space_pressed(ctx: &egui::Context, audio_region_active: bool) -> bool {
     audio_region_active
-        && !ctx.wants_keyboard_input()
+        && !ctx.egui_wants_keyboard_input()
         && ctx.input(|i| i.key_pressed(egui::Key::Space))
 }
 
@@ -965,7 +968,8 @@ impl PromptApp {
 }
 
 impl eframe::App for PromptApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
         if self.poll_pending(ctx) {
             return;
         }
@@ -977,12 +981,12 @@ impl eframe::App for PromptApp {
         let p_border = hex_to_c32(&self.palette.harmonies.base);
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(p_bg)
                     .stroke(egui::Stroke::new(1.0_f32, p_border))
-                    .inner_margin(egui::Margin::symmetric(24.0, 20.0)),
+                    .inner_margin(egui::Margin::symmetric(24, 20)),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 if self.pending.is_some() {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -995,7 +999,9 @@ impl eframe::App for PromptApp {
                         ui.label(error);
                     });
                 }
-                ui.set_enabled(self.pending.is_none());
+                if !(self.pending.is_none()) {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     Icon::Sparkles.ui(ui, 18.0, hex_to_c32(&self.palette.harmonies.triadic_1));
                     ui.heading(
@@ -1090,13 +1096,13 @@ fn run_prompt_modal(
             ui_ext::configure_workbench_style(&cc.egui_ctx);
             ui_appearance::apply_visuals(&cc.egui_ctx, &palette);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Box::new(PromptApp::new(
+            Ok(Box::new(PromptApp::new(
                 title,
                 message,
                 default_text,
                 recipe_name,
                 palette,
-            ))
+            )))
         }),
     )
 }
@@ -1230,7 +1236,7 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
             let vector_runtime =
                 cc.gl
                     .as_ref()
-                    .zip(cc.get_proc_address)
+                    .zip(cc.get_proc_address.as_deref())
                     .and_then(|(gl, loader)| {
                         // SAFETY: eframe invokes its creator with this window's context
                         // current. Its matching loader is used only here, and on_exit
@@ -1255,7 +1261,7 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
                 start_auto_actions,
             );
             app.vector_runtime = vector_runtime;
-            Box::new(app)
+            Ok(Box::new(app))
         }),
     )
 }

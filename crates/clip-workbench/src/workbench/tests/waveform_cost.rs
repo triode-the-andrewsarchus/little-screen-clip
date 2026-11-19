@@ -101,7 +101,8 @@ fn measure_prepared_audio_frames() {
                 let mut stats = None;
                 for frame in 0..110 {
                     let started = Instant::now();
-                    let output = ctx.run(
+                    let output = clip_ui::test_support::run_frame(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(
                                 Pos2::ZERO,
@@ -111,12 +112,14 @@ fn measure_prepared_audio_frames() {
                             ..Default::default()
                         },
                         |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
-                                if kind == "studio" {
-                                    studio.render_ui(ui, ctx, &palette, &mut false);
-                                } else {
-                                    rolling.render_ui(ui, ctx, &palette, &mut None);
-                                }
+                            ctx.root_ui(|ui| {
+                                egui::CentralPanel::default().show(ui, |ui| {
+                                    if kind == "studio" {
+                                        studio.render_ui(ui, ctx, &palette, &mut false);
+                                    } else {
+                                        rolling.render_ui(ui, ctx, &palette, &mut None);
+                                    }
+                                })
                             });
                         },
                     );

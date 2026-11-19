@@ -101,7 +101,7 @@ fn render_blocks(
                         .or_default()
                         .show(ui, format, text);
                     egui::CollapsingHeader::new("Diagram source")
-                        .id_source(index)
+                        .id_salt(index)
                         .show(ui, |ui| {
                             render_styled_code_block(ui, text, language, palette);
                         });
@@ -118,11 +118,11 @@ fn list_indent(ui: &egui::Ui, depth: usize) -> f32 {
 }
 
 fn quote_frame(palette: &AppPalette) -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(hex_to_c32(&palette.colors.surface_recessed))
         .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
-        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .corner_radius(CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
 }
 
 fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &AppPalette) {
@@ -293,10 +293,10 @@ pub(super) fn render_markdown_span(
             );
         }
         little_clip_render::markdown::MarkdownSpan::Code(s) => {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hex_to_c32(&palette.colors.surface_panel))
-                .inner_margin(egui::Margin::symmetric(4.0, 1.0))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+                .inner_margin(egui::Margin::symmetric(4, 1))
+                .corner_radius(CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(s)
@@ -336,14 +336,14 @@ pub(super) fn render_styled_code_block(
 ) {
     let syntax = find_syntax(lang);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(hex_to_c32(&palette.colors.surface_recessed))
         .stroke(Stroke::new(
             1.0_f32,
             hex_to_c32(&palette.colors.surface_panel),
         ))
-        .inner_margin(egui::Margin::same(10.0))
-        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+        .inner_margin(egui::Margin::same(10))
+        .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
         .show(ui, |ui| {
             if !lang.is_empty() {
                 ui.horizontal(|ui| {
@@ -356,10 +356,11 @@ pub(super) fn render_styled_code_block(
                 ui.add_space(crate::ui_ext::SPACE_XS);
             }
 
-            let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+            let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+                let text = buffer.as_str();
                 let mut layout_job = build_highlighted_layout_job(text, syntax, palette, &[]);
                 layout_job.wrap.max_width = wrap_width;
-                ui.fonts(|f| f.layout_job(layout_job))
+                ui.fonts_mut(|f| f.layout_job(layout_job))
             };
 
             let mut code = code;

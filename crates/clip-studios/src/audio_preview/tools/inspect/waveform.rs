@@ -96,11 +96,12 @@ impl AudioPreviewState {
         let transient_col = crate::hex_to_c32(&palette.diff_mod);
 
         // Frame border & background
-        painter.rect_filled(rect, Rounding::same(8.0), bg_frame);
+        painter.rect_filled(rect, CornerRadius::same(8), bg_frame);
         painter.rect_stroke(
             rect,
-            Rounding::same(8.0),
+            CornerRadius::same(8),
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         if self.paint_analysis_placeholder(&painter, rect, text_f_med) {
@@ -180,7 +181,7 @@ impl AudioPreviewState {
             }
 
             // Read raw_scroll_delta directly to avoid smooth_scroll_delta momentum lingering over multiple frames
-            let raw_scroll = ui.input(|i| i.raw_scroll_delta);
+            let raw_scroll = clip_ui::ui_ext::wheel_delta(ui.ctx());
             let combined_scroll = raw_scroll.x + raw_scroll.y;
             // egui-winit emits Ctrl+wheel as MouseWheel + Zoom, not Scroll, so it never
             // appears in raw_scroll_delta. Read the raw wheel event for this gesture.
@@ -805,11 +806,11 @@ impl AudioPreviewState {
                 Pos2::new(rect.min.x, rect.min.y),
                 Pos2::new(rect.max.x, ruler_rect.max.y),
             ),
-            Rounding {
-                nw: 8.0,
-                ne: 8.0,
-                sw: 0.0,
-                se: 0.0,
+            CornerRadius {
+                nw: 8,
+                ne: 8,
+                sw: 0,
+                se: 0,
             },
             bg_frame,
         );
@@ -868,11 +869,12 @@ impl AudioPreviewState {
         }
 
         // 2. VIEW 1: WAVEFORM (Audacity-style Stems or Peak Bars)
-        painter.rect_filled(wave_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(wave_rect, CornerRadius::ZERO, bg_frame);
         painter.rect_stroke(
             wave_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         let is_stereo = analysis.channels >= 2 && analysis.ch2_samples.is_some();
@@ -1164,8 +1166,9 @@ impl AudioPreviewState {
         }
         painter.rect_stroke(
             spec_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         // 4. VIEW 3: COLORCHORD 2-D MULTI-NOTE CHROMATIC RIBBON
@@ -1184,10 +1187,10 @@ impl AudioPreviewState {
             let u_end = ((v_start + v_dur) / total_dur).clamp(0.0, 1.0);
             let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
             // Paint theme background under texture so silent/empty note regions match active theme
-            painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
+            painter.rect_filled(strip_rect, CornerRadius::ZERO, bg_frame);
             painter.image(tex.id(), strip_rect, uv, Color32::WHITE);
         } else {
-            painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
+            painter.rect_filled(strip_rect, CornerRadius::ZERO, bg_frame);
             crate::icons::Icon::Hourglass.paint_text(
                 &painter,
                 strip_rect.center(),
@@ -1199,8 +1202,9 @@ impl AudioPreviewState {
         }
         painter.rect_stroke(
             strip_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         // Hover tooltip over ColorChord note strip (multi-note chord display)
@@ -1244,7 +1248,7 @@ impl AudioPreviewState {
                 } else {
                     "Musical Note: — (Silence / Below Threshold)".to_string()
                 };
-                egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
+                egui::Tooltip::for_widget(&response).show(|ui| {
                     ui.add(
                         crate::icons::Icon::Audio.label(
                             egui::RichText::new(text)
@@ -1257,11 +1261,12 @@ impl AudioPreviewState {
         }
 
         // 5. HORIZONTAL VIEWPORT SCROLLBAR / PAN TRACK
-        painter.rect_filled(scroll_rect, Rounding::same(3.0), bg_frame);
+        painter.rect_filled(scroll_rect, CornerRadius::same(3), bg_frame);
         painter.rect_stroke(
             scroll_rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         let total_dur = self.duration_sec.max(0.01);
@@ -1272,11 +1277,12 @@ impl AudioPreviewState {
             Vec2::new(thumb_w, scroll_rect.height()),
         );
 
-        painter.rect_filled(thumb_rect, Rounding::same(3.0), border_frame);
+        painter.rect_filled(thumb_rect, CornerRadius::same(3), border_frame);
         painter.rect_stroke(
             thumb_rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, text_f_med),
+            egui::StrokeKind::Middle,
         );
 
         // 6. UNIFIED SELECTION OVERLAY ACROSS ALL 3 VIEWS
@@ -1296,7 +1302,7 @@ impl AudioPreviewState {
                         );
                         painter.rect_filled(
                             sel_rect,
-                            Rounding::ZERO,
+                            CornerRadius::ZERO,
                             crate::hex_to_c32_alpha(&palette.harmonies.base, 40),
                         );
 
@@ -1345,7 +1351,7 @@ impl AudioPreviewState {
                         let alpha = if is_active { 55 } else { 30 };
                         painter.rect_filled(
                             sel_rect,
-                            Rounding::ZERO,
+                            CornerRadius::ZERO,
                             crate::hex_to_c32_alpha(&palette.harmonies.base, alpha),
                         );
 
@@ -1391,7 +1397,7 @@ impl AudioPreviewState {
                                 Vec2::new(26.0, 14.0),
                             );
                             let badge_bg = if is_active { border_frame } else { bg_frame };
-                            painter.rect_filled(badge_rect, Rounding::same(3.0), badge_bg);
+                            painter.rect_filled(badge_rect, CornerRadius::same(3), badge_bg);
                             painter.text(
                                 badge_rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -1453,7 +1459,7 @@ impl AudioPreviewState {
             let badge_text = format!("{:02}:{:05.2}", cur_m, cur_s);
             painter.rect_filled(
                 Rect::from_min_size(badge_pos, Vec2::new(65.0, 18.0)),
-                Rounding::same(4.0),
+                CornerRadius::same(4),
                 crate::hex_to_c32_alpha(&palette.colors.surface_recessed, 220),
             );
             painter.text(

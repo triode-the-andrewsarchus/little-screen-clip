@@ -1523,14 +1523,17 @@ mod tests {
         let ctx = egui::Context::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0, 900.0));
 
-        let initial = ctx.run(
+        let initial = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_remove_bg_toolbar(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_remove_bg_toolbar(ui, ctx, &palette);
+                    })
                 });
             },
         );
@@ -1561,15 +1564,18 @@ mod tests {
                 click(left_button, false),
             ],
         ] {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_remove_bg_toolbar(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_remove_bg_toolbar(ui, ctx, &palette);
+                        })
                     });
                 },
             );
@@ -1950,7 +1956,7 @@ mod tests {
         let ctx = egui::Context::default();
         state.texture = Some(ctx.load_texture(
             "pending-preview",
-            egui::ColorImage::new([24, 16], Color32::WHITE),
+            egui::ColorImage::filled([24, 16], Color32::WHITE),
             egui::TextureOptions::LINEAR,
         ));
         let texture_id = state.texture.as_ref().unwrap().id();
@@ -1964,19 +1970,22 @@ mod tests {
         started_rx.recv().unwrap();
         let dir = tempfile::tempdir().unwrap();
         state.start_save(&dir.path().join("pending.png"), &jobs);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 400.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(state.render_save_progress(
-                        ui,
-                        ctx,
-                        &mut false,
-                        &little_clip_core::palette::AppPalette::default()
-                    ));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        assert!(state.render_save_progress(
+                            ui,
+                            ctx,
+                            &mut false,
+                            &little_clip_core::palette::AppPalette::default()
+                        ));
+                    })
                 });
             },
         );
@@ -1985,7 +1994,7 @@ mod tests {
             .iter()
             .enumerate()
             .find_map(|(i, shape)| match &shape.shape {
-                egui::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
+                egui::Shape::Rect(rect) if rect.fill_texture_id() == texture_id => {
                     Some((i, rect.rect))
                 }
                 egui::Shape::Mesh(mesh) if mesh.texture_id == texture_id => Some((

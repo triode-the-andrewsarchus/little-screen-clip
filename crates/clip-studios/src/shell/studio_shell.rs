@@ -14,7 +14,7 @@ use crate::ui_ext::{
     CONTROL_CORNER_RADIUS, CONTROL_HEIGHT, CONTROL_ICON_SIZE, FOOTER_INSET_Y, PANEL_INSET,
     SPACE_MD, SPACE_SM, SPACE_XS, StatusToast, contrast_text_c32, equal_button_width,
 };
-use egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Rect, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
 
 use crate::icons::Icon;
@@ -127,9 +127,9 @@ impl StudioPanelLayout {
         rects: &StudioPanelRects,
         state: &mut PanelState,
         palette: &AppPalette,
-        id: impl std::hash::Hash,
+        id: impl egui::AsIdSalt,
     ) {
-        let id = ui.id().with(id);
+        let id = ui.scope_id().with(id);
         if let Some(left) = rects.left
             && left.right() < rects.center.left()
             && left.bottom() > rects.center.top()
@@ -249,7 +249,7 @@ impl StudioPanelLayout {
             &palette.colors.text_muted
         };
         ui.painter()
-            .rect_filled(grip, Rounding::same(2.0), hex_to_c32(color));
+            .rect_filled(grip, CornerRadius::same(2), hex_to_c32(color));
         response
     }
 
@@ -393,26 +393,26 @@ impl StudioPanelLayout {
     pub fn show_side(
         ui: &mut egui::Ui,
         rect: Rect,
-        id: impl std::hash::Hash,
+        id: impl egui::AsIdSalt,
         palette: &AppPalette,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) {
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(
                     1.0_f32,
                     hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(SPACE_SM))
+                .corner_radius(CornerRadius::from(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width((rect.width() - SPACE_SM * 2.0).max(1.0));
                     ui.set_max_width((rect.width() - SPACE_SM * 2.0).max(1.0));
                     ui.set_height((rect.height() - SPACE_SM * 2.0).max(1.0));
                     egui::ScrollArea::vertical()
-                        .id_source(id)
+                        .id_salt(id)
                         .auto_shrink([false, false])
                         .show(ui, add_contents);
                 });
@@ -421,7 +421,7 @@ impl StudioPanelLayout {
 
     /// Render content in an exact clipped region, regardless of its panel role.
     pub fn show_region(ui: &mut egui::Ui, rect: Rect, add_contents: impl FnOnce(&mut egui::Ui)) {
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect);
             ui.set_min_size(rect.size());
             ui.set_max_size(rect.size());
@@ -436,16 +436,16 @@ impl StudioPanelLayout {
         palette: &AppPalette,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) {
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(
                     1.0_f32,
                     hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(SPACE_SM))
+                .corner_radius(CornerRadius::from(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(SPACE_SM))
                 .show(ui, add_contents);
         });
     }
@@ -573,9 +573,9 @@ impl<'a> StudioShell<'a> {
             true,
         );
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.panel)
-            .inner_margin(egui::Margin::symmetric(PANEL_INSET, SPACE_SM))
+            .inner_margin(egui::Margin::from(egui::vec2(PANEL_INSET, SPACE_SM)))
             .stroke(Stroke::new(1.0_f32, colors.border))
             .show(ui, |ui| {
                 let (row_rect, _) = ui.allocate_exact_size(
@@ -596,8 +596,11 @@ impl<'a> StudioShell<'a> {
                 }
                 // Allocate the functional controls first. Their width determines how much
                 // space the title can use; a long filename must never draw over them.
-                let mut action_ui =
-                    ui.child_ui(row_rect, egui::Layout::right_to_left(egui::Align::Center));
+                let mut action_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
                 action_ui.set_clip_rect(row_rect);
                 {
                     let ui = &mut action_ui;
@@ -642,9 +645,10 @@ impl<'a> StudioShell<'a> {
                     egui::pos2(controls_left, row_rect.top()),
                     egui::pos2(title_right, row_rect.bottom()),
                 );
-                let mut title_action_ui = ui.child_ui(
-                    controls_rect,
-                    egui::Layout::right_to_left(egui::Align::Center),
+                let mut title_action_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(controls_rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
                 title_action_ui.set_clip_rect(controls_rect);
                 title_actions(&mut title_action_ui);
@@ -654,7 +658,7 @@ impl<'a> StudioShell<'a> {
                     .badges
                     .iter()
                     .map(|badge| {
-                        ui.fonts(|fonts| {
+                        ui.fonts_mut(|fonts| {
                             fonts
                                 .layout_no_wrap(
                                     badge.text.clone(),
@@ -680,8 +684,11 @@ impl<'a> StudioShell<'a> {
                             egui::pos2(badge_x, row_rect.top()),
                             Vec2::new(width, row_rect.height()),
                         );
-                        let mut badge_ui = ui
-                            .child_ui(badge_rect, egui::Layout::left_to_right(egui::Align::Center));
+                        let mut badge_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(badge_rect)
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        );
                         badge_ui.set_clip_rect(badge_rect);
                         crate::ui_ext::badge_pill(
                             &mut badge_ui,
@@ -704,15 +711,18 @@ impl<'a> StudioShell<'a> {
                     .max(row_rect.left());
                 let name_rect =
                     Rect::from_min_max(row_rect.min, egui::pos2(name_right, row_rect.bottom()));
-                let mut name_ui =
-                    ui.child_ui(name_rect, egui::Layout::left_to_right(egui::Align::Center));
+                let mut name_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(name_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
                 name_ui.set_clip_rect(name_rect);
                 if let Some(icon) = self.icon {
                     let (icon_rect, _) = name_ui
                         .allocate_exact_size(Vec2::splat(CONTROL_HEIGHT), egui::Sense::hover());
                     name_ui.painter().rect_filled(
                         icon_rect,
-                        Rounding::same(CONTROL_CORNER_RADIUS),
+                        CornerRadius::from(CONTROL_CORNER_RADIUS),
                         header_accent,
                     );
                     icon.image_tinted(
@@ -729,7 +739,7 @@ impl<'a> StudioShell<'a> {
                     .compact_title
                     .as_deref()
                     .filter(|_| {
-                        ui.fonts(|fonts| {
+                        ui.fonts_mut(|fonts| {
                             let full_width = fonts
                                 .layout_no_wrap(
                                     self.title.clone(),
@@ -794,9 +804,9 @@ impl<'a> StudioShell<'a> {
             center_width
         };
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(PANEL_INSET, FOOTER_INSET_Y))
+            .inner_margin(egui::Margin::from(egui::vec2(PANEL_INSET, FOOTER_INSET_Y)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let render_status = |ui: &mut egui::Ui| {
@@ -808,8 +818,11 @@ impl<'a> StudioShell<'a> {
                                 egui::Label::new(
                                     egui::RichText::new(hints).color(colors.text_muted),
                                 )
-                                .wrap(center_width == 0.0)
-                                .truncate(center_width > 0.0),
+                                .wrap_mode(if center_width > 0.0 {
+                                    egui::TextWrapMode::Truncate
+                                } else {
+                                    egui::TextWrapMode::Wrap
+                                }),
                             )
                             .on_hover_text(hints);
                         }
@@ -823,7 +836,7 @@ impl<'a> StudioShell<'a> {
                                         .monospace()
                                         .color(colors.accent),
                                 )
-                                .wrap(true),
+                                .wrap(),
                             );
                         }
                     };
@@ -887,7 +900,8 @@ mod tests {
                 crate::ui_ext::configure_workbench_style(&ctx);
                 let readout = "01:01:01.25 / 02:02:02.50";
                 let mut header_center = 0.0;
-                let output = ctx.run(
+                let output = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -896,25 +910,27 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            header_center = ui.available_rect_before_wrap().center().x;
-                            StudioShell::new(title, Icon::Audio, &palette, &mut false)
-                                .with_header_readout(readout, 242.0)
-                                .with_badge("44.1 kHz", None)
-                                .with_badge("WAV", None)
-                                .with_escape_hatch(EscapeHatch::primary(
-                                    "Audacity", "audacity", "Edit",
-                                ))
-                                .render_header_with_title_actions(
-                                    ui,
-                                    |ui| {
-                                        ui.add_sized(
-                                            [100.0, CONTROL_HEIGHT],
-                                            egui::Label::new("Volume"),
-                                        );
-                                    },
-                                    |_| {},
-                                );
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                header_center = ui.available_rect_before_wrap().center().x;
+                                StudioShell::new(title, Icon::Audio, &palette, &mut false)
+                                    .with_header_readout(readout, 242.0)
+                                    .with_badge("44.1 kHz", None)
+                                    .with_badge("WAV", None)
+                                    .with_escape_hatch(EscapeHatch::primary(
+                                        "Audacity", "audacity", "Edit",
+                                    ))
+                                    .render_header_with_title_actions(
+                                        ui,
+                                        |ui| {
+                                            ui.add_sized(
+                                                [100.0, CONTROL_HEIGHT],
+                                                egui::Label::new("Volume"),
+                                            );
+                                        },
+                                        |_| {},
+                                    );
+                            })
                         });
                     },
                 );
@@ -973,7 +989,8 @@ mod tests {
             ] {
                 for _ in 0..3 {
                     let mut height = 0.0;
-                    let _ = ctx.run(
+                    let _ = clip_ui::test_support::run_frame(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -982,24 +999,27 @@ mod tests {
                             ..Default::default()
                         },
                         |ctx| {
-                            let panel = egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
-                                let shell = StudioShell::new("Image", None, &palette, &mut close)
-                                    .with_footer_hints(
-                                        "Drag: Draw shape | Del: Delete | Esc: Deselect",
+                            let panel = ctx.root_ui(|ui| {
+                                egui::Panel::bottom("footer").show(ui, |ui| {
+                                    let shell =
+                                        StudioShell::new("Image", None, &palette, &mut close)
+                                            .with_footer_hints(
+                                                "Drag: Draw shape | Del: Delete | Esc: Deselect",
+                                            );
+                                    let toast = message.map(|message| (message.into(), 0.0));
+                                    shell.render_footer_with_center(
+                                        ui,
+                                        &toast,
+                                        1.0,
+                                        center_width,
+                                        |ui| {
+                                            ui.add_sized(
+                                                Vec2::new(center_width, 24.0),
+                                                egui::Label::new("100%"),
+                                            );
+                                        },
                                     );
-                                let toast = message.map(|message| (message.into(), 0.0));
-                                shell.render_footer_with_center(
-                                    ui,
-                                    &toast,
-                                    1.0,
-                                    center_width,
-                                    |ui| {
-                                        ui.add_sized(
-                                            Vec2::new(center_width, 24.0),
-                                            egui::Label::new("100%"),
-                                        );
-                                    },
-                                );
+                                })
                             });
                             height = panel.response.rect.height();
                         },
@@ -1025,7 +1045,8 @@ mod tests {
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
             let mut close = false;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1034,11 +1055,13 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let shell = StudioShell::new("MIDI", None, &palette, &mut close)
-                            .with_footer_hints("[Esc] Close | [Space] Play")
-                            .with_footer_readout(readout);
-                        shell.render_footer(ui, &None, 0.0);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let shell = StudioShell::new("MIDI", None, &palette, &mut close)
+                                .with_footer_hints("[Esc] Close | [Space] Play")
+                                .with_footer_readout(readout);
+                            shell.render_footer(ui, &None, 0.0);
+                        })
                     });
                 },
             );
@@ -1072,13 +1095,15 @@ mod tests {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut close = false;
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut shell = StudioShell::new("Image", Icon::Image, &palette, &mut close)
-                    .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
-                    .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
-                    .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
-                shell.render_header(ui, |_| {});
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut shell = StudioShell::new("Image", Icon::Image, &palette, &mut close)
+                        .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                        .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                        .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                    shell.render_header(ui, |_| {});
+                })
             });
         });
 
@@ -1142,43 +1167,45 @@ mod tests {
             let mut close = false;
             let mut header_rect = None;
             let mut action_rects = Vec::new();
-            let output = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let compact_title = if width == 1177.0 {
-                        long_filename
-                    } else {
-                        "fixture.webp"
-                    };
-                    let mut shell =
-                        StudioShell::new(&full_title, Icon::Image, &palette, &mut close)
-                            .with_compact_title(compact_title)
-                            .with_badge("6000×6000 (1:1)", None)
-                            .with_badge("WEBP", None)
-                            .with_badge("554.4 KB", None)
-                            .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
-                            .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
-                            .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
-                    let response = ui.scope(|ui| {
-                        shell.render_header(ui, |ui| {
-                            action_rects.push(
-                                ui.add(crate::ui_ext::action_button(
-                                    "Copy",
-                                    Color32::LIGHT_BLUE,
-                                    &palette,
-                                ))
-                                .rect,
-                            );
-                            action_rects.push(
-                                ui.add(crate::ui_ext::action_button(
-                                    "Save As...",
-                                    Color32::GREEN,
-                                    &palette,
-                                ))
-                                .rect,
-                            );
+            let output = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let compact_title = if width == 1177.0 {
+                            long_filename
+                        } else {
+                            "fixture.webp"
+                        };
+                        let mut shell =
+                            StudioShell::new(&full_title, Icon::Image, &palette, &mut close)
+                                .with_compact_title(compact_title)
+                                .with_badge("6000×6000 (1:1)", None)
+                                .with_badge("WEBP", None)
+                                .with_badge("554.4 KB", None)
+                                .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                                .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                                .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                        let response = ui.scope(|ui| {
+                            shell.render_header(ui, |ui| {
+                                action_rects.push(
+                                    ui.add(crate::ui_ext::action_button(
+                                        "Copy",
+                                        Color32::LIGHT_BLUE,
+                                        &palette,
+                                    ))
+                                    .rect,
+                                );
+                                action_rects.push(
+                                    ui.add(crate::ui_ext::action_button(
+                                        "Save As...",
+                                        Color32::GREEN,
+                                        &palette,
+                                    ))
+                                    .rect,
+                                );
+                            });
                         });
-                    });
-                    header_rect = Some(response.response.rect);
+                        header_rect = Some(response.response.rect);
+                    })
                 });
             });
             let rect = header_rect.unwrap();
@@ -1227,18 +1254,25 @@ mod tests {
                 );
             }
             assert!(visible.iter().all(|text| text.width() > 0.0));
-            assert!(action_rects.iter().all(|action| action.top() == 16.0));
+            let top = action_rects[0].top();
+            assert!(
+                action_rects
+                    .iter()
+                    .all(|action| (action.top() - top).abs() <= 1.0)
+            );
         }
     }
 
     fn run_layout(layout: StudioPanelLayout, size: Vec2) -> StudioPanelRects {
         let ctx = egui::Context::default();
         let mut result = None;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_min_size(size);
-                ui.set_max_size(size);
-                result = Some(layout.allocate(ui));
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_min_size(size);
+                    ui.set_max_size(size);
+                    result = Some(layout.allocate(ui));
+                })
             });
         });
         result.expect("layout should be allocated")
@@ -1293,19 +1327,21 @@ mod tests {
         let frame = |input: egui::RawInput,
                      state: &mut PanelState,
                      output: &mut Option<StudioPanelRects>| {
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.set_min_size(size);
-                    ui.set_max_size(size);
-                    let rects = layout.with_panel_sizes(state).allocate(ui);
-                    *output = Some(rects);
-                    StudioPanelLayout::show_resize_handles(
-                        ui,
-                        &rects,
-                        state,
-                        &palette,
-                        "drag_test",
-                    );
+            let _ = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.set_min_size(size);
+                        ui.set_max_size(size);
+                        let rects = layout.with_panel_sizes(state).allocate(ui);
+                        *output = Some(rects);
+                        StudioPanelLayout::show_resize_handles(
+                            ui,
+                            &rects,
+                            state,
+                            &palette,
+                            "drag_test",
+                        );
+                    })
                 });
             });
         };

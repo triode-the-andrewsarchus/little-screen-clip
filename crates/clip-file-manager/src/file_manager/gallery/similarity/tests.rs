@@ -606,13 +606,13 @@ fn test_vertical_packing_and_order_retention() {
 fn test_similarity_canvas_hud_does_not_block_popup_or_hover() {
     let ctx = egui::Context::default();
     let raw = egui::RawInput::default();
-    let _ = ctx.run(raw, |ctx| {
-        egui::Area::new(egui::Id::new("similarity_canvas_search"))
+    let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+        egui::Area::new(egui::Id::unique("similarity_canvas_search"))
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 ui.label("Search");
             });
-        egui::Area::new(egui::Id::new("similarity_canvas_hud"))
+        egui::Area::new(egui::Id::unique("similarity_canvas_hud"))
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 ui.label("HUD");
@@ -767,10 +767,12 @@ fn test_similarity_canvas_keyboard_shortcuts() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp = ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::hover());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp = ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::hover());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -799,11 +801,13 @@ fn test_similarity_canvas_middle_click_pans_canvas() {
         pressed: true,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw1, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp =
-                ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw1, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp =
+                    ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -811,11 +815,13 @@ fn test_similarity_canvas_middle_click_pans_canvas() {
     let mut raw2 = egui::RawInput::default();
     raw2.events
         .push(egui::Event::PointerMoved(egui::pos2(140.0, 120.0)));
-    let _ = ctx.run(raw2, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp =
-                ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw2, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp =
+                    ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -1101,10 +1107,12 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw_plus, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw_plus, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -1126,10 +1134,12 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw_minus, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw_minus, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -1152,10 +1162,12 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw_zoom, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw_zoom, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 
@@ -1189,12 +1201,14 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
-    let _ = ctx.run(raw_focus_plus, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let id = ui.make_persistent_id("fake_text_box");
-            ui.memory_mut(|m| m.request_focus(id));
-            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
-            canvas.handle_input(ui, canvas_rect, &resp);
+    let _ = clip_ui::test_support::run_frame(&ctx, raw_focus_plus, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let id = ui.make_persistent_id("fake_text_box");
+                ui.memory_mut(|m| m.request_focus(id));
+                let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+                canvas.handle_input(ui, canvas_rect, &resp);
+            })
         });
     });
 

@@ -664,7 +664,7 @@ impl ImagePreviewState {
             .inner
             .clicked()
         {
-            ctx.output_mut(|output| output.copied_text = self.ocr_state.extracted_text.clone());
+            ctx.copy_text(self.ocr_state.extracted_text.clone());
             self.show_toast("Extracted text copied to clipboard");
         }
 
@@ -737,7 +737,7 @@ impl ImagePreviewState {
                 &mut stale_output
             };
             egui::ScrollArea::vertical()
-                .id_source("ocr_output_text_scroll")
+                .id_salt("ocr_output_text_scroll")
                 .max_height(editor_height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -1044,14 +1044,17 @@ mod input_stamp_tests {
         let palette = AppPalette::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
 
-        let initial = ctx.run(
+        let initial = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ocr_results(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ocr_results(ui, ctx, &palette);
+                    })
                 });
             },
         );
@@ -1066,15 +1069,18 @@ mod input_stamp_tests {
             })
             .expect("rendered OCR Copy all text button label");
         let mut render = |events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ocr_results(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ocr_results(ui, ctx, &palette);
+                        })
                     });
                 },
             )
@@ -1099,7 +1105,10 @@ mod input_stamp_tests {
             },
         ]);
 
-        assert_eq!(copied.platform_output.copied_text, expected);
+        assert_eq!(
+            clip_ui::test_support::copied_text(&copied.platform_output),
+            expected
+        );
         assert!(!state.ocr_state.in_progress);
         assert!(state.ocr_rx.is_none());
     }

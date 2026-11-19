@@ -15,14 +15,17 @@ fn image_texture_sampling_changes_when_edits_cross_the_pixel_art_threshold() {
     ] {
         state.current_rgba = Arc::new(RgbaImage::new(size.0, size.1));
         state.dirty_texture = true;
-        let output = ctx.run(
+        let (_, uploads) = clip_ui::test_support::run_frame_with_uploads(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    })
                 });
             },
         );
@@ -31,10 +34,9 @@ fn image_texture_sampling_changes_when_edits_cross_the_pixel_art_threshold() {
             .as_ref()
             .expect("canvas texture uploaded")
             .id();
-        let (_, uploaded) = output
-            .textures_delta
-            .set
+        let (_, uploaded) = uploads
             .iter()
+            .rev()
             .find(|(texture_id, _)| *texture_id == id)
             .expect("updated canvas texture sent to renderer");
         assert_eq!(uploaded.options, expected, "sampling for {size:?}");
@@ -83,15 +85,18 @@ fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales(
         let mut root_rect = None;
         let mut close_requested = false;
 
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    root_rect = Some(ui.max_rect());
-                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        root_rect = Some(ui.max_rect());
+                        state.render_ui(ui, ctx, &palette, &mut close_requested);
+                    })
                 });
             },
         );
@@ -114,7 +119,8 @@ fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales(
             .find_map(|clipped| match &clipped.shape {
                 egui::epaint::Shape::Rect(rect)
                     if rect.fill == crate::hex_to_c32(&palette.colors.canvas)
-                        && rect.rounding == Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS) =>
+                        && rect.corner_radius
+                            == CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS) =>
                 {
                     Some(rect.rect)
                 }
@@ -136,7 +142,23 @@ fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales(
         };
         let reset = control_bounds("Reset");
         let pixel = control_bounds("1:1");
-        let percentage = control_bounds("100%");
+        let percentage = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.pos.y >= viewport.bottom()
+                        && text
+                            .galley
+                            .text()
+                            .strip_suffix('%')
+                            .is_some_and(|value| value.parse::<u32>().is_ok()) =>
+                {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                _ => None,
+            })
+            .expect("footer zoom percentage");
         for bounds in [reset, pixel, percentage] {
             assert!(root.contains(bounds.min) && root.contains(bounds.max));
             assert!(
@@ -202,7 +224,8 @@ fn save_dialog_owns_image_shortcuts_until_dismissed() {
         modifiers: egui::Modifiers,
     ) -> bool {
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
                 events: vec![egui::Event::Key {
@@ -215,8 +238,10 @@ fn save_dialog_owns_image_shortcuts_until_dismissed() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, palette, &mut close);
+                    })
                 });
             },
         );
@@ -232,7 +257,7 @@ fn save_dialog_owns_image_shortcuts_until_dismissed() {
         egui::Key::F12,
         egui::Modifiers::NONE
     ));
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     assert!(!key_frame(
         &mut state,
         &ctx,
@@ -284,7 +309,8 @@ fn unmodified_v_shortcut_selects_view_tool() {
     let ctx = egui::Context::default();
     let mut close = false;
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
             events: vec![egui::Event::Key {
@@ -297,8 +323,10 @@ fn unmodified_v_shortcut_selects_view_tool() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -315,7 +343,8 @@ fn crop_enter_applies_selected_region_through_rendered_shortcut() {
     let palette = AppPalette::default();
     let mut close = false;
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
             events: vec![egui::Event::Key {
@@ -328,8 +357,10 @@ fn crop_enter_applies_selected_region_through_rendered_shortcut() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -357,7 +388,8 @@ fn redact_escape_deselects_region_without_burning_or_closing() {
     let palette = AppPalette::default();
     let mut close = false;
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
             events: vec![egui::Event::Key {
@@ -370,8 +402,10 @@ fn redact_escape_deselects_region_without_burning_or_closing() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );

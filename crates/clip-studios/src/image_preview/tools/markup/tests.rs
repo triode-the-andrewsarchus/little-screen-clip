@@ -283,12 +283,14 @@ fn rectangle_preview_scales_image_space_rounding_with_zoom() {
     });
     let ctx = egui::Context::default();
     for (viewport_size, expected_radius) in [(20.0, 4.0), (80.0, 16.0)] {
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_markup_passive(
-                    ui.painter(),
-                    Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(viewport_size)),
-                );
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_markup_passive(
+                        ui.painter(),
+                        Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(viewport_size)),
+                    );
+                })
             });
         });
         let rect = output
@@ -299,6 +301,6 @@ fn rectangle_preview_scales_image_space_rounding_with_zoom() {
                 _ => None,
             })
             .expect("markup rectangle painted");
-        assert_eq!(rect.rounding, Rounding::same(expected_radius));
+        assert_eq!(rect.corner_radius, CornerRadius::from(expected_radius));
     }
 }

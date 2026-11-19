@@ -137,7 +137,8 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
     let mut time = 0.0;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.1;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 620.0))),
                 time: Some(time),
@@ -145,8 +146,10 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    canvas.render_save_window_in_dir(ui, &palette, recipes_dir.path());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        canvas.render_save_window_in_dir(ui, &palette, recipes_dir.path());
+                    })
                 });
             },
         )
@@ -257,8 +260,11 @@ fn node_machine_history_and_delete_shortcuts_yield_to_focused_text_input() {
             .unwrap_or_default();
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 760.0))),
-            events,
-            modifiers,
+            events: [egui::Event::ModifiersChanged(modifiers)]
+                .into_iter()
+                .chain(events)
+                .collect(),
+
             ..Default::default()
         }
     }
@@ -289,21 +295,26 @@ fn node_machine_history_and_delete_shortcuts_yield_to_focused_text_input() {
         let ctx = egui::Context::default();
         let mut focused_canvas = test_canvas();
         focused_canvas.catalog_open = true;
-        let _ = ctx.run(input(Vec::new()), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                focused_canvas.ui(ui, &palette);
+        let _ = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    focused_canvas.ui(ui, &palette);
+                })
             });
         });
         let node_id = focused_canvas.selected_node.unwrap();
-        let _ = ctx.run(input(vec![key(shortcut, command)]), |ctx| {
-            assert!(
-                ctx.wants_keyboard_input(),
-                "catalog search owns keyboard focus"
-            );
-            egui::CentralPanel::default().show(ctx, |ui| {
-                focused_canvas.ui(ui, &palette);
+        let _ =
+            clip_ui::test_support::run_frame(&ctx, input(vec![key(shortcut, command)]), |ctx| {
+                assert!(
+                    ctx.egui_wants_keyboard_input(),
+                    "catalog search owns keyboard focus"
+                );
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        focused_canvas.ui(ui, &palette);
+                    })
+                });
             });
-        });
         assert!(
             focused_canvas
                 .graph
@@ -320,17 +331,22 @@ fn node_machine_history_and_delete_shortcuts_yield_to_focused_text_input() {
 
         let ctx = egui::Context::default();
         let mut unfocused_canvas = test_canvas();
-        let _ = ctx.run(input(Vec::new()), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                unfocused_canvas.ui(ui, &palette);
+        let _ = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    unfocused_canvas.ui(ui, &palette);
+                })
             });
         });
-        let _ = ctx.run(input(vec![key(shortcut, command)]), |ctx| {
-            assert!(!ctx.wants_keyboard_input());
-            egui::CentralPanel::default().show(ctx, |ui| {
-                unfocused_canvas.ui(ui, &palette);
+        let _ =
+            clip_ui::test_support::run_frame(&ctx, input(vec![key(shortcut, command)]), |ctx| {
+                assert!(!ctx.egui_wants_keyboard_input());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        unfocused_canvas.ui(ui, &palette);
+                    })
+                });
             });
-        });
         if shortcut == egui::Key::Delete {
             assert!(unfocused_canvas.graph.nodes.is_empty());
         } else {
@@ -349,16 +365,19 @@ fn node_machine_toolbar_wraps_controls_and_status_at_compact_widths() {
         let mut canvas = NodeCanvasState::new();
         canvas.status_message = Some(("Pipeline complete".to_string(), false));
         let mut action = None;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 120.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let host = ui.available_rect_before_wrap();
-                    canvas.render_toolbar(ui, &mut action, &palette);
-                    assert!(ui.min_rect().left() >= host.left() - 0.5);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let host = ui.available_rect_before_wrap();
+                        canvas.render_toolbar(ui, &mut action, &palette);
+                        assert!(ui.min_rect().left() >= host.left() - 0.5);
+                    })
                 });
             },
         );
@@ -447,18 +466,21 @@ fn compact_canvas_keeps_complete_python_script_controls_inside_its_viewport() {
     canvas.selected_node = Some(script_id);
     canvas.status_message = Some(("Saved recipe 'Pad and Caption'".to_owned(), false));
     let mut canvas_bounds = None;
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1177.0, 662.0))),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                // Exercise a constrained internal canvas without resizing the host window.
-                let allocated = ui.allocate_ui(Vec2::new(ui.available_width(), 270.0), |ui| {
-                    canvas.ui(ui, &palette);
-                });
-                canvas_bounds = Some(allocated.response.rect);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    // Exercise a constrained internal canvas without resizing the host window.
+                    let allocated = ui.allocate_ui(Vec2::new(ui.available_width(), 270.0), |ui| {
+                        canvas.ui(ui, &palette);
+                    });
+                    canvas_bounds = Some(allocated.response.rect);
+                })
             });
         },
     );
@@ -660,15 +682,21 @@ fn node_card_frame(
         Pos2::new(20.0, 20.0),
         Vec2::new(250.0, estimate_node_height(node)) * zoom,
     );
-    let output = egui::Context::default().run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let painter = ui.painter_at(rect);
-            render_node_card(
-                zoom, previews, &mut None, &mut None, &mut None, ui, &painter, node, rect, false,
-                &mut None, palette,
-            );
-        });
-    });
+    let output = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
+        egui::RawInput::default(),
+        |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let painter = ui.painter_at(rect);
+                    render_node_card(
+                        zoom, previews, &mut None, &mut None, &mut None, ui, &painter, node, rect,
+                        false, &mut None, palette,
+                    );
+                })
+            });
+        },
+    );
     (output, rect)
 }
 
@@ -749,16 +777,22 @@ fn inline_property_typing_is_one_undoable_graph_edit() {
         ]
     };
     let frame = |canvas: &mut NodeCanvasState, events, modifiers| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 620.0))),
-                events,
-                modifiers,
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(events)
+                    .collect(),
+
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    canvas.ui(ui, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        canvas.ui(ui, &palette);
+                    })
                 });
             },
         )
@@ -775,7 +809,7 @@ fn inline_property_typing_is_one_undoable_graph_edit() {
         })
         .expect("rendered inline property");
     frame(&mut canvas, click(position), egui::Modifiers::NONE);
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     assert!(
         canvas.undo_stack.is_empty(),
         "focus alone must not consume an undo step"
@@ -802,7 +836,7 @@ fn inline_property_typing_is_one_undoable_graph_edit() {
         click(Pos2::new(850.0, 550.0)),
         egui::Modifiers::NONE,
     );
-    assert!(!ctx.wants_keyboard_input());
+    assert!(!ctx.egui_wants_keyboard_input());
     frame(&mut canvas, vec![key(egui::Key::Z)], command);
     assert_eq!(canvas.graph.nodes[0].props["text"], "before");
     let output = frame(&mut canvas, vec![key(egui::Key::Y)], command);

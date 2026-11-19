@@ -348,7 +348,7 @@ pub(super) fn show(
     if !super::ui::popup_open(ui.ctx()) {
         ui.interact(
             icon,
-            egui::Id::new(("system-inspection-icon", &entry.path)),
+            egui::Id::unique(("system-inspection-icon", &entry.path)),
             egui::Sense::hover(),
         )
         .on_hover_text("Inspect system object");

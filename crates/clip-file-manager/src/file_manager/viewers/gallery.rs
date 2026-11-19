@@ -250,7 +250,7 @@ impl Collection {
         let mut visible = Vec::new();
         let mut keep = BTreeSet::new();
         egui::ScrollArea::horizontal()
-            .id_source("image_studio_photo_strip")
+            .id_salt("image_studio_photo_strip")
             .max_height(112.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -366,6 +366,7 @@ fn paint_photo(
             rect,
             5.0,
             egui::Stroke::new(2.0_f32, ui.visuals().selection.bg_fill),
+            egui::StrokeKind::Middle,
         );
     }
     let image_rect =

@@ -163,13 +163,15 @@ pub(super) fn show(
     let strip = Rect::from_min_max(pos2(thumbnail.right() + 12.0, body.top()), body.max);
     if let Some(document) = ready.and_then(|r| r.data.font.as_ref()) {
         if super::ui::preview_hovered(ui, body) {
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("font-info", &entry.path)),
-                |ui| {
-                    ui.label(&document.description);
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("font-info", &entry.path)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(&document.description);
+            });
         }
     } else {
         ui.painter().text(

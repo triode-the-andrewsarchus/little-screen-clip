@@ -64,7 +64,8 @@ fn stem_space_dispatches_one_start_for_idle_empty_state() {
     crate::ui_ext::configure_workbench_style(&ctx);
     let mut start_requests = 0;
     let mut close_requested = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
             events: vec![egui::Event::Key {
@@ -77,12 +78,14 @@ fn stem_space_dispatches_one_start_for_idle_empty_state() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |_ui| {
-                let closed =
-                    state.handle_studio_shortcuts_with_start(ctx, &mut close_requested, |_| {
-                        start_requests += 1
-                    });
-                assert!(!closed);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |_ui| {
+                    let closed =
+                        state.handle_studio_shortcuts_with_start(ctx, &mut close_requested, |_| {
+                            start_requests += 1
+                        });
+                    assert!(!closed);
+                })
             });
         },
     );
@@ -156,17 +159,20 @@ fn audio_studio_space_yields_to_focused_text_editor() {
     );
     state.active_mode = AudioToolMode::StemSeparation;
     let mut text = String::new();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut text))
-                .request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text))
+                    .request_focus();
+            })
         });
     });
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
 
     let mut close_requested = false;
     let mut start_requests = 0;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Space,
@@ -211,15 +217,18 @@ fn escape_cancels_nested_save_dialogs_before_closing_audio_studio() {
         ..Default::default()
     };
     let mut close_requested = false;
-    let _ = ctx.run(escape(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_ui(ui, ctx, &palette, &mut close_requested);
+    let _ = clip_ui::test_support::run_frame(&ctx, escape(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            })
         });
     });
     assert!(!close_requested);
     assert!(!state.save_dialog_open);
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::H,
@@ -231,8 +240,10 @@ fn escape_cancels_nested_save_dialogs_before_closing_audio_studio() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -241,17 +252,21 @@ fn escape_cancels_nested_save_dialogs_before_closing_audio_studio() {
 
     state.active_mode = AudioToolMode::StemSeparation;
     state.stem_separation.save_dialog_open = true;
-    let _ = ctx.run(escape(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_ui(ui, ctx, &palette, &mut close_requested);
+    let _ = clip_ui::test_support::run_frame(&ctx, escape(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            })
         });
     });
     assert!(!close_requested);
     assert!(!state.stem_separation.save_dialog_open);
 
-    let _ = ctx.run(escape(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_ui(ui, ctx, &palette, &mut close_requested);
+    let _ = clip_ui::test_support::run_frame(&ctx, escape(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            })
         });
     });
     assert!(close_requested);
@@ -290,16 +305,19 @@ fn audio_tool_shortcuts_switch_modes_and_ignore_modified_keys() {
         ),
         (egui::Key::I, egui::Modifiers::NONE, AudioToolMode::Inspect),
     ] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
-                modifiers,
-                events: vec![egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                }],
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| {
@@ -320,7 +338,8 @@ fn audio_tool_shortcuts_yield_to_focused_text_editor() {
     );
     state.save_dialog_open = true;
     let mut close_requested = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::H,
@@ -339,15 +358,18 @@ fn audio_tool_shortcuts_yield_to_focused_text_editor() {
 
     state.save_dialog_open = false;
     let mut edit_value = String::new();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut edit_value))
-                .request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut edit_value))
+                    .request_focus();
+            })
         });
     });
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::H,
@@ -380,14 +402,17 @@ fn pending_audio_folder_browse_requests_repaint_and_updates_destination() {
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let mut close_requested = false;
     let mut render = |state: &mut AudioPreviewState, ctx: &egui::Context| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                    })
                 });
             },
         )
@@ -414,11 +439,11 @@ fn pending_audio_folder_browse_requests_repaint_and_updates_destination() {
 fn enter_saves_edited_audio_fields_while_destination_or_filename_is_focused() {
     for (focused_id, filename) in [
         (
-            egui::Id::new("audio_save_destination"),
+            egui::Id::unique("audio_save_destination"),
             "edited_with_destination_focus.wav",
         ),
         (
-            egui::Id::new(("audio_save_filename", 0usize)),
+            egui::Id::unique(("audio_save_filename", 0usize)),
             "edited_with_filename_focus.wav",
         ),
     ] {
@@ -435,19 +460,20 @@ fn enter_saves_edited_audio_fields_while_destination_or_filename_is_focused() {
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             state.render_save_dialog(ctx, &palette, 1.0);
             ctx.memory_mut(|memory| memory.request_focus(focused_id));
         });
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             state.render_save_dialog(ctx, &palette, 1.0);
         });
         assert_eq!(ctx.memory(|memory| memory.focused()), Some(focused_id));
         assert!(
-            ctx.wants_keyboard_input(),
+            ctx.egui_wants_keyboard_input(),
             "the selected save field should own focus before Enter"
         );
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Enter,
@@ -501,28 +527,31 @@ fn inspect_footer_stays_after_canvas_in_full_and_embedded_views() {
         let mut close_requested = false;
         let mut scroll_viewport = None;
         let mut actual_host = host;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(host),
                 ..Default::default()
             },
             |ctx| {
-                actual_host = ctx.screen_rect();
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    if embedded {
-                        let output = egui::ScrollArea::vertical().show(ui, |ui| {
-                            state.render_standard_ui(
-                                ui,
-                                ctx,
-                                &palette,
-                                &mut close_requested,
-                                Some(350.0),
-                            );
-                        });
-                        scroll_viewport = Some((output.inner_rect, output.content_size.y));
-                    } else {
-                        state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
-                    }
+                actual_host = ctx.content_rect();
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        if embedded {
+                            let output = egui::ScrollArea::vertical().show(ui, |ui| {
+                                state.render_standard_ui(
+                                    ui,
+                                    ctx,
+                                    &palette,
+                                    &mut close_requested,
+                                    Some(350.0),
+                                );
+                            });
+                            scroll_viewport = Some((output.inner_rect, output.content_size.y));
+                        } else {
+                            state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                        }
+                    })
                 });
             },
         );
@@ -544,7 +573,7 @@ fn inspect_footer_stays_after_canvas_in_full_and_embedded_views() {
             .find_map(|clipped| match &clipped.shape {
                 Shape::Rect(rect)
                     if rect.fill == hex_to_c32(&palette.colors.surface_recessed)
-                        && rect.rounding == egui::Rounding::same(8.0)
+                        && rect.corner_radius == egui::CornerRadius::same(8)
                         && rect.rect.width() > 500.0
                         && rect.rect.height() > 100.0 =>
                 {
@@ -644,7 +673,8 @@ fn hf_space_yields_to_focused_text_editor_with_player_disabled() {
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let mut editor_text = String::new();
     let mut close_requested = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
             events: vec![egui::Event::Key {
@@ -657,11 +687,13 @@ fn hf_space_yields_to_focused_text_editor_with_player_disabled() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut editor_text))
-                    .request_focus();
-                assert!(ctx.wants_keyboard_input());
-                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut editor_text))
+                        .request_focus();
+                    assert!(ctx.egui_wants_keyboard_input());
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -784,9 +816,11 @@ fn inspect_canvas_drag_selects_region_and_ruler_click_only_scrubs() {
 fn inspect_canvas_effect_gestures_only_edit_the_hit_multi_region() {
     fn wheel_event(delta: f32, modifiers: egui::Modifiers) -> egui::Event {
         if modifiers.shift {
-            egui::Event::Scroll(Vec2::new(0.0, delta))
+            clip_ui::test_support::scroll(Vec2::new(0.0, delta))
         } else {
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: Vec2::new(0.0, delta),
                 modifiers,
@@ -1129,11 +1163,14 @@ fn embedded_audio_editor_preserves_text_focus_and_yields_editing_shortcuts() {
     state.selection = Some((0.1, 0.4));
     let mut text = String::new();
     let mut focused = None;
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let field = ui.add(egui::TextEdit::singleline(&mut text).id_source("stem-destination"));
-            focused = Some(field.id);
-            field.request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let field =
+                    ui.add(egui::TextEdit::singleline(&mut text).id_salt("stem-destination"));
+                focused = Some(field.id);
+                field.request_focus();
+            })
         });
     });
     for key in [
@@ -1143,7 +1180,8 @@ fn embedded_audio_editor_preserves_text_focus_and_yields_editing_shortcuts() {
         egui::Key::Minus,
         egui::Key::S,
     ] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
@@ -1155,9 +1193,11 @@ fn embedded_audio_editor_preserves_text_focus_and_yields_editing_shortcuts() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut text).id_source("stem-destination"));
-                    state.render_standard_ui(ui, ctx, &palette, &mut false, Some(100.0));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut text).id_salt("stem-destination"));
+                        state.render_standard_ui(ui, ctx, &palette, &mut false, Some(100.0));
+                    })
                 });
             },
         );

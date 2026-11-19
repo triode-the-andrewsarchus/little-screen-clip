@@ -154,7 +154,7 @@ fn cell(
     if !crate::file_manager::ui::popup_open(ui.ctx()) {
         ui.interact(
             rect,
-            ui.id()
+            ui.scope_id()
                 .with(("telemetry-series", index, &row.current.source)),
             Sense::hover(),
         )

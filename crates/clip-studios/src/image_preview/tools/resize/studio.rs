@@ -180,7 +180,7 @@ impl ImagePreviewState {
                         .strong()
                         .color(text),
                 );
-                egui::ComboBox::from_id_source("resize_filter_combo")
+                egui::ComboBox::from_id_salt("resize_filter_combo")
                     .selected_text(self.resize_state.filter.label())
                     .width(ui.available_width())
                     .show_ui(ui, |ui| {
@@ -276,7 +276,7 @@ impl ImagePreviewState {
                     ui.add(
                         egui::DragValue::new(&mut self.resize_state.target_size_val)
                             .speed(0.1)
-                            .clamp_range(0.01..=1000.0),
+                            .range(0.01..=1000.0),
                     );
                     let unit = if self.resize_state.target_size_unit_mb {
                         "MB"
@@ -304,7 +304,7 @@ impl ImagePreviewState {
                         .strong()
                         .color(text),
                 );
-                egui::ComboBox::from_id_source("opt_format_combo")
+                egui::ComboBox::from_id_salt("opt_format_combo")
                     .selected_text(self.resize_state.target_format.label())
                     .width(ui.available_width())
                     .show_ui(ui, |ui| {

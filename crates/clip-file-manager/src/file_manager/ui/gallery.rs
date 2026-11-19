@@ -152,7 +152,7 @@ impl FileManager {
                     self.sort = Sort { column, descending };
                     self.gallery_layout.invalidate_order();
                     self.rebuild_visible();
-                    ui.close_menu();
+                    ui.close();
                 }
             }
         });
@@ -185,24 +185,18 @@ impl FileManager {
 
         let pointer_inside = ui.rect_contains_pointer(ui.available_rect_before_wrap());
         if pointer_inside {
-            let ctrl_zoom = ui.input(|i| {
-                if (i.modifiers.ctrl || i.modifiers.command) && i.raw_scroll_delta.y.abs() > 0.01 {
-                    Some(i.raw_scroll_delta.y)
-                } else {
-                    None
-                }
-            });
-            if let Some(delta) = ctrl_zoom {
+            let zoom = ui.input(|input| input.zoom_delta()).ln();
+            if zoom.abs() > 0.000_05 {
+                let points = zoom
+                    / ui.ctx()
+                        .options(|options| options.input_options.scroll_zoom_speed);
                 let old_edge = self.thumbnail_edge;
-                let new_edge = (old_edge + delta * CTRL_ZOOM_SPEED)
+                let new_edge = (old_edge + points * CTRL_ZOOM_SPEED)
                     .clamp(MIN_THUMBNAIL_EDGE, MAX_THUMBNAIL_EDGE);
                 if (new_edge - old_edge).abs() > 0.1 {
                     self.thumbnail_edge = new_edge;
+                    ui.ctx().request_repaint();
                 }
-                ui.input_mut(|i| {
-                    i.raw_scroll_delta = egui::Vec2::ZERO;
-                });
-                ui.ctx().request_repaint();
             }
         }
 
@@ -337,7 +331,7 @@ impl FileManager {
                 );
                 let response = ui.interact(
                     rect,
-                    Id::new(("gallery_tile", &entry.path)),
+                    Id::unique(("gallery_tile", &entry.path)),
                     Sense::click_and_drag(),
                 );
                 let marked = selected.is_some_and(|s| s.contains(&entry.path));
@@ -384,12 +378,12 @@ impl FileManager {
         if ui.is_enabled() {
             self.drop_targets.extend(targets);
         }
-        self.finish_listing(ui, actions, output.state.offset.y, &background);
+        self.finish_listing(ui, actions, output.state.clamped_offset().y, &background);
     }
 
     fn gallery_scroll(&mut self, _ui: &Ui, unit: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
-            .id_source("files_photo_grid")
+            .id_salt("files_photo_grid")
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .auto_shrink([false, false]);
         if self.restore_scroll {
@@ -487,7 +481,7 @@ impl FileManager {
 
             let tile_response = ui.interact(
                 tile_rect,
-                Id::new(("sim_tile", &entry.path, placement.col, placement.row)),
+                Id::unique(("sim_tile", &entry.path, placement.col, placement.row)),
                 Sense::click_and_drag(),
             );
 
@@ -650,6 +644,7 @@ fn paint_gallery_tile(
             rect.shrink(1.0),
             0.0,
             egui::Stroke::new(2.0_f32, colors.focus),
+            egui::StrokeKind::Middle,
         );
     }
 
@@ -669,7 +664,7 @@ fn paint_gallery_tile(
             })
             .or_else(|| texture_info.map(|(_, size)| (size.x, size.y)));
 
-        let screen = ui.ctx().screen_rect().shrink(16.0);
+        let screen = ui.ctx().content_rect().shrink(16.0);
         let max_image_w = (screen.width() - 32.0).max(100.0);
         let max_image_h = (screen.height() - 120.0).max(100.0);
 

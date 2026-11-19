@@ -357,10 +357,10 @@ impl Viewers {
         self.poll_file_source(ui.ctx());
         let mut close = std::mem::take(&mut self.close_requested);
         // A popup owns Escape before either the studio or the host can close.
-        if ui.memory(|memory| memory.any_popup_open())
+        if egui::Popup::is_any_open(ui.ctx())
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
-            ui.memory_mut(|memory| memory.close_popup());
+            egui::Popup::close_all(ui.ctx());
         }
         self.gallery_controls(ui, palette);
         let blocked = self.collection_pending()
@@ -1143,15 +1143,17 @@ mod tests {
             let ctx = Context::default();
             viewers.open_document_at(path, position);
             finish_loading(&mut viewers, &ctx);
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    viewers.render_session(
-                        ui,
-                        &crate::ui_appearance::palette(
-                            little_clip_core::config::WorkbenchAppearance::Dark,
-                        ),
-                        &mut false,
-                    )
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        viewers.render_session(
+                            ui,
+                            &crate::ui_appearance::palette(
+                                little_clip_core::config::WorkbenchAppearance::Dark,
+                            ),
+                            &mut false,
+                        )
+                    })
                 });
             });
             assert!(

@@ -147,7 +147,7 @@ impl Hover {
         if super::ui::popup_open(ui.ctx()) {
             return;
         }
-        let screen = ui.ctx().screen_rect().shrink(8.0);
+        let screen = ui.ctx().content_rect().shrink(8.0);
         let space_below = (screen.bottom() - body.bottom() - 8.0).max(0.0);
         let space_above = (body.top() - 8.0 - screen.top()).max(0.0);
         let place_below = space_below >= 240.0 || space_below >= space_above;
@@ -194,7 +194,7 @@ impl Hover {
             (body.top() - 6.0 - shown_size.y).max(screen.top())
         };
 
-        egui::Area::new(egui::Id::new(("vcv_strip_hover", identity)))
+        egui::Area::new(egui::Id::unique(("vcv_strip_hover", identity)))
             .order(egui::Order::Tooltip)
             .fixed_pos(pos2(left, top))
             .interactable(false)
@@ -229,8 +229,12 @@ impl Hover {
                         Color32::from_rgb(180, 186, 198),
                     );
                 }
-                ui.painter()
-                    .rect_stroke(rect.expand(2.0), 6.0, egui::Stroke::new(1.0_f32, border));
+                ui.painter().rect_stroke(
+                    rect.expand(2.0),
+                    6.0,
+                    egui::Stroke::new(1.0_f32, border),
+                    egui::StrokeKind::Middle,
+                );
             });
     }
 }
@@ -627,7 +631,7 @@ impl Viewer {
                 if button.clicked() {
                     self.start_panel_job(action);
                     ui.ctx().request_repaint();
-                    ui.close_menu();
+                    ui.close();
                 }
             }
         });
@@ -737,6 +741,7 @@ impl Viewer {
                 rect,
                 0.0,
                 egui::Stroke::new(1.0_f32, Color32::from_rgb(12, 13, 16)),
+                egui::StrokeKind::Middle,
             );
             if hover_pos.is_some_and(|position| rect.contains(position)) {
                 hovered = Some((module, rect));
@@ -748,24 +753,27 @@ impl Viewer {
                 rect,
                 1.0,
                 egui::Stroke::new(2.0_f32, Color32::from_rgb(255, 212, 82)),
+                egui::StrokeKind::Middle,
             );
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("vcv_viewer_module_tip", m.id)),
-                |ui| {
-                    ui.label(format!(
-                        "{} ({}/{}) · {} HP",
-                        m.title, m.plugin, m.model, m.hp
-                    ));
-                    ui.small(format!(
-                        "{} · {} · row {}, col {}",
-                        m.role.label(),
-                        m.function.label(),
-                        m.row,
-                        m.column_hp
-                    ));
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("vcv_viewer_module_tip", m.id)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(format!(
+                    "{} ({}/{}) · {} HP",
+                    m.title, m.plugin, m.model, m.hp
+                ));
+                ui.small(format!(
+                    "{} · {} · row {}, col {}",
+                    m.role.label(),
+                    m.function.label(),
+                    m.row,
+                    m.column_hp
+                ));
+            });
         }
     }
 }
@@ -915,9 +923,11 @@ mod tests {
         let body = Rect::from_min_size(pos2(10.0, 40.0), vec2(760.0, 66.0));
         wait_for(|| {
             hover.poll(&ctx);
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| hover.show(ui, body, row_id, doc, true));
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| hover.show(ui, body, row_id, doc, true))
+                });
             });
             output
                 .shapes
@@ -934,9 +944,11 @@ mod tests {
         let mut viewer = Viewer::load(&path, &token).expect("viewer load");
         assert_eq!(viewer.artwork.rack.modules.len(), 6);
         let mut close = false;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                viewer.ui(ui, &mut close, &AppPalette::default());
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    viewer.ui(ui, &mut close, &AppPalette::default());
+                })
             });
         });
         assert!(!close);
@@ -1015,17 +1027,23 @@ mod tests {
         std::fs::write(&path, br#"{"modules":[{"id":1,"plugin":"Test","model":"Panel","pos":[-16000,0]},{"id":2,"plugin":"Test","model":"Panel","pos":[16000,0]}]}"#).unwrap();
         let viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
         let clip = Rect::from_min_size(Pos2::ZERO, vec2(700.0, 400.0));
-        let output = egui::Context::default().run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                paint_visible_rails(
-                    &ui.painter().with_clip_rect(clip),
-                    &viewer.artwork.rack,
-                    pos2(-200_000.0, 0.0),
-                    1.0,
-                    clip,
-                );
-            });
-        });
+        let output = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
+            egui::RawInput::default(),
+            |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        paint_visible_rails(
+                            &ui.painter().with_clip_rect(clip),
+                            &viewer.artwork.rack,
+                            pos2(-200_000.0, 0.0),
+                            1.0,
+                            clip,
+                        );
+                    })
+                });
+            },
+        );
         let screws = output
             .shapes
             .iter()

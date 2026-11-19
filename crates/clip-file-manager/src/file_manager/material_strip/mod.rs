@@ -184,7 +184,7 @@ impl Previews {
             );
             name.wrap.max_rows = 2;
             name.wrap.break_anywhere = true;
-            let name = ui.fonts(|fonts| fonts.layout_job(name));
+            let name = ui.fonts_mut(|fonts| fonts.layout_job(name));
             ui.painter()
                 .with_clip_rect(label.intersect(ui.clip_rect()))
                 .galley(label.min + vec2(0.0, 6.0), name, colors.text_secondary);
@@ -217,11 +217,17 @@ impl Previews {
             .checked(&entry.path, &self.context),
         );
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("material-strip-hover"), |ui| {
-            ui.set_max_width((ui.ctx().screen_rect().width() - 40.0).clamp(32.0, 360.0));
-            let size = (ui.ctx().screen_rect().height() - 260.0)
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique("material-strip-hover"),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            ui.set_max_width((ui.ctx().content_rect().width() - 40.0).clamp(32.0, 360.0));
+            let size = (ui.ctx().content_rect().height() - 260.0)
                 .clamp(32.0, 320.0)
-                .min((ui.ctx().screen_rect().width() - 40.0).max(32.0));
+                .min((ui.ctx().content_rect().width() - 40.0).max(32.0));
             if let Some(texture) = texture {
                 ui.image((texture.id(), vec2(size, size)));
             }

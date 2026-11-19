@@ -124,8 +124,7 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                 let mut points = Vec::new();
                 egui::epaint::tessellator::path::rounded_rectangle(
                     &mut points,
-                    image_rect,
-                    Rounding::same(*rounding),
+                    egui::epaint::RoundedRect::new(image_rect, *rounding),
                 );
                 let Some((first, rest)) = points.split_first() else {
                     continue;

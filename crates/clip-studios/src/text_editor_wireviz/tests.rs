@@ -154,7 +154,8 @@ fn gesture_frame(
     events: Vec<egui::Event>,
     hover: Option<Endpoint>,
 ) {
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -164,10 +165,12 @@ fn gesture_frame(
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let (_, response) =
-                    ui.allocate_exact_size(egui::vec2(200.0, 150.0), Sense::click_and_drag());
-                editor.terminal_input(ui, &response, hover);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let (_, response) =
+                        ui.allocate_exact_size(egui::vec2(200.0, 150.0), Sense::click_and_drag());
+                    editor.terminal_input(ui, &response, hover);
+                })
             });
         },
     );

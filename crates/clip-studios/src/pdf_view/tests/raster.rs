@@ -15,10 +15,12 @@ fn inline_preview_defers_retry_until_deadline_and_does_not_admit_hidden_page() {
 
     let mut hidden = InlinePdfPagePreview::new(raster);
 
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.set_clip_rect(egui::Rect::NOTHING);
-            hidden.show(ui, ctx, Vec2::new(64.0, 64.0));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.set_clip_rect(egui::Rect::NOTHING);
+                hidden.show(ui, ctx, Vec2::new(64.0, 64.0));
+            })
         });
     });
     assert!(hidden.decode_slot.is_none());
@@ -130,7 +132,8 @@ fn saturated_preview_queue_reports_an_error_instead_of_loading_forever() {
     }
     state.start_preview_worker_on(&jobs, |_, _, _, _| panic!("full queue must not render"));
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             time: Some(1_000_000.0),
             ..Default::default()
@@ -341,7 +344,8 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
 
     for key in [egui::Key::Delete, egui::Key::Backspace] {
         let now = crate::ui_ext::feedback_time();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -357,8 +361,10 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -387,7 +393,8 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
     state.edit_rx = Some(receiver);
     state.edit_in_progress = true;
     let now = crate::ui_ext::feedback_time();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -403,8 +410,10 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );

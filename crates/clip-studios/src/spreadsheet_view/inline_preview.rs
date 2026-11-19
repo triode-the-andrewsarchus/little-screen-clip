@@ -13,7 +13,7 @@ impl InlineSpreadsheetPreview {
         Self {
             data,
             host_size,
-            id: egui::Id::new((
+            id: egui::Id::unique((
                 "inline-spreadsheet-preview",
                 NEXT_INLINE_SPREADSHEET_ID.fetch_add(1, Ordering::Relaxed),
             )),
@@ -46,15 +46,15 @@ impl InlineSpreadsheetPreview {
             .min(data.sheets.len().saturating_sub(1));
         let mut selected_cell = self.selected_cell;
         let scroll_offset = self.scroll_offset;
-        let output = ui.allocate_ui_at_rect(rect, |ui| {
-            egui::Frame::none()
+        let output = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::Frame::NONE
                 .fill(crate::hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(
                     1.0_f32,
                     crate::hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     if data.sheets.len() > 1 {
                         ui.push_id(id, |ui| {
@@ -84,7 +84,7 @@ impl InlineSpreadsheetPreview {
                                         data.sheets.len(),
                                         inline_sheet_label(&sheet.name)
                                     ))
-                                    .truncate(true),
+                                    .truncate(),
                                 );
                                 if ui
                                     .add_enabled(
@@ -119,7 +119,7 @@ impl InlineSpreadsheetPreview {
                     let total_height = (sheet.rows.len() as f32 * row_stride - 1.0).max(0.0);
                     let mut clicked_cell = None;
                     let output = egui::ScrollArea::both()
-                        .id_source(id)
+                        .id_salt(id)
                         .auto_shrink([false, false])
                         .min_scrolled_height(0.0)
                         .scroll_offset(scroll_offset)
@@ -175,14 +175,15 @@ impl InlineSpreadsheetPreview {
                                     };
                                     let cell_painter =
                                         ui.painter().with_clip_rect(visible_cell_rect);
-                                    cell_painter.rect_filled(cell_rect, Rounding::ZERO, fill);
+                                    cell_painter.rect_filled(cell_rect, CornerRadius::ZERO, fill);
                                     cell_painter.rect_stroke(
                                         cell_rect,
-                                        Rounding::ZERO,
+                                        CornerRadius::ZERO,
                                         Stroke::new(
                                             0.5_f32,
                                             crate::hex_to_c32(&palette.colors.surface_panel),
                                         ),
+                                        egui::StrokeKind::Middle,
                                     );
                                     let text_color = crate::contrast_text_c32(
                                         fill,
@@ -205,7 +206,11 @@ impl InlineSpreadsheetPreview {
                     if output.inner.is_some() {
                         selected_cell = output.inner;
                     }
-                    (output.state.offset, active_sheet_idx, selected_cell)
+                    (
+                        output.state.clamped_offset(),
+                        active_sheet_idx,
+                        selected_cell,
+                    )
                 })
                 .inner
         });

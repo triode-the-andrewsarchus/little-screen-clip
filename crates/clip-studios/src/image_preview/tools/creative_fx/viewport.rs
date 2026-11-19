@@ -64,11 +64,11 @@ impl ImagePreviewState {
 
         // ── 1. LEFT PANEL: Creative FX List with 42x28 mini preview photos ──
         crate::shell::StudioPanelLayout::show_region(ui, browser, |ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(browser_w - 16.0);
                     ui.set_height((browser_h - 16.0).max(1.0));
@@ -110,7 +110,7 @@ impl ImagePreviewState {
                     ui.add_space(crate::ui_ext::SPACE_XS);
 
                     egui::ScrollArea::vertical()
-                        .id_source("creative_fx_list_scroll")
+                        .id_salt("creative_fx_list_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.set_width(browser_w - 24.0);
@@ -126,10 +126,12 @@ impl ImagePreviewState {
                                     (b_low, f_high, f_med)
                                 };
 
-                                let row_frame = egui::Frame::none()
+                                let row_frame = egui::Frame::NONE
                                     .fill(row_bg)
-                                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                                    .inner_margin(egui::Margin::symmetric(6.0, 5.0));
+                                    .corner_radius(CornerRadius::from(
+                                        crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                    ))
+                                    .inner_margin(egui::Margin::symmetric(6, 5));
 
                                 let resp = row_frame
                                     .show(ui, |ui| {
@@ -147,7 +149,7 @@ impl ImagePreviewState {
                                                 );
                                                 ui.painter().rect_filled(
                                                     rect,
-                                                    Rounding::same(2.0),
+                                                    CornerRadius::same(2),
                                                     b_med,
                                                 );
                                             }
@@ -187,9 +189,9 @@ impl ImagePreviewState {
 
         // ── 2. CENTER PANEL: Split-view Comparison Canvas ──
         crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(hex_to_c32(&palette.colors.canvas))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.set_width(center_w);
                     ui.set_height(main_h);
@@ -225,7 +227,7 @@ impl ImagePreviewState {
 
                     painter.rect_filled(
                         canvas_rect,
-                        Rounding::same(4.0),
+                        CornerRadius::same(4),
                         hex_to_c32(&palette.colors.canvas),
                     );
 
@@ -260,7 +262,7 @@ impl ImagePreviewState {
                         self.pan += response.drag_delta();
                     }
                     if response.hovered() {
-                        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                        let scroll_delta = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
                         if scroll_delta.abs() > 0.0 {
                             let zoom_factor = (scroll_delta * 0.002).exp();
                             let old_zoom = self.zoom;
@@ -300,11 +302,12 @@ impl ImagePreviewState {
 
                         painter.rect_stroke(
                             img_rect,
-                            Rounding::ZERO,
+                            CornerRadius::ZERO,
                             Stroke::new(
                                 1.0_f32,
                                 hex_to_c32_alpha(&palette.colors.text_secondary, 40),
                             ),
+                            egui::StrokeKind::Middle,
                         );
                     }
 
@@ -313,11 +316,12 @@ impl ImagePreviewState {
                         let spinner_pos = canvas_rect.center();
                         let spin_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
                         let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
-                        painter.rect_filled(spin_rect, Rounding::same(8.0), spin_bg);
+                        painter.rect_filled(spin_rect, CornerRadius::same(8), spin_bg);
                         painter.rect_stroke(
                             spin_rect,
-                            Rounding::same(8.0),
+                            CornerRadius::same(8),
                             Stroke::new(1.0_f32, b_med),
+                            egui::StrokeKind::Middle,
                         );
                         crate::icons::Icon::Hourglass.paint_text(
                             &painter,
@@ -346,17 +350,17 @@ impl ImagePreviewState {
 
         // ── 3. RIGHT PANEL: Controls for Selected Effect ──
         crate::shell::StudioPanelLayout::show_region(ui, controls, |ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(controls_w - 16.0);
                     ui.set_height((controls_h - 16.0).max(1.0));
 
                     egui::ScrollArea::vertical()
-                        .id_source("creative_fx_controls_scroll")
+                        .id_salt("creative_fx_controls_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let full_w = (controls_w - 32.0).max(120.0);
@@ -622,8 +626,13 @@ impl ImagePreviewState {
             Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
             Vec2::new(100.0, 22.0),
         );
-        painter.rect_filled(orig_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0_f32, b_med));
+        painter.rect_filled(orig_rect, CornerRadius::same(4), badge_bg);
+        painter.rect_stroke(
+            orig_rect,
+            CornerRadius::same(4),
+            Stroke::new(1.0_f32, b_med),
+            egui::StrokeKind::Middle,
+        );
         painter.text(
             orig_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -647,8 +656,13 @@ impl ImagePreviewState {
             Pos2::new(img_rect.max.x - fx_badge_w - 10.0, img_rect.min.y + 10.0),
             Vec2::new(fx_badge_w, 22.0),
         );
-        painter.rect_filled(fx_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(fx_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
+        painter.rect_filled(fx_rect, CornerRadius::same(4), badge_bg);
+        painter.rect_stroke(
+            fx_rect,
+            CornerRadius::same(4),
+            Stroke::new(1.0_f32, base_c),
+            egui::StrokeKind::Middle,
+        );
         let badge_icon = if self.creative_fx_state.is_rendering {
             crate::icons::Icon::Hourglass
         } else {

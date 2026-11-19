@@ -310,7 +310,7 @@ fn render_result_list(
         && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))
     .then_some(results[*cursor].0);
     egui::ScrollArea::vertical()
-        .id_source("pdf-result-list")
+        .id_salt("pdf-result-list")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, (page, label)) in results.iter().enumerate() {
@@ -365,7 +365,7 @@ impl PdfEditorState {
             self.navigation.right = Some(RightTab::Find);
             self.navigation.focus_find = true;
         }
-        if !ctx.wants_keyboard_input()
+        if !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::T))
         {
             self.navigation.left = LeftTab::Contents;

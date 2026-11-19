@@ -575,7 +575,8 @@ mod tests {
         for (request, pending, expected) in [(7, true, true), (8, true, false), (7, false, false)] {
             manager.search.request_id = request;
             manager.search.pending = pending;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -584,8 +585,10 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                        })
                     });
                 },
             );
@@ -722,6 +725,48 @@ mod tests {
     }
 
     #[test]
+    fn named_search_controls_submit_and_clear_a_filename_filter() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let folder = tempfile::tempdir().unwrap();
+        for name in ["Alpha.txt", "Beta.txt"] {
+            std::fs::write(folder.path().join(name), "Owned fixture.").unwrap();
+        }
+        let mut manager = FileManager::new(folder.path().into());
+        manager.pending = None;
+        manager.commit(
+            read_directory(folder.path(), &AtomicBool::new(false)).unwrap(),
+            Navigation::New,
+        );
+        manager.search.open = true;
+
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut harness = Harness::builder()
+            .with_size([900.0, 480.0])
+            .with_context_setup(clip_ui::ui_ext::configure_workbench_style)
+            .build_ui_state(|ui, manager| manager.search_ui(ui, &palette), manager);
+
+        harness
+            .get_by_role_and_label(egui::Role::TextInput, "Find")
+            .click();
+        harness.event(egui::Event::Paste("Alpha".into()));
+        harness.run();
+        harness.get_by_label("Search").click();
+        harness.run();
+        assert_eq!(harness.state().visible.len(), 1);
+        assert_eq!(
+            harness.state().search.applied.as_ref().unwrap().name,
+            "Alpha"
+        );
+        assert!(harness.state().search.service.is_none());
+
+        harness.get_by_label("Close").click();
+        harness.run();
+        assert!(!harness.state().search.open);
+        assert_eq!(harness.state().visible.len(), 2);
+    }
+
+    #[test]
     fn find_paste_and_enter_in_one_frame_submit_new_and_replacement_queries() {
         let folder = tempfile::tempdir().unwrap();
         for name in ["Alpha.txt", "Beta.txt"] {
@@ -746,7 +791,8 @@ mod tests {
         };
         for name in ["Alpha", "Beta"] {
             let command = format!(":*.txt {name}");
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     events: vec![
                         key(egui::Key::F, egui::Modifiers::CTRL),
@@ -761,8 +807,10 @@ mod tests {
                         memory.request_focus(crate::file_manager::ui::list_id())
                     });
                     assert!(manager.search_navigation_keys(ctx));
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                        })
                     });
                 },
             );
@@ -783,22 +831,25 @@ mod tests {
         let ctx = egui::Context::default();
         for (focus, allowed) in [
             (ui::input_id(), true),
-            (egui::Id::new("other-editor"), false),
+            (egui::Id::unique("other-editor"), false),
         ] {
             manager.search.open = true;
             manager.search.automatic = true;
             manager.search.focus = false;
             manager.search.draft = "ordinary literal".into();
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
-                    modifiers: egui::Modifiers::CTRL,
-                    events: vec![egui::Event::Key {
-                        key: egui::Key::F,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::CTRL,
-                    }],
+                    events: [egui::Event::ModifiersChanged(egui::Modifiers::CTRL)]
+                        .into_iter()
+                        .chain(vec![egui::Event::Key {
+                            key: egui::Key::F,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::CTRL,
+                        }])
+                        .collect(),
                     ..Default::default()
                 },
                 |ctx| {
@@ -892,7 +943,8 @@ mod tests {
         search.edited(10.1);
         let ctx = egui::Context::default();
         for (time, expected) in [(10.3, false), (10.36, true), (10.4, false)] {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     time: Some(time),
                     ..Default::default()

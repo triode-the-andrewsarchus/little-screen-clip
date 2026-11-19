@@ -11,7 +11,7 @@ use crate::icons::Icon;
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use drawing::*;
-use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Id, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{

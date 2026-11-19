@@ -822,7 +822,8 @@ mod tests {
             egui_extras::install_image_loaders(&ctx);
             let render = |manager: &mut FileManager, events| {
                 manager.mounts.last_scan = Some(Instant::now());
-                ctx.run(
+                clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -832,8 +833,11 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            manager.ui(ui, &little_clip_core::palette::AppPalette::default())
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                manager.tick(little_clip_core::BackgroundJobs::global());
+                                manager.ui(ui, &little_clip_core::palette::AppPalette::default())
+                            })
                         });
                     },
                 )

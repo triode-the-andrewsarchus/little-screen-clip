@@ -152,7 +152,7 @@ impl SignalPainter {
         });
         let mut changed = None;
         egui::ScrollArea::both()
-            .id_source("wave_signal_cells")
+            .id_salt("wave_signal_cells")
             .max_height(330.0)
             .show(ui, |ui| {
                 for (index, lane) in document.lanes.iter().enumerate() {
@@ -208,7 +208,7 @@ impl SignalPainter {
         ui.horizontal(|ui| {
             let label = ui.add_sized(
                 [120.0, 42.0],
-                egui::SelectableLabel::new(self.selected == index, &lane.name),
+                egui::Button::selectable(self.selected == index, &lane.name),
             );
             if label.clicked() {
                 self.selected = index;
@@ -402,7 +402,8 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, Option<String>) {
         let mut edit = None;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 600.0))),
                 time: Some(time),
@@ -410,8 +411,10 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    edit = editor.show(ui, source, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        edit = editor.show(ui, source, &AppPalette::default());
+                    })
                 });
             },
         );

@@ -16,7 +16,8 @@ fn idle_pdf_escape_returns_to_source_route_and_preserves_slots() {
     assert_eq!(state.path, path, "active PDF path belongs to this session");
 
     let ctx = egui::Context::default();
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -31,7 +32,7 @@ fn idle_pdf_escape_returns_to_source_route_and_preserves_slots() {
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(
@@ -78,7 +79,8 @@ fn palette_text_diff_opens_and_escape_returns_to_palette() {
     assert_eq!(app.view, WorkbenchView::Palette);
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -93,7 +95,7 @@ fn palette_text_diff_opens_and_escape_returns_to_palette() {
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());
@@ -152,7 +154,8 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
     assert_eq!(app.view, WorkbenchView::Palette);
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -167,7 +170,7 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());
@@ -199,13 +202,14 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
     assert_eq!(app.view, WorkbenchView::Palette);
 
     let ctx = egui::Context::default();
-    let search_id = egui::Id::new("binary_diff_search_field");
+    let search_id = egui::Id::unique("binary_diff_search_field");
     if let Some(ViewerSession::BinaryDiff(state)) = &mut app.viewer {
         state.search_query = "fixture".to_owned();
         state.update_search();
     }
     ctx.memory_mut(|memory| memory.request_focus(search_id));
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -213,7 +217,7 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
             )),
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
     let Some(ViewerSession::BinaryDiff(state)) = app.viewer.as_ref() else {
@@ -221,7 +225,8 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
     };
     assert_eq!(state.search_query, "fixture");
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -236,7 +241,7 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     let Some(ViewerSession::BinaryDiff(state)) = app.viewer.as_ref() else {
@@ -245,7 +250,8 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
     assert!(state.search_query.is_empty());
     assert_eq!(app.view, WorkbenchView::Palette);
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -254,7 +260,7 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
             events: vec![key_press_event(egui::Key::Escape)],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());
@@ -309,7 +315,7 @@ fn quick_palette_operation_success_closes_popup_once() {
         .expect("uppercase operation is available for text");
 
     let ctx = egui::Context::default();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         app.execute_current_action_with(ctx, |_| {
             Ok(IpcResponse::OpResult {
                 item: ClipItem::from_text("FIXTURE TEXT"),
@@ -335,7 +341,7 @@ fn quick_palette_operation_error_keeps_popup_open_with_feedback() {
         .expect("uppercase operation is available for text");
 
     let ctx = egui::Context::default();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         app.execute_current_action_with(ctx, |_| {
             Ok(IpcResponse::Error {
                 error: "fixture operation failure".to_owned(),
@@ -372,7 +378,7 @@ fn quick_palette_recipe_success_closes_popup_once() {
 
     let sent = std::cell::RefCell::new(None);
     let ctx = egui::Context::default();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         app.execute_current_action_with(ctx, |request| {
             *sent.borrow_mut() = Some(request.clone());
             Ok(IpcResponse::Success {
@@ -396,22 +402,26 @@ fn auto_action_success_sends_once_and_keeps_enabled_config() {
     let ctx = egui::Context::default();
     let mut checkbox_rect = egui::Rect::NOTHING;
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                checkbox_rect = render_auto_actions(ui, &mut app.config, &app.ui_palette)
-                    .1
-                    .checkbox;
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    checkbox_rect = render_auto_actions(ui, &mut app.config, &app.ui_palette)
+                        .1
+                        .checkbox;
+                })
             });
         },
     );
     assert!(checkbox_rect.is_positive());
     let click_pos = checkbox_rect.center();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             events: vec![egui::Event::PointerButton {
@@ -423,13 +433,16 @@ fn auto_action_success_sends_once_and_keeps_enabled_config() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_auto_actions(ui, &mut app.config, &app.ui_palette);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_auto_actions(ui, &mut app.config, &app.ui_palette);
+                })
             });
         },
     );
     let mut changed = None;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             events: vec![egui::Event::PointerButton {
@@ -441,8 +454,10 @@ fn auto_action_success_sends_once_and_keeps_enabled_config() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                changed = render_auto_actions(ui, &mut app.config, &app.ui_palette).0;
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    changed = render_auto_actions(ui, &mut app.config, &app.ui_palette).0;
+                })
             });
         },
     );
@@ -521,7 +536,7 @@ fn delayed_daemon_swap_retains_completion_without_speculative_state_or_duplicate
         &jobs,
         |_| panic!("must not submit a second mutation"),
     );
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         app.poll_daemon_mutation(ctx)
     });
     assert!(
@@ -566,7 +581,7 @@ fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) -> usize 
     let mut closes = 0;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while app.daemon_mutation.is_some() {
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             app.poll_daemon_mutation(ctx)
         });
         closes += viewport_close_command_count(&output);
@@ -640,7 +655,7 @@ fn retained_actions_close_only_on_success_and_settings_publish_only_on_confirmat
                 }
             },
         );
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             app.poll_daemon_mutation(ctx)
         });
         assert_eq!(viewport_close_command_count(&output), 0);
@@ -707,7 +722,7 @@ fn standalone_prompt_keeps_input_on_failure_and_closes_after_confirmed_retry() {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut closes = 0;
         while prompt.pending.is_some() {
-            let frame = ctx.run(egui::RawInput::default(), |ctx| {
+            let frame = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
                 prompt.poll_pending(ctx);
             });
             closes += viewport_close_command_count(&frame);
@@ -748,7 +763,8 @@ fn palette_mouse_click_dispatches_the_rendered_operation_or_recipe() {
         let ctx = egui::Context::default();
         let frame = |events| {
             let mut clicked = None;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -758,8 +774,10 @@ fn palette_mouse_click_dispatches_the_rendered_operation_or_recipe() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        clicked = app.render_palette_action_list(ui);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            clicked = app.render_palette_action_list(ui);
+                        })
                     });
                 },
             );

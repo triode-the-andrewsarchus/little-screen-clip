@@ -402,8 +402,13 @@ impl Capture {
             }
             egui::ScrollArea::both().max_height(280.0).show(ui, |ui| {
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&snapshot.text).monospace())
-                        .wrap(snapshot.dimensions.is_none()),
+                    egui::Label::new(egui::RichText::new(&snapshot.text).monospace()).wrap_mode(
+                        if snapshot.dimensions.is_none() {
+                            egui::TextWrapMode::Wrap
+                        } else {
+                            egui::TextWrapMode::Extend
+                        },
+                    ),
                 );
             });
         }
@@ -551,17 +556,19 @@ mod render_tests {
             ..Default::default()
         };
         let context = egui::Context::default();
-        let output = context.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                capture.show(
-                    ui,
-                    &document,
-                    &little_clip_core::palette::AppPalette::default(),
-                )
+        let output = clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    capture.show(
+                        ui,
+                        &document,
+                        &little_clip_core::palette::AppPalette::default(),
+                    )
+                })
             });
         });
         assert!(capture.pending.is_none());
-        assert!(output.platform_output.copied_text.is_empty());
+        assert!(clip_ui::test_support::copied_text(&output.platform_output).is_empty());
         assert!(!output.shapes.is_empty());
         assert_eq!(capture.snapshot.as_ref().unwrap().text, "abc");
     }

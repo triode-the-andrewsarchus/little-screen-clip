@@ -61,7 +61,7 @@ impl ConstellationState {
         ui.horizontal_wrapped(|ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .id_source("constellation-search")
+                    .id_salt("constellation-search")
                     .hint_text("Filter samples · Ctrl+F")
                     .desired_width(170.0),
             );
@@ -448,6 +448,7 @@ impl ConstellationState {
             hud_rect,
             6.0,
             Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            egui::StrokeKind::Middle,
         );
 
         // 1. Top Row: Filename (left) + Category Pill (right)
@@ -480,7 +481,12 @@ impl ConstellationState {
                 200,
             ),
         );
-        painter.rect_stroke(pill_rect, 4.0, Stroke::new(1.0_f32, cat_color));
+        painter.rect_stroke(
+            pill_rect,
+            4.0,
+            Stroke::new(1.0_f32, cat_color),
+            egui::StrokeKind::Middle,
+        );
         painter.text(
             pill_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -541,6 +547,7 @@ impl ConstellationState {
             wave_rect,
             3.0,
             Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            egui::StrokeKind::Middle,
         );
 
         painter.line_segment(
@@ -553,7 +560,7 @@ impl ConstellationState {
 
         if let Some(ref prev) = cached_preview {
             if ui.ctx().data(|data| {
-                data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+                data.get_temp::<bool>(egui::Id::unique("audio_dadaspec"))
                     .unwrap_or(false)
             }) && let Some(spec) = &prev.dadaspec
             {

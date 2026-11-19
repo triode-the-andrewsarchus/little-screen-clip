@@ -40,7 +40,7 @@ fn inspect_footer_galley(
         },
     );
     job.wrap.max_width = width.max(1.0);
-    ui.fonts(|fonts| fonts.layout_job(job))
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
 #[cfg(test)]
@@ -54,6 +54,7 @@ fn control_wheel_delta(events: &[egui::Event], page_size: f32) -> f32 {
                 unit,
                 delta,
                 modifiers,
+                ..
             } if modifiers.ctrl => {
                 let points_per_unit = match unit {
                     egui::MouseWheelUnit::Point => 1.0,

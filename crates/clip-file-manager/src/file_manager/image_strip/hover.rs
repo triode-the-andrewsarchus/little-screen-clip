@@ -63,7 +63,7 @@ impl Hover {
     ) {
         self.seen = true;
         self.segment_hovered = segment.is_some();
-        let screen = ui.ctx().screen_rect().shrink(8.0);
+        let screen = ui.ctx().content_rect().shrink(8.0);
         let top = thumbnail.bottom() + 6.0;
         let bounds = vec2(screen.width(), screen.bottom() - top);
         if bounds.y < 16.0 {
@@ -167,7 +167,7 @@ impl Hover {
 
         super::super::ui::preview_popup_with_overlay(
             ui,
-            egui::Id::new(("image_strip_hover", identity)),
+            egui::Id::unique(("image_strip_hover", identity)),
             thumbnail,
             size,
             texture,

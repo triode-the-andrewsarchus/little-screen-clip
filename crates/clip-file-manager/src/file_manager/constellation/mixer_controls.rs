@@ -57,7 +57,11 @@ pub(super) fn layer_strip(
             cursor.x = bounds.right() - width;
         }
         let rect = Rect::from_min_size(cursor, Vec2::new(width, row_height));
-        let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
         // Native button outlines extend half a point beyond their layout bounds.
         child.set_clip_rect(ui.clip_rect().intersect(rect.expand(1.0)));
         child.spacing_mut().interact_size.y = row_height;
@@ -152,7 +156,7 @@ fn bipolar_slider(
                 egui::Slider::new(value, -limit..=limit)
                     .step_by(step)
                     .show_value(false)
-                    .clamp_to_range(false),
+                    .clamping(egui::SliderClamping::Never),
             );
             let double_clicked =
                 crate::shell::studio_controls::slider_double_clicked(ui, &response);
@@ -346,37 +350,45 @@ mod tests {
             let ctx = egui::Context::default();
             let mut value = 137.0;
             let mut rect = Rect::NOTHING;
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
-                    modifiers,
+                    events: vec![egui::Event::ModifiersChanged(modifiers)],
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        rect =
-                            bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0).rect;
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            rect = bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0)
+                                .rect;
+                        })
                     });
                 },
             );
             assert_eq!(value, 137.0, "Idle rendering must preserve typed cents");
             let point = egui::pos2(rect.left() + rect.width() * 0.573, rect.center().y);
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
-                    modifiers,
-                    events: vec![
-                        egui::Event::PointerMoved(point),
-                        egui::Event::PointerButton {
-                            pos: point,
-                            button: egui::PointerButton::Primary,
-                            pressed: true,
-                            modifiers,
-                        },
-                    ],
+                    events: [egui::Event::ModifiersChanged(modifiers)]
+                        .into_iter()
+                        .chain(vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers,
+                            },
+                        ])
+                        .collect(),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0);
+                        })
                     });
                 },
             );
@@ -396,7 +408,8 @@ mod tests {
             let mut value = initial;
             let mut slider = Rect::NOTHING;
             let mut render = |time, events| {
-                let _ = ctx.run(
+                let _ = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(420.0, 240.0))),
                         time: Some(time),
@@ -404,15 +417,17 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            slider = if label == "Gain" {
-                                gain_fader(ui, &mut value).rect
-                            } else if label == "Pan" {
-                                bipolar_slider(ui, label, &mut value, limit, step, reset, 360.0)
-                                    .rect
-                            } else {
-                                fader(ui, label, &mut value, limit, step, reset, 360.0).rect
-                            };
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                slider = if label == "Gain" {
+                                    gain_fader(ui, &mut value).rect
+                                } else if label == "Pan" {
+                                    bipolar_slider(ui, label, &mut value, limit, step, reset, 360.0)
+                                        .rect
+                                } else {
+                                    fader(ui, label, &mut value, limit, step, reset, 360.0).rect
+                                };
+                            })
                         });
                     },
                 );
@@ -455,19 +470,22 @@ mod tests {
             sample.playback_speed = speed;
             sample.pitch_semitones = cents / 100.0;
             let mut retrigger = true;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 80.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        layer_strip(
-                            ui,
-                            &mut sample,
-                            &mut retrigger,
-                            &little_clip_core::palette::AppPalette::default(),
-                        );
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            layer_strip(
+                                ui,
+                                &mut sample,
+                                &mut retrigger,
+                                &little_clip_core::palette::AppPalette::default(),
+                            );
+                        })
                     });
                 },
             );

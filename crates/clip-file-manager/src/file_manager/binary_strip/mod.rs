@@ -154,7 +154,7 @@ pub(super) fn show(
         colors,
     );
     let label_font = egui::FontId::monospace(9.0);
-    let label_height = ui.fonts(|fonts| fonts.row_height(&label_font));
+    let label_height = ui.fonts_mut(|fonts| fonts.row_height(&label_font));
     // Leave room for the section bar, its gaps, and a full line of text.
     let strip = Rect::from_min_max(
         pos2(thumbnail.right() + 8.0, body.top()),
@@ -198,38 +198,42 @@ pub(super) fn show(
             let offset = (((point.x - strip.left()) / strip.width()).clamp(0.0, 1.0) as f64
                 * document.size as f64) as u64;
             let (name, _) = document.region(offset.min(document.size.saturating_sub(1)));
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("binary-offset", &entry.path)),
-                |ui| {
-                    ui.label(format!("{name} · offset 0x{offset:x}"));
-                    ui.label(
-                        "Brightness represents byte value; dense regions use average byte values.",
-                    );
-                    for section in document.sections.iter().take(24) {
-                        ui.label(format!(
-                            "{} · {} bytes",
-                            section.name,
-                            section.end - section.start
-                        ));
-                    }
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("binary-offset", &entry.path)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(format!("{name} · offset 0x{offset:x}"));
+                ui.label(
+                    "Brightness represents byte value; dense regions use average byte values.",
+                );
+                for section in document.sections.iter().take(24) {
+                    ui.label(format!(
+                        "{} · {} bytes",
+                        section.name,
+                        section.end - section.start
+                    ));
+                }
+            });
         }
         if super::ui::preview_hovered(ui, thumbnail) {
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("binary-hash", &entry.path)),
-                |ui| {
-                    ui.label(if document.icon.is_some() {
-                        "Embedded executable icon"
-                    } else {
-                        "SHA-256 fingerprint"
-                    });
-                    ui.monospace(&document.hash);
-                    ui.label("Matching SHA-256 hashes identify identical file bytes.");
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("binary-hash", &entry.path)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(if document.icon.is_some() {
+                    "Embedded executable icon"
+                } else {
+                    "SHA-256 fingerprint"
+                });
+                ui.monospace(&document.hash);
+                ui.label("Matching SHA-256 hashes identify identical file bytes.");
+            });
         }
     }
     strip

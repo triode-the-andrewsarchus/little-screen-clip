@@ -54,23 +54,24 @@ pub fn palette(appearance: WorkbenchAppearance) -> AppPalette {
 /// Apply desktop widget states from semantic workbench roles.
 pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
     let colors = WorkbenchColors::from_palette(palette);
-    let mut visuals = if palette.is_dark {
-        egui::Visuals::dark()
+    let theme = if palette.is_dark {
+        egui::Theme::Dark
     } else {
-        egui::Visuals::light()
+        egui::Theme::Light
     };
+    let mut visuals = theme.default_visuals();
 
     visuals.panel_fill = colors.canvas;
     visuals.window_fill = colors.panel;
     visuals.extreme_bg_color = colors.recessed;
     visuals.faint_bg_color = colors.panel;
     visuals.window_stroke = egui::Stroke::new(1.0_f32, colors.border);
-    visuals.window_rounding = egui::Rounding::same(crate::ui_ext::CARD_CORNER_RADIUS);
+    visuals.window_corner_radius = egui::CornerRadius::from(crate::ui_ext::CARD_CORNER_RADIUS);
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 4.0),
-        blur: 12.0,
-        spread: 0.0,
+        offset: [0, 4],
+        blur: 12,
+        spread: 0,
         color: Color32::from_black_alpha(32),
     };
     visuals.slider_trailing_fill = true;
@@ -114,7 +115,7 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
     visuals.hyperlink_color = colors.link;
     visuals.warn_fg_color = colors.warning;
     visuals.error_fg_color = colors.danger;
-    visuals.text_cursor.color = colors.focus;
+    visuals.text_cursor.stroke.color = colors.focus;
 
     for widget in [
         &mut visuals.widgets.noninteractive,
@@ -123,11 +124,12 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widget.rounding = egui::Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS);
+        widget.corner_radius = egui::CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS);
         widget.bg_stroke.width = 1.0;
         widget.expansion = 0.0;
     }
-    ctx.set_visuals(visuals);
+    ctx.set_visuals_of(theme, visuals);
+    ctx.set_theme(theme);
 }
 
 #[cfg(test)]
@@ -195,7 +197,7 @@ mod tests {
             let colors = WorkbenchColors::from_palette(&palette);
             let ctx = egui::Context::default();
             apply_visuals(&ctx, &palette);
-            let visuals = ctx.style().visuals.clone();
+            let visuals = ctx.global_style().visuals.clone();
             assert!(ratio(colors.canvas, colors.text_primary) >= 4.5);
             assert!(ratio(colors.panel, colors.text_secondary) >= 4.5);
             assert!(ratio(colors.recessed, colors.text_muted) >= 4.5);
@@ -217,7 +219,7 @@ mod tests {
             }
             assert_eq!(visuals.warn_fg_color, colors.warning);
             assert_eq!(visuals.error_fg_color, colors.danger);
-            assert_eq!(visuals.text_cursor.color, colors.focus);
+            assert_eq!(visuals.text_cursor.stroke.color, colors.focus);
             assert_eq!(
                 visuals.widgets.noninteractive.weak_bg_fill, colors.canvas,
                 "{appearance:?} disabled content should fade toward the workbench canvas"

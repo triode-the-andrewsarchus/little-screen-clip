@@ -12,7 +12,7 @@ pub(in crate::file_manager) struct MusicRange {
     pub snapped: bool,
 }
 pub(in crate::file_manager) fn waveform_id() -> Id {
-    Id::new("files_music_waveform_focus")
+    Id::unique("files_music_waveform_focus")
 }
 
 impl FileManager {
@@ -91,7 +91,7 @@ fn interact_waveform(
     }
     let interaction = ui.interact(
         rect,
-        Id::new(("music_wave", &entry.path)),
+        Id::unique(("music_wave", &entry.path)),
         Sense::click_and_drag(),
     );
     paint_range(
@@ -218,7 +218,7 @@ fn music_card<'a>(
             pos2(rect.right() - 6.0, art.bottom()),
         );
         let dadaspec = ui.ctx().data(|data| {
-            data.get_temp::<bool>(Id::new("audio_dadaspec"))
+            data.get_temp::<bool>(Id::unique("audio_dadaspec"))
                 .unwrap_or(false)
         });
         if !dadaspec {
@@ -449,32 +449,35 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 400.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(400.0, 80.0));
-                        ui.interact(rect, waveform_id(), Sense::focusable_noninteractive());
-                        let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
-                        let (engaged, _) = interact_waveform(
-                            ui,
-                            &entry,
-                            (rect, 4.0, &source),
-                            &mut response,
-                            &mut selection,
-                            &music,
-                            WorkbenchColors::from_palette(&AppPalette::default()),
-                        );
-                        if index > 0 {
-                            assert!(
-                                engaged,
-                                "Gesture frame {index} fell through to file-row actions"
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(400.0, 80.0));
+                            ui.interact(rect, waveform_id(), Sense::focusable_noninteractive());
+                            let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
+                            let (engaged, _) = interact_waveform(
+                                ui,
+                                &entry,
+                                (rect, 4.0, &source),
+                                &mut response,
+                                &mut selection,
+                                &music,
+                                WorkbenchColors::from_palette(&AppPalette::default()),
                             );
-                        }
+                            if index > 0 {
+                                assert!(
+                                    engaged,
+                                    "Gesture frame {index} fell through to file-row actions"
+                                );
+                            }
+                        })
                     });
                 },
             );

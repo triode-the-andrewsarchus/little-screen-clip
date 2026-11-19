@@ -62,32 +62,38 @@ mod tests {
         let ctx = egui::Context::default();
         configure_workbench_style(&ctx);
         for _ in 0..2 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        let native = ui.add(egui::Button::new("Action")).rect.size();
-                        let shared = ui
-                            .add(ButtonRole::Secondary.button("Action", &palette))
-                            .rect
-                            .size();
-                        assert!(
-                            (native - shared).length() < 0.001,
-                            "standard padding changed: {native:?} / {shared:?}"
-                        );
-                        let native_small = ui.add(egui::Button::new("Action").small()).rect.size();
-                        let shared_small = ui
-                            .add(ButtonRole::Secondary.button("Action", &palette).small())
-                            .rect
-                            .size();
-                        assert!(
-                            (native_small - shared_small).length() < 0.001,
-                            "compact padding changed: {native_small:?} / {shared_small:?}"
-                        );
-                        assert!(shared_small.y < CONTROL_HEIGHT);
-                        let compact =
-                            ui.add(ButtonRole::Secondary.button("Action", &palette).compact());
-                        assert_eq!(compact.rect.height(), crate::ui_ext::COMPACT_CONTROL_HEIGHT);
-                    });
+            let _ = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let native = ui.add(egui::Button::new("Action")).rect.size();
+                            let shared = ui
+                                .add(ButtonRole::Secondary.button("Action", &palette))
+                                .rect
+                                .size();
+                            assert!(
+                                (native - shared).length() < 0.001,
+                                "standard padding changed: {native:?} / {shared:?}"
+                            );
+                            let native_small =
+                                ui.add(egui::Button::new("Action").small()).rect.size();
+                            let shared_small = ui
+                                .add(ButtonRole::Secondary.button("Action", &palette).small())
+                                .rect
+                                .size();
+                            assert!(
+                                (native_small - shared_small).length() < 0.001,
+                                "compact padding changed: {native_small:?} / {shared_small:?}"
+                            );
+                            assert!(shared_small.y < CONTROL_HEIGHT);
+                            let compact =
+                                ui.add(ButtonRole::Secondary.button("Action", &palette).compact());
+                            assert_eq!(
+                                compact.rect.height(),
+                                crate::ui_ext::COMPACT_CONTROL_HEIGHT
+                            );
+                        });
+                    })
                 });
             });
         }
@@ -118,18 +124,20 @@ mod tests {
                                 modifiers: egui::Modifiers::NONE,
                             });
                         }
-                        let _ = ctx.run(input, |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
-                                let response = ui.add_enabled(
-                                    enabled,
-                                    role.button_with_icon(Some(Icon::Copy), "Action", &palette),
-                                );
-                                assert_eq!(response.enabled(), enabled);
-                                assert!(response.rect.height() >= CONTROL_HEIGHT);
-                                if frame == 1 && enabled {
-                                    response.request_focus();
-                                }
-                                clicked = response.clicked();
+                        let _ = crate::test_support::run_frame(&ctx, input, |ctx| {
+                            ctx.root_ui(|ui| {
+                                egui::CentralPanel::default().show(ui, |ui| {
+                                    let response = ui.add_enabled(
+                                        enabled,
+                                        role.button_with_icon(Some(Icon::Copy), "Action", &palette),
+                                    );
+                                    assert_eq!(response.enabled(), enabled);
+                                    assert!(response.rect.height() >= CONTROL_HEIGHT);
+                                    if frame == 1 && enabled {
+                                        response.request_focus();
+                                    }
+                                    clicked = response.clicked();
+                                })
                             });
                         });
                         assert_eq!(clicked, frame == 2 && enabled, "{appearance:?} {role:?}");

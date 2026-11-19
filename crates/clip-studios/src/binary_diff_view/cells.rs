@@ -13,7 +13,7 @@ pub(super) fn render_hex_table_header(
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::hover());
     ui.painter().rect_filled(
         header_rect,
-        Rounding::ZERO,
+        CornerRadius::ZERO,
         hex_to_c32(&palette.colors.surface_recessed),
     );
     let content_width = 4.0 * scale
@@ -27,9 +27,10 @@ pub(super) fn render_hex_table_header(
         egui::pos2(header_rect.min.x, header_rect.min.y),
         Vec2::new(content_width, header_rect.height()),
     );
-    let mut child_ui = ui.child_ui(
-        header_ui_rect,
-        egui::Layout::left_to_right(egui::Align::Center),
+    let mut child_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(header_ui_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     child_ui.set_clip_rect(header_rect);
     child_ui.spacing_mut().item_spacing = Vec2::new(2.0 * scale, 0.0);

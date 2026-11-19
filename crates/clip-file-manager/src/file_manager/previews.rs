@@ -618,7 +618,7 @@ impl EntryPreviews {
                 egui::vec2(146.0, 20.0),
             );
             let accent = ui.visuals().warn_fg_color;
-            ui.allocate_ui_at_rect(rect, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 crate::ui_ext::badge_pill(ui, "Paper unavailable", Some(accent), palette)
             })
             .response
@@ -727,11 +727,13 @@ impl EntryPreviews {
                 .get(id)
                 .is_some_and(|ready| ready.data.document.is_some())
         {
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("text_strip_hover", &entry.path)),
-                |ui| self.text_hover(ui, id, 0.0, usize::MAX, palette),
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("text_strip_hover", &entry.path)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| self.text_hover(ui, id, 0.0, usize::MAX, palette));
         }
         clicked_line
     }
@@ -767,7 +769,12 @@ impl EntryPreviews {
             return rect;
         }
         let rect = document.metadata.as_ref().map_or(rect, |metadata| {
-            metadata.show(ui, rect, egui::Id::new(("frontmatter_strip", id)), palette)
+            metadata.show(
+                ui,
+                rect,
+                egui::Id::unique(("frontmatter_strip", id)),
+                palette,
+            )
         });
         let (width, height) = raster_dimensions(ui, rect);
         let colors = super::text_strip::palette_colors(palette);
@@ -799,11 +806,13 @@ impl EntryPreviews {
                 ],
                 egui::Stroke::new(1.0_f32, ui.visuals().selection.stroke.color),
             );
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("text_strip_hover", id)),
-                |ui| self.text_hover(ui, id, fraction, width as usize, palette),
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("text_strip_hover", id)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| self.text_hover(ui, id, fraction, width as usize, palette));
         }
         rect
     }
@@ -969,7 +978,7 @@ impl EntryPreviews {
             if !gallery && !entry.is_video() && !super::ui::popup_open(ui.ctx()) {
                 ui.interact(
                     rect,
-                    egui::Id::new(("listing_preview", id)),
+                    egui::Id::unique(("listing_preview", id)),
                     egui::Sense::hover(),
                 )
                 .on_hover_ui(|ui| {
@@ -1142,10 +1151,13 @@ mod tests {
 
         let palette = little_clip_core::palette::AppPalette::default();
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let row = egui::Rect::from_min_size(ui.min_rect().min, egui::vec2(400.0, 120.0));
-                previews.show_visual(ui, row, &entry, None, colors, &palette);
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let row =
+                        egui::Rect::from_min_size(ui.min_rect().min, egui::vec2(400.0, 120.0));
+                    previews.show_visual(ui, row, &entry, None, colors, &palette);
+                })
             });
         });
 
@@ -1455,14 +1467,19 @@ mod tests {
             .clone()
             .unwrap();
         for width in [512.0, 256.0] {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    previews.text_strip(
-                        ui,
-                        egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width, 66.0)),
-                        &entry,
-                        &palette,
-                    );
+            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        previews.text_strip(
+                            ui,
+                            egui::Rect::from_min_size(
+                                egui::pos2(20.0, 20.0),
+                                egui::vec2(width, 66.0),
+                            ),
+                            &entry,
+                            &palette,
+                        );
+                    })
                 });
             });
             let raster = previews.raster_sizes[&id].1;
@@ -1530,7 +1547,8 @@ mod tests {
             let ctx = egui::Context::default();
             egui_extras::install_image_loaders(&ctx);
             let render = |manager: &mut FileManager| {
-                ctx.run(
+                clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1539,7 +1557,12 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| manager.ui(ui, &palette));
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                manager.tick(little_clip_core::BackgroundJobs::global());
+                                manager.ui(ui, &palette)
+                            })
+                        });
                     },
                 )
             };
@@ -1620,13 +1643,15 @@ mod tests {
         for text in ["initial", "updated with more bytes"] {
             std::fs::write(&path, text).unwrap();
             let entry = single_entry(dir.path());
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    previews.show(
-                        ui,
-                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0)),
-                        &entry,
-                    );
+            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        previews.show(
+                            ui,
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0)),
+                            &entry,
+                        );
+                    })
                 });
             });
             let id = previews.identities[&path].1;

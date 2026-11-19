@@ -80,9 +80,9 @@ impl MidiViewerState {
         let playhead_color = crate::hex_to_c32(&palette.harmonies.complementary);
         let pause_color = crate::hex_to_c32(&palette.harmonies.warm_attention);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg)
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let total_notes = self.data.total_notes;
                 let duration_sec = self.data.duration_sec;
@@ -153,12 +153,12 @@ impl MidiViewerState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Transport & Zoom Bar
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(b_low)
                     .stroke(Stroke::new(1.0_f32, b_med))
-                    .inner_margin(egui::Margin::symmetric(
-                        crate::ui_ext::PANEL_INSET,
-                        crate::ui_ext::CONTROL_GROUP_INSET_Y,
+                    .inner_margin(egui::Margin::from(
+                        egui::vec2(crate::ui_ext::PANEL_INSET,
+                        crate::ui_ext::CONTROL_GROUP_INSET_Y),
                     ))
                     .show(ui, |ui| {
                         // Keep every transport and zoom action visible on compact popup widths.
@@ -381,7 +381,7 @@ impl MidiViewerState {
                 let painter = ui.painter_at(canvas_rect);
 
                 // Background
-                painter.rect_filled(canvas_rect, Rounding::ZERO, b_low);
+                painter.rect_filled(canvas_rect, CornerRadius::ZERO, b_low);
 
                 let kb_width = 48.0f32;
                 let grid_rect = Rect::from_min_max(
@@ -420,7 +420,7 @@ impl MidiViewerState {
                     } else {
                         bg
                     };
-                    painter.rect_filled(lane_rect, Rounding::ZERO, lane_bg);
+                    painter.rect_filled(lane_rect, CornerRadius::ZERO, lane_bg);
                     painter.line_segment([lane_rect.left_bottom(), lane_rect.right_bottom()], Stroke::new(0.5_f32, b_med));
 
                     // Left keyboard key
@@ -441,8 +441,8 @@ impl MidiViewerState {
                         Some(key_text_color),
                         palette,
                     );
-                    painter.rect_filled(key_rect, Rounding::same(2.0), key_color);
-                    painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5_f32, b_low));
+                    painter.rect_filled(key_rect, CornerRadius::same(2), key_color);
+                    painter.rect_stroke(key_rect, CornerRadius::same(2), Stroke::new(0.5_f32, b_low), egui::StrokeKind::Middle);
 
                     let note_name = format!("{}{}", NOTE_NAMES[(k_int % 12) as usize], (k_int as i32 / 12) - 1);
                     // Keep every pitch name when there is room for a full label
@@ -477,8 +477,8 @@ impl MidiViewerState {
                 let is_hovered = response.hovered();
 
                 if is_hovered {
-                    let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
-                    let scroll_x = ui.input(|i| i.raw_scroll_delta.x);
+                    let scroll_y = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
+                    let scroll_x = clip_ui::ui_ext::wheel_delta(ui.ctx()).x;
 
                     if scroll_y != 0.0 {
                         let anchor_time = if let Some(p) = hover_pos {
@@ -637,7 +637,7 @@ impl MidiViewerState {
                             );
                             painter.rect_filled(
                                 sel_rect,
-                                Rounding::ZERO,
+                                CornerRadius::ZERO,
                                 Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 45),
                             );
                         }
@@ -711,8 +711,8 @@ impl MidiViewerState {
                         }
                     };
 
-                    painter.rect_filled(note_rect, Rounding::same(2.0), fill_color);
-                    painter.rect_stroke(note_rect, Rounding::same(2.0), Stroke::new(0.5_f32, b_low));
+                    painter.rect_filled(note_rect, CornerRadius::same(2), fill_color);
+                    painter.rect_stroke(note_rect, CornerRadius::same(2), Stroke::new(0.5_f32, b_low), egui::StrokeKind::Middle);
                 }
 
                 self.hovered_note = hovered;

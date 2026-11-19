@@ -46,12 +46,13 @@ impl Probe {
                 .ok_or("eframe did not supply an OpenGL context")?;
             let loader = cc
                 .get_proc_address
+                .as_ref()
                 .ok_or("eframe did not supply its GL function loader")?;
             // SAFETY: eframe calls its application creator with this window's
             // context current. Its loader supplies functions for that context.
             // The renderer is used only by this thread's paint callbacks and is
             // destroyed in on_exit before eframe destroys the owning context.
-            unsafe { Runtime::install(&cc.egui_ctx, gl, loader) }
+            unsafe { Runtime::install(&cc.egui_ctx, gl, loader.as_ref()) }
         })();
         let (runtime, error) = match initialized {
             Ok(runtime) => (Some(runtime), None),
@@ -80,7 +81,7 @@ impl Probe {
             self.pan += ui.input(|input| input.pointer.delta());
         }
         if response.hovered() {
-            let scroll = ui.input(|input| input.raw_scroll_delta.y);
+            let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(0.25, 32.0);
         }
         if let Some(svg) = &self.svg {
@@ -145,14 +146,15 @@ fn paint_vectors(canvas: &mut Canvas<OpenGl>, rect: egui::Rect, zoom: f32, pan: 
 }
 
 impl eframe::App for Probe {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
         // Exercise repeated interleaving of both renderers, including while
         // the compositor asynchronously changes the native surface size.
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Q)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        egui::TopBottomPanel::top("probe_toolbar").show(ctx, |ui| {
+        egui::Panel::top("probe_toolbar").show(root, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Vector context probe");
                 if ui.button("Magnify").clicked() {
@@ -168,11 +170,11 @@ impl eframe::App for Probe {
                 }
             });
         });
-        egui::CentralPanel::default().show(ctx, |ui| self.vector_ui(ui));
+        egui::CentralPanel::default().show(root, |ui| self.vector_ui(ui));
         // This layer paints after the GPU callback. Its text and interaction
         // verify that egui's GL state is restored, rather than only testing an
         // isolated FemtoVG window.
-        egui::Area::new(egui::Id::new("probe_overlay"))
+        egui::Area::new(egui::Id::unique("probe_overlay"))
             .order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(30.0, 80.0))
             .show(ctx, |ui| {
@@ -225,7 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_inner_size([1100.0, 720.0]),
             ..Default::default()
         },
-        Box::new(move |cc| Box::new(Probe::new(cc, owned_metrics))),
+        Box::new(move |cc| Ok(Box::new(Probe::new(cc, owned_metrics)))),
     )?;
     let frames = metrics.frames.load(Ordering::Relaxed);
     let errors = metrics.gl_errors.load(Ordering::Relaxed);

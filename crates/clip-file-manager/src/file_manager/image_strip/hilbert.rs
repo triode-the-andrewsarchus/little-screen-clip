@@ -354,10 +354,7 @@ impl HilbertStrip {
                 pixels.push(veil_color);
             }
         }
-        egui::ColorImage {
-            size: [width, height],
-            pixels,
-        }
+        egui::ColorImage::new([width, height], pixels)
     }
 
     /// Returns the target dimmed color (INK or PAPER) for the given segment based on OKLab lightness.
@@ -385,10 +382,7 @@ impl HilbertStrip {
                 pixels.push(veil_color);
             }
         }
-        egui::ColorImage {
-            size: [width, height],
-            pixels,
-        }
+        egui::ColorImage::new([width, height], pixels)
     }
 
     /// Returns the color of the given source segment, if valid and not omitted.

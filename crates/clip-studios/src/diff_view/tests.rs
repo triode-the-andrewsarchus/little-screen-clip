@@ -57,16 +57,19 @@ fn modified_s_does_not_swap_diff_operands() {
     fn send_modified_s(state: &mut DiffViewerState, modifiers: egui::Modifiers) {
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
-                modifiers,
-                events: vec![egui::Event::Key {
-                    key: egui::Key::S,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                }],
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Key {
+                        key: egui::Key::S,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| state.handle_shortcuts(ctx, &mut close),
@@ -123,7 +126,8 @@ fn unmodified_s_swaps_operands_and_recomputes_text_diff() {
 
     let ctx = egui::Context::default();
     let mut close = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::S,
@@ -180,30 +184,39 @@ fn text_diff_ctrl_c_publishes_exact_ansi_stripped_result() {
     crate::ui_ext::configure_workbench_style(&ctx);
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(900.0, 620.0),
             )),
-            events: vec![egui::Event::Key {
-                key: egui::Key::C,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::CTRL,
-            }],
-            modifiers: egui::Modifiers::CTRL,
+            events: [egui::Event::ModifiersChanged(egui::Modifiers::CTRL)]
+                .into_iter()
+                .chain(vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }])
+                .collect(),
+
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
 
-    assert_eq!(output.platform_output.copied_text, expected);
+    assert_eq!(
+        clip_ui::test_support::copied_text(&output.platform_output),
+        expected
+    );
     assert!(
         state
             .status_toast
@@ -300,9 +313,11 @@ fn text_diff_state_computes_in_background() {
         let palette = crate::ui_appearance::palette(appearance);
         let console = crate::hex_to_c32(&palette.colors.console_surface);
         let mut close = false;
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         });
         assert!(output.shapes.iter().any(|clipped| {
@@ -316,7 +331,8 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
     fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
@@ -369,7 +385,8 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
     fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
@@ -473,7 +490,8 @@ fn saturated_diff_executor_reports_recoverable_error() {
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let error_text = "Diff unavailable: Diff computation failed: background job queue is full";
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -482,8 +500,10 @@ fn saturated_diff_executor_reports_recoverable_error() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
@@ -940,7 +960,10 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
             let section = layout_job
                 .sections
                 .iter()
-                .find(|section| layout_job.text[section.byte_range.clone()].contains(token))
+                .find(|section| {
+                    layout_job.text[section.byte_range.start.0..section.byte_range.end.0]
+                        .contains(token)
+                })
                 .unwrap_or_else(|| panic!("missing ANSI section for {token}"));
             let foreground = section.format.color;
             assert!(
@@ -978,7 +1001,8 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
         let mut time = 0.0;
         let mut render = |events: Vec<egui::Event>| {
             time += 0.05;
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     time: Some(time),
@@ -986,8 +1010,10 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui(ui, ctx, &palette, &mut false);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        })
                     });
                 },
             )
@@ -1000,7 +1026,7 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
                     egui::Shape::Text(text) if text.galley.text() == plain => {
-                        Some((text.pos, text.galley.size(), clipped.clip_rect))
+                        Some((text.pos, text.galley.clone(), clipped.clip_rect))
                     }
                     _ => None,
                 })
@@ -1015,8 +1041,9 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
                 })
                 .max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height())))
         };
-        let (initial_pos, initial_size, viewport) =
+        let (initial_pos, initial_galley, viewport) =
             find_line(&initial).expect("full ANSI line should render without elision");
+        let initial_size = initial_galley.size();
         assert!(
             initial_size.x > viewport.width() * 10.0,
             "long-line size {} should greatly exceed viewport width {}",
@@ -1030,38 +1057,36 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
         let scroll_point = content_viewport.center();
         let _ = render(vec![
             egui::Event::PointerMoved(scroll_point),
-            egui::Event::Scroll(egui::vec2(-100_000.0, 0.0)),
+            clip_ui::test_support::scroll(egui::vec2(-100_000.0, 0.0)),
         ]);
         let mut scrolled = None;
         for _ in 0..24 {
             scrolled = Some(render(Vec::new()));
         }
         let scrolled = scrolled.unwrap();
-        let (scrolled_pos, scrolled_size, scrolled_viewport) =
+        let (scrolled_pos, scrolled_galley, scrolled_viewport) =
             find_line(&scrolled).expect("scrolled ANSI line should retain its complete galley");
         let scrolled_console_rect =
             find_console_rect(&scrolled).expect("scrolled console surface should render");
         let scrolled_content_viewport = scrolled_console_rect.shrink(crate::ui_ext::SPACE_SM);
-        assert_eq!(scrolled_size, initial_size);
+        assert_eq!(scrolled_galley.size(), initial_size);
         assert!(
             scrolled_pos.x < initial_pos.x - viewport.width(),
             "horizontal pan should advance across the long line: {initial_pos:?} -> {scrolled_pos:?}"
         );
-        let glyph_width = scrolled_size.x / plain.chars().count() as f32;
-        let marker_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                scrolled_pos.x + marker_start as f32 * glyph_width,
-                scrolled_pos.y,
-            ),
-            egui::vec2(marker.chars().count() as f32 * glyph_width, scrolled_size.y),
-        );
+        let first = scrolled_galley.pos_from_cursor(egui::text::CCursor::new(marker_start));
+        let last = scrolled_galley.pos_from_cursor(egui::text::CCursor::new(
+            marker_start + marker.chars().count(),
+        ));
+        let marker_rect = first.union(last).translate(scrolled_pos.to_vec2());
+        let visible = scrolled_viewport.intersect(scrolled_content_viewport);
+        let tolerance = 1.0 / ctx.pixels_per_point();
         assert!(
-            scrolled_viewport.contains_rect(marker_rect)
-                && scrolled_content_viewport.contains_rect(marker_rect),
-            "{appearance:?}: far ANSI marker should be brought fully into the console viewport: {marker_rect:?} in {scrolled_content_viewport:?}"
+            visible.expand(tolerance).contains_rect(marker_rect),
+            "{appearance:?}: far ANSI marker should be brought fully into the console viewport: {marker_rect:?} in {visible:?}"
         );
         assert_eq!(
-            find_line(&scrolled).unwrap().1.x,
+            find_line(&scrolled).unwrap().1.size().x,
             initial_size.x,
             "long ANSI line must not be elided after scrolling"
         );
@@ -1145,9 +1170,11 @@ fn pending_diff_copy_defers_close_and_preserves_worker_error() {
             .appearance,
     );
     let mut close = true;
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default()
-            .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default()
+                .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut close))
+        });
     });
     assert!(!close);
     assert!(

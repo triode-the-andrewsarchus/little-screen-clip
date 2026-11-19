@@ -8,25 +8,27 @@ fn inspect_play_and_pause_keep_the_same_button_width() {
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let mut widths = Vec::new();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let width =
-                crate::ui_ext::equal_button_width(ui, &["Play [Space]", "Pause [Space]"], true)
-                    + 1.0;
-            for (label, icon) in [
-                ("Play [Space]", crate::icons::Icon::Play),
-                ("Pause [Space]", crate::icons::Icon::Pause),
-            ] {
-                widths.push(
-                    ui.add(
-                        clip_ui::buttons::ButtonRole::Primary
-                            .button_with_icon(Some(icon), label, &palette)
-                            .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT)),
-                    )
-                    .rect
-                    .size(),
-                );
-            }
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let width =
+                    crate::ui_ext::equal_button_width(ui, &["Play [Space]", "Pause [Space]"], true)
+                        + 1.0;
+                for (label, icon) in [
+                    ("Play [Space]", crate::icons::Icon::Play),
+                    ("Pause [Space]", crate::icons::Icon::Pause),
+                ] {
+                    widths.push(
+                        ui.add(
+                            clip_ui::buttons::ButtonRole::Primary
+                                .button_with_icon(Some(icon), label, &palette)
+                                .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT)),
+                        )
+                        .rect
+                        .size(),
+                    );
+                }
+            })
         });
     });
     assert_eq!(widths.len(), 2);
@@ -75,6 +77,8 @@ fn wheel_effects_use_waveform_and_respective_spectrum_halves() {
 fn control_wheel_uses_raw_mouse_wheel_events() {
     let events = [
         egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::new(0.0, 1.0),
             modifiers: egui::Modifiers {
@@ -91,6 +95,8 @@ fn control_wheel_uses_raw_mouse_wheel_events() {
 #[test]
 fn control_wheel_ignores_unmodified_wheel_events() {
     let events = [egui::Event::MouseWheel {
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Point,
         delta: Vec2::new(0.0, 20.0),
         modifiers: egui::Modifiers::default(),

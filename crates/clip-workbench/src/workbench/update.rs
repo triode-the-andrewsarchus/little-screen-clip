@@ -11,7 +11,7 @@ impl eframe::App for WorkbenchApp {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the fixed appearance to egui on the first frame or mode changes.
         if !self.appearance_applied {
             ui_appearance::apply_visuals(ctx, &self.ui_palette);
@@ -22,15 +22,21 @@ impl eframe::App for WorkbenchApp {
             strip.poll_copy(ctx);
         }
         self.poll_daemon_mutation(ctx);
+    }
+
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
+        self.handle_appearance_shortcut(ctx);
+        root.set_style(ctx.global_style());
+
         if self.daemon_mutation.is_some() {
-            egui::TopBottomPanel::bottom("daemon_mutation_progress").show(ctx, |ui| {
+            egui::Panel::bottom("daemon_mutation_progress").show(root, |ui| {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Waiting for daemon operation to finish…");
                 });
             });
         }
-        self.handle_appearance_shortcut(ctx);
 
         while let Ok(result) = self.state_rx.try_recv() {
             match result {
@@ -83,7 +89,7 @@ impl eframe::App for WorkbenchApp {
                 self.poll_midi_load(ctx);
             }
         }
-        if self.render_modal_viewers(ctx) {
+        if self.render_modal_viewers(root) {
             self.palette_search_needs_focus = true;
             return;
         }
@@ -97,7 +103,7 @@ impl eframe::App for WorkbenchApp {
 
         self.handle_global_shortcuts(ctx);
 
-        self.render_workbench_header(ctx);
+        self.render_workbench_header(root);
         self.retire_hidden_rolling_audio();
 
         let mut host_action = None;
@@ -105,21 +111,21 @@ impl eframe::App for WorkbenchApp {
         if self.view == WorkbenchView::Palette
             && let Some(strip) = &mut self.rolling_audio_strip
         {
-            egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
-                .min_height(100.0)
+            egui::Panel::bottom("rolling_audio_strip_panel")
+                .min_size(100.0)
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(crate::hex_to_c32(&self.ui_palette.colors.canvas))
-                        .inner_margin(egui::Margin::symmetric(
+                        .inner_margin(egui::Margin::from(egui::vec2(
                             crate::ui_ext::PANEL_INSET,
                             crate::ui_ext::FOOTER_INSET_Y,
-                        ))
+                        )))
                         .stroke(egui::Stroke::new(
                             1.0_f32,
                             crate::hex_to_c32(&self.ui_palette.colors.surface_panel),
                         )),
                 )
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     strip.render_ui(ui, ctx, &self.ui_palette, &mut host_action);
                 });
         }
@@ -128,7 +134,7 @@ impl eframe::App for WorkbenchApp {
             self.apply_rolling_audio_action(host_action, ctx);
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root, |ui| {
             ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.colors.text_primary));
 
             show_workbench_footer(
@@ -471,13 +477,13 @@ impl WorkbenchApp {
                             hex_to_c32(&self.ui_palette.colors.surface_recessed)
                         };
 
-                        let frame = egui::Frame::none()
+                        let frame = egui::Frame::NONE
                             .fill(bg)
-                            .inner_margin(egui::Margin::symmetric(
+                            .inner_margin(egui::Margin::from(egui::vec2(
                                 crate::ui_ext::BUTTON_PADDING_X,
                                 crate::ui_ext::BUTTON_PADDING_Y,
-                            ))
-                            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
+                            )))
+                            .corner_radius(crate::ui_ext::CONTROL_CORNER_RADIUS)
                             .stroke(egui::Stroke::new(
                                 1.0_f32,
                                 if is_selected {
@@ -534,11 +540,8 @@ impl WorkbenchApp {
                         });
                         if self.daemon_mutation.is_none() {
                             // Keyboard navigation remains owned by the palette.
-                            let sense = egui::Sense {
-                                focusable: false,
-                                ..egui::Sense::click()
-                            };
-                            let id = ui.id().with((idx, act.category(), act.label()));
+                            let sense = egui::Sense::CLICK;
+                            let id = ui.scope_id().with((idx, act.category(), act.label()));
                             if ui
                                 .interact(row.response.rect, id, sense)
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)

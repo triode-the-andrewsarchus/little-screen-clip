@@ -56,7 +56,7 @@ impl FileManager {
         palette: &AppPalette,
     ) {
         // Floating search HUD pill
-        let search_id = Id::new("similarity_canvas_search");
+        let search_id = Id::unique("similarity_canvas_search");
         let search_pos = pos2(
             canvas_rect.left() + HUD_INSET_X,
             canvas_rect.top() + SEARCH_HUD_INSET_Y,
@@ -140,7 +140,7 @@ impl FileManager {
         colors: WorkbenchColors,
     ) {
         // Floating Grid Jump Navigator
-        let nav_id = Id::new("similarity_grid_nav");
+        let nav_id = Id::unique("similarity_grid_nav");
         let nav_pos = pos2(
             canvas_rect.left() + HUD_INSET_X,
             canvas_rect.bottom() - BOTTOM_HUD_HEIGHT,
@@ -187,7 +187,7 @@ impl FileManager {
         palette: &AppPalette,
     ) {
         // Floating HUD pill
-        let hud_id = Id::new("similarity_canvas_hud");
+        let hud_id = Id::unique("similarity_canvas_hud");
         let hud_pos = pos2(canvas_rect.right() - 250.0, canvas_rect.bottom() - 44.0);
         egui::Area::new(hud_id)
             .order(egui::Order::Middle)
@@ -304,6 +304,7 @@ pub(super) fn scroll_badge(
                 6.0,
                 fill,
                 egui::Stroke::new(1.0_f32, stroke_color),
+                egui::StrokeKind::Middle,
             );
             ui.painter().text(
                 badge_rect.center(),
@@ -366,7 +367,7 @@ fn grid_header(
         },
     );
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect(rect, 4.0, colors.panel, stroke);
+    painter.rect(rect, 4.0, colors.panel, stroke, egui::StrokeKind::Middle);
     // At overview zoom, keep the label legible without growing the hit area into another grid.
     if rect.height() < 26.0 || rect.width() < 260.0 {
         painter.text(
@@ -379,81 +380,85 @@ fn grid_header(
         return ui
             .interact(
                 rect,
-                ui.id().with(("compact_grid", grid.id)),
+                ui.scope_id().with(("compact_grid", grid.id)),
                 Sense::click(),
             )
             .on_hover_text("Click to search this grid; zoom in for controls")
             .clicked()
             .then_some(HeaderAction::Solo(grid.id));
     }
-    ui.allocate_ui_at_rect(rect.shrink2(vec2(4.0, 2.0)), |ui| {
-        ui.set_clip_rect(clip);
-        ui.spacing_mut().item_spacing.x = 4.0;
-        ui.spacing_mut().button_padding = vec2(3.0, 1.0);
-        ui.spacing_mut().interact_size.y = 20.0;
-        ui.horizontal(|ui| {
-            let mut included = grid.selected_for_search;
-            if ui
-                .checkbox(&mut included, "")
-                .on_hover_text("Include this grid in the next search")
-                .changed()
-            {
-                action = Some(HeaderAction::Toggle(grid.id));
-            }
-            // Reserve controls at the right, so long search terms cannot push them outside the header.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if grid.id > 0 {
-                    if header_button(ui, Icon::Close, true, "Remove this search grid", colors) {
-                        action = Some(HeaderAction::Remove(grid.id));
-                    }
-                    if header_button(
-                        ui,
-                        Icon::Plus,
-                        canvas.can_increase_grid_allowance(grid.id),
-                        "Increase match allowance (include more photos)",
-                        colors,
-                    ) {
-                        action = Some(HeaderAction::Allowance(grid.id, CanvasGrid::ALLOWANCE_STEP));
-                    }
-                    ui.label(format!("{:.0}%", grid.allowance * 100.0))
-                        .on_hover_text("Match allowance: higher includes more photos");
-                    if header_button(
-                        ui,
-                        Icon::Minus,
-                        canvas.can_decrease_grid_allowance(grid.id),
-                        "Decrease match allowance (fewer photos)",
-                        colors,
-                    ) {
-                        action = Some(HeaderAction::Allowance(
-                            grid.id,
-                            -CanvasGrid::ALLOWANCE_STEP,
-                        ));
-                    }
-                }
-                if header_button(
-                    ui,
-                    Icon::Grid,
-                    true,
-                    "Select all photos in this grid",
-                    colors,
-                ) {
-                    action = Some(HeaderAction::SelectAll(grid.id));
-                }
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 2.0))),
+        |ui| {
+            ui.set_clip_rect(clip);
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().button_padding = vec2(3.0, 1.0);
+            ui.spacing_mut().interact_size.y = 20.0;
+            ui.horizontal(|ui| {
+                let mut included = grid.selected_for_search;
                 if ui
-                    .add_sized(
-                        vec2(ui.available_width(), 20.0),
-                        egui::Label::new(egui::RichText::new(&title).strong())
-                            .truncate(true)
-                            .sense(Sense::click()),
-                    )
-                    .on_hover_text(format!("Search only this grid: {title}"))
-                    .clicked()
+                    .checkbox(&mut included, "")
+                    .on_hover_text("Include this grid in the next search")
+                    .changed()
                 {
-                    action = Some(HeaderAction::Solo(grid.id));
+                    action = Some(HeaderAction::Toggle(grid.id));
                 }
+                // Reserve controls at the right, so long search terms cannot push them outside the header.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if grid.id > 0 {
+                        if header_button(ui, Icon::Close, true, "Remove this search grid", colors) {
+                            action = Some(HeaderAction::Remove(grid.id));
+                        }
+                        if header_button(
+                            ui,
+                            Icon::Plus,
+                            canvas.can_increase_grid_allowance(grid.id),
+                            "Increase match allowance (include more photos)",
+                            colors,
+                        ) {
+                            action =
+                                Some(HeaderAction::Allowance(grid.id, CanvasGrid::ALLOWANCE_STEP));
+                        }
+                        ui.label(format!("{:.0}%", grid.allowance * 100.0))
+                            .on_hover_text("Match allowance: higher includes more photos");
+                        if header_button(
+                            ui,
+                            Icon::Minus,
+                            canvas.can_decrease_grid_allowance(grid.id),
+                            "Decrease match allowance (fewer photos)",
+                            colors,
+                        ) {
+                            action = Some(HeaderAction::Allowance(
+                                grid.id,
+                                -CanvasGrid::ALLOWANCE_STEP,
+                            ));
+                        }
+                    }
+                    if header_button(
+                        ui,
+                        Icon::Grid,
+                        true,
+                        "Select all photos in this grid",
+                        colors,
+                    ) {
+                        action = Some(HeaderAction::SelectAll(grid.id));
+                    }
+                    if ui
+                        .add_sized(
+                            vec2(ui.available_width(), 20.0),
+                            egui::Label::new(egui::RichText::new(&title).strong())
+                                .truncate()
+                                .sense(Sense::click()),
+                        )
+                        .on_hover_text(format!("Search only this grid: {title}"))
+                        .clicked()
+                    {
+                        action = Some(HeaderAction::Solo(grid.id));
+                    }
+                });
             });
-        });
-    });
+        },
+    );
     action
 }
 
@@ -512,6 +517,6 @@ fn hud_frame(ui: &Ui, colors: WorkbenchColors) -> egui::Frame {
     egui::Frame::popup(ui.style())
         .fill(colors.panel)
         .stroke(egui::Stroke::new(1.0_f32, colors.border))
-        .rounding(6.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(8, 4))
 }

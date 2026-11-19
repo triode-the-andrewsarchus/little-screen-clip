@@ -199,10 +199,10 @@ impl AudioPreviewState {
             }
         });
         let available = ui.available_rect_before_wrap();
-        egui::SidePanel::left(ui.make_persistent_id("channel_controls"))
-            .exact_width(276.0)
+        egui::Panel::left(ui.make_persistent_id("channel_controls"))
+            .exact_size(276.0)
             .resizable(false)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .show(ui, |ui| self.render_channel_controls(ui, palette));
             });

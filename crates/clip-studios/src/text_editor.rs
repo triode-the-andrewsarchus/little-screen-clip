@@ -422,7 +422,7 @@ impl Editor {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         };
         Self {
-            id: egui::Id::new(uuid::Uuid::new_v4()),
+            id: egui::Id::unique(uuid::Uuid::new_v4()),
             timing: None,
             drawing: None,
             harness: None,
@@ -448,7 +448,7 @@ impl Editor {
         history.add_undo(&(cursor, self.text.clone()));
         self.text = text;
         let cursor = egui::text::CCursorRange::one(egui::text::CCursor::new(
-            cursor.primary.index.min(self.text.chars().count()),
+            cursor.primary.index.0.min(self.text.chars().count()),
         ));
         history.add_undo(&(cursor, self.text.clone()));
         state.cursor.set_char_range(Some(cursor));
@@ -719,15 +719,16 @@ impl Editor {
         let syntax = format
             .and_then(|format| crate::text_preview::SYNTAX_SET.find_syntax_by_name(format.name()))
             .unwrap_or_else(|| crate::text_preview::SYNTAX_SET.find_syntax_plain_text());
-        let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+        let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+            let text = buffer.as_str();
             let mut job =
                 crate::text_preview::build_highlighted_layout_job(text, syntax, palette, &[]);
             job.wrap.max_width = wrap_width;
-            ui.fonts(|fonts| fonts.layout_job(job))
+            ui.fonts_mut(|fonts| fonts.layout_job(job))
         };
         let highlight = format.is_some() && self.text.len() <= 256 * 1024;
         egui::ScrollArea::both()
-            .id_source("diagram_source_editor")
+            .id_salt("diagram_source_editor")
             .show(ui, |ui| {
                 let mut edit = egui::TextEdit::multiline(&mut self.text)
                     .id(id)
@@ -798,7 +799,7 @@ impl Editor {
         ui.columns(2, |columns| {
             self.source_ui(&mut columns[0], palette, Some(format), source_id);
             egui::ScrollArea::vertical()
-                .id_source("diagram_live_preview")
+                .id_salt("diagram_live_preview")
                 .show(&mut columns[1], |ui| {
                     if format == little_clip_core::diagram::Format::Wavedrom {
                         if let Some(text) = self
@@ -1169,11 +1170,11 @@ mod tests {
         let mut session = clipboard_graph("original");
         let editor = session.editor.as_mut().unwrap();
         editor.apply_graphical_edit(&ctx, editor.id, "painted".into());
-        let canvas = egui::Id::new("focused drawing fixture");
+        let canvas = egui::Id::unique("focused drawing fixture");
         editor.drawing = Some(crate::text_editor_drawing::focused_fixture(canvas));
-        egui::text_edit::TextEditState::default().store(&ctx, egui::Id::new("a text field"));
+        egui::text_edit::TextEditState::default().store(&ctx, egui::Id::unique("a text field"));
         for (focus, expected) in [
-            (egui::Id::new("a text field"), "painted"),
+            (egui::Id::unique("a text field"), "painted"),
             (canvas, "original"),
         ] {
             let modifiers = egui::Modifiers {
@@ -1181,28 +1182,33 @@ mod tests {
                 command: true,
                 ..Default::default()
             };
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
-                    modifiers,
-                    events: vec![egui::Event::Key {
-                        key: egui::Key::Z,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers,
-                    }],
+                    events: [egui::Event::ModifiersChanged(modifiers)]
+                        .into_iter()
+                        .chain(vec![egui::Event::Key {
+                            key: egui::Key::Z,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        }])
+                        .collect(),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.interact(
-                            ui.available_rect_before_wrap(),
-                            focus,
-                            egui::Sense::click_and_drag(),
-                        );
-                        ctx.memory_mut(|memory| memory.request_focus(focus));
-                        assert!(ctx.wants_keyboard_input());
-                        editor.history_ui(ui, editor.id, &Default::default());
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ui.interact(
+                                ui.available_rect_before_wrap(),
+                                focus,
+                                egui::Sense::click_and_drag(),
+                            );
+                            ctx.memory_mut(|memory| memory.request_focus(focus));
+                            assert!(ctx.egui_wants_keyboard_input());
+                            editor.history_ui(ui, editor.id, &Default::default());
+                        })
                     });
                 },
             );
@@ -1223,21 +1229,26 @@ mod tests {
                 shift: redo,
                 ..Default::default()
             };
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
-                    modifiers,
-                    events: vec![egui::Event::Key {
-                        key: egui::Key::Z,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers,
-                    }],
+                    events: [egui::Event::ModifiersChanged(modifiers)]
+                        .into_iter()
+                        .chain(vec![egui::Event::Key {
+                            key: egui::Key::Z,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        }])
+                        .collect(),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        editor.history_ui(ui, editor.id, &Default::default())
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            editor.history_ui(ui, editor.id, &Default::default())
+                        })
                     });
                 },
             );
@@ -1262,9 +1273,11 @@ mod tests {
         close: &mut bool,
         input: egui::RawInput,
     ) -> egui::FullOutput {
-        context.run(input, |context| {
-            egui::CentralPanel::default()
-                .show(context, |ui| session.ui(ui, &Default::default(), close));
+        clip_ui::test_support::run_frame(&context, input, |context| {
+            context.root_ui(|ui| {
+                egui::CentralPanel::default()
+                    .show(ui, |ui| session.ui(ui, &Default::default(), close))
+            });
         })
     }
 
@@ -1814,7 +1827,8 @@ mod temporary_source_tests {
         session.editor.as_mut().unwrap().save_as = true;
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -1826,8 +1840,10 @@ mod temporary_source_tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| session.ui(ui, &AppPalette::default(), &mut close));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| session.ui(ui, &AppPalette::default(), &mut close))
+                });
             },
         );
         assert!(!close);

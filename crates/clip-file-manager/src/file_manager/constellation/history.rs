@@ -123,11 +123,11 @@ impl ConstellationState {
     }
 
     /// Shows an inline decision bar even when another media view is active.
-    pub fn render_bank_guard(&mut self, ctx: &egui::Context, folder: &Path, palette: &AppPalette) {
+    pub fn render_bank_guard(&mut self, root: &mut egui::Ui, folder: &Path, palette: &AppPalette) {
         if self.pending_bank_action.is_none() {
             return;
         }
-        egui::TopBottomPanel::top("unsaved_sample_pack").show(ctx, |ui| {
+        egui::Panel::top("unsaved_sample_pack").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong("This sample pack has unsaved changes.");
                 if ui

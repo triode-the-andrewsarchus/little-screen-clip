@@ -63,8 +63,14 @@ def main():
         (left / "COPYME").write_text("copy payload")
         (left / "MOVEME").write_text("move payload")
         (right / "RETURNME").write_text("return payload")
-        (left / "Nested").mkdir()
-        (left / "TREE").mkdir(); (left / "TREE/data").write_text("tree payload")
+        for name in ("Nested", "TREE"):
+            folder = left / name
+            folder.mkdir()
+            # Keep the two folders collapsed in the compact windows. The test
+            # exercises file transfers with the native protocol.
+            for index in range(9):
+                (folder / f"fixture-{index}").write_text("owned fixture")
+        (left / "TREE/data").write_text("tree payload")
         binary = Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager"
         config, env, apps = start_two_clients(output, args.appearance, binary, [left, right], children)
         session = Session(output, env, config["niri_bin"], apps[0])

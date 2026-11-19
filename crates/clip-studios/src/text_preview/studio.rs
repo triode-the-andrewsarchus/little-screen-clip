@@ -76,7 +76,7 @@ impl TextPreviewState {
 
     /// Copies the full text content to the system clipboard.
     pub fn copy_all_to_clipboard(&mut self, ctx: &egui::Context) {
-        ctx.output_mut(|o| o.copied_text = self.content.as_str().to_owned());
+        ctx.copy_text(self.content.as_str().to_owned());
         if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&self.content) {
             tracing::debug!(%error, "failed to copy text preview to system clipboard");
         }
@@ -133,9 +133,9 @@ impl TextPreviewState {
             .with_footer_hints("Ctrl+F: Find • Esc: Close/Dismiss")
             .with_footer_readout(format!("{} lines • {} chars", total_lines, total_chars));
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Header (Zone 1)
                 let clicked_hatch = shell.render_header(ui, |ui| {
@@ -203,7 +203,7 @@ impl TextPreviewState {
             }
         }
 
-        if !ctx.wants_keyboard_input()
+        if !ctx.egui_wants_keyboard_input()
             && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F))
         {
             self.show_find = true;

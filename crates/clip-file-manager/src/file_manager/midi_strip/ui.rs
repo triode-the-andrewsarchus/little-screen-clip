@@ -3,7 +3,7 @@ use crate::{icons::Icon, ui_appearance::WorkbenchColors};
 use egui::{Id, Rect, Sense, Ui, pos2, vec2};
 use std::sync::Arc;
 pub(in crate::file_manager) fn focus_id() -> Id {
-    Id::new("files_midi_strip_focus")
+    Id::unique("files_midi_strip_focus")
 }
 
 #[expect(
@@ -24,7 +24,7 @@ pub(in crate::file_manager) fn show(
     let icon = Rect::from_min_size(row.min + vec2(6.0, 32.0), vec2(64.0, row.height() - 42.0));
     let icon_response = ui.interact(
         icon,
-        Id::new(("midi_strip_editor", &entry.path)),
+        Id::unique(("midi_strip_editor", &entry.path)),
         Sense::click(),
     );
     Icon::Midi.paint(ui.painter(), icon.shrink(16.0), colors.text_secondary);
@@ -67,7 +67,7 @@ pub(in crate::file_manager) fn show(
     paint_selection(ui, strip, entry, preview, &document, colors);
     let interaction = ui.interact(
         strip,
-        Id::new(("midi_strip", &entry.path)),
+        Id::unique(("midi_strip", &entry.path)),
         Sense::click_and_drag(),
     );
     if ui.input(|input| input.modifiers.ctrl || input.modifiers.command || input.modifiers.shift) {
@@ -131,8 +131,12 @@ fn paint_selection(
         );
         ui.painter()
             .rect_filled(selected, 0.0, colors.accent.gamma_multiply(0.25));
-        ui.painter()
-            .rect_stroke(selected, 0.0, egui::Stroke::new(1.0_f32, colors.accent));
+        ui.painter().rect_stroke(
+            selected,
+            0.0,
+            egui::Stroke::new(1.0_f32, colors.accent),
+            egui::StrokeKind::Middle,
+        );
     }
     if let Some(time) = preview.position(&entry.path, entry.revision) {
         let x = strip.left() + time.clamp(0.0, duration) / duration * strip.width();

@@ -48,7 +48,8 @@ fn text_preview_escape_without_find_returns_to_source_route_and_slots() {
 
     let ctx = egui::Context::default();
     assert!(ctx.memory(|memory| memory.focused()).is_none());
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -57,7 +58,7 @@ fn text_preview_escape_without_find_returns_to_source_route_and_slots() {
             events: vec![key_press_event(egui::Key::Escape)],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none(), "Escape closes the idle text preview");
@@ -364,8 +365,8 @@ fn clipboard_diagrams_open_the_shared_source_editor_and_plain_text_keeps_its_vie
         replacement.push_left(ClipItem::from_text("a later clipboard item"));
         app.state = Arc::new(replacement);
         let context = egui::Context::default();
-        let _ = context.run(egui::RawInput::default(), |context| {
-            assert!(app.render_modal_viewers(context));
+        let _ = clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |context| {
+            assert!(context.root_ui(|ui| app.render_modal_viewers(ui)));
         });
         let Some(ViewerSession::TextEditor(session)) = &app.viewer else {
             panic!("clipboard update replaced editor");
@@ -397,8 +398,8 @@ fn replacing_clipboard_source_waits_for_accepted_copy_completion() {
     let context = egui::Context::default();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let _ = context.run(egui::RawInput::default(), |context| {
-            app.render_modal_viewers(context);
+        let _ = clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |context| {
+            context.root_ui(|ui| app.render_modal_viewers(ui));
         });
         let pending =
             matches!(&app.viewer, Some(ViewerSession::TextEditor(source)) if source.busy());

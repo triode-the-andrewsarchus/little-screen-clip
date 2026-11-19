@@ -319,7 +319,8 @@ mod tests {
             let ctx = egui::Context::default();
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::Enter,

@@ -229,9 +229,9 @@ impl SplatViewerState {
             *close = true;
             return;
         }
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let badge = if self.error.is_some() {
                     "Preview unavailable".into()
@@ -286,7 +286,7 @@ impl SplatViewerState {
             self.desired.camera.pan[1] += delta.y;
         }
         if response.hovered() {
-            let scroll = ui.input(|input| input.raw_scroll_delta.y);
+            let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             self.desired.camera.zoom =
                 (self.desired.camera.zoom * (scroll * 0.002).exp()).clamp(0.05, 50.0);
         }
@@ -309,7 +309,7 @@ impl SplatViewerState {
             );
         }
         if let Some(error) = &self.error {
-            ui.allocate_ui_at_rect(rect.shrink(16.0), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(16.0)), |ui| {
                 ui.colored_label(
                     egui::Color32::WHITE,
                     format!("Unable to display 3D scene:\n{error}"),

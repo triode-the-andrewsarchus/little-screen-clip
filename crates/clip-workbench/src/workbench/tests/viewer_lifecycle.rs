@@ -24,8 +24,8 @@ fn hidden_rolling_audio_retires_on_view_switch_and_modal_entry() {
         component_gallery::ComponentGalleryState::new().unwrap(),
     ));
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(!app.rolling_audio_strip.as_ref().unwrap().is_playing);
 }
@@ -47,7 +47,8 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
 
     let ctx = egui::Context::default();
     ui_ext::configure_workbench_style(&ctx);
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -55,7 +56,7 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
             )),
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
     assert!(app.viewer.is_some());
     assert!(app.spreadsheet_load_job.is_some());
@@ -89,8 +90,8 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         ))))
         .unwrap();
     app.spreadsheet_load_job = Some((ticket, receiver, None));
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        if !app.render_modal_viewers(ctx) {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        if !ctx.root_ui(|ui| app.render_modal_viewers(ui)) {
             app.poll_spreadsheet_load(ctx);
         }
     });
@@ -137,7 +138,8 @@ fn midi_completion_waits_for_foreground_and_startup_viewers() {
 
     let ctx = egui::Context::default();
     ui_ext::configure_workbench_style(&ctx);
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -146,7 +148,7 @@ fn midi_completion_waits_for_foreground_and_startup_viewers() {
             ..Default::default()
         },
         |ctx| {
-            if !app.render_modal_viewers(ctx) {
+            if !ctx.root_ui(|ui| app.render_modal_viewers(ui)) {
                 app.poll_midi_load(ctx);
             }
         },
@@ -158,8 +160,8 @@ fn midi_completion_waits_for_foreground_and_startup_viewers() {
     ));
 
     app.viewer = app.startup_viewers.pop_front();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        if !app.render_modal_viewers(ctx) {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        if !ctx.root_ui(|ui| app.render_modal_viewers(ui)) {
             app.poll_midi_load(ctx);
         }
     });
@@ -182,8 +184,8 @@ fn midi_completion_waits_for_foreground_and_startup_viewers() {
     let (result_tx, receiver) = std::sync::mpsc::channel();
     result_tx.send(Ok(Err("fixture failure".into()))).unwrap();
     app.midi_load_job = Some((ticket, receiver));
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        if !app.render_modal_viewers(ctx) {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        if !ctx.root_ui(|ui| app.render_modal_viewers(ui)) {
             app.poll_midi_load(ctx);
         }
     });
@@ -402,7 +404,8 @@ fn idle_audio_mode_escape_closes_to_the_originating_workbench_route() {
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
         let selected_slots = app.selected_slots.clone();
 
-        let _ = egui::Context::default().run(
+        let _ = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -411,7 +414,7 @@ fn idle_audio_mode_escape_closes_to_the_originating_workbench_route() {
                 events: vec![key_press_event(egui::Key::Escape)],
                 ..Default::default()
             },
-            |ctx| assert!(app.render_modal_viewers(ctx)),
+            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
         );
 
         assert!(app.viewer.is_none(), "Escape closes {mode:?} Audio Studio");
@@ -447,8 +450,8 @@ fn midi_escape_retains_accepted_export_and_handles_its_completion() {
         }],
         ..Default::default()
     };
-    let output = ctx.run(escape(), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let output = clip_ui::test_support::run_frame(&ctx, escape(), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(matches!(&app.viewer, Some(ViewerSession::Midi(state)) if state.export_pending()));
     assert!(
@@ -458,8 +461,8 @@ fn midi_escape_retains_accepted_export_and_handles_its_completion() {
             .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
     );
     complete("controlled host export failure".into());
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        app.render_modal_viewers(ctx);
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| app.render_modal_viewers(ui));
     });
     let Some(ViewerSession::Midi(state)) = &app.viewer else {
         panic!("completion should remain inspectable");
@@ -469,8 +472,8 @@ fn midi_escape_retains_accepted_export_and_handles_its_completion() {
         state.status_toast.message(crate::ui_ext::feedback_time()),
         Some("controlled host export failure")
     );
-    let _ = ctx.run(escape(), |ctx| {
-        app.render_modal_viewers(ctx);
+    let _ = clip_ui::test_support::run_frame(&ctx, escape(), |ctx| {
+        ctx.root_ui(|ui| app.render_modal_viewers(ui));
     });
     assert!(app.viewer.is_none());
 }

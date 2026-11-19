@@ -17,7 +17,7 @@ mod studio;
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
-use egui::{self, Rounding, Stroke, Vec2};
+use egui::{self, CornerRadius, Stroke, Vec2};
 use little_clip_core::pdf::{
     PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
@@ -389,7 +389,7 @@ impl PdfPageViewport {
         // Clamp before interaction as well, since the host or page aspect may change.
         self.page_rect(viewport, dimensions);
         if response.hovered() {
-            let scroll = ui.input(|input| input.raw_scroll_delta.y);
+            let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
                 self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, 8.0);

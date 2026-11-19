@@ -155,7 +155,7 @@ impl Viewer {
                 ui.horizontal(|ui| {
                     ui.label(format!("Selected: {character} · U+{:04X}", character as u32));
                     if ui.add(ButtonRole::Secondary.button("Copy character", palette)).clicked() {
-                        ui.output_mut(|output| output.copied_text = character.to_string());
+                        ui.ctx().copy_text(character.to_string());
                     }
                 });
             }
@@ -172,7 +172,7 @@ impl Viewer {
             if faces > 1 {
                 ui.label("Collection face");
                 let mut selected = self.request.face + 1;
-                ui.add(egui::DragValue::new(&mut selected).clamp_range(1..=faces));
+                ui.add(egui::DragValue::new(&mut selected).range(1..=faces));
                 self.request.face = selected - 1;
             }
         });
@@ -186,7 +186,7 @@ impl Viewer {
     fn block_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Character range");
-            egui::ComboBox::from_id_source("font-block")
+            egui::ComboBox::from_id_salt("font-block")
                 .selected_text(BLOCKS[self.block].0)
                 .show_ui(ui, |ui| {
                     for (index, (name, start)) in BLOCKS.iter().enumerate() {
@@ -243,7 +243,12 @@ impl Viewer {
                     ),
                 vec2(cell, cell),
             );
-            painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5_f32, dim));
+            painter.rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(0.5_f32, dim),
+                egui::StrokeKind::Middle,
+            );
             if self.present.get(index) == Some(&false) {
                 painter.line_segment(
                     [rect.left_top(), rect.right_bottom()],
@@ -254,7 +259,12 @@ impl Viewer {
                 .selected
                 .is_some_and(|ch| ch as u32 == self.request.start + index as u32)
             {
-                painter.rect_stroke(rect.shrink(1.0), 0.0, egui::Stroke::new(2.0_f32, accent));
+                painter.rect_stroke(
+                    rect.shrink(1.0),
+                    0.0,
+                    egui::Stroke::new(2.0_f32, accent),
+                    egui::StrokeKind::Middle,
+                );
             }
             if response.hover_pos().is_some_and(|pos| rect.contains(pos)) {
                 let value = self.request.start + index as u32;

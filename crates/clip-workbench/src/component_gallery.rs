@@ -9,7 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::BODY_FONT_SIZE;
 use crate::ui_ext::{self, badge_pill};
 use clip_ui::buttons::ButtonRole;
-use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2};
 use little_clip_core::audio::{FullAudioAnalysis, PeakBlock};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
@@ -325,9 +325,9 @@ impl ComponentGalleryState {
     pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         let colors = WorkbenchColors::from_palette(palette);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(colors.panel)
-                .rounding(Rounding::same(ui_ext::PANEL_CORNER_RADIUS))
+                .corner_radius(CornerRadius::from(ui_ext::PANEL_CORNER_RADIUS))
                 .inner_margin(ui_ext::PANEL_INSET)
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
@@ -579,9 +579,9 @@ impl ComponentGalleryState {
                     {
                         self.selected_tool = tool;
                     }
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(colors.recessed)
-                        .rounding(Rounding::same(ui_ext::CARD_CORNER_RADIUS))
+                        .corner_radius(CornerRadius::from(ui_ext::CARD_CORNER_RADIUS))
                         .stroke(Stroke::new(1.0_f32, colors.border))
                         .inner_margin(ui_ext::SPACE_SM)
                         .show(ui, |ui| {
@@ -607,9 +607,9 @@ fn render_section(
     contents: impl FnOnce(&mut egui::Ui),
 ) {
     let colors = WorkbenchColors::from_palette(palette);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(colors.panel)
-        .rounding(Rounding::same(ui_ext::PANEL_CORNER_RADIUS))
+        .corner_radius(CornerRadius::from(ui_ext::PANEL_CORNER_RADIUS))
         .stroke(Stroke::new(1.0_f32, colors.border))
         .inner_margin(ui_ext::PANEL_INSET)
         .show(ui, |ui| {
@@ -629,9 +629,9 @@ fn status_sample(
     palette: &AppPalette,
 ) {
     let colors = WorkbenchColors::from_palette(palette);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(colors.recessed)
-        .rounding(Rounding::same(ui_ext::CONTROL_CORNER_RADIUS))
+        .corner_radius(CornerRadius::from(ui_ext::CONTROL_CORNER_RADIUS))
         .stroke(Stroke::new(1.0_f32, accent))
         .inner_margin(Vec2::splat(ui_ext::SPACE_SM))
         .show(ui, |ui| {
@@ -686,14 +686,17 @@ mod tests {
                 ui_appearance::apply_visuals(&ctx, &palette);
                 let mut gallery = ComponentGalleryState::new().unwrap();
                 let mut close = false;
-                let mut outputs = vec![ctx.run(
+                let mut outputs = vec![clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            gallery.render_ui(ui, &palette, &mut close);
+                        ctx.root_ui(|root| {
+                            egui::CentralPanel::default().show(root, |ui| {
+                                gallery.render_ui(ui, &palette, &mut close);
+                            })
                         });
                     },
                 )];
@@ -710,22 +713,21 @@ mod tests {
                     if has_pdf_action {
                         break;
                     }
-                    outputs.push(ctx.run(
+                    outputs.push(clip_ui::test_support::run_frame(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                             events: vec![
                                 egui::Event::PointerMoved(egui::pos2(size.x * 0.5, size.y * 0.75)),
-                                egui::Event::MouseWheel {
-                                    unit: egui::MouseWheelUnit::Point,
-                                    delta: egui::vec2(0.0, -500.0),
-                                    modifiers: egui::Modifiers::NONE,
-                                },
+                                clip_ui::test_support::scroll(egui::vec2(0.0, -500.0)),
                             ],
                             ..Default::default()
                         },
                         |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
-                                gallery.render_ui(ui, &palette, &mut close);
+                            ctx.root_ui(|ui| {
+                                egui::CentralPanel::default().show(ui, |ui| {
+                                    gallery.render_ui(ui, &palette, &mut close);
+                                })
                             });
                         },
                     ));
@@ -884,14 +886,17 @@ mod tests {
         let audio_source = Arc::clone(&gallery.audio_source);
         let pdf_raster = Arc::clone(&gallery.pdf_raster);
 
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, clipped_size)),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    gallery.render_ui(ui, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        gallery.render_ui(ui, &palette, &mut close);
+                    })
                 });
             },
         );
@@ -903,14 +908,17 @@ mod tests {
 
         let mut pdf_texture_id = None;
         for frame in 0..200 {
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, visible_size)),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        gallery.render_ui(ui, &palette, &mut close);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            gallery.render_ui(ui, &palette, &mut close);
+                        })
                     });
                 },
             );
@@ -953,14 +961,17 @@ mod tests {
             "gallery and inline widget retain one raster Arc each"
         );
         for _ in 0..3 {
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, visible_size)),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        gallery.render_ui(ui, &palette, &mut close);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            gallery.render_ui(ui, &palette, &mut close);
+                        })
                     });
                 },
             );

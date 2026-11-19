@@ -226,11 +226,7 @@ impl Previews {
             colors.text_primary.b(),
         ];
         let dpi = ui.ctx().pixels_per_point();
-        let hover_idle = ui.input(|input| {
-            input.raw_scroll_delta == egui::Vec2::ZERO
-                && input.smooth_scroll_delta == egui::Vec2::ZERO
-                && !input.pointer.primary_down()
-        });
+        let hover_idle = ui.input(|input| !input.is_scrolling() && !input.pointer.primary_down());
 
         for (ordinal, cell) in cells {
             let index = ordinal - 1;
@@ -266,7 +262,7 @@ impl Previews {
             );
             name_job.wrap.max_rows = 1;
             name_job.wrap.break_anywhere = true;
-            let galley = ui.fonts(|fonts| fonts.layout_job(name_job));
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(name_job));
             ui.painter()
                 .with_clip_rect(label_rect.intersect(ui.clip_rect()))
                 .galley(label_rect.min, galley, colors.text_secondary);
@@ -331,8 +327,14 @@ impl Previews {
         });
         let preset = &library.brushes[index];
         let texture = ready.and_then(|ready| ready.texture.as_ref());
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("brush-strip-hover"), |ui| {
-            let available = (ui.ctx().screen_rect().width() - 56.0).max(48.0);
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique("brush-strip-hover"),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            let available = (ui.ctx().content_rect().width() - 56.0).max(48.0);
             let h = 110.0_f32.min(available / BRUSH_HOVER_ASPECT_RATIO);
             let size = vec2(h * BRUSH_HOVER_ASPECT_RATIO, h);
             ui.set_max_width(size.x);

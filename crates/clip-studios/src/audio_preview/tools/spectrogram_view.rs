@@ -11,7 +11,7 @@
 //! - [`frequency_ticks`]: Computes Nyquist-aware frequency ticks (supporting ultrasonic >196 kHz).
 //! - [`time_ruler_interval`] & [`format_time_label`]: Standardized timeline ruler helpers.
 
-use egui::{self, Color32, Pos2, Rect, Rounding, Stroke};
+use egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke};
 use little_clip_ops::hf_audio::{HfSpectrogramConfig, render_hf_viewport_spectrogram};
 
 /// Returns frequency label ticks and values in descending order for the spectrogram axis.
@@ -224,7 +224,7 @@ pub fn paint_spectrogram_surface(
         let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
         painter.image(tex.id(), spec_rect, uv, Color32::WHITE);
     } else {
-        painter.rect_filled(spec_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(spec_rect, CornerRadius::ZERO, bg_frame);
         crate::icons::Icon::Hourglass.paint_text(
             painter,
             spec_rect.center(),

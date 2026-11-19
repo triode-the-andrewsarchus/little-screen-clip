@@ -68,7 +68,7 @@ impl AudioPreviewState {
             self.paint_channel_row(painter, palette, plots, index, label);
         }
         self.paint_channel_overlay(painter, palette, plots, ruler);
-        painter.rect_filled(scroll, Rounding::same(3.0), colors.recessed);
+        painter.rect_filled(scroll, CornerRadius::same(3), colors.recessed);
         let total = self.duration_sec.max(0.01);
         let thumb = Rect::from_min_size(
             Pos2::new(scroll.min.x + start / total * scroll.width(), scroll.min.y),
@@ -77,7 +77,7 @@ impl AudioPreviewState {
                 scroll.height(),
             ),
         );
-        painter.rect_filled(thumb, Rounding::same(3.0), colors.panel);
+        painter.rect_filled(thumb, CornerRadius::same(3), colors.panel);
     }
     fn paint_channel_row(
         &mut self,
@@ -108,7 +108,7 @@ impl AudioPreviewState {
                 plots.min.y + (index + 1) as f32 * row_height - 4.0,
             ),
         );
-        painter.rect_filled(wave, Rounding::ZERO, colors.recessed);
+        painter.rect_filled(wave, CornerRadius::ZERO, colors.recessed);
         painter.text(
             Pos2::new(track.min.x - 8.0, wave.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -193,7 +193,11 @@ impl AudioPreviewState {
                 Pos2::new(plots.min.x - 44.0, top),
                 Pos2::new(plots.max.x, spectrum.max.y),
             );
-            painter.rect_filled(body, Rounding::ZERO, colors.canvas.linear_multiply(0.72));
+            painter.rect_filled(
+                body,
+                CornerRadius::ZERO,
+                colors.canvas.linear_multiply(0.72),
+            );
         }
     }
     fn paint_channel_overlay(
@@ -219,7 +223,7 @@ impl AudioPreviewState {
             let right = time_x(end);
             overlay.rect_filled(
                 Rect::from_min_max(Pos2::new(left, plots.min.y), Pos2::new(right, plots.max.y)),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 hex_to_c32_alpha(&palette.harmonies.base, 40),
             );
             for x in [left, right] {
@@ -292,7 +296,7 @@ impl AudioPreviewState {
                     .interact_pos()
                     .is_some_and(|pos| header.contains(pos))
             });
-            ui.allocate_ui_at_rect(header, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(header), |ui| {
                 ui.horizontal(|ui| {
                     if ui
                         .add(

@@ -6,7 +6,7 @@
 use crate::icons::Icon;
 use crate::ui_ext::{StatusMessage, StatusToast, feedback_time};
 use crate::{hex_to_c32, hex_to_c32_alpha};
-use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::BackgroundJobs;
 use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
@@ -347,7 +347,7 @@ impl RollingAudioStripState {
             ui.spacing_mut().interact_size.y = crate::ui_ext::CONTROL_HEIGHT;
             // Treat each label as one wrapped-row item. egui's flowing-label
             // layout can place its glyphs above the row after a short icon.
-            ui.style_mut().wrap = Some(false);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.horizontal_wrapped(|ui| {
                 let accent_text = crate::ui_ext::contrast_text_c32_on(
                     canvas,
@@ -494,7 +494,7 @@ impl RollingAudioStripState {
             let painter = ui.painter_at(rect);
 
             // Background & Border (glow border when selection is active and focused)
-            painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.colors.surface_recessed));
+            painter.rect_filled(rect, CornerRadius::same(4), hex_to_c32(&palette.colors.surface_recessed));
             let border_stroke = if self.selected_region.is_some() {
                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
             } else {
@@ -502,8 +502,9 @@ impl RollingAudioStripState {
             };
             painter.rect_stroke(
                 rect,
-                Rounding::same(4.0),
+                CornerRadius::same(4),
                 border_stroke,
+                egui::StrokeKind::Middle,
             );
 
             let center_y = rect.center().y;
@@ -653,7 +654,7 @@ impl RollingAudioStripState {
 
                 painter.rect_filled(
                     sel_rect,
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     hex_to_c32_alpha(&palette.harmonies.base, 40),
                 );
                 painter.line_segment(
@@ -793,7 +794,8 @@ mod tests {
                 let palette = crate::ui_appearance::palette(appearance);
                 let mut strip = empty_test_strip();
                 for _ in 0..3 {
-                    let output = ctx.run(
+                    let output = clip_ui::test_support::run_frame(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(
                                 Pos2::ZERO,
@@ -802,11 +804,13 @@ mod tests {
                             ..Default::default()
                         },
                         |ctx| {
-                            egui::TopBottomPanel::bottom("audio-test")
-                                .min_height(100.0)
-                                .show(ctx, |ui| {
-                                    strip.render_ui(ui, ctx, &palette, &mut None);
-                                });
+                            ctx.root_ui(|ui| {
+                                egui::Panel::bottom("audio-test")
+                                    .min_size(100.0)
+                                    .show(ui, |ui| {
+                                        strip.render_ui(ui, ctx, &palette, &mut None);
+                                    })
+                            });
                         },
                     );
                     let mut header_found = false;
@@ -977,7 +981,8 @@ mod tests {
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut action = None;
         let mut frame = |time: f64, events: Vec<egui::Event>| {
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 160.0))),
                     time: Some(time),
@@ -985,8 +990,10 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        strip.render_ui(ui, ctx, &palette, &mut action);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            strip.render_ui(ui, ctx, &palette, &mut action);
+                        })
                     });
                 },
             );
@@ -1055,14 +1062,17 @@ mod tests {
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 160.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        strip.render_header(ui, &palette, 120.0, feedback_time());
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            strip.render_header(ui, &palette, 120.0, feedback_time());
+                        })
                     });
                 },
             );
@@ -1082,7 +1092,11 @@ mod tests {
                     "header text exceeds available width: {bounds:?} clipped to {:?}",
                     clipped_shape.clip_rect
                 );
-                assert!(!shape.galley.elided, "header text was elided");
+                assert!(
+                    !shape.galley.elided,
+                    "header text was elided: {:?}",
+                    shape.galley.text()
+                );
                 text.push(shape.galley.job.text.clone());
             }
             text
@@ -1245,7 +1259,8 @@ mod tests {
             .set(StatusMessage::error("Copy failed"), 10.0);
         let mut heights = Vec::new();
         for now in [11.0, 15.0, 70.0] {
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     // A distinct frame clock must not determine feedback age.
                     time: Some(1000.0 + now),
@@ -1253,10 +1268,12 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let top = ui.cursor().top();
-                        strip.render_header(ui, &palette, 120.0, now);
-                        heights.push(ui.cursor().top() - top);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let top = ui.cursor().top();
+                            strip.render_header(ui, &palette, 120.0, now);
+                            heights.push(ui.cursor().top() - top);
+                        })
                     });
                 },
             );
@@ -1419,7 +1436,9 @@ mod tests {
             strip.selected_region = None;
             assert!(strip.copy_pending());
             let ctx = egui::Context::default();
-            let output = ctx.run(egui::RawInput::default(), |ctx| strip.poll_copy(ctx));
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                strip.poll_copy(ctx)
+            });
             assert!(output.viewport_output.values().any(|v| {
                 v.commands
                     .iter()
@@ -1428,9 +1447,11 @@ mod tests {
             let artifact = artifact_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    strip.render_header(ui, &palette, 2.0, feedback_time() + 60.0);
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        strip.render_header(ui, &palette, 2.0, feedback_time() + 60.0);
+                    })
                 });
             });
             assert!(

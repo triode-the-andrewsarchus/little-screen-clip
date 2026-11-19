@@ -103,7 +103,7 @@ impl Search {
         }
         let response = ui.interact(
             footer,
-            egui::Id::new(("search_explanation", &entry.path)),
+            egui::Id::unique(("search_explanation", &entry.path)),
             egui::Sense::click_and_drag(),
         );
         self.result_hover(&response, entry);

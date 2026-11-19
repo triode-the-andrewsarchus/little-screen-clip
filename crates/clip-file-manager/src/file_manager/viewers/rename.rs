@@ -83,7 +83,7 @@ impl Rename {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
                 ui.label("Filename (including extension):");
-                let field_id = egui::Id::new("files_editor_rename_name");
+                let field_id = egui::Id::unique("files_editor_rename_name");
                 ui.ctx().memory_mut(|memory| memory.request_focus(field_id));
                 let mut output = egui::TextEdit::singleline(&mut self.name)
                     .id(field_id)

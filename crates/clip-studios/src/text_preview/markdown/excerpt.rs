@@ -177,7 +177,7 @@ impl MarkdownExcerptView {
             return;
         }
         egui::ScrollArea::vertical()
-            .id_source((
+            .id_salt((
                 "markdown_source_excerpt",
                 self.data.source_lines.start(),
                 self.data.source_lines.end(),

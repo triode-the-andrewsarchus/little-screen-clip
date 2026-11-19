@@ -130,11 +130,11 @@ impl Document {
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
-        let width = (ui.ctx().screen_rect().width() - 40.0).clamp(160.0, 760.0);
+        let width = (ui.ctx().content_rect().width() - 40.0).clamp(160.0, 760.0);
         ui.set_width(width);
         let font_id = egui::FontId::monospace(14.0);
         let mut remaining = if short_file {
-            let screen = ui.ctx().screen_rect();
+            let screen = ui.ctx().content_rect();
             let pointer_y = ui.ctx().pointer_hover_pos().map_or(screen.top(), |p| p.y);
             let content_top = ui.cursor().top().max(pointer_y + 16.0);
             // Reserve frame padding and the heading inside the one-third-window
@@ -143,7 +143,7 @@ impl Document {
                 .min(screen.bottom() - content_top - 12.0)
                 .max(0.0);
             let row_height =
-                ui.fonts(|fonts| fonts.row_height(&font_id)) + ui.spacing().item_spacing.y;
+                ui.fonts_mut(|fonts| fonts.row_height(&font_id)) + ui.spacing().item_spacing.y;
             (height / row_height).floor() as usize
         } else {
             EXCERPT_LINES

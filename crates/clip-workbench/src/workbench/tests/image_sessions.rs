@@ -269,7 +269,8 @@ fn rendered_image_studio_escape_restores_only_the_matching_edited_session() {
     state.undo_stack.push(Arc::clone(&state.original_rgba));
     let edited_pixel = *state.current_rgba.get_pixel(0, 0);
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -278,7 +279,7 @@ fn rendered_image_studio_escape_restores_only_the_matching_edited_session() {
             events: vec![key_press_event(egui::Key::Escape)],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(

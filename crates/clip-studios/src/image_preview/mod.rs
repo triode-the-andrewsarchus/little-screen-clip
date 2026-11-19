@@ -24,7 +24,7 @@ pub(crate) use tools::{
 
 use crate::icons::Icon;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
-use egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use image::RgbaImage;
 #[cfg(any(test, feature = "test-support"))]
 use little_clip_core::ClipItem;
@@ -449,7 +449,7 @@ impl InlineImagePreview {
         }
 
         if response.hovered() {
-            let scroll_y = ui.input(|input| input.raw_scroll_delta.y);
+            let scroll_y = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll_y != 0.0 {
                 self.zoom = (self.zoom * (scroll_y / 240.0).exp()).clamp(0.25, 8.0);
                 ui.ctx().request_repaint();

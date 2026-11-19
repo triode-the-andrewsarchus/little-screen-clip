@@ -4,7 +4,7 @@
 //! handling slot selection, inspection, and drag-and-drop slot swapping.
 
 use crate::hex_to_c32;
-use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::SlotId;
 use little_clip_core::palette::AppPalette;
 
@@ -103,7 +103,7 @@ impl<'a> ScreenMirrorWidget<'a> {
         let width = ui.available_width();
         let size = fitted_mirror_size(Vec2::new(
             width,
-            ui.ctx().screen_rect().height() * self.height_scale,
+            ui.ctx().content_rect().height() * self.height_scale,
         ));
         let (space, _) = ui.allocate_exact_size(Vec2::new(width, size.y), egui::Sense::hover());
         let rect = Rect::from_center_size(space.center(), size);
@@ -146,7 +146,7 @@ impl<'a> ScreenMirrorWidget<'a> {
         } else {
             painter.rect_filled(
                 rect,
-                Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
+                CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS),
                 hex_to_c32(&palette.colors.surface_recessed),
             );
         }
@@ -176,15 +176,17 @@ impl<'a> ScreenMirrorWidget<'a> {
                 let stroke_color = hex_to_c32(&palette.harmonies.base);
                 painter.rect_stroke(
                     slot_screen_rect,
-                    Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
+                    CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS),
                     Stroke::new(2.0_f32, stroke_color),
+                    egui::StrokeKind::Middle,
                 );
             } else if is_hovered && !is_dragging {
                 let stroke_color = hex_to_c32(&palette.colors.text_secondary);
                 painter.rect_stroke(
                     slot_screen_rect,
-                    Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
+                    CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS),
                     Stroke::new(1.0_f32, stroke_color),
+                    egui::StrokeKind::Middle,
                 );
             }
         }
@@ -214,7 +216,13 @@ impl<'a> ScreenMirrorWidget<'a> {
             && let Some(source) = *self.dragging_slot
         {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("slot_drag_tip"), |ui| {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique("slot_drag_tip"),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
                 ui.label(format!(
                     "Dragging {} (drop on another slot to swap)",
                     source.label()
@@ -292,20 +300,23 @@ mod native_input_tests {
         left_priors: usize,
     ) -> Option<MirrorAction> {
         let mut action = None;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none())
-                    .show(ctx, |ui| {
-                        action = ScreenMirrorWidget::new(None, left_priors, dragging, &[])
-                            .with_native(data)
-                            .show(ui, &crate::ui_appearance::palette(Default::default()));
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| {
+                            action = ScreenMirrorWidget::new(None, left_priors, dragging, &[])
+                                .with_native(data)
+                                .show(ui, &crate::ui_appearance::palette(Default::default()));
+                        })
+                });
             },
         );
         action

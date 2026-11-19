@@ -129,7 +129,7 @@ impl PdfInteraction {
             self.anchor = None;
             self.endpoint = None;
         }
-        let copy = !ui.ctx().wants_keyboard_input()
+        let copy = !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events
@@ -139,7 +139,7 @@ impl PdfInteraction {
             });
         if copy {
             if let Some(text) = self.selected_text(layout) {
-                ui.output_mut(|output| output.copied_text = text.to_owned());
+                ui.ctx().copy_text(text.to_owned());
             } else {
                 copy_image = self.image;
             }
@@ -196,6 +196,7 @@ impl PdfInteraction {
                 element_rect(page, image.rect),
                 0.0,
                 Stroke::new(2.0_f32, egui::Color32::RED),
+                egui::StrokeKind::Middle,
             );
         }
     }
@@ -224,11 +225,17 @@ mod tests {
             ..Default::default()
         };
         let page = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
-        let output = egui::Context::default().run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                PdfInteraction::default().paint_overlay(ui, page, page, &layout, "b");
-            });
-        });
+        let output = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
+            Default::default(),
+            |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        PdfInteraction::default().paint_overlay(ui, page, page, &layout, "b");
+                    })
+                });
+            },
+        );
         let highlights = output
             .shapes
             .iter()

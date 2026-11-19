@@ -205,14 +205,17 @@ fn binary_diff_ordinary_chrome_renders_within_compact_and_wide_hosts() {
     for width in [1200.0, 1760.0] {
         let ctx = egui::Context::default();
         let host = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 760.0));
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(host),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -331,7 +334,8 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
     let mut time = 0.0;
     let mut render = |state: &mut BinaryDiffViewState, time: &mut f64, events: Vec<egui::Event>| {
         *time += 0.1;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -342,8 +346,10 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    })
                 });
             },
         )
@@ -393,7 +399,7 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
     );
 
     assert_eq!(
-        copied.platform_output.copied_text,
+        clip_ui::test_support::copied_text(&copied.platform_output),
         "Binary Diff Summary:\nLeft: left.bin (3 bytes)\nRight: right.bin (4 bytes)\nSimilarity: 50.00%\nMatches: 2 B | Mismatches: 1 B | Insertions: 1 B | Deletions: 0 B\nMode: Aligned"
     );
     state.result.as_mut().unwrap().alignment_limited = true;
@@ -416,9 +422,7 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
         );
         if !pressed {
             assert!(
-                frame
-                    .platform_output
-                    .copied_text
+                clip_ui::test_support::copied_text(&frame.platform_output)
                     .ends_with("Mode: Aligned (approximate alignment)")
             );
         }
@@ -463,7 +467,8 @@ fn fragmented_diffs_bound_draw_work_and_reveal_the_last_card() {
             state.nav.selected_diff_block = Some(block_count);
             state.nav.scroll_target_row = Some(block_count * 2 - 2);
         }
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -472,8 +477,10 @@ fn fragmented_diffs_bound_draw_work_and_reveal_the_last_card() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );

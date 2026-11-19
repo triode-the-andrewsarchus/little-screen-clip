@@ -666,10 +666,7 @@ impl ImagePreviewState {
                 pixels.push(Color32::TRANSPARENT);
             }
         }
-        let color_image = egui::ColorImage {
-            size: [w as usize, h as usize],
-            pixels,
-        };
+        let color_image = egui::ColorImage::new([w as usize, h as usize], pixels);
         if let Some(tex) = &mut self.inpaint_mask_texture {
             tex.set(color_image, egui::TextureOptions::NEAREST);
         } else {

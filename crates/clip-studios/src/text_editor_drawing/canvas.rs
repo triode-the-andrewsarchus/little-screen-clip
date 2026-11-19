@@ -392,7 +392,12 @@ impl DrawingEditor {
                     self.camera.screen(*current, rect),
                 );
                 painter.rect_filled(area, 0.0, accent.gamma_multiply(0.12));
-                painter.rect_stroke(area, 0.0, egui::Stroke::new(1.0_f32, accent));
+                painter.rect_stroke(
+                    area,
+                    0.0,
+                    egui::Stroke::new(1.0_f32, accent),
+                    egui::StrokeKind::Middle,
+                );
             }
             Some(Gesture::Draw {
                 start,
@@ -440,7 +445,12 @@ impl DrawingEditor {
                         ));
                     }
                     _ => {
-                        painter.rect_stroke(Rect::from_two_pos(a, b), 2.0, stroke);
+                        painter.rect_stroke(
+                            Rect::from_two_pos(a, b),
+                            2.0,
+                            stroke,
+                            egui::StrokeKind::Middle,
+                        );
                     }
                 }
             }
@@ -501,14 +511,15 @@ mod tests {
         events: Vec<egui::Event>,
         mut paint: impl FnMut(&mut egui::Ui),
     ) {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, &mut paint);
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, &mut paint));
             },
         );
     }
@@ -674,7 +685,7 @@ mod tests {
             ui_frame(&ctx, events, |ui| {
                 let response = ui.interact(
                     rect,
-                    egui::Id::new("drawing pointer fixture"),
+                    egui::Id::unique("drawing pointer fixture"),
                     egui::Sense::click_and_drag(),
                 );
                 editor.interact(ui, &response, rect);

@@ -28,7 +28,7 @@ impl PdfEditorState {
             }
         }
         if !self.source.read_only()
-            && !ctx.wants_keyboard_input()
+            && !ctx.egui_wants_keyboard_input()
             && !self.document_tools.ocr_busy()
         {
             if ctx.input(|input| {
@@ -47,7 +47,7 @@ impl PdfEditorState {
             self.ensure_page_texture(page, ctx);
         }
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none().fill(colors.canvas).inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+        egui::Frame::NONE.fill(colors.canvas).inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let read_only = self.source.read_only();
                 let mut rotate = false;
@@ -181,11 +181,11 @@ impl PdfEditorState {
         ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(size.x);
             ui.set_height(size.y);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(colors.recessed)
                 .stroke(Stroke::new(1.0_f32, colors.panel))
-                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| render(self, ui));
         });
     }
@@ -198,7 +198,7 @@ impl PdfEditorState {
     ) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::ScrollArea::vertical()
-            .id_source("pdf-page-thumbnails")
+            .id_salt("pdf-page-thumbnails")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let pages = self
@@ -218,14 +218,14 @@ impl PdfEditorState {
                 for (page, (width, height), failed) in pages {
                     let selected = self.selected_page == Some(page);
                     let accent = crate::hex_to_c32(&palette.harmonies.base);
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(colors.canvas)
                         .stroke(Stroke::new(
                             if selected { 2.0_f32 } else { 1.0_f32 },
                             if selected { accent } else { colors.panel },
                         ))
-                        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                        .inner_margin(egui::Margin::same(crate::ui_ext::ITEM_SPACING_Y))
+                        .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                        .inner_margin(egui::Margin::from(crate::ui_ext::ITEM_SPACING_Y))
                         .show(ui, |ui| {
                             let aspect = width as f32 / height.max(1) as f32;
                             let image_width =
@@ -239,7 +239,7 @@ impl PdfEditorState {
                                 .then(|| self.ensure_page_texture(page, ctx))
                                 .flatten();
                             let clicked = if let Some(texture) = texture {
-                                ui.add(egui::ImageButton::new(egui::load::SizedTexture::new(
+                                ui.add(egui::Button::image(egui::load::SizedTexture::new(
                                     texture, size,
                                 )))
                                 .clicked()

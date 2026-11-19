@@ -73,7 +73,7 @@ impl Camera {
     }
     pub fn input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
         if response.hovered() {
-            let scroll = ui.input(|input| input.raw_scroll_delta.y);
+            let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll != 0.0
                 && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
             {

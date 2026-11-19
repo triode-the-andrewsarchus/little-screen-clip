@@ -21,7 +21,7 @@ impl ImagePreviewState {
         // Background canvas fill
         painter.rect_filled(
             canvas_rect,
-            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
             hex_to_c32(&palette.colors.canvas),
         );
 
@@ -50,7 +50,7 @@ impl ImagePreviewState {
 
         // Zooming interaction (mouse wheel)
         if response.hovered() {
-            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll_delta = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll_delta.abs() > 0.0 {
                 let zoom_factor = (scroll_delta * 0.002).exp();
                 let old_zoom = self.zoom;
@@ -125,11 +125,12 @@ impl ImagePreviewState {
             // Draw crisp subtle border around the image bounds
             painter.rect_stroke(
                 img_rect,
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 Stroke::new(
                     1.0_f32,
                     hex_to_c32_alpha(&palette.colors.text_secondary, 40),
                 ),
+                egui::StrokeKind::Middle,
             );
 
             // Draw any placed redaction bars so they remain visible across all modes
@@ -147,7 +148,7 @@ impl ImagePreviewState {
                 );
                 painter.rect_filled(
                     Rect::from_min_max(screen_min, screen_max),
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     Color32::BLACK,
                 );
             }

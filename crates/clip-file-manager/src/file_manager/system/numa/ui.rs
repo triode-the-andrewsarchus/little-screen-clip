@@ -50,7 +50,7 @@ pub(in crate::file_manager::system) fn paint(
             .shrink(width.min(height).min(1.0) * 0.25);
             distance_cell(ui, cell, row, *id, value, colors, palette);
             let label = format!("N{id}");
-            let label_width = ui.fonts(|fonts| {
+            let label_width = ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(label.clone(), FontId::monospace(9.0), colors.text_secondary)
                     .size()
@@ -113,7 +113,7 @@ fn distance_cell(
     };
     painter.rect_filled(cell, 1.0, fill);
     let label = value.map_or_else(|| "?".into(), u16::to_string);
-    let label_width = ui.fonts(|fonts| {
+    let label_width = ui.fonts_mut(|fonts| {
         fonts
             .layout_no_wrap(label.clone(), FontId::monospace(10.0), colors.text_primary)
             .size()
@@ -134,6 +134,6 @@ fn distance_cell(
         );
     }
     if !crate::file_manager::ui::popup_open(ui.ctx()) {
-        ui.interact(cell,ui.id().with(("numa-distance",row.id,column)),Sense::hover()).on_hover_text(format!("node{} → node{column}: {} · {}{}\nRelative distance, not measured latency · observed {} ms ago",row.id,value.map_or_else(||"unavailable".into(),u16::to_string),row.outcome,if row.retained {" · last observation"} else {""},super::super::model::now_ms().saturating_sub(row.observed_ms)));
+        ui.interact(cell,ui.scope_id().with(("numa-distance",row.id,column)),Sense::hover()).on_hover_text(format!("node{} → node{column}: {} · {}{}\nRelative distance, not measured latency · observed {} ms ago",row.id,value.map_or_else(||"unavailable".into(),u16::to_string),row.outcome,if row.retained {" · last observation"} else {""},super::super::model::now_ms().saturating_sub(row.observed_ms)));
     }
 }

@@ -157,7 +157,8 @@ fn huge_line_rendering_only_shapes_bounded_fragments() {
     let ctx = egui::Context::default();
     let content = "long text ".repeat(10_000);
     let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -166,8 +167,10 @@ fn huge_line_rendering_only_shapes_bounded_fragments() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_raw_code_view(ui, &AppPalette::default());
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_raw_code_view(ui, &AppPalette::default());
+                })
             });
         },
     );
@@ -197,7 +200,8 @@ fn gutter_labels_wrapped_source_line_once_on_its_first_fragment() {
     state.wrap_lines = false;
     let target_first_row = state.line_first_fragment[1];
     let target_fragment = state.code_fragments[target_first_row];
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -206,8 +210,10 @@ fn gutter_labels_wrapped_source_line_once_on_its_first_fragment() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_raw_code_view(ui, &AppPalette::default());
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_raw_code_view(ui, &AppPalette::default());
+                })
             });
         },
     );
@@ -256,7 +262,8 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
     state.scroll_to_line = Some(first_row + 1);
     let render = |state: &mut TextPreviewState, time: &mut f64, events: Vec<egui::Event>| {
         *time += 0.05;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -267,8 +274,10 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_raw_code_view(ui, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_raw_code_view(ui, &AppPalette::default());
+                    })
                 });
             },
         )
@@ -295,12 +304,12 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
                 let char_index = content[fragment.start_byte..byte].chars().count();
                 let cursor = text
                     .galley
-                    .pos_from_ccursor(egui::text::CCursor::new(char_index));
+                    .pos_from_cursor(egui::text::CCursor::new(char_index));
                 assert_eq!(
                     text.galley
                         .cursor_from_pos(cursor.center().to_vec2())
-                        .ccursor
-                        .index,
+                        .index
+                        .0,
                     char_index,
                     "galley cursor round-trip failed for source byte {byte}"
                 );
@@ -348,10 +357,10 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
             Some((expected_anchor, expected_focus))
         );
         assert_eq!(
-            render(&mut state, &mut time, vec![egui::Event::Copy])
-                .platform_output
-                .copied_text,
-            content[start..end]
+            clip_ui::test_support::copied_text(
+                &render(&mut state, &mut time, vec![egui::Event::Copy]).platform_output
+            ),
+            &content[start..end]
         );
     }
     state.scroll_to_line = Some(1);
@@ -361,17 +370,17 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
     }));
     assert_eq!(state.code_selection, Some((end, start)));
     assert_eq!(
-        render(&mut state, &mut time, vec![egui::Event::Copy])
-            .platform_output
-            .copied_text,
-        content[start..end]
+        clip_ui::test_support::copied_text(
+            &render(&mut state, &mut time, vec![egui::Event::Copy]).platform_output
+        ),
+        &content[start..end]
     );
 
     state.code_selection = None;
     assert_eq!(
-        render(&mut state, &mut time, vec![egui::Event::Copy])
-            .platform_output
-            .copied_text,
+        clip_ui::test_support::copied_text(
+            &render(&mut state, &mut time, vec![egui::Event::Copy]).platform_output
+        ),
         content
     );
 
@@ -414,10 +423,10 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
     assert_eq!(state.code_selection, Some((line_start, line_end)));
     assert!(content[line_start..line_end].contains('\n'));
     assert_eq!(
-        render(&mut state, &mut time, vec![egui::Event::Copy])
-            .platform_output
-            .copied_text,
-        content[line_start..line_end]
+        clip_ui::test_support::copied_text(
+            &render(&mut state, &mut time, vec![egui::Event::Copy]).platform_output
+        ),
+        &content[line_start..line_end]
     );
 }
 
@@ -431,7 +440,8 @@ fn minimap_scroll_extent_stays_at_document_height_at_end_of_file() {
         let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
         state.wrap_lines = wrap;
         let render = |state: &mut TextPreviewState, events: Vec<egui::Event>| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -441,8 +451,10 @@ fn minimap_scroll_extent_stays_at_document_height_at_end_of_file() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_raw_code_view(ui, &AppPalette::default())
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_raw_code_view(ui, &AppPalette::default())
+                        })
                     });
                 },
             )
@@ -561,7 +573,8 @@ fn minimap_wrapped_line_marker_and_click_use_virtual_row_geometry() {
     let mut clicked_fraction = None;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.05;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -572,17 +585,19 @@ fn minimap_wrapped_line_marker_and_click_use_virtual_row_geometry() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    clicked_fraction = render_code_minimap(
-                        ui,
-                        &lines,
-                        &first_fragment,
-                        &rows,
-                        640.0,
-                        0.0,
-                        0.2,
-                        &palette,
-                    );
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        clicked_fraction = render_code_minimap(
+                            ui,
+                            &lines,
+                            &first_fragment,
+                            &rows,
+                            640.0,
+                            0.0,
+                            0.2,
+                            &palette,
+                        );
+                    })
                 });
             },
         )
@@ -658,7 +673,8 @@ fn unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end() {
 
     let mut render = |events: Vec<egui::Event>| {
         time += 0.05;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(time),
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -669,8 +685,10 @@ fn unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_raw_code_view(ui, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_raw_code_view(ui, &AppPalette::default());
+                    })
                 });
             },
         )
@@ -697,7 +715,7 @@ fn unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end() {
 
     let scrolled = render(vec![
         egui::Event::PointerMoved(clip.center()),
-        egui::Event::Scroll(egui::vec2(-8_000.0, 0.0)),
+        clip_ui::test_support::scroll(egui::vec2(-8_000.0, 0.0)),
     ]);
     let mut settled = scrolled;
     for _ in 0..8 {
@@ -726,14 +744,15 @@ fn wrapped_view_places_next_line_below_the_entire_galley() {
     for scale in [1.0, 1.5, 2.0] {
         let ctx = egui::Context::default();
         ctx.set_pixels_per_point(scale);
-        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |_| {});
         let mut state = TextPreviewState::from_text(
             format!("{}\nNEXT_ROW\n{}", "word ".repeat(30), "tail\n".repeat(60)),
             None,
             &AppConfig::default(),
         );
         let render_frame = |state: &mut TextPreviewState| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -742,8 +761,10 @@ fn wrapped_view_places_next_line_below_the_entire_galley() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_raw_code_view(ui, &AppPalette::default())
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_raw_code_view(ui, &AppPalette::default())
+                        })
                     });
                 },
             )
@@ -816,29 +837,34 @@ fn wrapped_view_places_next_line_below_the_entire_galley() {
 #[test]
 fn test_gutter_text_alignment() {
     let ctx = egui::Context::default();
-    let output = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal_top(|ui| {
-                let gutter_resp = ui.label(
-                    egui::RichText::new("1\n2\n3")
-                        .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE)),
-                );
-                let mut text = "#include <stdio.h>\nint main() {}\n".to_string();
-                let syntax = find_syntax("c");
-                let palette = AppPalette::default();
-                let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
-                    let layout_job = build_highlighted_layout_job(text, syntax, &palette, &[]);
-                    ui.fonts(|f| f.layout_job(layout_job))
-                };
-                let edit = egui::TextEdit::multiline(&mut text)
-                    .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
-                    .layouter(&mut layouter)
-                    .frame(false)
-                    .margin(egui::Margin::ZERO);
-                let edit_resp = ui.add(edit);
+    let output = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    let gutter_resp = ui.label(
+                        egui::RichText::new("1\n2\n3")
+                            .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE)),
+                    );
+                    let mut text = "#include <stdio.h>\nint main() {}\n".to_string();
+                    let syntax = find_syntax("c");
+                    let palette = AppPalette::default();
+                    let mut layouter = |ui: &egui::Ui,
+                                        buffer: &dyn egui::TextBuffer,
+                                        _wrap_width: f32| {
+                        let text = buffer.as_str();
+                        let layout_job = build_highlighted_layout_job(text, syntax, &palette, &[]);
+                        ui.fonts_mut(|f| f.layout_job(layout_job))
+                    };
+                    let edit = egui::TextEdit::multiline(&mut text)
+                        .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
+                        .layouter(&mut layouter)
+                        .frame(egui::Frame::NONE)
+                        .margin(egui::Margin::ZERO);
+                    let edit_resp = ui.add(edit);
 
-                assert_eq!(gutter_resp.rect.min.y, edit_resp.rect.min.y);
-            });
+                    assert_eq!(gutter_resp.rect.min.y, edit_resp.rect.min.y);
+                });
+            })
         });
     });
 
@@ -872,10 +898,14 @@ fn test_gutter_text_alignment() {
         .iter()
         .zip(code_text.galley.rows.iter())
     {
-        assert_eq!(g_row.rect.min.y, c_row.rect.min.y, "Row min Y must align");
         assert_eq!(
-            g_row.rect.height(),
-            c_row.rect.height(),
+            g_row.rect().min.y,
+            c_row.rect().min.y,
+            "Row min Y must align"
+        );
+        assert_eq!(
+            g_row.rect().height(),
+            c_row.rect().height(),
             "Row heights must be identical"
         );
     }

@@ -8,7 +8,7 @@ fn draw_numeric_rows(
     color: Color32,
 ) {
     egui::ScrollArea::horizontal()
-        .id_source(id)
+        .id_salt(id)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             ui.vertical(|ui| {
@@ -19,7 +19,7 @@ fn draw_numeric_rows(
                                 .font(egui::FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
                                 .color(color),
                         )
-                        .wrap(false),
+                        .extend(),
                     );
                 }
             });
@@ -562,7 +562,7 @@ impl ImagePreviewState {
                 .color(muted),
         );
         let current_tol = self.dcs_state.params.tol;
-        egui::ComboBox::from_id_source("dcs_tol_combo")
+        egui::ComboBox::from_id_salt("dcs_tol_combo")
             .selected_text(match current_tol {
                 value if value <= 0.0 => "Off".to_string(),
                 value => format!("{:.1}% per tail", value * 100.0),
@@ -592,7 +592,7 @@ impl ImagePreviewState {
                 .color(muted),
         );
         let current_stride = self.dcs_state.params.stride;
-        egui::ComboBox::from_id_source("dcs_stride_combo")
+        egui::ComboBox::from_id_salt("dcs_stride_combo")
             .selected_text(match current_stride {
                 0 => "Automatic".to_string(),
                 1 => "Every pixel".to_string(),
@@ -1377,15 +1377,18 @@ mod tests {
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette = AppPalette::default();
             let mut drawer_rect = None;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 1000.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        drawer_rect = Some(ui.available_rect_before_wrap());
-                        state.render_decorrelation_stretch_stats_drawer(ui, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            drawer_rect = Some(ui.available_rect_before_wrap());
+                            state.render_decorrelation_stretch_stats_drawer(ui, &palette);
+                        })
                     });
                 },
             );

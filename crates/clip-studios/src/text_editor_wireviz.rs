@@ -264,7 +264,7 @@ impl WireEditor {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
-                        .id_source("harness_inspector")
+                        .id_salt("harness_inspector")
                         .min_scrolled_height(0.0)
                         .max_height(height)
                         .show(ui, |ui| {
@@ -279,7 +279,7 @@ impl WireEditor {
             );
         });
         egui::ScrollArea::vertical()
-            .id_source("harness_notices")
+            .id_salt("harness_notices")
             .min_scrolled_height(0.0)
             .max_height(64.0)
             .show(ui, |ui| {

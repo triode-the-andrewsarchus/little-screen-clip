@@ -284,7 +284,7 @@ impl AudioPreviewState {
         }
 
         // Global spacebar shortcut for play/pause in HF mode
-        if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             if self.is_playing {
                 self.pause();
             } else {
@@ -478,7 +478,7 @@ impl AudioPreviewState {
             ui.add(
                 egui::DragValue::new(&mut self.hf_analysis.gain_db)
                     .speed(0.5_f32)
-                    .clamp_range(-20.0_f32..=40.0_f32)
+                    .range(-20.0_f32..=40.0_f32)
                     .suffix(" dB"),
             )
             .on_hover_text("Spectrogram intensity boost (-20 to +40 dB)");
@@ -487,7 +487,7 @@ impl AudioPreviewState {
             ui.add(
                 egui::DragValue::new(&mut self.hf_analysis.range_db)
                     .speed(1.0_f32)
-                    .clamp_range(20.0_f32..=120.0_f32)
+                    .range(20.0_f32..=120.0_f32)
                     .suffix(" dB"),
             )
             .on_hover_text("Dynamic display range floor (20 to 120 dB)");
@@ -496,7 +496,7 @@ impl AudioPreviewState {
             ui.add(
                 egui::DragValue::new(&mut self.hf_analysis.contrast)
                     .speed(0.05_f32)
-                    .clamp_range(0.2_f32..=3.0_f32),
+                    .range(0.2_f32..=3.0_f32),
             )
             .on_hover_text("Display contrast curve exponent (0.2 to 3.0)");
 
@@ -616,11 +616,12 @@ impl AudioPreviewState {
 
         {
             let painter = ui.painter();
-            painter.rect_filled(roi_rect, Rounding::same(4.0_f32), bg_frame);
+            painter.rect_filled(roi_rect, CornerRadius::from(4.0_f32), bg_frame);
             painter.rect_stroke(
                 roi_rect,
-                Rounding::same(4.0_f32),
+                CornerRadius::from(4.0_f32),
                 Stroke::new(1.0_f32, border_frame),
+                egui::StrokeKind::Middle,
             );
 
             if let Some(ref analysis) = self.analysis {
@@ -644,7 +645,7 @@ impl AudioPreviewState {
                         } else {
                             accent_cyan
                         };
-                        painter.rect_filled(rect_bar, Rounding::ZERO, col);
+                        painter.rect_filled(rect_bar, CornerRadius::ZERO, col);
                     }
                 }
 
@@ -670,13 +671,14 @@ impl AudioPreviewState {
             );
             painter.rect_filled(
                 v_rect,
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 Color32::from_rgba_unmultiplied(255, 255, 255, 30),
             );
             painter.rect_stroke(
                 v_rect,
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+                egui::StrokeKind::Middle,
             );
 
             // Playhead indicator on ROI bar
@@ -774,7 +776,7 @@ impl AudioPreviewState {
 
         // Mouse pan & zoom interactions on spectrogram
         if canvas_response.hovered() {
-            let scroll_delta = ctx.input(|i| i.raw_scroll_delta);
+            let scroll_delta = clip_ui::ui_ext::wheel_delta(ctx);
             if scroll_delta.y != 0.0_f32 {
                 let zoom_anchor = ctx
                     .input(|i| i.pointer.hover_pos())
@@ -809,7 +811,7 @@ impl AudioPreviewState {
             Pos2::new(canvas_rect.min.x, canvas_rect.min.y),
             egui::vec2(gutter_width, spec_height),
         );
-        painter.rect_filled(gutter_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(gutter_rect, CornerRadius::ZERO, bg_frame);
         painter.line_segment(
             [
                 Pos2::new(track_min_x, canvas_rect.min.y),
@@ -877,7 +879,7 @@ impl AudioPreviewState {
         }
 
         // Draw Bottom Time Ruler
-        painter.rect_filled(ruler_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(ruler_rect, CornerRadius::ZERO, bg_frame);
         painter.line_segment(
             [
                 Pos2::new(track_min_x, ruler_rect.min.y),
@@ -949,13 +951,14 @@ impl AudioPreviewState {
             );
             painter.rect_filled(
                 badge_rect,
-                Rounding::same(3.0_f32),
+                CornerRadius::from(3.0_f32),
                 Color32::from_black_alpha(180),
             );
             painter.rect_stroke(
                 badge_rect,
-                Rounding::same(3.0_f32),
+                CornerRadius::from(3.0_f32),
                 Stroke::new(1.0_f32, border_frame),
+                egui::StrokeKind::Middle,
             );
             painter.galley(
                 Pos2::new(badge_rect.min.x + 6.0_f32, badge_rect.min.y + 3.0_f32),

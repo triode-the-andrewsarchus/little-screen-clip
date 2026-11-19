@@ -5,13 +5,15 @@ fn contextual_palette_preview_actions_use_neutral_secondary_surface() {
         let palette = ui_appearance::palette(appearance);
         let expected_fill = crate::ui_appearance::WorkbenchColors::from_palette(&palette).raised;
         let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(contextual_palette_action_button(
-                    Some(Icon::Pdf),
-                    "Edit PDF",
-                    &palette,
-                ));
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(contextual_palette_action_button(
+                        Some(Icon::Pdf),
+                        "Edit PDF",
+                        &palette,
+                    ));
+                })
             });
         });
 
@@ -176,8 +178,8 @@ fn visible_gallery_actions_open_full_studios() {
             events,
             ..Default::default()
         };
-        let mut first_frame = ctx.run(input(Vec::new()), |ctx| {
-            assert!(app.render_modal_viewers(ctx));
+        let mut first_frame = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
+            assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
         });
         for _ in 0..12 {
             let action_is_visible = first_frame.shapes.iter().any(|shape| {
@@ -189,16 +191,13 @@ fn visible_gallery_actions_open_full_studios() {
             if action_is_visible {
                 break;
             }
-            first_frame = ctx.run(
+            first_frame = clip_ui::test_support::run_frame(
+                &ctx,
                 input(vec![
                     egui::Event::PointerMoved(egui::pos2(640.0, 540.0)),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(0.0, -500.0),
-                        modifiers: egui::Modifiers::NONE,
-                    },
+                    clip_ui::test_support::scroll(egui::vec2(0.0, -500.0)),
                 ]),
-                |ctx| assert!(app.render_modal_viewers(ctx)),
+                |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
             );
         }
         let action_position = first_frame
@@ -217,19 +216,21 @@ fn visible_gallery_actions_open_full_studios() {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             input(vec![
                 egui::Event::PointerMoved(action_position),
                 pointer_event(true),
             ]),
-            |ctx| assert!(app.render_modal_viewers(ctx)),
+            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
         );
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             input(vec![
                 egui::Event::PointerMoved(action_position),
                 pointer_event(false),
             ]),
-            |ctx| assert!(app.render_modal_viewers(ctx)),
+            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
         );
         let opened_expected_studio = match (kind, app.viewer.as_ref()) {
             (component_gallery::GalleryPreviewKind::Image, Some(ViewerSession::Image(_)))
@@ -421,19 +422,19 @@ fn closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view
         modifiers: egui::Modifiers::NONE,
     };
 
-    let _ = ctx.run(input(vec![escape()]), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
     assert!(app.startup_viewers.is_empty());
 
-    let _ = ctx.run(input(Vec::new()), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
 
-    let _ = ctx.run(input(vec![escape()]), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(app.viewer.is_none());
     assert_eq!(app.view, WorkbenchView::NodeMachine);
@@ -477,8 +478,8 @@ fn midi_escape_after_region_clear_returns_to_source_view_and_preserves_slots() {
         modifiers: egui::Modifiers::NONE,
     };
 
-    let _ = ctx.run(input(vec![escape()]), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     let Some(ViewerSession::Midi(state)) = &app.viewer else {
         panic!("first Escape should keep MIDI viewer open");
@@ -488,8 +489,8 @@ fn midi_escape_after_region_clear_returns_to_source_view_and_preserves_slots() {
     assert_eq!(app.view, WorkbenchView::NodeMachine);
     assert_eq!(app.selected_slots, original_slots);
 
-    let _ = ctx.run(input(vec![escape()]), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(
         app.viewer.is_none(),
@@ -532,7 +533,8 @@ fn closing_dirty_pdf_requests_workbench_mirror_redraw() {
         modifiers: egui::Modifiers::NONE,
     };
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -541,7 +543,7 @@ fn closing_dirty_pdf_requests_workbench_mirror_redraw() {
             events: vec![escape],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());

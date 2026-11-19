@@ -104,7 +104,7 @@ impl Atom {
     ) -> Self {
         let galley = egui::WidgetText::from(text).into_galley(
             ui,
-            Some(true),
+            Some(egui::TextWrapMode::Wrap),
             width,
             FontId::proportional(size),
         );
@@ -181,7 +181,9 @@ fn show_spans(
                 egui::pos2(x, rect.top() + ascent - atom.ascent),
                 egui::vec2(atom.width, atom.ascent + atom.descent),
             );
-            let id = ui.id().with(("math-row", block, row_index, atom_index));
+            let id = ui
+                .scope_id()
+                .with(("math-row", block, row_index, atom_index));
             let response = paint_atom(ui, &atom, atom_rect, id, &line, previews);
             if let Some(url) = atom.url {
                 if response.clicked() {
@@ -381,7 +383,8 @@ mod tests {
         let palette = AppPalette::default();
         let mut available = egui::Rect::NOTHING;
         let mut following_top = 0.0;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -390,10 +393,12 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    available = ui.available_rect_before_wrap();
-                    super::super::render_blocks(ui, &blocks, &palette, Some(&mut previews));
-                    following_top = ui.label("Following paragraph").rect.top();
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        available = ui.available_rect_before_wrap();
+                        super::super::render_blocks(ui, &blocks, &palette, Some(&mut previews));
+                        following_top = ui.label("Following paragraph").rect.top();
+                    })
                 });
             },
         );
@@ -403,7 +408,7 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
+                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id() == texture_id => {
                     Some(rect.rect)
                 }
                 _ => None,

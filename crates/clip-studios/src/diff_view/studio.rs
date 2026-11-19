@@ -5,7 +5,7 @@ impl DiffViewerState {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             *close_requested = true;
         }
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         if ctx.input(|i| {
@@ -67,7 +67,7 @@ impl DiffViewerState {
             if is_img {
                 self.copy_image_diff_to_clipboard();
             } else {
-                ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
+                ctx.copy_text(strip_ansi_codes(&self.result.raw_ansi));
                 self.status_toast = Some(("Diff text copied to clipboard!".into(), now));
             }
         }
@@ -126,9 +126,9 @@ impl DiffViewerState {
             s
         };
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
@@ -159,9 +159,7 @@ impl DiffViewerState {
                         if is_img {
                             self.copy_image_diff_to_clipboard();
                         } else {
-                            ui.output_mut(|o| {
-                                o.copied_text = strip_ansi_codes(&self.result.raw_ansi)
-                            });
+                            ui.ctx().copy_text(strip_ansi_codes(&self.result.raw_ansi));
                             self.status_toast =
                                 Some(("Diff text copied to clipboard!".into(), now));
                         }
@@ -246,11 +244,11 @@ impl DiffViewerState {
         };
 
         ui.centered_and_justified(|ui| {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(b_med)
                 .stroke(Stroke::new(1.0_f32, b_low))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(egui::Margin::symmetric(36.0, 28.0))
+                .corner_radius(CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(36, 28))
                 .show(ui, |ui| {
                     ui.set_max_width(400.0);
                     ui.vertical_centered(|ui| {

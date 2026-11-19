@@ -332,7 +332,7 @@ impl ImagePreviewState {
                             .iter()
                             .map(|d| d.text.clone())
                             .collect();
-                        ctx.output_mut(|o| o.copied_text = combined.join("\n"));
+                        ctx.copy_text(combined.join("\n"));
                         self.show_toast(crate::ui_ext::StatusMessage::new(
                             crate::icons::Icon::Copy,
                             "Copied all barcode payloads to clipboard!",
@@ -350,14 +350,14 @@ impl ImagePreviewState {
                     let is_selected = self.barcode_state.selected_idx == Some(idx);
                     let card_border = if is_selected { diff_mod } else { b_med };
 
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(b_low)
-                        .inner_margin(egui::Margin::symmetric(
+                        .inner_margin(egui::Margin::from(egui::vec2(
                             crate::ui_ext::SPACE_SM,
                             crate::ui_ext::SPACE_XS,
-                        ))
+                        )))
                         .stroke(Stroke::new(1.0_f32, card_border))
-                        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                        .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 chip_badge(ui, &det.format, base_c, b_low);
@@ -397,7 +397,7 @@ impl ImagePreviewState {
                                         palette,
                                     );
                                 if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
-                                    ctx.output_mut(|o| o.copied_text = det.text.clone());
+                                    ctx.copy_text(det.text.clone());
                                     self.show_toast(crate::ui_ext::StatusMessage::new(
                                         crate::icons::Icon::Copy,
                                         "Copied code payload to clipboard!",
@@ -478,13 +478,14 @@ impl ImagePreviewState {
                     let next = pts[(i + 1) % pts.len()];
                     painter.line_segment([pts[i], next], Stroke::new(stroke_w, border));
                 }
-                painter.rect_filled(code_rect, Rounding::same(3.0), fill);
+                painter.rect_filled(code_rect, CornerRadius::same(3), fill);
             } else {
-                painter.rect_filled(code_rect, Rounding::same(4.0), fill);
+                painter.rect_filled(code_rect, CornerRadius::same(4), fill);
                 painter.rect_stroke(
                     code_rect,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(stroke_w, border),
+                    egui::StrokeKind::Middle,
                 );
             }
 
@@ -494,11 +495,12 @@ impl ImagePreviewState {
             );
             let badge_rect = Rect::from_min_size(badge_pos, Vec2::new(75.0, 16.0));
             let badge_text_col = contrast_text_c32(b_low, Some(f_high), palette);
-            painter.rect_filled(badge_rect, Rounding::same(3.0), b_low);
+            painter.rect_filled(badge_rect, CornerRadius::same(3), b_low);
             painter.rect_stroke(
                 badge_rect,
-                Rounding::same(3.0),
+                CornerRadius::same(3),
                 Stroke::new(1.0_f32, border),
+                egui::StrokeKind::Middle,
             );
             painter.text(
                 badge_rect.center(),
@@ -509,28 +511,30 @@ impl ImagePreviewState {
             );
 
             if hovered {
-                egui::show_tooltip_at_pointer(
-                    ui.ctx(),
-                    egui::Id::new(format!("barcode_tip_{}", idx)),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("Format: {}", det.format))
-                                .strong()
-                                .color(base_c),
+                egui::Tooltip::always_open(
+                    ui.ctx().clone(),
+                    ui.layer_id(),
+                    egui::Id::unique(format!("barcode_tip_{}", idx)),
+                    egui::PopupAnchor::Pointer,
+                )
+                .show(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Format: {}", det.format))
+                            .strong()
+                            .color(base_c),
+                    );
+                    ui.label(egui::RichText::new(&det.text).monospace());
+                    if det.is_url {
+                        let triadic_1 = hex_to_c32(&palette.harmonies.triadic_1);
+                        ui.add(
+                            crate::icons::Icon::Globe.label(
+                                egui::RichText::new("Click in toolbar to open URL")
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(triadic_1),
+                            ),
                         );
-                        ui.label(egui::RichText::new(&det.text).monospace());
-                        if det.is_url {
-                            let triadic_1 = hex_to_c32(&palette.harmonies.triadic_1);
-                            ui.add(
-                                crate::icons::Icon::Globe.label(
-                                    egui::RichText::new("Click in toolbar to open URL")
-                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                        .color(triadic_1),
-                                ),
-                            );
-                        }
-                    },
-                );
+                    }
+                });
 
                 if clicked {
                     self.barcode_state.selected_idx = Some(idx);

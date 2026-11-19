@@ -136,7 +136,7 @@ impl WorkbenchApp {
             }
         };
         let mut dismiss = false;
-        egui::Area::new(egui::Id::new("rolling_audio_editor_handoff"))
+        egui::Area::new(egui::Id::unique("rolling_audio_editor_handoff"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
             .show(ctx, |ui| {

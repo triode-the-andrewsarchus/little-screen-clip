@@ -57,7 +57,8 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
                         events: Vec<egui::Event>,
                         time: f64,
                         rects: &mut [egui::Rect; 2]| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -68,11 +69,13 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        rects[0] = first.show(ui, &palette).rect;
-                        rects[1] = second.show(ui, &palette).rect;
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            rects[0] = first.show(ui, &palette).rect;
+                            rects[1] = second.show(ui, &palette).rect;
+                        });
+                    })
                 });
             },
         )
@@ -109,7 +112,7 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
         &mut second,
         vec![
             egui::Event::PointerMoved(rects[0].center()),
-            egui::Event::Scroll(Vec2::new(0.0, -260.0)),
+            clip_ui::test_support::scroll(Vec2::new(0.0, -260.0)),
         ],
         0.2,
         &mut rects,
@@ -121,7 +124,7 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
         matches!(&shape.shape, egui::epaint::Shape::Text(text) if rects[1].contains(text.pos) && text.galley.job.text == "row-0000")
     }), "unhovered host should still show its first row");
 
-    let row_height = ctx.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+    let row_height = ctx.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
     let mut first_host_rows: Vec<_> = scrolled
         .shapes
         .iter()
@@ -148,7 +151,7 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
         first_host_rows.len() >= 2,
         "scrolled host should show multiple rows"
     );
-    let row_pitch = row_height + ctx.style().spacing.item_spacing.y;
+    let row_pitch = row_height + ctx.global_style().spacing.item_spacing.y;
     assert!(
         ((first_host_rows[1].0 - first_host_rows[0].0) - row_pitch).abs() < 1.0,
         "virtual row y positions must match measured row height: {first_host_rows:?}"
@@ -163,7 +166,8 @@ fn inline_text_preview_skips_layout_when_host_is_clipped() {
     let mut preview = InlineTextPreview::new(data, Vec2::new(180.0, 100.0));
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -172,9 +176,11 @@ fn inline_text_preview_skips_layout_when_host_is_clipped() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add_space(200.0);
-                preview.show(ui, &palette);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add_space(200.0);
+                    preview.show(ui, &palette);
+                })
             });
         },
     );
@@ -475,6 +481,11 @@ fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
         let syntax = SYNTAX_SET.find_syntax_by_extension(extension).unwrap();
         assert_eq!(syntax.name, name);
         let layout = build_highlighted_layout_job(source, syntax, &AppPalette::default(), &[]);
-        assert!(layout.sections.len() > 1);
+        assert_eq!(layout.text, source);
+        assert!(!layout.sections.is_empty(), "missing {name} layout");
+        // The layout now coalesces adjacent sections that use the same format.
+        if matches!(extension, "json5" | "bpmn") {
+            assert!(layout.sections.len() > 1, "missing {name} highlighting");
+        }
     }
 }

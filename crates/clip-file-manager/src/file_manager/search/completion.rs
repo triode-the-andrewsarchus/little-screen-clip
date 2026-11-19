@@ -281,7 +281,8 @@ impl State {
         let cursor = cursor
             .filter(|range| range.primary.index == range.secondary.index)?
             .primary
-            .index;
+            .index
+            .0;
         if self
             .source
             .as_ref()
@@ -360,7 +361,7 @@ impl State {
         ui.small("↑/↓ choose · Tab completes · Enter applies");
         let mut chosen = None;
         egui::ScrollArea::vertical()
-            .id_source("search_command_suggestions")
+            .id_salt("search_command_suggestions")
             .max_height(106.0)
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -517,21 +518,24 @@ mod tests {
     #[test]
     fn tab_keeps_text_focus_and_arrow_selection_does_not_submit() {
         let ctx = Context::default();
-        let id = Id::new("completion_test");
+        let id = Id::unique("completion_test");
         let mut state = State::default();
         let mut draft = r#":*.md;q:"Date?" as "#.to_string();
         let mut frame = |events: Vec<egui::Event>| {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.keys(ctx, id, &mut draft, false);
-                        let output = egui::TextEdit::singleline(&mut draft).id(id).show(ui);
-                        state.ui(ui, &mut draft, false, &output);
-                        let _ = ui.button("Another control");
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.keys(ctx, id, &mut draft, false);
+                            let output = egui::TextEdit::singleline(&mut draft).id(id).show(ui);
+                            state.ui(ui, &mut draft, false, &output);
+                            let _ = ui.button("Another control");
+                        })
                     });
                 },
             );

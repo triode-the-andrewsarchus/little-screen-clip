@@ -25,7 +25,7 @@ impl TextPreviewState {
                 break;
             }
             let (_, source) = self.source_fragment(row);
-            let galley = ui.fonts(|fonts| {
+            let galley = ui.fonts_mut(|fonts| {
                 fonts.layout(source.to_owned(), font.clone(), Color32::WHITE, width)
             });
             self.code_rows
@@ -42,7 +42,7 @@ impl TextPreviewState {
 
     /// Renders raw / code view with syntax highlighting, line numbers gutter, and search match highlighting.
     pub(super) fn render_raw_code_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        if !ui.ctx().wants_keyboard_input()
+        if !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events
@@ -67,7 +67,7 @@ impl TextPreviewState {
         }
         let syntax = find_syntax(self.language);
         let code_font = FontId::monospace(crate::ui_ext::MONO_FONT_SIZE);
-        let (line_height, digit_width) = ui.fonts(|fonts| {
+        let (line_height, digit_width) = ui.fonts_mut(|fonts| {
             (
                 fonts.row_height(&code_font) + 4.0,
                 fonts.glyph_width(&code_font, '0'),
@@ -76,19 +76,19 @@ impl TextPreviewState {
 
         let show_gutter = self.show_line_numbers;
         let mut scroll_area = egui::ScrollArea::new([!self.wrap_lines, true])
-            .id_source("text_code_virtual_scroll")
+            .id_salt("text_code_virtual_scroll")
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
 
         // Unified editor surface frame
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.surface_recessed))
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
             ))
-            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
-            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+            .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 let total_rows = self.code_fragments.len().max(1);
                 let digits = self.line_first_fragment.len().to_string().len().max(2);
@@ -162,8 +162,6 @@ impl TextPreviewState {
                                 let origin = ui.max_rect().min;
                                 let mut row =
                                     self.code_rows.row_at(viewport.top() + rounding_tolerance);
-                                // Keep row identities stable while the visible range changes.
-                                ui.skip_ahead_auto_ids(row);
                                 let pointer = ui.ctx().pointer_interact_pos();
                                 let pressed = ui.input(|input| input.pointer.primary_pressed());
                                 let down = ui.input(|input| input.pointer.primary_down());
@@ -201,7 +199,7 @@ impl TextPreviewState {
                                         self.fail_search(error);
                                     }
                                     job.wrap.max_width = wrap_width;
-                                    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
                                     let line =
                                         &self.content[fragment.start_byte..fragment.end_byte];
                                     let height = (galley.size().y + 4.0).max(line_height);
@@ -219,27 +217,23 @@ impl TextPreviewState {
                                             hex_to_c32(&palette.colors.text_muted),
                                         );
                                     }
-                                    let response = ui
-                                        .push_id(row, |ui| {
-                                            ui.put(
-                                                text_rect,
-                                                egui::Label::new(galley.clone())
-                                                    .selectable(false)
-                                                    .sense(egui::Sense::click_and_drag()),
-                                            )
-                                        })
-                                        .inner;
+                                    ui.expand_to_include_rect(text_rect);
+                                    ui.interact(
+                                        text_rect,
+                                        ui.make_persistent_id(("source-fragment", row)),
+                                        egui::Sense::click_and_drag(),
+                                    );
                                     if let Some(pointer) = pointer.filter(|point| {
                                         text_rect.contains(*point)
                                             && ui.clip_rect().contains(*point)
-                                    }) && ((pressed && response.contains_pointer())
+                                    }) && ((pressed && ui.rect_contains_pointer(text_rect))
                                         || (self.code_selection_dragging && (down || released)))
                                     {
                                         let cursor =
                                             galley.cursor_from_pos(pointer - text_rect.min);
                                         let local_byte = line
                                             .char_indices()
-                                            .nth(cursor.ccursor.index)
+                                            .nth(cursor.index.0)
                                             .map_or(line.len(), |(byte, _)| byte);
                                         let source_byte = fragment.start_byte + local_byte;
                                         if pressed {
@@ -264,6 +258,11 @@ impl TextPreviewState {
                                             hex_to_c32_alpha(&palette.harmonies.base, 90),
                                         );
                                     }
+                                    ui.painter().galley(
+                                        text_rect.min,
+                                        galley,
+                                        Color32::PLACEHOLDER,
+                                    );
                                     y += height;
                                     row += 1;
                                 }
@@ -278,8 +277,8 @@ impl TextPreviewState {
                                     egui::vec2(0.0, self.code_rows.total_height()),
                                 ));
                             });
-                            self.code_scroll_offset = output.state.offset.y;
-                            self.minimap_fraction = (output.state.offset.y
+                            self.code_scroll_offset = output.state.clamped_offset().y;
+                            self.minimap_fraction = (output.state.clamped_offset().y
                                 / (output.content_size.y - output.inner_rect.height()).max(1.0))
                             .clamp(0.0, 1.0);
                             self.minimap_view_fraction = (output.inner_rect.height()
@@ -407,15 +406,16 @@ pub(super) fn paint_code_selection(
     let end_char = line[..end - fragment.start_byte].chars().count();
     let mut row_start = 0;
     for row in &galley.rows {
-        let row_end = row_start + row.char_count_including_newline();
+        let row_end = row_start + row.char_count_including_newline().0;
         let from = start_char.max(row_start).min(row_end) - row_start;
         let to = end_char.max(row_start).min(row_end) - row_start;
         if from < to {
             let rect = egui::Rect::from_min_max(
-                galley_pos + egui::vec2(row.x_offset(from), row.min_y()),
-                galley_pos + egui::vec2(row.x_offset(to), row.max_y()),
+                galley_pos + egui::vec2(row.x_offset(from.into()), row.min_y()),
+                galley_pos + egui::vec2(row.x_offset(to.into()), row.max_y()),
             );
-            ui.painter().rect_filled(rect, egui::Rounding::ZERO, color);
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::ZERO, color);
         }
         row_start = row_end;
     }

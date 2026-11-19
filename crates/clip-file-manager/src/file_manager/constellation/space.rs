@@ -228,7 +228,7 @@ impl ConstellationState {
     pub(super) fn handle_explore_escape(&mut self, ctx: &egui::Context) {
         if self.expanded_set.is_some()
             && !self.browser_open
-            && !ctx.memory(|memory| memory.any_popup_open())
+            && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.leave_set();
@@ -379,7 +379,7 @@ impl ConstellationState {
         }
         let color = painter
             .ctx()
-            .style()
+            .global_style()
             .visuals
             .weak_text_color()
             .gamma_multiply(0.12);
@@ -431,7 +431,7 @@ impl ConstellationState {
             } else {
                 painter
                     .ctx()
-                    .style()
+                    .global_style()
                     .visuals
                     .weak_text_color()
                     .gamma_multiply(0.35)
@@ -450,12 +450,12 @@ fn ring_radius(ordinal: usize) -> f32 {
 
 /// A small repeating dot texture keeps each pitch stem to one strip, regardless of height.
 pub(super) fn stem_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    let id = egui::Id::new("constellation_stem_texture");
+    let id = egui::Id::unique("constellation_stem_texture");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return texture;
     }
     // Five texels per logical pixel: a 1.6 px dot repeats every six pixels.
-    let mut image = egui::ColorImage::new([12, 30], Color32::TRANSPARENT);
+    let mut image = egui::ColorImage::filled([12, 30], Color32::TRANSPARENT);
     for y in 0..30 {
         for x in 0..12 {
             let dx = x as f32 + 0.5 - 6.0;
@@ -546,16 +546,15 @@ mod tests {
             }
         }
         let ctx = egui::Context::default();
-        let output = ctx.run(Default::default(), |ctx| {
-            assert_eq!(stem_texture(ctx).id(), stem_texture(ctx).id());
-        });
-        let (_, delta) = output.textures_delta.set.iter().find(|(_, delta)| {
+        let (_, uploads) =
+            clip_ui::test_support::run_frame_with_uploads(&ctx, Default::default(), |ctx| {
+                assert_eq!(stem_texture(ctx).id(), stem_texture(ctx).id());
+            });
+        let (_, delta) = uploads.iter().find(|(_, delta)| {
             matches!(&delta.image, egui::ImageData::Color(image) if image.size == [12, 30])
         }).unwrap();
         assert_eq!(delta.options.wrap_mode, egui::TextureWrapMode::Repeat);
-        let egui::ImageData::Color(image) = &delta.image else {
-            unreachable!()
-        };
+        let egui::ImageData::Color(image) = &delta.image;
         assert!(image[(6, 0)].a() > 240 && image[(6, 29)].a() > 240);
         assert_eq!(
             image[(6, 15)].a(),

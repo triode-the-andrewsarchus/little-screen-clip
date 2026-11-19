@@ -18,8 +18,8 @@ fn queued_scene_completion_waits_until_the_active_session_closes() {
     let scene = scene_file_viewer(PathBuf::from("missing.sog"), &AppConfig::default());
     let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::from([scene]));
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(matches!(
         app.viewer,

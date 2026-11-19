@@ -106,7 +106,7 @@ fn gallery_page_opens_editor_without_raster_workers_and_retains_source_files() {
             result: Ok(staging),
         }))
         .unwrap();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         editor.poll_edit_worker(ctx, 0.0)
     });
     assert_eq!(editor.path, output);
@@ -264,13 +264,13 @@ fn page_textures_obey_handle_and_byte_limits_while_selected_page_stays_resident(
         let mut state = raster_state(PAGE_TEXTURE_LIMIT * 2, dimension);
         state.texture_frame += 1;
         let mut selected_id = None;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             selected_id = Some(upload_page(&mut state, 1, ctx));
         });
         let selected_id = selected_id.unwrap();
         for page_num in 2..=state.page_count {
             state.texture_frame += 1;
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
                 upload_page(&mut state, page_num, ctx);
             });
             let (count, bytes) = resident_textures(&state);
@@ -337,17 +337,17 @@ fn evicted_page_reselection_reuploads_original_raster() {
     assert!(state.pages[1].texture.is_none());
     state.selected_page = Some(2);
     state.texture_frame += 1;
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        let reloaded = upload_page(&mut state, 2, ctx);
-        assert_ne!(reloaded, original_id);
-    });
+    let (_, uploads) =
+        clip_ui::test_support::run_frame_with_uploads(&ctx, egui::RawInput::default(), |ctx| {
+            let reloaded = upload_page(&mut state, 2, ctx);
+            assert_ne!(reloaded, original_id);
+        });
     assert_eq!(std::fs::read(source_path).unwrap(), source);
     let texture = state.pages[1].texture.as_ref().unwrap();
     assert_eq!(texture.size(), [16, 16]);
-    let upload = output
-        .textures_delta
-        .set
+    let upload = uploads
         .iter()
+        .rev()
         .find(|(id, _)| *id == texture.id())
         .unwrap();
     match &upload.1.image {
@@ -359,7 +359,6 @@ fn evicted_page_reselection_reuploads_original_raster() {
                     .all(|pixel| *pixel == egui::Color32::from_rgb(23, 45, 67))
             );
         }
-        _ => panic!("PDF reload must upload the original RGBA raster"),
     }
     let (count, bytes) = resident_textures(&state);
     assert!(count <= PAGE_TEXTURE_LIMIT && bytes <= PAGE_TEXTURE_BYTE_LIMIT);
@@ -403,7 +402,8 @@ fn long_document_uploads_visible_thumbnails_and_selected_page_only() {
     state.selected_page = Some(100);
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -412,8 +412,10 @@ fn long_document_uploads_visible_thumbnails_and_selected_page_only() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -480,7 +482,7 @@ fn failed_page_raster_is_reported_instead_of_spinning_forever() {
     drop(sender);
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         state.poll_preview_worker(ctx)
     });
     assert_eq!(state.pages[0].error.as_deref(), Some("raster failed"));

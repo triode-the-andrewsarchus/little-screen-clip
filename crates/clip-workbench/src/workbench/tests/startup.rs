@@ -185,7 +185,8 @@ fn closing_viewer_cancels_pending_image_replacement() {
     let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
     app.open_slot_file_preview(&path, true);
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Escape,
@@ -197,7 +198,7 @@ fn closing_viewer_cancels_pending_image_replacement() {
             ..Default::default()
         },
         |ctx| {
-            app.render_modal_viewers(ctx);
+            ctx.root_ui(|ui| app.render_modal_viewers(ui));
         },
     );
     assert!(app.viewer.is_none());
@@ -260,10 +261,10 @@ fn palette_prompt_escape_cancels_only_the_overlay() {
         modifiers: egui::Modifiers::NONE,
     };
 
-    let _ = ctx.run(input(Vec::new()), |ctx| {
-        assert!(app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, input(Vec::new()), |ctx| {
+        assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui)));
         assert!(
-            ctx.wants_keyboard_input(),
+            ctx.egui_wants_keyboard_input(),
             "prompt editor should own keyboard focus"
         );
     });
@@ -273,13 +274,14 @@ fn palette_prompt_escape_cancels_only_the_overlay() {
         Some(ViewerSession::ComponentGallery(_))
     ));
 
-    let first_escape_output = ctx.run(input(vec![escape()]), |ctx| {
-        let modal_active = app.render_modal_viewers(ctx);
-        assert!(modal_active, "the prompt owns the Escape frame");
-        if !modal_active {
-            app.handle_global_shortcuts(ctx);
-        }
-    });
+    let first_escape_output =
+        clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+            let modal_active = ctx.root_ui(|ui| app.render_modal_viewers(ui));
+            assert!(modal_active, "the prompt owns the Escape frame");
+            if !modal_active {
+                app.handle_global_shortcuts(ctx);
+            }
+        });
     let close_commands = first_escape_output
         .viewport_output
         .get(&egui::ViewportId::ROOT)
@@ -302,16 +304,17 @@ fn palette_prompt_escape_cancels_only_the_overlay() {
     assert_eq!(app.selected_action_index, 3);
     assert_eq!(app.selected_slots, original_slots);
 
-    let second_escape_output = ctx.run(input(vec![escape()]), |ctx| {
-        let modal_active = app.render_modal_viewers(ctx);
-        assert!(
-            modal_active,
-            "the gallery viewer owns the second Escape frame"
-        );
-        if !modal_active {
-            app.handle_global_shortcuts(ctx);
-        }
-    });
+    let second_escape_output =
+        clip_ui::test_support::run_frame(&ctx, input(vec![escape()]), |ctx| {
+            let modal_active = ctx.root_ui(|ui| app.render_modal_viewers(ui));
+            assert!(
+                modal_active,
+                "the gallery viewer owns the second Escape frame"
+            );
+            if !modal_active {
+                app.handle_global_shortcuts(ctx);
+            }
+        });
     let close_commands = second_escape_output
         .viewport_output
         .get(&egui::ViewportId::ROOT)
@@ -361,7 +364,8 @@ fn quick_palette_enter_executes_prompt_recipe_while_search_is_focused() {
     app.search_query = recipe_name.to_owned();
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -377,11 +381,13 @@ fn quick_palette_enter_executes_prompt_recipe_while_search_is_focused() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut app.search_query));
-                response.request_focus();
-                assert!(ctx.wants_keyboard_input());
-                app.handle_palette_nav_and_execution(ctx);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.add(egui::TextEdit::singleline(&mut app.search_query));
+                    response.request_focus();
+                    assert!(ctx.egui_wants_keyboard_input());
+                    app.handle_palette_nav_and_execution(ctx);
+                })
             });
         },
     );
@@ -401,7 +407,8 @@ fn quick_palette_focused_search_receives_ordinary_text_without_changing_selectio
     let original_slots = app.selected_slots.clone();
     let ctx = egui::Context::default();
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -410,14 +417,17 @@ fn quick_palette_focused_search_receives_ordinary_text_without_changing_selectio
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut app.search_query))
-                    .request_focus();
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.search_query))
+                        .request_focus();
+                })
             });
         },
     );
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -427,10 +437,12 @@ fn quick_palette_focused_search_receives_ordinary_text_without_changing_selectio
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut app.search_query));
-                assert!(ctx.wants_keyboard_input());
-                app.handle_global_shortcuts(ctx);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.search_query));
+                    assert!(ctx.egui_wants_keyboard_input());
+                    app.handle_global_shortcuts(ctx);
+                })
             });
         },
     );
@@ -453,7 +465,8 @@ fn in_app_prompt_enter_submits_from_focused_editor_once() {
     let ctx = egui::Context::default();
     let sent = std::cell::RefCell::new(Vec::new());
     let frame = |app: &mut WorkbenchApp, events| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -475,7 +488,7 @@ fn in_app_prompt_enter_submits_from_focused_editor_once() {
 
     frame(&mut app, Vec::new());
     assert!(
-        ctx.wants_keyboard_input(),
+        ctx.egui_wants_keyboard_input(),
         "prompt editor should receive focus"
     );
     assert!(
@@ -540,7 +553,8 @@ fn shared_workbench_status_is_visible_in_every_host_view() {
         let ctx = egui::Context::default();
         let mut status_height = 0.0;
         let mut hint_height = 0.0;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -549,20 +563,24 @@ fn shared_workbench_status_is_visible_in_every_host_view() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    status_height = show_workbench_footer(
-                        ui,
-                        view,
-                        Some("Image preview failed: invalid PNG header"),
-                        &palette,
-                    )
-                    .height();
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        status_height = show_workbench_footer(
+                            ui,
+                            view,
+                            Some("Image preview failed: invalid PNG header"),
+                            &palette,
+                        )
+                        .height();
+                    })
                 });
             },
         );
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                hint_height = show_workbench_footer(ui, view, None, &palette).height();
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    hint_height = show_workbench_footer(ui, view, None, &palette).height();
+                })
             });
         });
         assert!(
@@ -582,7 +600,8 @@ fn palette_search_focus_yields_to_audio_and_returns_on_activation() {
         activate_from_audio: bool,
     ) -> egui::Id {
         let mut field_id = None;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -591,20 +610,22 @@ fn palette_search_focus_yields_to_audio_and_returns_on_activation() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut field = egui::TextEdit::singleline(value);
-                    if audio_active {
-                        field = field.interactive(false);
-                    }
-                    let response = ui.add(field.desired_width(300.0));
-                    field_id = Some(response.id);
-                    update_palette_search_focus(
-                        ctx,
-                        &response,
-                        needs_focus,
-                        audio_active,
-                        activate_from_audio,
-                    );
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut field = egui::TextEdit::singleline(value);
+                        if audio_active {
+                            field = field.interactive(false);
+                        }
+                        let response = ui.add(field.desired_width(300.0));
+                        field_id = Some(response.id);
+                        update_palette_search_focus(
+                            ctx,
+                            &response,
+                            needs_focus,
+                            audio_active,
+                            activate_from_audio,
+                        );
+                    })
                 });
             },
         );
@@ -640,7 +661,8 @@ fn compact_palette_footer_reserves_wrapped_status_above_scrollable_results() {
     let mut results_content_height = 0.0;
     let mut results_viewport_height = 0.0;
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -649,21 +671,23 @@ fn compact_palette_footer_reserves_wrapped_status_above_scrollable_results() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.allocate_space(egui::vec2(ui.available_width(), 480.0));
-                body_rect = ui.available_rect_before_wrap();
-                footer_rect =
-                    show_workbench_footer(ui, WorkbenchView::Palette, Some(status), &palette);
-                remaining_height = ui.available_height();
-                let results = egui::ScrollArea::vertical()
-                    .max_height(ui.available_height().max(0.0))
-                    .show(ui, |ui| {
-                        for result in 0..40 {
-                            ui.label(format!("Result {result}: representative operation"));
-                        }
-                    });
-                results_content_height = results.content_size.y;
-                results_viewport_height = results.inner_rect.height();
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.allocate_space(egui::vec2(ui.available_width(), 480.0));
+                    body_rect = ui.available_rect_before_wrap();
+                    footer_rect =
+                        show_workbench_footer(ui, WorkbenchView::Palette, Some(status), &palette);
+                    remaining_height = ui.available_height();
+                    let results = egui::ScrollArea::vertical()
+                        .max_height(ui.available_height().max(0.0))
+                        .show(ui, |ui| {
+                            for result in 0..40 {
+                                ui.label(format!("Result {result}: representative operation"));
+                            }
+                        });
+                    results_content_height = results.content_size.y;
+                    results_viewport_height = results.inner_rect.height();
+                })
             });
         },
     );

@@ -8,10 +8,10 @@ impl FileManager {
         if !self.bookmarks.entries.is_empty() {
             let height =
                 (36.0 + self.bookmarks.entries.len() as f32 * row).min(bounds.height() * 0.35);
-            let panel = egui::TopBottomPanel::bottom("files_bookmarks")
-                .exact_height(height)
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
+            let panel = egui::Panel::bottom("files_bookmarks")
+                .exact_size(height)
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     self.bookmarks_ui(ui, colors);
                 });
@@ -33,7 +33,7 @@ impl FileManager {
             .map(|rect| {
                 (
                     rect,
-                    ui.interact(rect, Id::new("files_bookmark_drop"), Sense::hover()),
+                    ui.interact(rect, Id::unique("files_bookmark_drop"), Sense::hover()),
                 )
             });
         if let Some((_, response)) = &drop
@@ -48,10 +48,10 @@ impl FileManager {
             let height = (36.0 + self.mounts.entries.len() as f32 * row)
                 .min(available_height * 0.4)
                 .max(36.0 + row);
-            egui::TopBottomPanel::bottom("files_mounts")
-                .exact_height(height)
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
+            egui::Panel::bottom("files_mounts")
+                .exact_size(height)
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     self.mounts_ui(ui, colors);
                 });
@@ -70,8 +70,12 @@ impl FileManager {
                 || (response.contains_pointer() && egui::DragAndDrop::has_any_payload(ui.ctx()));
             if hovering {
                 ui.painter().rect_filled(rect, 0.0, colors.recessed);
-                ui.painter()
-                    .rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, colors.accent));
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.0_f32, colors.accent),
+                    egui::StrokeKind::Middle,
+                );
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -88,7 +92,7 @@ impl FileManager {
         let mut open = None;
         let mut remove = None;
         egui::ScrollArea::vertical()
-            .id_source("files_bookmark_rows")
+            .id_salt("files_bookmark_rows")
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
             .show_rows(ui, ROW_HEIGHT, self.bookmarks.entries.len(), |ui, rows| {
@@ -132,7 +136,7 @@ impl FileManager {
                     response.context_menu(|ui| {
                         if ui.button("Remove shortcut").clicked() {
                             remove = Some(entry.uri.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 }

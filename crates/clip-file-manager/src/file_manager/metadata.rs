@@ -412,7 +412,7 @@ impl Metadata {
             response.context_menu(|ui| {
                 if ui.button("Filename order").clicked() {
                     clicked = Some(Field::Filename);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         }

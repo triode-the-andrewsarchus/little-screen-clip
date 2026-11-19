@@ -5,7 +5,7 @@ use crate::ui_ext::{
     BUTTON_PADDING_X, CONTROL_CORNER_RADIUS, CONTROL_HEIGHT, CONTROL_ICON_SIZE, SPACE_SM,
     contrast_text_c32, wrapped_equal_button_width,
 };
-use egui::{Color32, Id, Key, Rect, Response, Rounding, Sense, Stroke, TextStyle, Ui, Vec2};
+use egui::{Color32, CornerRadius, Id, Key, Rect, Response, Sense, Stroke, TextStyle, Ui, Vec2};
 use little_clip_core::palette::AppPalette;
 
 pub struct Tab<'a, T> {
@@ -44,7 +44,7 @@ impl<'a, T> Tab<'a, T> {
     ) -> (Response, bool) {
         let colors = WorkbenchColors::from_palette(palette);
         let font = TextStyle::Button.resolve(ui.style());
-        let galley = ui.fonts(|fonts| {
+        let galley = ui.fonts_mut(|fonts| {
             fonts.layout_no_wrap(self.label.to_owned(), font.clone(), Color32::WHITE)
         });
         let icon_width = self.icon.map_or(0.0, |_| CONTROL_ICON_SIZE + SPACE_SM);
@@ -58,15 +58,9 @@ impl<'a, T> Tab<'a, T> {
                 .max(1.0),
             CONTROL_HEIGHT,
         );
-        let (rect, response) = ui.allocate_exact_size(
-            size,
-            Sense {
-                focusable: false,
-                ..Sense::click()
-            },
-        );
+        let (rect, response) = ui.allocate_exact_size(size, Sense::CLICK);
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, selected, self.label)
+            egui::WidgetInfo::selected(egui::Role::Tab, response.enabled(), selected, self.label)
         });
         let background = if selected {
             colors.raised
@@ -91,16 +85,16 @@ impl<'a, T> Tab<'a, T> {
                 egui::text::LayoutJob::simple(self.label.to_owned(), font, foreground, text_width);
             text_job.wrap.max_rows = 1;
             text_job.wrap.break_anywhere = true;
-            ui.fonts(|fonts| fonts.layout_job(text_job))
+            ui.fonts_mut(|fonts| fonts.layout_job(text_job))
         } else {
             galley
         };
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-        let rounding = Rounding {
-            nw: CONTROL_CORNER_RADIUS,
-            ne: CONTROL_CORNER_RADIUS,
-            sw: 0.0,
-            se: 0.0,
+        let rounding = CornerRadius {
+            nw: CONTROL_CORNER_RADIUS as u8,
+            ne: CONTROL_CORNER_RADIUS as u8,
+            sw: 0,
+            se: 0,
         };
         painter.rect(
             rect,
@@ -111,6 +105,7 @@ impl<'a, T> Tab<'a, T> {
             } else {
                 Stroke::NONE
             },
+            egui::StrokeKind::Middle,
         );
         let indicator = if vertical {
             Rect::from_min_size(
@@ -135,7 +130,7 @@ impl<'a, T> Tab<'a, T> {
                 !vertical,
             ));
         } else {
-            painter.rect_filled(indicator, Rounding::ZERO, colors.border);
+            painter.rect_filled(indicator, CornerRadius::ZERO, colors.border);
         }
         let content_x = if vertical {
             rect.left() + BUTTON_PADDING_X
@@ -160,7 +155,12 @@ impl<'a, T> Tab<'a, T> {
             foreground,
         );
         if focused && selected {
-            painter.rect_stroke(rect.shrink(2.0), rounding, Stroke::new(1.0_f32, foreground));
+            painter.rect_stroke(
+                rect.shrink(2.0),
+                rounding,
+                Stroke::new(1.0_f32, foreground),
+                egui::StrokeKind::Middle,
+            );
         }
         let close_clicked =
             closable && tab_close_button(ui, rect, response.id, self.label, foreground);
@@ -173,7 +173,11 @@ fn tab_close_button(ui: &mut Ui, tab: Rect, id: Id, label: &str, foreground: Col
     let rect = Rect::from_min_max(egui::pos2(tab.right() - 24.0, tab.top()), tab.max);
     let response = ui.interact(rect, id.with("close"), Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, format!("Remove {label}"))
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            ui.is_enabled(),
+            format!("Remove {label}"),
+        )
     });
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     if response.hovered() || response.has_focus() {
@@ -201,13 +205,13 @@ pub struct TabBar<'a, T> {
 
 impl<'a, T: Copy + PartialEq> TabBar<'a, T> {
     pub fn new(
-        id: impl std::hash::Hash,
+        id: impl std::hash::Hash + std::fmt::Debug,
         selected: T,
         tabs: &'a [Tab<'a, T>],
         palette: &'a AppPalette,
     ) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             selected,
             tabs,
             palette,
@@ -360,20 +364,24 @@ mod tests {
             Tab::new(2, "Third"),
         ];
         let mut changed = None;
-        let output = ctx.run(
+        let output = crate::test_support::run_frame(
+            &ctx,
             RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 400.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let bar = TabBar::new("test_tabs", selected, &tabs, &palette).equal_widths();
-                    changed = if vertical {
-                        bar.vertical().show(ui)
-                    } else {
-                        bar.show(ui)
-                    };
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let bar =
+                            TabBar::new("test_tabs", selected, &tabs, &palette).equal_widths();
+                        changed = if vertical {
+                            bar.vertical().show(ui)
+                        } else {
+                            bar.show(ui)
+                        };
+                    })
                 });
             },
         );
@@ -413,15 +421,18 @@ mod tests {
         let tabs = [Tab::new(0, "First.wav"), Tab::new(1, "Second.wav")];
         let frame = |events| {
             let mut actions = (None, None);
-            let output = ctx.run(
+            let output = crate::test_support::run_frame(
+                &ctx,
                 RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        actions = TabBar::new("closable", 0, &tabs, &palette).show_closable(ui);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            actions = TabBar::new("closable", 0, &tabs, &palette).show_closable(ui);
+                        })
                     });
                 },
             );
@@ -458,14 +469,17 @@ mod tests {
             Tab::new(1, "[C]rop").icon(Icon::Crop),
             Tab::new(2, "Auto-Actions [F3]").icon(Icon::Settings),
         ];
-        let output = ctx.run(
+        let output = crate::test_support::run_frame(
+            &ctx,
             RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 400.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    TabBar::new("natural_tabs", 0, &tabs, &palette).show(ui);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        TabBar::new("natural_tabs", 0, &tabs, &palette).show(ui);
+                    })
                 });
             },
         );
@@ -508,44 +522,31 @@ mod tests {
 
     #[test]
     fn clicking_another_tab_changes_selection_and_active_click_is_a_noop() {
-        let ctx = egui::Context::default();
-        let (output, _) = render(&ctx, 0, 900.0, false, Vec::new());
-        let position = tab_rects(&output)[1].center();
-        let mut selected = 0;
-        for expected_change in [Some(1), None] {
-            let (_, change) = render(
-                &ctx,
-                selected,
-                900.0,
-                false,
-                vec![
-                    Event::PointerMoved(position),
-                    Event::PointerButton {
-                        pos: position,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Modifiers::NONE,
-                    },
-                ],
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let palette = AppPalette::default();
+        let tabs = [Tab::new(0, "First"), Tab::new(1, "Second")];
+        let mut harness = Harness::builder()
+            .with_context_setup(crate::ui_ext::configure_workbench_style)
+            .build_ui_state(
+                |ui, (selected, changes)| {
+                    if let Some(next) =
+                        TabBar::new("test_tabs", *selected, &tabs, &palette).show(ui)
+                    {
+                        *selected = next;
+                        *changes += 1;
+                    }
+                },
+                (0, 0),
             );
-            assert!(change.is_none());
-            let (_, change) = render(
-                &ctx,
-                selected,
-                900.0,
-                false,
-                vec![Event::PointerButton {
-                    pos: position,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Modifiers::NONE,
-                }],
-            );
-            assert_eq!(change, expected_change);
-            if let Some(value) = change {
-                selected = value;
-            }
-        }
+
+        harness.get_by_label("Second").click();
+        harness.run();
+        assert_eq!(*harness.state(), (1, 1));
+
+        harness.get_by_label("Second").click();
+        harness.run();
+        assert_eq!(*harness.state(), (1, 1));
     }
 
     #[test]

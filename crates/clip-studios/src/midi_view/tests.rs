@@ -69,7 +69,8 @@ fn render_inline_midi_pair(
 ) -> (egui::FullOutput, [Rect; 2]) {
     let palette = AppPalette::default();
     let mut rects = [Rect::NOTHING; 2];
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(480.0, 180.0))),
             events,
@@ -77,11 +78,13 @@ fn render_inline_midi_pair(
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    rects[0] = first.show(ui, &palette).rect;
-                    rects[1] = second.show(ui, &palette).rect;
-                });
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        rects[0] = first.show(ui, &palette).rect;
+                        rects[1] = second.show(ui, &palette).rect;
+                    });
+                })
             });
         },
     );
@@ -216,15 +219,18 @@ fn inline_midi_preview_clips_geometry_and_caps_note_rendering() {
 
     let clipped_ctx = egui::Context::default();
     let mut clipped = InlineMidiPreview::new(inline_midi_data(100), Vec2::new(220.0, 124.0));
-    let clipped_output = clipped_ctx.run(
+    let clipped_output = clip_ui::test_support::run_frame(
+        &clipped_ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 100.0))),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add_space(200.0);
-                clipped.show(ui, &palette);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add_space(200.0);
+                    clipped.show(ui, &palette);
+                })
             });
         },
     );
@@ -320,7 +326,8 @@ fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
     let mut close_requested = false;
     let ctx = egui::Context::default();
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Space,
@@ -332,8 +339,10 @@ fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -365,7 +374,8 @@ fn midi_space_pauses_active_transport_without_player_or_sink() {
     let mut close_requested = false;
     let ctx = egui::Context::default();
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Space,
@@ -377,8 +387,10 @@ fn midi_space_pauses_active_transport_without_player_or_sink() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -414,7 +426,8 @@ fn midi_escape_clears_selected_region_before_closing_viewer() {
     let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
     let mut close_requested = false;
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Escape,
@@ -426,8 +439,10 @@ fn midi_escape_clears_selected_region_before_closing_viewer() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -863,7 +878,8 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
     let mut render = |state: &mut MidiViewerState, events: Vec<egui::Event>| {
         time += 0.1;
 
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -874,8 +890,10 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui_with_copy_dispatch(ui, &palette, &mut close, &mut dispatch);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui_with_copy_dispatch(ui, &palette, &mut close, &mut dispatch);
+                    })
                 });
             },
         )
@@ -1198,7 +1216,8 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
     state.selected_region = Some((0.5, 1.5));
 
     for width in [760.0, 1000.0, 1760.0] {
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1207,10 +1226,12 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut close = false;
-                    state.render_ui(ui, &palette, &mut close);
-                    assert!(!close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut close = false;
+                        state.render_ui(ui, &palette, &mut close);
+                        assert!(!close);
+                    })
                 });
             },
         );
@@ -1295,8 +1316,10 @@ fn accepted_midi_export_survives_repeat_copy_stop_and_viewer_drop() {
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
     let mut close = true;
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| state.render_ui(ui, &palette, &mut close));
+    let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| state.render_ui(ui, &palette, &mut close))
+        });
     });
     assert!(!close);
     assert!(
@@ -1321,8 +1344,10 @@ fn midi_export_failure_uses_the_studios_display_clock() {
     state.export_job = Some(MidiExportJob { receiver });
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| state.render_ui(ui, &palette, &mut false));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| state.render_ui(ui, &palette, &mut false))
+        });
     });
     let now = crate::ui_ext::feedback_time();
     assert_eq!(

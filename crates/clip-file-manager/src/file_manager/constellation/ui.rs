@@ -95,7 +95,7 @@ pub(super) fn outlined_toggle(
     ui.add(
         egui::Button::new(label)
             .fill(ui.visuals().widgets.inactive.weak_bg_fill)
-            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
+            .corner_radius(crate::ui_ext::CONTROL_CORNER_RADIUS)
             .stroke(border),
     )
 }
@@ -202,8 +202,8 @@ impl ConstellationState {
         for (pad, _) in notes {
             self.slot_flash[pad] = Some(std::time::Instant::now());
         }
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(8.0, 0.0))
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(8, 0))
             .show(ui, |ui| {
                 self.render_toolbar(ui, current_folder, on_play_sample, palette);
                 self.render_indexing_progress(ui, palette);
@@ -219,19 +219,20 @@ impl ConstellationState {
         );
         self.map_viewport = Some(canvas_bounds.shrink(8.0));
         if self.pack_shelf_open {
-            egui::SidePanel::right("constellation_pack_shelf_panel")
+            #[cfg(test)]
+            tests::remember_panel_id(ui, "constellation_pack_shelf_panel");
+            egui::Panel::right("constellation_pack_shelf_panel")
                 .resizable(true)
-                .default_width(360.0)
-                .width_range(280.0..=420.0)
-                .frame(egui::Frame::none().inner_margin(egui::Margin {
-                    left: 8.0,
-                    right: 0.0,
-                    top: 0.0,
-                    bottom: 0.0,
+                .default_size(360.0)
+                .size_range(280.0..=420.0)
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                    left: 8,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
                 }))
-                .show_inside(ui, |ui| {
-                    // Keep content requests from changing the user's divider width.
-                    // egui 0.27 otherwise stores overflowing child bounds as panel size.
+                .show(ui, |ui| {
+                    // Keep the rack's contents within the divider width as modes change.
                     let bounds = ui.available_rect_before_wrap();
                     ui.allocate_rect(bounds, Sense::hover());
                     let rail = Rect::from_min_max(
@@ -245,8 +246,11 @@ impl ConstellationState {
                         bounds.min + Vec2::new(0.0, 8.0),
                         bounds.max - Vec2::new(28.0, 8.0),
                     );
-                    let mut content =
-                        ui.child_ui(content_bounds, egui::Layout::top_down(egui::Align::Min));
+                    let mut content = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(content_bounds)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
                     let ui = &mut content;
 
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
@@ -299,11 +303,11 @@ impl ConstellationState {
                 });
         }
         if !self.pack_shelf_open {
-            egui::SidePanel::right("constellation_rack_reopen")
+            egui::Panel::right("constellation_rack_reopen")
                 .resizable(false)
-                .exact_width(20.0)
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
+                .exact_size(20.0)
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
                     let rect = ui.available_rect_before_wrap();
                     if render_rack_rail(ui, rect, false) {
                         self.pack_shelf_open = true;
@@ -311,8 +315,8 @@ impl ConstellationState {
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::none())
-            .show_inside(ui, |ui| {
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 if self.samples.is_empty() && self.active_job.is_none() {
                     self.render_empty_state(ui, current_folder, palette);
@@ -324,18 +328,20 @@ impl ConstellationState {
                     && self.pad_editor_open
                     && !self.pack_bank.slots[self.selected_slot].is_empty()
                 {
-                    egui::TopBottomPanel::bottom("constellation_selected_pad")
+                    #[cfg(test)]
+                    tests::remember_panel_id(ui, "constellation_selected_pad");
+                    egui::Panel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(290.0)
-                        .height_range(220.0..=420.0)
-                        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 6.0)))
-                        .show_inside(ui, |ui| {
+                        .default_size(290.0)
+                        .size_range(220.0..=420.0)
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)))
+                        .show(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                             ui.separator();
                             // Overflow gets a reserved gutter, never an overlay on trim handles.
                             ui.style_mut().spacing.scroll.floating = false;
                             egui::ScrollArea::vertical()
-                                .id_source("constellation_layer_editor")
+                                .id_salt("constellation_layer_editor")
                                 .min_scrolled_height(0.0)
                                 .show(ui, |ui| self.render_selected_pad(ui, palette));
                         });
@@ -394,7 +400,7 @@ impl ConstellationState {
         viewport: Rect,
     ) -> Option<Pos2> {
         // Zoom handling
-        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+        let scroll_delta = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
         if scroll_delta.abs() > 0.1 && response.hovered() {
             let pointer_pos = ui
                 .input(|i| i.pointer.hover_pos())
@@ -843,11 +849,11 @@ fn relax_star_positions(points: &mut [Pos2], spacing: f32) {
 
 /// Atlas of a sharp disk (left) and a Gaussian density splat (right). Both use four vertices.
 fn dot_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    let id = egui::Id::new("constellation_dot_texture");
+    let id = egui::Id::unique("constellation_dot_texture");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return texture;
     }
-    let mut image = egui::ColorImage::new([64, 32], Color32::TRANSPARENT);
+    let mut image = egui::ColorImage::filled([64, 32], Color32::TRANSPARENT);
     for y in 0..32 {
         for x in 0..32 {
             let distance = Vec2::new(x as f32 - 15.5, y as f32 - 15.5).length();

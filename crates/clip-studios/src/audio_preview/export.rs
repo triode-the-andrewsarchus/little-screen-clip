@@ -736,7 +736,7 @@ impl AudioPreviewState {
                     ui.add_sized(
                         [text_width, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut self.save_destination_dir)
-                            .id(egui::Id::new("audio_save_destination")),
+                            .id(egui::Id::unique("audio_save_destination")),
                     );
                     if ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Browse...", palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
@@ -777,7 +777,7 @@ impl AudioPreviewState {
                                         crate::ui_ext::CONTROL_HEIGHT,
                                     ],
                                     egui::TextEdit::singleline(filename)
-                                        .id(egui::Id::new(("audio_save_filename", idx))),
+                                        .id(egui::Id::unique(("audio_save_filename", idx))),
                                 );
                             });
                         }
@@ -800,7 +800,7 @@ impl AudioPreviewState {
                         format!("Save All {} Files [Enter]", slice_count)
                     };
                     let save_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(crate::icons::Icon::Save), btn_text, palette)
-                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                        .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.add(save_btn).clicked() || is_enter {

@@ -113,7 +113,7 @@ impl Transfers {
                         progress.bytes,
                         display_path(&progress.current)
                     ))
-                    .truncate(true),
+                    .truncate(),
                 );
                 if ui
                     .add(ButtonRole::Secondary.button("Cancel operation", palette))
@@ -159,7 +159,7 @@ impl Transfers {
                 report.failed.len(),
                 if report.cancelled { " (cancelled)" } else { "" }
             ))
-            .id_source(("file_operation_report", index))
+            .id_salt(("file_operation_report", index))
             .default_open(!report.failed.is_empty())
             .show(ui, |ui| {
                 ui.label(format!("{} items unprocessed", report.unprocessed));
@@ -195,7 +195,7 @@ impl Transfers {
         };
         let mut decision = None;
         let mut cancel = false;
-        egui::Window::new("Destination already exists").id(egui::Id::new("file_transfer_conflict"))
+        egui::Window::new("Destination already exists").id(egui::Id::unique("file_transfer_conflict"))
             .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(format!("Source: {}", display_path(&conflict.source)));

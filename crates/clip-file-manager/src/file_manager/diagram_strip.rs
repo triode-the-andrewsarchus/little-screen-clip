@@ -205,7 +205,13 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
     };
     paint(ui, rect, ready, texture, scale);
     if super::ui::preview_hovered(ui, rect) {
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(("diagram_strip_hover", id)), |ui| {
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique(("diagram_strip_hover", id)),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
             hover(ui, ready);
         });
     }
@@ -228,7 +234,7 @@ pub(super) fn hover(ui: &mut egui::Ui, ready: &Ready) -> bool {
     let Some(texture) = &ready.texture else {
         return false;
     };
-    let screen = ui.ctx().screen_rect();
+    let screen = ui.ctx().content_rect();
     let width = (screen.width() - 40.0).clamp(160.0, 960.0);
     let max_height = (screen.height() * 0.6).clamp(100.0, 640.0);
     let original = texture.size_vec2();

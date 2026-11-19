@@ -5,7 +5,7 @@ impl NodeCanvasState {
         let mut action = None;
 
         // Undo / Redo & Node Delete shortcuts (when not typing in a text field)
-        let wants_kb = ui.ctx().wants_keyboard_input();
+        let wants_kb = ui.ctx().egui_wants_keyboard_input();
         if !wants_kb {
             let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
             if cmd && ui.input(|i| i.key_pressed(egui::Key::Z)) {
@@ -48,7 +48,7 @@ impl NodeCanvasState {
             self.graph.pan[1] += response.drag_delta().y;
         }
 
-        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+        let scroll_delta = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
         if scroll_delta.abs() > 0.1 && response.hovered() {
             let steps = (scroll_delta / 50.0).clamp(-4.0, 4.0);
             let zoom_factor = (1.055f32).powf(steps);
@@ -378,7 +378,11 @@ impl NodeCanvasState {
                 Pos2::new(full_rect.min.x + canvas_size.x + 8.0, full_rect.min.y),
                 full_rect.max,
             );
-            let mut editor_ui = ui.child_ui(editor_rect, egui::Layout::top_down(egui::Align::Min));
+            let mut editor_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(editor_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
             editor_ui.set_clip_rect(editor_rect.intersect(ui.clip_rect()));
             let node = &mut self.graph.nodes[index];
             if self

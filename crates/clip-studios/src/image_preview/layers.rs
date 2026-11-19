@@ -16,16 +16,19 @@ mod tests {
         state: &mut ImagePreviewState,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 700.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.set_max_width(240.0);
-                    state.render_view_toolbar(ui, ctx, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.set_max_width(240.0);
+                        state.render_view_toolbar(ui, ctx, &AppPalette::default());
+                    })
                 });
             },
         )
@@ -216,7 +219,7 @@ impl Inspector {
         ))
         .on_hover_text("Original source color space. Editing and raster export use 8-bit RGBA.");
         if let Some(profile) = &summary.profile {
-            ui.add(egui::Label::new(profile).truncate(true))
+            ui.add(egui::Label::new(profile).truncate())
                 .on_hover_text(profile);
         }
         self.overview(ui, ctx, palette, &document);
@@ -240,11 +243,11 @@ impl Inspector {
                 self.selected = None;
             }
             egui::ScrollArea::vertical()
-                .id_source("source_layers")
+                .id_salt("source_layers")
                 .max_height(110.0)
                 .min_scrolled_height(0.0)
                 .show_rows(ui, 22.0, summary.layers.len(), |ui, range| {
-                    ui.style_mut().wrap = Some(false);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     for index in range {
                         let layer = &summary.layers[index];
                         ui.horizontal(|ui| {
@@ -387,6 +390,7 @@ impl Inspector {
                     bounds,
                     0.0,
                     Stroke::new(2.0_f32, hex_to_c32(&palette.harmonies.base)),
+                    egui::StrokeKind::Middle,
                 );
             }
         }

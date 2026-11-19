@@ -22,7 +22,7 @@ use std::{
 
 const GPU_BUDGET: usize = 128 * 1024 * 1024;
 fn runtime_key() -> egui::Id {
-    egui::Id::new("geography_gpu_runtime")
+    egui::Id::unique("geography_gpu_runtime")
 }
 
 #[derive(Clone)]
@@ -460,7 +460,7 @@ impl TextureTile {
                     0,
                     external,
                     ty,
-                    Some(data),
+                    glow::PixelUnpackData::Slice(Some(data)),
                 );
             }
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);

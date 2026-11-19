@@ -46,7 +46,7 @@ pub(super) fn show(
     if super::ui::preview_hovered(ui, thumbnail)
         && let Some(texture) = texture
     {
-        let screen = ui.ctx().screen_rect().shrink(8.0);
+        let screen = ui.ctx().content_rect().shrink(8.0);
         let bounds = vec2(
             screen.width().min(640.0),
             (screen.bottom() - thumbnail.bottom() - 6.0).min(480.0),
@@ -56,7 +56,7 @@ pub(super) fn show(
             let scale = (bounds.x / size.x).min(bounds.y / size.y).min(1.0);
             super::ui::preview_popup(
                 ui,
-                egui::Id::new(("blend-thumbnail-hover", &entry.path)),
+                egui::Id::unique(("blend-thumbnail-hover", &entry.path)),
                 thumbnail,
                 size * scale,
                 Some(texture),

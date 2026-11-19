@@ -171,3 +171,28 @@ decisions to both and reports cognitive complexity 35. The remaining conditions
 select bounded OCR regions and normalization needed for reliable assertions;
 there is no new production controller or separate processing pipeline per crop.
 Keep this limitation explicit rather than adding abstractions to hide a score.
+
+## egui interaction tests and live inspection
+
+Use `egui_kittest` for deterministic application interactions. Query the
+accessible widget name, send input through the harness, then assert the
+resulting application state. Shared tab selection and the Files search
+controls use this approach. Keep direct egui inputs for cases that must
+deliver several native events in a single frame. Use the private Weston/Niri
+runner for compositor geometry, native file drag and drop, and clipboard
+protocol checks.
+
+Both desktop binaries support live inspection through the optional
+`ui-inspection` feature. With `egui-mcp` 0.3 installed, configure it as a
+stdio MCP server and attach to the port printed by the inspection build.
+Run live acceptance against owned fixtures in a private Weston/Niri session.
+
+```sh
+cargo install --locked egui_mcp --version 0.3.0
+cargo build -p clip-workbench -p clip-file-manager --features ui-inspection
+```
+
+Set `EGUI_INSPECTION=127.0.0.1:5719` in the private workbench launch
+environment, or use another loopback port for a second app. Query the widget
+tree to find controls by name and use the screenshot tool to inspect
+appearance. Native input and window behavior still use the compositor runner.

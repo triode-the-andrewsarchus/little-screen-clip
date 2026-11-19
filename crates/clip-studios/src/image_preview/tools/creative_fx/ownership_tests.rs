@@ -1289,7 +1289,7 @@ fn thumbnail_batch_drops_pending_textures_and_messages_for_old_pixels() {
         .push((CreativeFxType::LensAberration, RgbaImage::new(2, 2)));
     let texture = ctx.load_texture(
         "stale_fx_thumbnail_test",
-        egui::ColorImage::new([2, 2], Color32::WHITE),
+        egui::ColorImage::filled([2, 2], Color32::WHITE),
         egui::TextureOptions::LINEAR,
     );
     state
@@ -1451,20 +1451,23 @@ fn creative_fx_parameter_debounce_requests_a_repaint_without_pointer_input() {
     for fx in CreativeFxType::all() {
         let thumbnail = ctx.load_texture(
             format!("debounce-{fx:?}"),
-            egui::ColorImage::new([2, 2], Color32::BLACK),
+            egui::ColorImage::filled([2, 2], Color32::BLACK),
             egui::TextureOptions::LINEAR,
         );
         state.creative_fx_state.fx_thumbnails.insert(*fx, thumbnail);
     }
     let render_frame = |state: &mut ImagePreviewState| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         )

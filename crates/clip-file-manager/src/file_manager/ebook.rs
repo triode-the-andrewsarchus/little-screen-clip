@@ -320,7 +320,7 @@ impl Viewer {
                 self.selected + 1,
                 self.book.chapters().len()
             ));
-            egui::ComboBox::from_id_source("book-chapters")
+            egui::ComboBox::from_id_salt("book-chapters")
                 .selected_text(
                     self.book.chapters()[self.selected]
                         .title
@@ -384,7 +384,7 @@ impl Viewer {
             );
         }
         let mut scroll = egui::ScrollArea::both()
-            .id_source("book-reading")
+            .id_salt("book-reading")
             .auto_shrink([false, false]);
         if self.scroll_top {
             scroll = scroll.vertical_scroll_offset(0.0);
@@ -409,8 +409,7 @@ impl Viewer {
                     }
                     Display::Text(text) => {
                         ui.add(
-                            egui::Label::new(egui::RichText::new(text).size(self.font_size))
-                                .wrap(true),
+                            egui::Label::new(egui::RichText::new(text).size(self.font_size)).wrap(),
                         );
                         ui.add_space(8.0);
                     }
@@ -508,7 +507,13 @@ pub(super) fn show_list(
         }
         if super::ui::preview_hovered(ui, cell) {
             hovered = Some(index);
-            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(("book-chapter", index)), |ui| {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("book-chapter", index)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
                 ui.label(&summary.chapters[index]);
             });
         }
@@ -554,7 +559,13 @@ fn comic_strip(
         }
         if super::ui::preview_hovered(ui, rect) {
             hovered = Some(*index);
-            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(("comic-page", index)), |ui| {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("comic-page", index)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
                 ui.label(&summary.chapters[*index]);
             });
         }

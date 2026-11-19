@@ -74,8 +74,8 @@ impl Hover {
             data.source_lines.start(),
             data.source_lines.end()
         ));
-        ui.set_width((ui.ctx().screen_rect().width() - 40.0).clamp(160.0, 760.0));
-        let height = (ui.ctx().screen_rect().height() / 3.0).clamp(80.0, 400.0);
+        ui.set_width((ui.ctx().content_rect().width() - 40.0).clamp(160.0, 760.0));
+        let height = (ui.ctx().content_rect().height() / 3.0).clamp(80.0, 400.0);
         if let Some((_, view)) = &mut self.view {
             view.show(ui, height, palette);
         }

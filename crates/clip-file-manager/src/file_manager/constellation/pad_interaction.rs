@@ -58,7 +58,7 @@ impl ConstellationState {
         let rect = response.rect;
         let painter = ui.painter();
         let visuals = ui.visuals().clone();
-        // egui 0.27 consumes even a mismatched payload in take_payload.
+        // Check the type before releasing so a pad drag survives the file-drop handler.
         if egui::DragAndDrop::has_payload_of_type::<crate::file_manager::transfers::FileDrag>(
             ui.ctx(),
         ) && let Some(payload) =
@@ -86,6 +86,7 @@ impl ConstellationState {
                 rect.shrink(1.0),
                 4.0,
                 egui::Stroke::new(2.0_f32, visuals.selection.bg_fill),
+                egui::StrokeKind::Middle,
             );
         }
         if egui::DragAndDrop::has_payload_of_type::<PadDrag>(ui.ctx())
@@ -283,13 +284,13 @@ impl ConstellationState {
             .clicked()
             {
                 self.pack_bank.slots[index].choke_priority = priority;
-                ui.close_menu();
+                ui.close();
             }
         }
         ui.separator();
         if ui.button("Leave mute group").clicked() {
             self.leave_mute_group(index);
-            ui.close_menu();
+            ui.close();
         }
     }
 
@@ -323,7 +324,12 @@ impl ConstellationState {
         let mut lines = Vec::new();
         for (rect, pad) in &self.pad_drop_targets {
             if *pad == index || (group != 0 && self.pack_bank.slots[*pad].choke_group == group) {
-                painter.rect_stroke(rect.shrink(2.0), 4.0, egui::Stroke::new(2.0_f32, color));
+                painter.rect_stroke(
+                    rect.shrink(2.0),
+                    4.0,
+                    egui::Stroke::new(2.0_f32, color),
+                    egui::StrokeKind::Middle,
+                );
                 if *pad != index {
                     let direction = (rect.center() - origin.center()).normalized();
                     let start =
@@ -365,7 +371,8 @@ mod tests {
         state.pack_bank.slots[0].choke_priority = 1;
         state.pack_bank.slots[1].choke_priority = 2;
         let mut frame = |events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -375,10 +382,14 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let (_, response) =
-                            ui.allocate_exact_size(egui::vec2(100.0, 100.0), egui::Sense::click());
-                        state.handle_pad_response(ui, 1, &response, None);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let (_, response) = ui.allocate_exact_size(
+                                egui::vec2(100.0, 100.0),
+                                egui::Sense::click(),
+                            );
+                            state.handle_pad_response(ui, 1, &response, None);
+                        })
                     });
                 },
             )
@@ -442,24 +453,26 @@ mod tests {
         let mut state = ConstellationState::default();
         state.pack_bank.slots[0].choke_group = 1;
         state.pack_bank.slots[2].choke_group = 1;
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let background = ui.painter().add(egui::Shape::Noop);
-                state.pad_drop_targets = (0..3)
-                    .map(|index| {
-                        (
-                            egui::Rect::from_min_size(
-                                egui::pos2(20.0 + index as f32 * 70.0, 20.0),
-                                egui::vec2(60.0, 60.0),
-                            ),
-                            index,
-                        )
-                    })
-                    .collect();
-                for (rect, _) in &state.pad_drop_targets {
-                    ui.painter().rect_filled(*rect, 4.0, egui::Color32::GRAY);
-                }
-                state.paint_mute_links(ui, Some(0), background);
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let background = ui.painter().add(egui::Shape::Noop);
+                    state.pad_drop_targets = (0..3)
+                        .map(|index| {
+                            (
+                                egui::Rect::from_min_size(
+                                    egui::pos2(20.0 + index as f32 * 70.0, 20.0),
+                                    egui::vec2(60.0, 60.0),
+                                ),
+                                index,
+                            )
+                        })
+                        .collect();
+                    for (rect, _) in &state.pad_drop_targets {
+                        ui.painter().rect_filled(*rect, 4.0, egui::Color32::GRAY);
+                    }
+                    state.paint_mute_links(ui, Some(0), background);
+                })
             });
         });
         let links = output
@@ -488,7 +501,8 @@ mod tests {
             if !pressed {
                 egui::DragAndDrop::set_payload(&ctx, drag.clone());
             }
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -506,10 +520,14 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let (_, response) =
-                            ui.allocate_exact_size(egui::vec2(100.0, 100.0), egui::Sense::hover());
-                        state.handle_pad_response(ui, 5, &response, None);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let (_, response) = ui.allocate_exact_size(
+                                egui::vec2(100.0, 100.0),
+                                egui::Sense::hover(),
+                            );
+                            state.handle_pad_response(ui, 5, &response, None);
+                        })
                     });
                 },
             );

@@ -372,14 +372,15 @@ impl ImagePreviewState {
                 }
             };
 
-            painter.rect_filled(box_screen_rect, Rounding::ZERO, fill_color);
+            painter.rect_filled(box_screen_rect, CornerRadius::ZERO, fill_color);
 
             let is_selected = self.redaction_state.selected_idx == Some(i);
             if is_selected {
                 painter.rect_stroke(
                     box_screen_rect,
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     Stroke::new(2.0_f32, diff_del),
+                    egui::StrokeKind::Middle,
                 );
 
                 let handles = get_box_handles(box_screen_rect);
@@ -388,13 +389,14 @@ impl ImagePreviewState {
                         Rect::from_center_size(*pos, Vec2::splat(handle_radius * 2.0));
                     painter.rect_filled(
                         handle_rect,
-                        Rounding::same(1.0),
+                        CornerRadius::same(1),
                         hex_to_c32(&palette.colors.text_primary),
                     );
                     painter.rect_stroke(
                         handle_rect,
-                        Rounding::same(1.0),
+                        CornerRadius::same(1),
                         Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
+                        egui::StrokeKind::Middle,
                     );
                 }
 
@@ -418,21 +420,23 @@ impl ImagePreviewState {
                 let ideal_badge_min = badge_pos - badge_size * 0.5;
                 let badge_rect =
                     crate::ui_ext::clamp_overlay_rect(ideal_badge_min, badge_size, img_rect);
-                painter.rect_filled(badge_rect, Rounding::same(4.0), b_low_badge);
+                painter.rect_filled(badge_rect, CornerRadius::same(4), b_low_badge);
                 painter.rect_stroke(
                     badge_rect,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(1.0_f32, diff_del),
+                    egui::StrokeKind::Middle,
                 );
                 painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, badge_text_col);
             } else {
                 painter.rect_stroke(
                     box_screen_rect,
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     Stroke::new(
                         1.0_f32,
                         hex_to_c32_alpha(&palette.colors.text_secondary, 60),
                     ),
+                    egui::StrokeKind::Middle,
                 );
             }
         }
@@ -454,11 +458,12 @@ impl ImagePreviewState {
                     _ => Color32::from_rgba_unmultiplied(0, 0, 0, 210),
                 };
 
-                painter.rect_filled(in_progress_rect, Rounding::ZERO, fill);
+                painter.rect_filled(in_progress_rect, CornerRadius::ZERO, fill);
                 painter.rect_stroke(
                     in_progress_rect,
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     Stroke::new(1.5_f32, diff_del),
+                    egui::StrokeKind::Middle,
                 );
             }
             Some(RedactionDrag::InpaintRect(start_norm, curr_norm, is_erase)) => {
@@ -475,11 +480,12 @@ impl ImagePreviewState {
                 } else {
                     hex_to_c32(&palette.harmonies.base)
                 };
-                painter.rect_filled(in_progress_rect, Rounding::ZERO, fill);
+                painter.rect_filled(in_progress_rect, CornerRadius::ZERO, fill);
                 painter.rect_stroke(
                     in_progress_rect,
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     Stroke::new(1.5_f32, stroke_color),
+                    egui::StrokeKind::Middle,
                 );
             }
             _ => {}

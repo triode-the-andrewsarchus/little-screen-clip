@@ -7,7 +7,7 @@ use egui::{Id, Key, Modifiers, Ui};
 use little_clip_core::palette::AppPalette;
 
 pub(in crate::file_manager) fn input_id() -> Id {
-    Id::new("file_manager_search")
+    Id::unique("file_manager_search")
 }
 impl FileManager {
     pub(in crate::file_manager) fn search_columns(
@@ -83,7 +83,7 @@ impl FileManager {
             );
         }
         if ui
-            .interact(cell, Id::new("image_hash_sort"), egui::Sense::click())
+            .interact(cell, Id::unique("image_hash_sort"), egui::Sense::click())
             .on_hover_text("Sort by image hash/distance; click again to reverse")
             .clicked()
         {
@@ -108,7 +108,7 @@ impl FileManager {
         }
         let focused = ctx.memory(|memory| memory.focused());
         let find_target = [None, Some(list_id()), Some(input_id())].contains(&focused)
-            && !ctx.memory(|memory| memory.any_popup_open());
+            && !egui::Popup::is_any_open(ctx);
         if find_target && key(ctx, Modifiers::CTRL, Key::F) {
             let literal = self.search.literal;
             self.search.open(self.search.draft.clone());
@@ -141,7 +141,7 @@ impl FileManager {
             self.search.literal,
         );
         let edit_output = ui.horizontal(|ui| {
-            ui.label(if self.search.automatic {
+            let label = ui.label(if self.search.automatic {
                 "Find · automatic scope"
             } else {
                 "Find"
@@ -153,11 +153,12 @@ impl FileManager {
                 // events, including paste/Enter queued with Ctrl+F.
                 ui.memory_mut(|memory| memory.request_focus(input_id()));
             }
-            let output = egui::TextEdit::singleline(&mut self.search.draft)
+            let mut output = egui::TextEdit::singleline(&mut self.search.draft)
                 .id(input_id())
                 .hint_text(":image,10kb..2MB name  ·  :emb:\"description\"")
                 .desired_width((ui.available_width() - 300.0).max(80.0))
                 .show(ui);
+            output.response.response = output.response.response.labelled_by(label.id);
             if self.search.automatic && output.response.changed() {
                 self.search.edited(ui.input(|input| input.time));
             }
@@ -183,7 +184,7 @@ impl FileManager {
                     self.search.edit_at = None;
                     self.search.error = None;
                     self.search.focus = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             self.search.controls.visible = options_visible;
@@ -277,7 +278,7 @@ impl FileManager {
             .as_ref()
             .and_then(super::query::Query::date_summary)
         {
-            ui.add(egui::Label::new(egui::RichText::new(summary).small()).truncate(true));
+            ui.add(egui::Label::new(egui::RichText::new(summary).small()).truncate());
         }
     }
 
@@ -346,12 +347,14 @@ impl FileManager {
             if root.is_none() {
                 command = Some(Command::Enroll(path.clone()));
             }
-            ui.memory_mut(|memory| memory.toggle_popup(popup));
         }
-        egui::popup::popup_below_widget(ui, popup, &response, |ui| {
-            command = index_menu(ui, root, &message, error.as_deref(), backend.as_deref())
-                .or(command.take());
-        });
+        egui::Popup::from_toggle_button_response(&response)
+            .id(popup)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                command = index_menu(ui, root, &message, error.as_deref(), backend.as_deref())
+                    .or(command.take());
+            });
         if let Some(command) = command
             && let Err(error) = self
                 .search_service()
@@ -416,18 +419,18 @@ fn index_menu(
         ui.label(format!("{} files · {} vectors", root.files, root.vectors));
         if ui.button("Rebuild index").clicked() {
             command = Some(Command::Rebuild(root.path.clone()));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Remove indexed folder").clicked() {
             command = Some(Command::Remove(root.path.clone()));
-            ui.close_menu();
+            ui.close();
         }
     }
     if ui.button("Install embedding model and runtime").on_hover_text("Downloads checksum-verified model weights (about 865 MB) and builds the pinned local inference runtime.").clicked() {
-                command = Some(Command::Setup); ui.close_menu();
+                command = Some(Command::Setup); ui.close();
             }
     if ui.button("Install answer model").on_hover_text("Downloads the pinned local Qwen3.5-9B Q8 model and vision projector (about 10.7 GB) for temporary question/answer columns. Missing embedding weights add about 865 MB; the local runtime is also built if needed.").clicked() {
-        command = Some(Command::SetupAnswer); ui.close_menu();
+        command = Some(Command::SetupAnswer); ui.close();
     }
     command
 }

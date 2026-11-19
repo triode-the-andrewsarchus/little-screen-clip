@@ -16,7 +16,7 @@ fn parents(path: &Path) -> Vec<&Path> {
 }
 fn column_width(ui: &Ui, path: &Path, default: f32) -> f32 {
     ui.ctx()
-        .data(|data| data.get_temp::<f32>(Id::new(("miller-column-width", path))))
+        .data(|data| data.get_temp::<f32>(Id::unique(("miller-column-width", path))))
         .unwrap_or(default)
 }
 fn divider(ui: &mut Ui, path: &Path, width: f32, height: f32, colors: WorkbenchColors) {
@@ -25,13 +25,13 @@ fn divider(ui: &mut Ui, path: &Path, width: f32, height: f32, colors: WorkbenchC
     // the active resize gesture attached to its folder across those frames.
     let response = ui.interact(
         rect,
-        Id::new(("miller-divider", path)),
+        Id::unique(("miller-divider", path)),
         Sense::click_and_drag(),
     );
     let response = response
         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
         .on_hover_text("Drag to resize column; double-click to reset width");
-    let id = Id::new(("miller-column-width", path));
+    let id = Id::unique(("miller-column-width", path));
     if response.double_clicked() {
         ui.ctx().data_mut(|data| data.remove::<f32>(id));
     } else if response.dragged() {
@@ -64,7 +64,7 @@ fn heading(ui: &mut Ui, path: &Path) {
                 .unwrap_or(path.as_os_str())
                 .to_string_lossy(),
         )
-        .truncate(true),
+        .truncate(),
     )
     .on_hover_text(display_path(path));
     ui.separator();
@@ -190,7 +190,7 @@ impl FileManager {
             .label(&current)
             .unwrap_or_else(|| current.clone());
         let viewport = ui.available_size();
-        let viewport_id = ui.id().with("miller-viewport");
+        let viewport_id = ui.scope_id().with("miller-viewport");
         let changed = ui.ctx().data_mut(|data| {
             let old = data.get_temp::<(PathBuf, egui::Vec2)>(viewport_id);
             let next = (current.clone(), viewport);
@@ -220,7 +220,7 @@ impl FileManager {
         let restore = self.restore_scroll;
         let height = (viewport.y - 30.0).max(0.0);
         let mut area = egui::ScrollArea::horizontal()
-            .id_source("miller-columns")
+            .id_salt("miller-columns")
             .max_height(height)
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
@@ -330,14 +330,14 @@ impl FileManager {
             .filter(|entry| !entry.hidden || self.show_hidden)
             .collect();
         let mut target = None;
-        let route_id = ui.id().with("ancestor-route");
+        let route_id = ui.scope_id().with("ancestor-route");
         let changed_route = ui.ctx().data_mut(|data| {
             let changed = data.get_temp::<PathBuf>(route_id).as_deref() != Some(current);
             data.insert_temp(route_id, current.to_path_buf());
             changed
         });
         let mut area = egui::ScrollArea::vertical()
-            .id_source("ancestor")
+            .id_salt("ancestor")
             .auto_shrink([false, false]);
         if (restore || changed_route)
             && let Some(index) = entries
@@ -385,38 +385,41 @@ mod tests {
             vec![egui::Event::PointerMoved(pos2(150.0, 50.0))],
             vec![egui::Event::PointerMoved(pos2(190.0, 50.0))],
         ] {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 220.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        egui::ScrollArea::horizontal()
-                            .horizontal_scroll_offset(200.0)
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.horizontal_top(|ui| {
-                                    let width = column_width(ui, path, 300.0);
-                                    ui.allocate_space(vec2(width, 160.0));
-                                    center = ui.cursor().min + vec2(3.0, 40.0);
-                                    divider(
-                                        ui,
-                                        path,
-                                        width,
-                                        160.0,
-                                        WorkbenchColors::from_palette(&AppPalette::default()),
-                                    );
-                                    ui.allocate_space(vec2(300.0, 160.0));
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            egui::ScrollArea::horizontal()
+                                .horizontal_scroll_offset(200.0)
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    ui.horizontal_top(|ui| {
+                                        let width = column_width(ui, path, 300.0);
+                                        ui.allocate_space(vec2(width, 160.0));
+                                        center = ui.cursor().min + vec2(3.0, 40.0);
+                                        divider(
+                                            ui,
+                                            path,
+                                            width,
+                                            160.0,
+                                            WorkbenchColors::from_palette(&AppPalette::default()),
+                                        );
+                                        ui.allocate_space(vec2(300.0, 160.0));
+                                    });
                                 });
-                            });
+                        })
                     });
                 },
             );
         }
         assert!(
-            ctx.data(|d| d.get_temp::<f32>(Id::new(("miller-column-width", path))))
+            ctx.data(|d| d.get_temp::<f32>(Id::unique(("miller-column-width", path))))
                 .is_some_and(|w| w > 340.0),
             "divider at {center:?}, dragged={:?}",
             ctx.dragged_id()
@@ -470,16 +473,19 @@ mod tests {
         for spacing in [0.0, 6.0, 12.0] {
             {
                 let ctx = egui::Context::default();
-                let output = ctx.run(
+                let output = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 220.0))),
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.spacing_mut().item_spacing.y = spacing;
-                            let colors = WorkbenchColors::from_palette(&AppPalette::default());
-                            browser.column_ancestor(ui, root.path(), &target, true, colors);
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = spacing;
+                                let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                                browser.column_ancestor(ui, root.path(), &target, true, colors);
+                            })
                         });
                     },
                 );
@@ -500,18 +506,21 @@ mod tests {
             (700.0, 320.0),
         ] {
             browser.drop_targets.clear();
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        browser.columns_ui(
-                            ui,
-                            WorkbenchColors::from_palette(&AppPalette::default()),
-                            &AppPalette::default(),
-                        )
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            browser.columns_ui(
+                                ui,
+                                WorkbenchColors::from_palette(&AppPalette::default()),
+                                &AppPalette::default(),
+                            )
+                        })
                     });
                 },
             );

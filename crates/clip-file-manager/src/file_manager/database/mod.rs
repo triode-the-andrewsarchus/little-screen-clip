@@ -166,12 +166,12 @@ impl Viewer {
         }
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.tables(ui);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let Some(table) = self.document.tables.get(self.selected) else {
                 ui.label("No table or view objects");
@@ -252,7 +252,7 @@ impl Viewer {
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut selected = None;
         egui::ScrollArea::vertical()
-            .id_source("database-tables")
+            .id_salt("database-tables")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show_rows(ui, height, self.document.tables.len(), |ui, rows| {
@@ -280,7 +280,7 @@ impl Viewer {
 fn schema(ui: &mut egui::Ui, table: &Table) -> Option<String> {
     let mut chosen = None;
     egui::ScrollArea::vertical()
-        .id_source("database-schema")
+        .id_salt("database-schema")
         .auto_shrink([false, false])
         .min_scrolled_height(0.0)
         .show(ui, |ui| {
@@ -330,7 +330,7 @@ fn schema(ui: &mut egui::Ui, table: &Table) -> Option<String> {
             }
             ui.separator();
             ui.strong("Stored definition");
-            ui.add(egui::Label::new(egui::RichText::new(&table.sql).monospace()).wrap(true));
+            ui.add(egui::Label::new(egui::RichText::new(&table.sql).monospace()).wrap());
         });
     chosen
 }
@@ -385,14 +385,16 @@ pub(super) fn show_list(
         );
         if super::ui::preview_hovered(ui, rect) {
             hovered = Some(index);
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("database-object", index)),
-                |ui| {
-                    ui.label(name);
-                    ui.label(format!("{} schema objects total", summary.total));
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("database-object", index)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(name);
+                ui.label(format!("{} schema objects total", summary.total));
+            });
         }
         x += width + 4.0;
     }

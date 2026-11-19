@@ -48,7 +48,7 @@ impl FileManager {
         let mut submit = false;
         let mut cancel = false;
         egui::Window::new(dialog.action.title())
-            .id(Id::new("file_manager_naming"))
+            .id(Id::unique("file_manager_naming"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -60,7 +60,7 @@ impl FileManager {
                 }
                 ui.label("Name:");
                 let mut output = egui::TextEdit::singleline(&mut dialog.name)
-                    .id(Id::new("file_manager_name"))
+                    .id(Id::unique("file_manager_name"))
                     .desired_width(360.0)
                     .show(ui);
                 if dialog.focus {

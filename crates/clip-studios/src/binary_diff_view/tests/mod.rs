@@ -6,7 +6,7 @@ mod state;
 
 pub(super) fn trigger_global_shortcut(state: &mut BinaryDiffViewState, key: egui::Key) {
     let ctx = egui::Context::default();
-    ctx.begin_frame(egui::RawInput {
+    ctx.begin_pass(egui::RawInput {
         events: vec![egui::Event::Key {
             key,
             physical_key: None,
@@ -18,6 +18,6 @@ pub(super) fn trigger_global_shortcut(state: &mut BinaryDiffViewState, key: egui
     });
     let mut close_requested = false;
     state.handle_global_shortcuts(&ctx, &mut close_requested);
-    let _ = ctx.end_frame();
+    ctx.end_pass().drop_without_applying_deltas();
     assert!(!close_requested);
 }

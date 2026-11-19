@@ -7,7 +7,8 @@ fn model3d_toolbar_clicks_change_only_their_view_controls() {
         app: &mut WorkbenchApp,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -17,7 +18,7 @@ fn model3d_toolbar_clicks_change_only_their_view_controls() {
                 events,
                 ..Default::default()
             },
-            |ctx| assert!(app.render_modal_viewers(ctx)),
+            |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
         )
     }
 
@@ -304,7 +305,8 @@ fn file_backed_3d_viewer_escape_returns_to_workbench_and_drops_pending_session()
     assert_eq!(app.view, WorkbenchView::Palette);
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -319,7 +321,7 @@ fn file_backed_3d_viewer_escape_returns_to_workbench_and_drops_pending_session()
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
     assert!(
         app.viewer.is_none(),
@@ -329,8 +331,8 @@ fn file_backed_3d_viewer_escape_returns_to_workbench_and_drops_pending_session()
 
     // A subsequent modal poll must not let a completed parse publish into
     // or replace the workbench after the viewer has been closed.
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        assert!(!app.render_modal_viewers(ctx));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        assert!(!ctx.root_ui(|ui| app.render_modal_viewers(ui)));
     });
     assert!(app.viewer.is_none());
     assert_eq!(app.view, WorkbenchView::Palette);
@@ -364,7 +366,8 @@ fn ready_idle_3d_viewer_escape_returns_to_originating_workbench_view() {
     assert!(state.rx.is_none());
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -379,7 +382,7 @@ fn ready_idle_3d_viewer_escape_returns_to_originating_workbench_view() {
             }],
             ..Default::default()
         },
-        |ctx| assert!(app.render_modal_viewers(ctx)),
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none(), "Escape should close the ready viewer");

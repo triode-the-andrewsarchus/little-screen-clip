@@ -6,6 +6,8 @@
 pub mod buttons;
 pub mod icons;
 pub mod sliders;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod ui_appearance;
 pub mod ui_ext;
 pub mod ui_tabs;

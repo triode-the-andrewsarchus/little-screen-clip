@@ -49,7 +49,7 @@ impl NodeCanvasState {
             );
 
             let mut recipe_to_load = None;
-            egui::ComboBox::from_id_source("recipe_combobox")
+            egui::ComboBox::from_id_salt("recipe_combobox")
                 .selected_text(
                     egui::RichText::new(&self.selected_recipe_name)
                         .color(hex_to_c32(&palette.harmonies.base))
@@ -223,14 +223,12 @@ impl NodeCanvasState {
             } else {
                 hex_to_c32(&palette.diff_add)
             };
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new(msg)
-                        .color(col)
-                        .size(BODY_FONT_SIZE)
-                        .strong(),
-                );
-            });
+            ui.label(
+                egui::RichText::new(msg)
+                    .color(col)
+                    .size(BODY_FONT_SIZE)
+                    .strong(),
+            );
         }
     }
 
@@ -248,18 +246,18 @@ impl NodeCanvasState {
         // Dark dim backdrop
         ui.painter().rect_filled(
             parent_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Color32::from_rgba_unmultiplied(0, 0, 0, 160),
         );
 
-        egui::Area::new(Id::new("catalog_modal_area"))
+        egui::Area::new(Id::unique("catalog_modal_area"))
             .fixed_pos(modal_rect.min)
             .show(ui.ctx(), |ui| {
                 egui::Frame::window(ui.style())
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)))
-                    .rounding(crate::ui_ext::CARD_CORNER_RADIUS)
-                    .inner_margin(egui::Margin::same(crate::ui_ext::PANEL_INSET))
+                    .corner_radius(crate::ui_ext::CARD_CORNER_RADIUS)
+                    .inner_margin(egui::Margin::from(crate::ui_ext::PANEL_INSET))
                     .show(ui, |ui| {
                         ui.set_width(modal_w);
                         ui.set_height(modal_h);
@@ -331,13 +329,13 @@ impl NodeCanvasState {
                                     );
                                 } else {
                                     for template in filtered {
-                                        let frame = egui::Frame::none()
+                                        let frame = egui::Frame::NONE
                                             .fill(hex_to_c32(&palette.colors.surface_panel))
-                                            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
-                                            .inner_margin(egui::Margin::symmetric(
+                                            .corner_radius(crate::ui_ext::CONTROL_CORNER_RADIUS)
+                                            .inner_margin(egui::Margin::from(egui::vec2(
                                                 crate::ui_ext::BUTTON_PADDING_X,
                                                 crate::ui_ext::BUTTON_PADDING_Y,
-                                            ));
+                                            )));
 
                                         frame.show(ui, |ui| {
                                             ui.horizontal(|ui| {

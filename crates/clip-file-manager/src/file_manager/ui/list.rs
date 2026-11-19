@@ -280,7 +280,7 @@ impl FileManager {
             return;
         }
         egui::ScrollArea::horizontal()
-            .id_source("answer_columns_horizontal")
+            .id_salt("answer_columns_horizontal")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let extras = count + usize::from(self.search.images.active());
@@ -476,7 +476,7 @@ impl FileManager {
         targets.append(&mut previews.child_targets);
         drop(previews);
         self.drop_targets.extend(targets);
-        self.finish_listing(ui, actions, output.state.offset.y, &background);
+        self.finish_listing(ui, actions, output.state.clamped_offset().y, &background);
         self.list_audio(play);
         if let Some(column) = output.inner {
             column.apply(self);
@@ -605,19 +605,22 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 400.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    manager.list_contents(
-                        ui,
-                        WorkbenchColors::from_palette(&AppPalette::default()),
-                        &AppPalette::default(),
-                    )
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        manager.list_contents(
+                            ui,
+                            WorkbenchColors::from_palette(&AppPalette::default()),
+                            &AppPalette::default(),
+                        )
+                    })
                 });
             },
         )
@@ -927,16 +930,18 @@ mod tests {
         let entry = &directory.entries[0];
         let ctx = egui::Context::default();
         for width in [95.0, 130.0, 260.0] {
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    media_header(
-                        ui,
-                        Rect::from_min_size(pos2(10.0, 10.0), vec2(width, ROW_HEIGHT)),
-                        entry,
-                        Some("5 events · UTC (2 shown) · additional summary".into()),
-                        None,
-                        WorkbenchColors::from_palette(&AppPalette::default()),
-                    );
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        media_header(
+                            ui,
+                            Rect::from_min_size(pos2(10.0, 10.0), vec2(width, ROW_HEIGHT)),
+                            entry,
+                            Some("5 events · UTC (2 shown) · additional summary".into()),
+                            None,
+                            WorkbenchColors::from_palette(&AppPalette::default()),
+                        );
+                    })
                 });
             });
             let name = output
@@ -975,22 +980,26 @@ mod tests {
                 .unwrap();
         let ctx = egui::Context::default();
         for entry in &directory.entries {
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, ROW_HEIGHT));
-                    let columns = ListColumns::new(header)
-                        .for_family(Some(super::super::super::sorting::family(entry)));
-                    let last = columns.metadata_fields().len() - 1;
-                    assert!(columns.metadata_cell(header, last).unwrap().right() <= columns.size);
-                    let colors = WorkbenchColors::from_palette(&AppPalette::default());
-                    columns.sort_header(ui, header, None, colors, true);
-                    columns.paint(
-                        ui,
-                        header.translate(vec2(0.0, 40.0)),
-                        "12 KiB",
-                        "2026-11-14",
-                        colors.text_primary,
-                    );
+            let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, ROW_HEIGHT));
+                        let columns = ListColumns::new(header)
+                            .for_family(Some(super::super::super::sorting::family(entry)));
+                        let last = columns.metadata_fields().len() - 1;
+                        assert!(
+                            columns.metadata_cell(header, last).unwrap().right() <= columns.size
+                        );
+                        let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                        columns.sort_header(ui, header, None, colors, true);
+                        columns.paint(
+                            ui,
+                            header.translate(vec2(0.0, 40.0)),
+                            "12 KiB",
+                            "2026-11-14",
+                            colors.text_primary,
+                        );
+                    })
                 });
             });
             for expected in ["Size", "Modified", "12 KiB", "2026-11-14"] {
@@ -1030,18 +1039,21 @@ mod tests {
                 assert!(!manager.reveal_selection);
                 let ctx = egui::Context::default();
                 let mut rendered_scroll = None;
-                let _ = ctx.run(
+                let _ = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 320.0))),
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            let height = *manager.list_offsets.last().unwrap();
-                            let output = manager
-                                .list_scroll(ui, ROW_HEIGHT)
-                                .show(ui, |ui| ui.set_min_height(height));
-                            rendered_scroll = Some(output.state.offset.y);
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                let height = *manager.list_offsets.last().unwrap();
+                                let output = manager
+                                    .list_scroll(ui, ROW_HEIGHT)
+                                    .show(ui, |ui| ui.set_min_height(height));
+                                rendered_scroll = Some(output.state.clamped_offset().y);
+                            })
                         });
                     },
                 );
@@ -1128,20 +1140,23 @@ mod tests {
         }
         assert_eq!(manager.metadata.status(Category::VcvRack), "Metadata 4/4");
 
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let header = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, GROUP_HEADER_HEIGHT));
-                let columns = ListColumns::new(header).for_family(manager.single_family);
-                let colors = WorkbenchColors::from_palette(&AppPalette::default());
-                group_header(
-                    ui,
-                    header,
-                    manager.single_family,
-                    columns,
-                    manager.list_sort(),
-                    &manager.metadata,
-                    colors,
-                );
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let header =
+                        Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, GROUP_HEADER_HEIGHT));
+                    let columns = ListColumns::new(header).for_family(manager.single_family);
+                    let colors = WorkbenchColors::from_palette(&AppPalette::default());
+                    group_header(
+                        ui,
+                        header,
+                        manager.single_family,
+                        columns,
+                        manager.list_sort(),
+                        &manager.metadata,
+                        colors,
+                    );
+                })
             });
         });
         for expected in ["VCV Rack · Metadata 4/4", "Modules", "Cables", "Rows"] {

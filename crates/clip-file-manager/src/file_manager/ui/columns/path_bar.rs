@@ -40,7 +40,7 @@ impl FileManager {
         let widths: Vec<_> = labels
             .iter()
             .map(|label| {
-                ui.fonts(|fonts| {
+                ui.fonts_mut(|fonts| {
                     fonts
                         .layout_no_wrap(label.to_string(), font.clone(), colors.text_secondary)
                         .size()
@@ -64,7 +64,7 @@ impl FileManager {
                                 for path in paths[..start].iter().rev() {
                                     if ui.button(display_path(path)).clicked() {
                                         target = Some(path.to_path_buf());
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             });
@@ -90,7 +90,7 @@ impl FileManager {
                                         colors.text_secondary
                                     }),
                             )
-                            .truncate(true)
+                            .truncate()
                             .sense(if is_file {
                                 Sense::hover()
                             } else {
@@ -103,8 +103,8 @@ impl FileManager {
                     }
                     response.context_menu(|ui| {
                         if ui.button("Copy path").clicked() {
-                            ui.output_mut(|output| output.copied_text = display_path(paths[index]));
-                            ui.close_menu();
+                            ui.ctx().copy_text(display_path(paths[index]));
+                            ui.close();
                         }
                     });
                 }

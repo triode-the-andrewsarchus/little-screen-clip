@@ -20,13 +20,13 @@ const ROW_HEIGHT: f32 = 28.0;
 pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
 
 fn address_id() -> Id {
-    Id::new("file_manager_address")
+    Id::unique("file_manager_address")
 }
 pub(super) fn list_id() -> Id {
-    Id::new("file_manager_list_focus")
+    Id::unique("file_manager_list_focus")
 }
 fn tree_id() -> Id {
-    Id::new("file_manager_tree_focus")
+    Id::unique("file_manager_tree_focus")
 }
 
 pub(super) fn key(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
@@ -48,12 +48,13 @@ impl FileManager {
     pub(crate) fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         self.drop_targets.clear();
         self.bookmark_drop_rect = None;
-        self.tick(super::BackgroundJobs::global());
         self.sync_preview_context();
         let settle_focus = self.sync_browser_focus(ui.ctx());
         let focus_handoff = self.focus_list;
         self.shortcuts(ui.ctx());
-        ui.set_enabled(!self.browser_modal());
+        if self.browser_modal() {
+            ui.disable();
+        }
         self.toolbar(ui, palette);
         self.search_ui(ui, palette);
         self.answer_columns_ui(ui, palette);
@@ -113,18 +114,17 @@ impl FileManager {
         };
         ui.ctx().data_mut(|data| {
             data.insert_temp(
-                egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
+                egui::Id::unique(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
                 file_clipboard,
             );
             data.insert_temp(
-                egui::Id::new(egui_winit::CLIPBOARD_TEXT_FOCUS_SHORTCUTS),
+                egui::Id::unique(egui_winit::CLIPBOARD_TEXT_FOCUS_SHORTCUTS),
                 text_focus_shortcuts,
             );
         });
-        self.schedule_repaints(ui.ctx());
     }
 
-    fn schedule_repaints(&self, ctx: &egui::Context) {
+    pub(super) fn schedule_repaints(&self, ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
         if let Some(last) = &self.last_status {
             let elapsed = last.timestamp.elapsed();
@@ -166,10 +166,10 @@ impl FileManager {
         let colors = WorkbenchColors::from_palette(palette);
         if self.shelf.open {
             let height = (ui.available_height() * 0.38).clamp(144.0, 224.0);
-            egui::TopBottomPanel::bottom("file_manager_shelf")
-                .exact_height(height)
-                .frame(egui::Frame::none().fill(colors.recessed).inner_margin(8.0))
-                .show_inside(ui, |ui| {
+            egui::Panel::bottom("file_manager_shelf")
+                .exact_size(height)
+                .frame(egui::Frame::NONE.fill(colors.recessed).inner_margin(8.0))
+                .show(ui, |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     self.shelf_ui(ui, palette);
                 });
@@ -190,12 +190,12 @@ impl FileManager {
                 .as_ref()
                 .is_some_and(|directory| directory.skipped > 0)
         {
-            egui::TopBottomPanel::bottom("file_manager_status")
-                .default_height(80.0)
-                .min_height(if self.error.is_some() { 80.0 } else { 56.0 })
-                .max_height(150.0)
-                .frame(egui::Frame::none().inner_margin(6.0))
-                .show_inside(ui, |ui| {
+            egui::Panel::bottom("file_manager_status")
+                .default_size(80.0)
+                .min_size(if self.error.is_some() { 80.0 } else { 56.0 })
+                .max_size(150.0)
+                .frame(egui::Frame::NONE.inner_margin(6.0))
+                .show(ui, |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     egui::ScrollArea::vertical()
                         .min_scrolled_height(0.0)
@@ -203,20 +203,20 @@ impl FileManager {
                         .show(ui, |ui| self.status(ui, colors, palette));
                 });
         }
-        egui::SidePanel::left("file_manager_folders")
-            .default_width(240.0)
-            .width_range(150.0..=400.0)
+        egui::Panel::left("file_manager_folders")
+            .default_size(240.0)
+            .size_range(150.0..=400.0)
             .resizable(true)
-            .show_inside(ui, |ui| self.sidebar_ui(ui, colors));
+            .show(ui, |ui| self.sidebar_ui(ui, colors));
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(
+            .frame(egui::Frame::NONE.inner_margin(
                 if self.view == super::BrowserView::Constellation {
                     0.0
                 } else {
                     8.0
                 },
             ))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 if ui.is_enabled()
                     && !matches!(
                         self.view,
@@ -307,7 +307,7 @@ impl FileManager {
         if !modal && !popup_open(ctx) && requested {
             self.focus_list = true;
             ctx.memory_mut(|memory| memory.request_focus(list_id()));
-            // egui 0.27 installs a focus lock only after the target owned the
+            // egui installs a focus lock only after the target owned the
             // previous frame. Repaint until that handoff settles, retaining
             // arrows even if egui's pending directional focus runs meanwhile.
             return focused != Some(list_id())
@@ -386,7 +386,7 @@ impl FileManager {
     fn constellation_shortcuts(&mut self, ctx: &egui::Context) {
         self.type_navigation.clear();
         if key(ctx, Modifiers::CTRL, Key::F)
-            || (!ctx.wants_keyboard_input()
+            || (!ctx.egui_wants_keyboard_input()
                 && !self.constellation.uses_pad_key('/')
                 && key(ctx, Modifiers::NONE, Key::Slash))
         {
@@ -518,7 +518,7 @@ impl FileManager {
             let mut output = egui::TextEdit::singleline(&mut self.address)
                 .id(address_id()).hint_text("Directory path [Ctrl+L]")
                 .desired_width(address_width).show(ui);
-            output.response.clone().on_hover_text("Enter a directory path. Relative paths and ~/ are supported. Backslashes: \\\\; unusual bytes: \\xHH.");
+            output.response.response.clone().on_hover_text("Enter a directory path. Relative paths and ~/ are supported. Backslashes: \\\\; unusual bytes: \\xHH.");
             if self.focus_address {
                 self.focus_address = false;
                 focus_text(ui.ctx(), &mut output, self.address.chars().count());
@@ -607,7 +607,7 @@ impl FileManager {
                 ui.spinner();
                 ui.add(
                     egui::Label::new(format!("Opening {}…", display_path(&request.path)))
-                        .truncate(true),
+                        .truncate(),
                 );
                 if ui
                     .add(
@@ -630,7 +630,7 @@ impl FileManager {
                 .or_else(|| self.mounts.status_text().map(str::to_owned));
             if let Some(mount_status) = status {
                 ui.spinner();
-                ui.add(egui::Label::new(mount_status).truncate(true));
+                ui.add(egui::Label::new(mount_status).truncate());
             }
         });
     }
@@ -819,7 +819,7 @@ impl FileManager {
 
     fn list_scroll(&mut self, ui: &Ui, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
-            .id_source("file_manager_listing")
+            .id_salt("file_manager_listing")
             .auto_shrink([false, false]);
         if self.restore_scroll {
             scroll = scroll
@@ -925,7 +925,7 @@ impl FileManager {
         let rows = self.tree.rows(self.show_hidden);
         let mut scroll = egui::ScrollArea::both()
             .min_scrolled_height(0.0)
-            .id_source("file_manager_tree")
+            .id_salt("file_manager_tree")
             .auto_shrink([false, false]);
         if self.tree.reveal
             && let Some(index) = rows
@@ -985,11 +985,11 @@ impl FileManager {
         let arrow_rect = Rect::from_min_size(rect.min + vec2(indent, 0.0), vec2(26.0, ROW_HEIGHT));
         let arrow = ui.interact(
             arrow_rect,
-            Id::new(("file_tree_arrow", index)),
+            Id::unique(("file_tree_arrow", index)),
             Sense::click(),
         );
         let body = Rect::from_min_max(pos2(arrow_rect.max.x, rect.min.y), rect.max);
-        let response = ui.interact(body, Id::new(("file_tree_row", index)), Sense::click());
+        let response = ui.interact(body, Id::unique(("file_tree_row", index)), Sense::click());
         row_background(
             ui,
             rect,
@@ -1004,6 +1004,7 @@ impl FileManager {
                 rect.shrink(1.0),
                 3.0,
                 egui::Stroke::new(1.0_f32, colors.focus),
+                egui::StrokeKind::Middle,
             );
         }
         (if expanded {
@@ -1164,16 +1165,9 @@ pub(super) fn model_thumbnail(
 
 /// Returns whether any popup or context menu is currently open or opening.
 pub(super) fn popup_open(ctx: &egui::Context) -> bool {
-    let reload_error = Id::new("appearance_reload_error");
     ctx.input(|input| input.pointer.secondary_clicked() || input.pointer.secondary_down())
-        || ctx.memory(|memory| {
-            memory.any_popup_open()
-                || memory
-                    .areas()
-                    .visible_layer_ids()
-                    .into_iter()
-                    .any(|layer| layer.order == egui::Order::Foreground && layer.id != reload_error)
-        })
+        || egui::Popup::is_any_open(ctx)
+        || ctx.any_popup_open()
 }
 
 /// Restricts passive preview hover to the enabled, visible portion of its row.
@@ -1389,7 +1383,8 @@ pub(super) fn sort_heading(
         // surrounding scroll area when the pointer moved during that frame.
         .interact(cell, id, Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label));
     if response.hovered() {
         ui.painter().rect_filled(cell, 2.0, colors.recessed);
     }
@@ -1482,7 +1477,7 @@ pub(super) fn media_header(
     if !popup_open(ui.ctx()) {
         ui.interact(
             header,
-            Id::new(("media_metadata", &entry.path)),
+            Id::unique(("media_metadata", &entry.path)),
             Sense::hover(),
         )
         .on_hover_text(details.map_or_else(
@@ -1518,6 +1513,14 @@ fn file_row(
     colors: WorkbenchColors,
 ) -> egui::Response {
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::ListItem,
+            response.enabled(),
+            selected,
+            &entry.name,
+        )
+    });
     let response = if rect.height() <= ROW_HEIGHT && !popup_open(ui.ctx()) {
         response.on_hover_text(format!(
             "{}{}",
@@ -1635,7 +1638,7 @@ impl ListActions {
             self.select_all = ui.button("Select all").clicked();
             self.open_trash = ui.button("Open Trash…").clicked();
             if self.naming.is_some() || self.files.is_some() || self.select_all || self.open_trash {
-                ui.close_menu();
+                ui.close();
             }
         });
         focus
@@ -1738,7 +1741,7 @@ impl ListActions {
         {
             self.open = Some(entry.path.clone());
             self.open_position = Some(super::DocumentPosition::VideoAudioTrack);
-            ui.close_menu();
+            ui.close();
         }
     }
 
@@ -1753,7 +1756,7 @@ impl ListActions {
         response.context_menu(|ui| {
             if let Some(path) = inspection_button(ui, entry) {
                 self.inspect = Some(path);
-                ui.close_menu();
+                ui.close();
             }
 
             if ui
@@ -1765,23 +1768,23 @@ impl ListActions {
                 .clicked()
             {
                 self.open = Some(entry.path.clone());
-                ui.close_menu();
+                ui.close();
             }
             if self.search_results && ui.button("Reveal in folder").clicked() {
                 self.reveal = Some(entry.path.clone());
-                ui.close_menu();
+                ui.close();
             }
             if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
             {
                 self.external = Some(entry.path.clone());
-                ui.close_menu();
+                ui.close();
             }
 
             self.video_audio_menu(ui, entry);
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
                 self.search_similar = Some(entry.path.clone());
-                ui.close_menu();
+                ui.close();
             }
 
             let mounts = super::fuse_binwalk::cached_mount_table();
@@ -1791,7 +1794,7 @@ impl ListActions {
                 if let Some(mode) = mounts.status(&mount_point) {
                     if ui.button("Open mounted binary contents").clicked() {
                         self.navigate_folder = Some(mount_point.clone());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if shift
                         && mode == super::fuse_binwalk::MountMode::ReadOnly
@@ -1800,17 +1803,17 @@ impl ListActions {
                             .clicked()
                     {
                         self.mount_binary = Some((entry.path.clone(), true));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Unmount binary contents").clicked() {
                         self.unmount_binary = Some(mount_point);
-                        ui.close_menu();
+                        ui.close();
                     }
                 } else {
                     let label = super::fuse_binwalk::mount_menu_label(shift);
                     if ui.button(label).clicked() {
                         self.mount_binary = Some((entry.path.clone(), shift));
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
             }
@@ -1818,7 +1821,7 @@ impl ListActions {
                 && ui.button("Unmount binary contents").clicked()
             {
                 self.unmount_binary = Some(mount_root);
-                ui.close_menu();
+                ui.close();
             }
             ui.separator();
             let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
@@ -1831,7 +1834,7 @@ impl ListActions {
                 can_edit && entry.system.is_none(),
             );
             if self.naming.is_some() || self.files.is_some() {
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -1870,7 +1873,7 @@ fn inspection_button(ui: &mut Ui, entry: &super::filesystem::Entry) -> Option<Pa
         (false, true) => "Inspect loop associations",
         _ => return None,
     };
-    ui.add(egui::Button::new(label).wrap(false))
+    ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend))
         .clicked()
         .then(|| entry.path.clone())
 }
@@ -1973,7 +1976,7 @@ pub(super) fn preview_popup_with_overlay(
     if popup_open(ui.ctx()) {
         return;
     }
-    let screen = ui.ctx().screen_rect().shrink(8.0);
+    let screen = ui.ctx().content_rect().shrink(8.0);
     let left = anchor
         .left()
         .clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
@@ -2046,20 +2049,23 @@ mod tests {
         let ctx = egui::Context::default();
         let colors = WorkbenchColors::from_palette(&AppPalette::default());
         for width in [28.0, 60.0, 160.0] {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let (cell, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-                    let before = ui.min_rect();
-                    let response = sort_heading(
-                        ui,
-                        cell,
-                        Id::new("bounded_header"),
-                        "Megapixels",
-                        Some(false),
-                        colors,
-                    );
-                    assert_eq!(response.rect, cell);
-                    assert_eq!(ui.min_rect(), before);
+            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (cell, _) =
+                            ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                        let before = ui.min_rect();
+                        let response = sort_heading(
+                            ui,
+                            cell,
+                            Id::unique("bounded_header"),
+                            "Megapixels",
+                            Some(false),
+                            colors,
+                        );
+                        assert_eq!(response.rect, cell);
+                        assert_eq!(ui.min_rect(), before);
+                    })
                 });
             });
         }
@@ -2124,7 +2130,7 @@ mod tests {
                 pressed: true,
                 modifiers: Modifiers::NONE,
             });
-            let _ = ctx.run(raw, |ctx| {
+            let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
                 browser.navigation_shortcuts(ctx);
             });
         };
@@ -2156,13 +2162,15 @@ mod tests {
         let mut raw = egui::RawInput::default();
         raw.events.push(egui::Event::PointerMoved(hover_pos));
         let mut hovered_without_menu = false;
-        let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let response = ui.allocate_rect(target_rect, Sense::click());
-                hovered_without_menu = preview_hovered(ui, target_rect);
-                response.context_menu(|ui| {
-                    let _ = ui.button("Open in Files");
-                });
+        let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.allocate_rect(target_rect, Sense::click());
+                    hovered_without_menu = preview_hovered(ui, target_rect);
+                    response.context_menu(|ui| {
+                        let _ = ui.button("Open in Files");
+                    });
+                })
             });
         });
         assert!(hovered_without_menu);
@@ -2183,13 +2191,15 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         let mut hovered_on_open = true;
-        let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let response = ui.allocate_rect(target_rect, Sense::click());
-                hovered_on_open = preview_hovered(ui, target_rect);
-                response.context_menu(|ui| {
-                    let _ = ui.button("Open in Files");
-                });
+        let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.allocate_rect(target_rect, Sense::click());
+                    hovered_on_open = preview_hovered(ui, target_rect);
+                    response.context_menu(|ui| {
+                        let _ = ui.button("Open in Files");
+                    });
+                })
             });
         });
         assert!(!hovered_on_open);
@@ -2199,13 +2209,15 @@ mod tests {
         raw.events
             .push(egui::Event::PointerMoved(pos2(180.0, 50.0)));
         let mut hovered_while_open = true;
-        let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let response = ui.allocate_rect(target_rect, Sense::click());
-                hovered_while_open = preview_hovered(ui, target_rect);
-                response.context_menu(|ui| {
-                    let _ = ui.button("Open in Files");
-                });
+        let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.allocate_rect(target_rect, Sense::click());
+                    hovered_while_open = preview_hovered(ui, target_rect);
+                    response.context_menu(|ui| {
+                        let _ = ui.button("Open in Files");
+                    });
+                })
             });
         });
         assert!(!hovered_while_open);

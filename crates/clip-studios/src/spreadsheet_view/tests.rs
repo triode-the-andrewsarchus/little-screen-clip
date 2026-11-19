@@ -25,7 +25,8 @@ fn render_inline_pair(
 ) -> (egui::FullOutput, [egui::Rect; 2]) {
     let palette = little_clip_core::palette::AppPalette::default();
     let mut rects = [egui::Rect::NOTHING; 2];
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -36,11 +37,13 @@ fn render_inline_pair(
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    rects[0] = first.show(ui, &palette).rect;
-                    rects[1] = second.show(ui, &palette).rect;
-                });
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        rects[0] = first.show(ui, &palette).rect;
+                        rects[1] = second.show(ui, &palette).rect;
+                    });
+                })
             });
         },
     );
@@ -137,16 +140,17 @@ fn inline_spreadsheet_previews_share_data_with_independent_navigation() {
     assert_eq!(second.selected_cell, None);
 
     let wheel_position = egui::pos2(rects[0].center().x, rects[0].bottom() - 18.0);
-    let (scrolled, rects) = render_inline_pair(
+    render_inline_pair(
         &ctx,
         &mut first,
         &mut second,
         vec![
             egui::Event::PointerMoved(wheel_position),
-            egui::Event::Scroll(Vec2::new(0.0, -500.0)),
+            clip_ui::test_support::scroll(Vec2::new(0.0, -500.0)),
         ],
         0.5,
     );
+    let (scrolled, rects) = render_inline_pair(&ctx, &mut first, &mut second, vec![], 0.6);
     assert!(first.scroll_offset.y > 0.0);
     assert_eq!(second.scroll_offset, Vec2::ZERO);
     assert!(
@@ -176,7 +180,8 @@ fn clipped_inline_spreadsheet_preview_renders_no_cells() {
     let mut preview = InlineSpreadsheetPreview::new(data, Vec2::new(220.0, 124.0));
     let ctx = egui::Context::default();
     let palette = little_clip_core::palette::AppPalette::default();
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -185,9 +190,11 @@ fn clipped_inline_spreadsheet_preview_renders_no_cells() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add_space(200.0);
-                preview.show(ui, &palette);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add_space(200.0);
+                    preview.show(ui, &palette);
+                })
             });
         },
     );
@@ -354,7 +361,8 @@ fn escape_clears_spreadsheet_search_before_closing_viewer() {
     };
     let mut close = false;
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -364,8 +372,10 @@ fn escape_clears_spreadsheet_search_before_closing_viewer() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -375,7 +385,8 @@ fn escape_clears_spreadsheet_search_before_closing_viewer() {
         "the first Escape clears the filter and keeps the viewer open"
     );
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -385,8 +396,10 @@ fn escape_clears_spreadsheet_search_before_closing_viewer() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -429,7 +442,8 @@ fn wide_sheet_renders_only_visible_columns_with_aligned_header() {
     let mut state = SpreadsheetViewerState::new(data, None);
     let palette = little_clip_core::palette::AppPalette::default();
     let ctx = egui::Context::default();
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -438,8 +452,10 @@ fn wide_sheet_renders_only_visible_columns_with_aligned_header() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
@@ -480,7 +496,8 @@ fn spreadsheet_grid_scrolls_horizontally_and_vertically() {
     let mut time = 0.0;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.05;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -491,8 +508,10 @@ fn spreadsheet_grid_scrolls_horizontally_and_vertically() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -530,7 +549,7 @@ fn spreadsheet_grid_scrolls_horizontally_and_vertically() {
         egui::Event::PointerMoved(grid_clip.center()),
         // Spreadsheet code normalizes horizontal wheel direction before the
         // grid ScrollArea consumes it.
-        egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+        clip_ui::test_support::scroll(Vec2::new(800.0, -800.0)),
     ]);
     let mut settled = None;
     for _ in 0..8 {
@@ -638,7 +657,8 @@ fn spreadsheet_scroll_targets_stay_aligned_across_host_sizes_and_zoom() {
         let mut time = 0.0;
         let mut render = |events: Vec<egui::Event>| {
             time += 0.05;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     time: Some(time),
@@ -646,8 +666,10 @@ fn spreadsheet_scroll_targets_stay_aligned_across_host_sizes_and_zoom() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui(ui, ctx, &palette, &mut false);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        })
                     });
                 },
             );
@@ -692,7 +714,7 @@ fn spreadsheet_scroll_targets_stay_aligned_across_host_sizes_and_zoom() {
         );
         let _ = render(vec![
             egui::Event::PointerMoved(cell_center),
-            egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+            clip_ui::test_support::scroll(Vec2::new(800.0, -800.0)),
         ]);
         let mut settled = None;
         for _ in 0..10 {
@@ -803,7 +825,8 @@ fn spreadsheet_scrolled_cell_selection_copies_exact_value_across_host_sizes_and_
         let mut time = 0.0;
         let mut render = |events: Vec<egui::Event>| {
             time += 0.05;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     time: Some(time),
@@ -811,8 +834,10 @@ fn spreadsheet_scrolled_cell_selection_copies_exact_value_across_host_sizes_and_
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui(ui, ctx, &palette, &mut false);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        })
                     });
                 },
             );
@@ -832,7 +857,7 @@ fn spreadsheet_scrolled_cell_selection_copies_exact_value_across_host_sizes_and_
             .unwrap_or_else(|| panic!("initial cell missing at host={size:?}, zoom={zoom}"));
         let _ = render(vec![
             egui::Event::PointerMoved(first_cell_center),
-            egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+            clip_ui::test_support::scroll(Vec2::new(800.0, -800.0)),
         ]);
         let mut settled = None;
         for _ in 0..10 {
@@ -894,7 +919,8 @@ fn spreadsheet_scrolled_cell_selection_copies_exact_value_across_host_sizes_and_
             "selection mismatch for {expected_value} at host={size:?}, zoom={zoom}"
         );
         assert_eq!(
-            released.platform_output.copied_text, expected_value,
+            clip_ui::test_support::copied_text(&released.platform_output),
+            expected_value,
             "copied value mismatch at host={size:?}, zoom={zoom}"
         );
         assert!(pressed.shapes.iter().any(|clipped| {
@@ -940,14 +966,17 @@ fn spreadsheet_search_highlights_visible_result_across_host_sizes_and_zoom() {
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
         ctx.set_zoom_factor(zoom);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -1031,7 +1060,8 @@ fn selecting_long_cell_shows_and_copies_full_value() {
     let mut time = 0.0;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.05;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 time: Some(time),
@@ -1039,8 +1069,10 @@ fn selecting_long_cell_shows_and_copies_full_value() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -1086,7 +1118,10 @@ fn selecting_long_cell_shows_and_copies_full_value() {
         },
     ]);
     assert_eq!(selected_cell, Some((1, 0)));
-    assert_eq!(copied.platform_output.copied_text, long_value);
+    assert_eq!(
+        clip_ui::test_support::copied_text(&copied.platform_output),
+        long_value
+    );
     assert!(pressed.shapes.iter().any(|clipped| {
         matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == long_value)
     }));
@@ -1125,7 +1160,8 @@ fn rendered_copy_table_button_copies_active_sheet_as_exact_tsv() {
     let mut time = 0.0;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.1;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 time: Some(time),
@@ -1133,8 +1169,10 @@ fn rendered_copy_table_button_copies_active_sheet_as_exact_tsv() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         )
@@ -1172,7 +1210,7 @@ fn rendered_copy_table_button_copies_active_sheet_as_exact_tsv() {
     ]);
 
     assert_eq!(
-        copied.platform_output.copied_text,
+        clip_ui::test_support::copied_text(&copied.platform_output),
         "Name\tCount\tNote\nalpha\t1\t日本語\nbeta\t2\t✓"
     );
 }
@@ -1192,14 +1230,17 @@ fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
         let mut state = SpreadsheetViewerState::new(data.clone(), None);
         let ctx = egui::Context::default();
         let host = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 620.0));
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(host),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -1275,11 +1316,13 @@ fn large_sheet_renders_only_visible_cells() {
         )),
         ..Default::default()
     };
-    let output = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut close = false;
-            state.render_ui(ui, ctx, &palette, &mut close);
-            assert!(!close);
+    let output = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut close = false;
+                state.render_ui(ui, ctx, &palette, &mut close);
+                assert!(!close);
+            })
         });
     });
 
@@ -1303,9 +1346,11 @@ fn large_sheet_renders_only_visible_cells() {
     );
 
     state.search_query = "Row 4975".into();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_ui(ui, ctx, &palette, &mut false);
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut false);
+            })
         });
     });
     assert_eq!(state.filtered_rows, vec![0, 4976]);
@@ -1335,7 +1380,8 @@ fn large_virtual_sheet_bounds_rendered_cells_and_reaches_far_corner() {
     let mut time = 0.0;
     let mut render = |events: Vec<egui::Event>| {
         time += 0.05;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1346,8 +1392,10 @@ fn large_virtual_sheet_bounds_rendered_cells_and_reaches_far_corner() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -1393,7 +1441,7 @@ fn large_virtual_sheet_bounds_rendered_cells_and_reaches_far_corner() {
         egui::Event::PointerMoved(first_cell_clip.center()),
         // Spreadsheet code normalizes horizontal wheel direction before the
         // grid ScrollArea consumes it.
-        egui::Event::Scroll(Vec2::new(100_000.0, -100_000.0)),
+        clip_ui::test_support::scroll(Vec2::new(100_000.0, -100_000.0)),
     ]);
     let mut settled = None;
     for _ in 0..16 {
@@ -1438,7 +1486,8 @@ fn column_widths_follow_rendered_text_width() {
     let mut state = SpreadsheetViewerState::new(data, None);
     let palette = little_clip_core::palette::AppPalette::default();
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -1447,8 +1496,10 @@ fn column_widths_follow_rendered_text_width() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );

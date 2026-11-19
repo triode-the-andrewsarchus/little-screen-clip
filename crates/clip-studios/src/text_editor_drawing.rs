@@ -252,12 +252,12 @@ impl DrawingEditor {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::Frame::group(ui.style())
-                        .rounding(8.0)
+                        .corner_radius(8.0)
                         .inner_margin(12.0)
                         .show(ui, |ui| {
                             ui.set_width((sidebar - 26.0).max(1.0));
                             egui::ScrollArea::vertical()
-                                .id_source("drawing_properties")
+                                .id_salt("drawing_properties")
                                 .min_scrolled_height(0.0)
                                 .max_height(height - 26.0)
                                 .show(ui, |ui| {
@@ -277,7 +277,7 @@ impl DrawingEditor {
         });
         self.navigation(ui, palette);
         egui::ScrollArea::vertical()
-            .id_source("drawing_notices")
+            .id_salt("drawing_notices")
             .min_scrolled_height(0.0)
             .max_height(64.0)
             .show(ui, |ui| {

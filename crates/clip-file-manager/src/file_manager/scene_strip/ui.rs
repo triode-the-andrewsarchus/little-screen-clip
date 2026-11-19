@@ -70,7 +70,7 @@ impl Previews {
         if !super::super::ui::popup_open(ui.ctx()) {
             ui.interact(
                 info,
-                egui::Id::new(("scene-strip-metadata", &entry.path)),
+                egui::Id::unique(("scene-strip-metadata", &entry.path)),
                 egui::Sense::hover(),
             )
             .on_hover_text(&detail);

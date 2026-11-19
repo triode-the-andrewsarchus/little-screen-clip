@@ -227,10 +227,7 @@ pub fn update_hovered_mask_texture(
         }
     }
 
-    let color_image = egui::ColorImage {
-        size: [w as usize, h as usize],
-        pixels,
-    };
+    let color_image = egui::ColorImage::new([w as usize, h as usize], pixels);
 
     if let Some(tex) = tex_handle {
         tex.set(color_image, egui::TextureOptions::NEAREST);

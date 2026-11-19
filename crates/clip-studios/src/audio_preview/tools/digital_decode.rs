@@ -353,7 +353,7 @@ impl AudioPreviewState {
         }
 
         // Spacebar toggles playback in Digital Decode view
-        if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             if self.is_playing {
                 self.pause();
             } else {
@@ -393,11 +393,12 @@ impl AudioPreviewState {
         let accent_playhead = crate::hex_to_c32(&palette.harmonies.complementary);
 
         // Frame border & background
-        painter.rect_filled(rect, Rounding::same(8.0), bg_frame);
+        painter.rect_filled(rect, CornerRadius::same(8), bg_frame);
         painter.rect_stroke(
             rect,
-            Rounding::same(8.0),
+            CornerRadius::same(8),
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         if self.paint_analysis_placeholder(&painter, rect, text_f_med) {
@@ -508,7 +509,7 @@ impl AudioPreviewState {
             }
 
             // Zoom and Pan handling
-            let raw_scroll = ui.input(|i| i.raw_scroll_delta);
+            let raw_scroll = clip_ui::ui_ext::wheel_delta(ui.ctx());
             if ui.input(|i| i.modifiers.shift) && (raw_scroll.x + raw_scroll.y).abs() > 0.1 {
                 let shifted_scroll = raw_scroll.x + raw_scroll.y;
                 let dt = -(shifted_scroll / 50.0) * self.view_duration_sec * 0.12;
@@ -561,16 +562,17 @@ impl AudioPreviewState {
             // Lane track background
             painter.rect_filled(
                 lane_rect,
-                Rounding::same(3.0),
+                CornerRadius::same(3),
                 crate::hex_to_c32_alpha(&palette.colors.surface_panel, 40),
             );
             painter.rect_stroke(
                 lane_rect,
-                Rounding::same(3.0),
+                CornerRadius::same(3),
                 Stroke::new(
                     1.0_f32,
                     crate::hex_to_c32_alpha(&palette.colors.surface_raised, 30),
                 ),
+                egui::StrokeKind::Middle,
             );
 
             // Gutter protocol badge
@@ -581,11 +583,12 @@ impl AudioPreviewState {
             let rgb = proto.chip_color();
             let proto_color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
             let badge_fill = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 40);
-            painter.rect_filled(badge_rect, Rounding::same(4.0), badge_fill);
+            painter.rect_filled(badge_rect, CornerRadius::same(4), badge_fill);
             painter.rect_stroke(
                 badge_rect,
-                Rounding::same(4.0),
+                CornerRadius::same(4),
                 Stroke::new(1.0_f32, proto_color),
+                egui::StrokeKind::Middle,
             );
             painter.text(
                 badge_rect.center(),
@@ -633,7 +636,7 @@ impl AudioPreviewState {
                     120
                 };
                 let chip_fill = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-                painter.rect_filled(chip_rect, Rounding::same(4.0), chip_fill);
+                painter.rect_filled(chip_rect, CornerRadius::same(4), chip_fill);
 
                 let stroke_color = if is_selected {
                     Color32::WHITE
@@ -644,8 +647,9 @@ impl AudioPreviewState {
                 };
                 painter.rect_stroke(
                     chip_rect,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(if is_selected { 1.8_f32 } else { 1.0_f32 }, stroke_color),
+                    egui::StrokeKind::Middle,
                 );
 
                 // Chip label text
@@ -683,7 +687,7 @@ impl AudioPreviewState {
                 Pos2::new(rect.min.x, ruler_rect.min.y),
                 Pos2::new(rect.max.x, ruler_rect.max.y),
             ),
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             bg_frame,
         );
         painter.line_segment(
@@ -758,11 +762,12 @@ impl AudioPreviewState {
         }
 
         // 3. WAVEFORM ENVELOPE
-        painter.rect_filled(wave_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(wave_rect, CornerRadius::ZERO, bg_frame);
         painter.rect_stroke(
             wave_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         let analysis = self.analysis.as_ref().unwrap();
@@ -849,7 +854,7 @@ impl AudioPreviewState {
         }
 
         // 4. SPECTROGRAM HEATMAP
-        painter.rect_filled(spec_rect, Rounding::ZERO, bg_frame);
+        painter.rect_filled(spec_rect, CornerRadius::ZERO, bg_frame);
         if let Some(ref tex) = self.spectrogram_texture {
             let total_dur = self.duration_sec.max(0.01);
             let u_start = (v_start / total_dur).clamp(0.0, 1.0);
@@ -868,8 +873,9 @@ impl AudioPreviewState {
         }
         painter.rect_stroke(
             spec_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         // Spectrogram frequency ticks in gutter
@@ -911,7 +917,7 @@ impl AudioPreviewState {
                 Pos2::new(x_start, ruler_rect.max.y),
                 Pos2::new(x_end.max(x_start + 2.0), spec_rect.max.y),
             );
-            painter.rect_filled(highlight_rect, Rounding::ZERO, highlight_col);
+            painter.rect_filled(highlight_rect, CornerRadius::ZERO, highlight_col);
             painter.line_segment(
                 [
                     Pos2::new(x_start, ruler_rect.max.y),
@@ -930,7 +936,7 @@ impl AudioPreviewState {
             // Floating tooltip chip over hovered symbol
             if self.digital_decode.hovered_symbol == Some(idx) {
                 let desc = sym.details.as_deref().unwrap_or(&sym.symbol);
-                egui::show_tooltip(ui.ctx(), response.id.with("sym_tt"), |ui| {
+                egui::Tooltip::for_widget(&response).show(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!("[{}]", sym.protocol.label()))
@@ -965,11 +971,12 @@ impl AudioPreviewState {
         }
 
         // 6. VIEWPORT SCROLLBAR / PAN TRACK
-        painter.rect_filled(scroll_rect, Rounding::same(3.0), bg_frame);
+        painter.rect_filled(scroll_rect, CornerRadius::same(3), bg_frame);
         painter.rect_stroke(
             scroll_rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, border_frame),
+            egui::StrokeKind::Middle,
         );
 
         let total_dur = self.duration_sec.max(0.01);
@@ -979,11 +986,12 @@ impl AudioPreviewState {
             Pos2::new(thumb_x, scroll_rect.min.y),
             Vec2::new(thumb_w, scroll_rect.height()),
         );
-        painter.rect_filled(thumb_rect, Rounding::same(3.0), border_frame);
+        painter.rect_filled(thumb_rect, CornerRadius::same(3), border_frame);
         painter.rect_stroke(
             thumb_rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, text_f_med),
+            egui::StrokeKind::Middle,
         );
 
         // 7. UNIFIED PLAYHEAD CURSOR
@@ -1174,7 +1182,7 @@ impl AudioPreviewState {
                             transcript_text.push('\n');
                         }
                     }
-                    ui.output_mut(|o| o.copied_text = transcript_text);
+                    ui.ctx().copy_text(transcript_text);
                     self.status_toast = Some((
                         crate::ui_ext::StatusMessage::new(
                             crate::icons::Icon::Copy,
@@ -1513,7 +1521,8 @@ mod tests {
         assert!(matches!(result_rx.try_recv(), Err(TryRecvError::Empty)));
 
         let mut close_requested = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::I,
@@ -1525,8 +1534,10 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close_requested);
+                    })
                 });
             },
         );
@@ -1535,9 +1546,11 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(1);
         while state.digital_decode.in_progress && Instant::now() < deadline {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close_requested);
+                    })
                 });
             });
             thread::yield_now();
@@ -1614,7 +1627,8 @@ mod tests {
         let mut time = 0.0;
         let mut render = |state: &mut AudioPreviewState, events: Vec<egui::Event>| {
             time += 0.1;
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1625,8 +1639,10 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_digital_decode_transcript(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_digital_decode_transcript(ui, ctx, &palette);
+                        })
                     });
                 },
             )
@@ -1670,7 +1686,7 @@ mod tests {
         );
 
         assert_eq!(
-            copied.platform_output.copied_text,
+            clip_ui::test_support::copied_text(&copied.platform_output),
             "=== DTMF ===\n[1.000s - 1.250s] 5: fixture payload\n\n"
         );
         state.cancel_session_analysis();

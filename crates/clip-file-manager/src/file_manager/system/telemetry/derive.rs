@@ -1007,17 +1007,23 @@ mod tests {
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
             let context = egui::Context::default();
-            let output = context.run(egui::RawInput::default(), |context| {
-                egui::CentralPanel::default().show(context, |ui| {
-                    super::super::ui::paint(
-                        ui,
-                        egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(1500.0, 52.0)),
-                        &data,
-                        crate::ui_appearance::WorkbenchColors::from_palette(&palette),
-                        &palette,
-                    );
+            let output =
+                clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |context| {
+                    context.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            super::super::ui::paint(
+                                ui,
+                                egui::Rect::from_min_size(
+                                    egui::pos2(10.0, 10.0),
+                                    egui::vec2(1500.0, 52.0),
+                                ),
+                                &data,
+                                crate::ui_appearance::WorkbenchColors::from_palette(&palette),
+                                &palette,
+                            );
+                        })
+                    });
                 });
-            });
             let text = output
                 .shapes
                 .iter()

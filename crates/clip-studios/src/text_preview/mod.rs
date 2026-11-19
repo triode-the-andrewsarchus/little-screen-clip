@@ -20,7 +20,7 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, HEADING_FONT_SIZE, MONO_FONT_SIZE, SUBHEADING_FONT_SIZE};
 use crate::{hex_to_c32, hex_to_c32_alpha};
-use egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, FontId, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::syntax::detect_language;
@@ -113,7 +113,7 @@ impl InlineTextPreview {
         Self {
             data,
             host_size,
-            id: egui::Id::new((
+            id: egui::Id::unique((
                 "inline-text-preview",
                 NEXT_INLINE_TEXT_ID.fetch_add(1, Ordering::Relaxed),
             )),
@@ -122,7 +122,7 @@ impl InlineTextPreview {
     }
 
     pub fn preferred_height(&self, ui: &egui::Ui, min_rows: usize, max_rows: usize) -> f32 {
-        let row_height = ui.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+        let row_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
         let rows = self.data.code_fragments.len().clamp(min_rows, max_rows);
         rows as f32 * (row_height + ui.spacing().item_spacing.y) + 2.0 * crate::ui_ext::SPACE_SM
     }
@@ -142,24 +142,24 @@ impl InlineTextPreview {
         let data = Arc::clone(&self.data);
         let id = self.id;
         let scroll_offset = self.scroll_offset;
-        let output = ui.allocate_ui_at_rect(rect, |ui| {
-            egui::Frame::none()
+        let output = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::Frame::NONE
                 .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(
                     1.0_f32,
                     hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     let fragments = &data.code_fragments;
                     let row_height =
-                        ui.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+                        ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
                     let row_pitch = row_height + ui.spacing().item_spacing.y;
                     // Fragments are single source lines. Keep a fixed row height and clip long
                     // lines to the host width instead of wrapping them.
                     let output = egui::ScrollArea::vertical()
-                        .id_source(id)
+                        .id_salt(id)
                         .auto_shrink([false, false])
                         .vertical_scroll_offset(scroll_offset)
                         .show_rows(ui, row_height, fragments.len(), |ui, rows| {
@@ -172,7 +172,7 @@ impl InlineTextPreview {
                                 let mut job =
                                     build_highlighted_layout_job(source, syntax, palette, &[]);
                                 job.wrap.max_width = f32::INFINITY;
-                                let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
                                 let row_rect = egui::Rect::from_min_size(
                                     egui::pos2(
                                         viewport_origin.x,
@@ -187,7 +187,7 @@ impl InlineTextPreview {
                                 );
                             }
                         });
-                    output.state.offset.y
+                    output.state.clamped_offset().y
                 })
                 .inner
         });

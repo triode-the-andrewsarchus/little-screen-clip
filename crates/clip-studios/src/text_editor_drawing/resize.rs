@@ -160,6 +160,7 @@ impl DrawingEditor {
                 Rect::from_center_size(point, egui::vec2(8.0, 8.0)),
                 1.0,
                 egui::Stroke::new(1.0_f32, accent),
+                egui::StrokeKind::Middle,
             );
         }
     }

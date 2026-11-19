@@ -91,9 +91,11 @@ fn pending_search_completes_when_find_toolbar_is_hidden() {
     let mut close = false;
     let deadline = Instant::now() + Duration::from_secs(2);
     while state.search_pending && Instant::now() < deadline {
-        let _ = context.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+        let _ = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         });
         std::thread::sleep(Duration::from_millis(1));
@@ -594,7 +596,8 @@ fn find_editor_enter_navigates_once_without_closing_the_preview() {
     state.active_match_idx = 0;
 
     let render = |ctx: &egui::Context, state: &mut TextPreviewState, events| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -604,8 +607,10 @@ fn find_editor_enter_navigates_once_without_closing_the_preview() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_search_toolbar(ui, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_search_toolbar(ui, &AppPalette::default());
+                    })
                 });
             },
         )
@@ -614,7 +619,7 @@ fn find_editor_enter_navigates_once_without_closing_the_preview() {
     state.focus_find_input = true;
     render(&ctx, &mut state, Vec::new());
     assert!(
-        ctx.wants_keyboard_input(),
+        ctx.egui_wants_keyboard_input(),
         "Find editor should own keyboard focus"
     );
 
@@ -654,19 +659,25 @@ fn find_editor_shift_enter_navigates_to_previous_match_once() {
     state.focus_find_input = true;
 
     let mut render = |events, modifiers| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     egui::vec2(900.0, 400.0),
                 )),
-                events,
-                modifiers,
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(events)
+                    .collect(),
+
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_search_toolbar(ui, &AppPalette::default());
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_search_toolbar(ui, &AppPalette::default());
+                    })
                 });
             },
         )
@@ -804,5 +815,5 @@ fn search_background_covers_only_the_matched_part_of_a_token() {
         .filter(|section| section.format.background != Color32::TRANSPARENT)
         .collect();
     assert_eq!(highlighted.len(), 1);
-    assert_eq!(highlighted[0].byte_range, 2..5);
+    assert_eq!(highlighted[0].byte_range, 2.into()..5.into());
 }

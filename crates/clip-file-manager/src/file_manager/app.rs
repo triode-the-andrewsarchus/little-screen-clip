@@ -6,33 +6,16 @@ use little_clip_core::{AppConfig, palette::AppPalette};
 use super::{FileManager, Navigation};
 use crate::{ui_appearance, ui_ext};
 
-// egui 0.27 lets a CentralPanel frame grow with overflowing children. Bound
-// both its background and child painting to the space left by the outer docks.
-pub(super) fn central_panel<R>(
-    ctx: &egui::Context,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::InnerResponse<R> {
-    central_panel_mode(ctx, false, add_contents)
-}
-
 fn central_panel_mode<R>(
-    ctx: &egui::Context,
+    root: &mut egui::Ui,
     fullscreen: bool,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    let bounds = ctx.available_rect();
-    let fill = if fullscreen {
-        egui::Color32::BLACK
-    } else {
-        ctx.style().visuals.panel_fill
-    };
-    egui::CentralPanel::default()
-        .frame(egui::Frame::none().inner_margin(if fullscreen { 0.0 } else { 8.0 }))
-        .show(ctx, |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(bounds));
-            ui.painter().rect_filled(bounds, 0.0, fill);
-            add_contents(ui)
-        })
+    let mut panel = egui::CentralPanel::default();
+    if fullscreen {
+        panel = panel.frame(egui::Frame::NONE.fill(egui::Color32::BLACK));
+    }
+    panel.show(root, add_contents)
 }
 
 enum DropDestination {
@@ -82,18 +65,20 @@ struct FileManagerApp {
 impl FileManagerApp {
     fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let ctx = &cc.egui_ctx;
-        let vector_runtime = cc
-            .gl
-            .as_ref()
-            .zip(cc.get_proc_address)
-            .and_then(|(gl, loader)| {
-                // SAFETY: eframe invokes its creator with this window's context
-                // current. Its matching loader is used only here, and on_exit
-                // releases the UI-thread runtime before eframe destroys the context.
-                unsafe { clip_ui::vectors::Runtime::install(ctx, gl, loader) }
-                    .map_err(|error| tracing::warn!(%error, "Native vector initialization failed"))
-                    .ok()
-            });
+        let vector_runtime =
+            cc.gl
+                .as_ref()
+                .zip(cc.get_proc_address.as_deref())
+                .and_then(|(gl, loader)| {
+                    // SAFETY: eframe invokes its creator with this window's context
+                    // current. Its matching loader is used only here, and on_exit
+                    // releases the UI-thread runtime before eframe destroys the context.
+                    unsafe { clip_ui::vectors::Runtime::install(ctx, gl, loader) }
+                        .map_err(
+                            |error| tracing::warn!(%error, "Native vector initialization failed"),
+                        )
+                        .ok()
+                });
         let map_runtime = cc
             .gl
             .as_ref()
@@ -101,7 +86,7 @@ impl FileManagerApp {
         let config = AppConfig::load();
         ctx.data_mut(|data| {
             data.insert_temp(
-                egui::Id::new("audio_dadaspec"),
+                egui::Id::unique("audio_dadaspec"),
                 config.file_manager.audio_dadaspec,
             )
         });
@@ -172,7 +157,7 @@ impl FileManagerApp {
             .clicked()
         {
             self.browser.search.open(self.browser.search.draft.clone());
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         let folders = self
@@ -192,7 +177,7 @@ impl FileManagerApp {
             .clicked()
         {
             self.browser.bookmarks.add(paths, None);
-            ui.close_menu();
+            ui.close();
         }
     }
     fn native_tick(&mut self, ctx: &egui::Context) {
@@ -367,7 +352,7 @@ impl FileManagerApp {
         }
     }
     fn audio_menu(&mut self, ui: &mut egui::Ui) {
-        ui.style_mut().wrap = Some(false);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         let spectrum = self.browser.music_previews.audio_spectrum();
         let dadaspec = self.browser.music_previews.audio_dadaspec();
         for (label, next_spectrum, next_dadaspec) in [
@@ -391,9 +376,9 @@ impl FileManagerApp {
                             .music_previews
                             .set_audio_dadaspec(next_dadaspec);
                         ui.ctx().data_mut(|data| {
-                            data.insert_temp(egui::Id::new("audio_dadaspec"), next_dadaspec)
+                            data.insert_temp(egui::Id::unique("audio_dadaspec"), next_dadaspec)
                         });
-                        ui.close_menu();
+                        ui.close();
                     }
                     Err(error) => {
                         self.browser.edits.report = Some(super::edits::EditReport {
@@ -406,10 +391,10 @@ impl FileManagerApp {
         }
     }
 
-    fn menu_bar(&mut self, ctx: &egui::Context) {
+    fn menu_bar(&mut self, root: &mut egui::Ui) {
         if !self.viewers.video_fullscreen() {
-            egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            egui::Panel::top("file_manager_title").show(root, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     for title in ["File", "Edit", "View"] {
                         ui.menu_button(title, |ui| {
                             if title == "View" {
@@ -417,7 +402,7 @@ impl FileManagerApp {
                                     self.browser.folder_view_settings(ui, &self.palette);
                                 }
                                 ui.menu_button("Photos", |ui| {
-                                    ui.style_mut().wrap = Some(false);
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                                     let current_mode = self.browser.photo_mode;
                                     if ui
                                         .selectable_label(
@@ -469,7 +454,7 @@ impl FileManagerApp {
                                 if !self.viewers.active() && ui.button("Search settings…").clicked()
                                 {
                                     self.browser.open_search_settings();
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             } else if title == "File" {
                                 self.constellation_index_menu(ui);
@@ -483,8 +468,7 @@ impl FileManagerApp {
                             self.viewers.menu_controls(ui, &self.palette);
                         } else {
                             ui.add(
-                                egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close")
-                                    .truncate(true),
+                                egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close").truncate(),
                             );
                         }
                     });
@@ -492,8 +476,9 @@ impl FileManagerApp {
             });
         }
     }
-    fn main_content(&mut self, ctx: &egui::Context) {
-        central_panel_mode(ctx, self.viewers.video_fullscreen(), |ui| {
+    fn main_content(&mut self, root: &mut egui::Ui) {
+        central_panel_mode(root, self.viewers.video_fullscreen(), |ui| {
+            let ctx = &ui.ctx().clone();
             if self.viewers.active() {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
@@ -659,7 +644,7 @@ impl FileManagerApp {
         if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
             self.browser.constellation.start_indexing(&folder);
             self.browser.set_view(super::BrowserView::Constellation);
-            ui.close_menu();
+            ui.close();
         }
     }
 
@@ -734,24 +719,33 @@ impl eframe::App for FileManagerApp {
             native.raw_input(ctx, input);
         }
     }
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.closing {
-            central_panel(ctx, |ui| {
-                ui.spinner();
-                ui.label("Closing...");
-            });
             self.finish_app_close(ctx);
             return;
         }
         self.tick_external(ctx);
+        let viewer_active = self.viewers.active();
+        self.browser.search.images.set_suspended(viewer_active);
+        self.browser.search.answers.set_suspended(viewer_active);
         self.browser
-            .search
-            .images
-            .set_suspended(self.viewers.active());
-        self.browser
-            .search
-            .answers
-            .set_suspended(self.viewers.active());
+            .tick(little_clip_core::BackgroundJobs::global());
+        self.browser.schedule_repaints(ctx);
+
+        if ctx.input(|input| input.viewport().close_requested()) {
+            self.request_app_close(ctx);
+        }
+    }
+
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
+        if self.closing {
+            egui::CentralPanel::default().show(root, |ui| {
+                ui.spinner();
+                ui.label("Closing...");
+            });
+            return;
+        }
         self.preview_keys(ctx);
         self.browser.retire_constellation_audition();
         if self.browser.view == super::BrowserView::Constellation {
@@ -774,7 +768,7 @@ impl eframe::App for FileManagerApp {
             // Browser file-reference shortcuts must not suppress studio text clipboard events.
             ctx.data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
+                    egui::Id::unique(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
                     false,
                 )
             });
@@ -782,20 +776,16 @@ impl eframe::App for FileManagerApp {
             self.browser.bookmark_drop_rect = None;
         }
         self.native_tick(ctx);
-        if self.viewers.active() {
-            self.browser
-                .tick(little_clip_core::BackgroundJobs::global());
-        }
         self.browser.handle_address_escape(ctx);
-        self.menu_bar(ctx);
+        self.menu_bar(root);
         if !self.viewers.active() {
-            egui::TopBottomPanel::bottom("file_manager_summary")
+            egui::Panel::bottom("file_manager_summary")
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(ui_appearance::WorkbenchColors::from_palette(&self.palette).panel)
-                        .inner_margin(egui::Margin::symmetric(8.0, 3.0)),
+                        .inner_margin(egui::Margin::symmetric(8, 3)),
                 )
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(
                             ui.available_width(),
@@ -804,16 +794,16 @@ impl eframe::App for FileManagerApp {
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.add(
-                                egui::Label::new(self.browser.selection_summary()).truncate(true),
+                                egui::Label::new(self.browser.selection_summary()).truncate(),
                             );
                             if self.browser.music.busy() || self.browser.music.copying() { ui.spinner(); }
                             if let Some(error) = &self.browser.music.error {
                                 ui.separator();
-                                ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate(true)).on_hover_text(error);
+                                ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text(error);
                             }
                             if let Some(status) = self.browser.archives.status(self.browser.path()) {
                                 ui.separator();
-                                ui.add(egui::Label::new(egui::RichText::new(status).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate(true)).on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
+                                ui.add(egui::Label::new(egui::RichText::new(status).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
                             }
                             if let Some(hint) = self
                                 .browser
@@ -823,7 +813,7 @@ impl eframe::App for FileManagerApp {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.add(egui::Label::new(hint).truncate(true));
+                                        ui.add(egui::Label::new(hint).truncate());
                                     },
                                 );
                             }
@@ -834,18 +824,17 @@ impl eframe::App for FileManagerApp {
         let folder = self.browser.path().to_path_buf();
         self.browser
             .constellation
-            .render_bank_guard(ctx, &folder, &self.palette);
+            .render_bank_guard(root, &folder, &self.palette);
         self.browser
             .constellation
             .render_duplicate_warning(ctx, &self.palette);
-        self.main_content(ctx);
+        self.main_content(root);
         if self.browser.view_preferences.active() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.browser.previews.multisample.finish_frame(ctx);
         self.native_start(ctx);
-        let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
-            || ctx.input(|input| input.viewport().close_requested());
+        let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q));
         if close || self.browser.constellation.close_approved {
             self.request_app_close(ctx);
         }
@@ -866,7 +855,7 @@ pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
     eframe::run_native(
         "clip-file-manager",
         options,
-        Box::new(move |cc| Box::new(FileManagerApp::new(cc, initial))),
+        Box::new(move |cc| Ok(Box::new(FileManagerApp::new(cc, initial)))),
     )
 }
 

@@ -236,17 +236,19 @@ mod tests {
     use super::*;
 
     fn frame(ctx: &egui::Context, points: &mut Vec<CurvePoint>, events: Vec<egui::Event>) -> bool {
-        ctx.begin_frame(egui::RawInput {
+        ctx.begin_pass(egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 220.0))),
             events,
             ..Default::default()
         });
-        let changed = egui::CentralPanel::default()
-            .show(ctx, |ui| {
-                render_tone_curve(ui, points, &AppPalette::default())
+        let changed = ctx
+            .root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_tone_curve(ui, points, &AppPalette::default())
+                })
             })
             .inner;
-        let _ = ctx.end_frame();
+        ctx.end_pass().drop_without_applying_deltas();
         changed
     }
 

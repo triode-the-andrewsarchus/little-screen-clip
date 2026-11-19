@@ -76,7 +76,7 @@ impl WorkbenchApp {
         ctx: &egui::Context,
         audio_region_active: bool,
     ) {
-        if !audio_region_active || ctx.wants_keyboard_input() {
+        if !audio_region_active || ctx.egui_wants_keyboard_input() {
             return;
         }
         let copy_pressed = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C));
@@ -180,7 +180,7 @@ impl WorkbenchApp {
         // The search field also accepts these keys as one-character commands.
         // Let the text edit own the key now; the prefix handler executes it once
         // on the next frame after the field has updated its text.
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) && !audio_region_active {

@@ -111,14 +111,14 @@ pub(in crate::file_manager::system) fn paint(
         if !crate::file_manager::ui::popup_open(ui.ctx()) {
             ui.interact(
                 bar,
-                ui.id().with(("partition-preview", &partition.path)),
+                ui.scope_id().with(("partition-preview", &partition.path)),
                 Sense::hover(),
             )
             .on_hover_text(partition_hover(partition, storage));
         }
     }
     if !crate::file_manager::ui::popup_open(ui.ctx()) {
-        ui.interact(rect, ui.id().with(("partition-layout", &storage.disk)), Sense::hover())
+        ui.interact(rect, ui.scope_id().with(("partition-layout", &storage.disk)), Sense::hover())
             .on_hover_text(format!("{}\nCapacity: {}\nCoverage: {}\nGray areas are outside observed partition ranges, not a free-space measurement.", storage.disk.display(), bytes(capacity), storage.coverage));
     }
 }

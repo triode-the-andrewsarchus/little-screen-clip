@@ -434,7 +434,8 @@ mod tests {
         let ctx = egui::Context::default();
         let palette = little_clip_core::palette::AppPalette::default();
         let mut close = true;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -450,8 +451,10 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut close))
+                });
             },
         );
         assert!(!close);

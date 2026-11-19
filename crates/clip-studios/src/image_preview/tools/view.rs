@@ -101,7 +101,7 @@ impl ImagePreviewState {
                 palette,
             );
             if ui.add(copy).clicked() {
-                ctx.output_mut(|output| output.copied_text = format!("{lat:.6}, {lon:.6}"));
+                ctx.copy_text(format!("{lat:.6}, {lon:.6}"));
             }
         }
     }
@@ -140,25 +140,31 @@ mod tests {
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette = AppPalette::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 800.0));
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_view_toolbar(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_view_toolbar(ui, ctx, &palette);
+                    })
                 });
             },
         );
-        let initial = ctx.run(
+        let initial = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_view_toolbar(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_view_toolbar(ui, ctx, &palette);
+                    })
                 });
             },
         );
@@ -183,15 +189,18 @@ mod tests {
                 panic!("rendered GPS coordinate Copy action missing; labels={labels:?}")
             });
         let mut render = |events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_view_toolbar(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_view_toolbar(ui, ctx, &palette);
+                        })
                     });
                 },
             )
@@ -216,6 +225,9 @@ mod tests {
             },
         ]);
 
-        assert_eq!(copied.platform_output.copied_text, "47.250000, -122.500000");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&copied.platform_output),
+            "47.250000, -122.500000"
+        );
     }
 }

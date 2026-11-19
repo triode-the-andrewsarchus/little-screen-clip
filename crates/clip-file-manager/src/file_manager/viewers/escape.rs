@@ -13,15 +13,18 @@ fn escape() -> Event {
 }
 fn frame(viewers: &mut Viewers, ctx: &Context, events: Vec<Event>) -> (bool, egui::FullOutput) {
     let mut closed = false;
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 800.0))),
             events,
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                closed = viewers.ui(ui, &AppPalette::default());
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    closed = viewers.ui(ui, &AppPalette::default());
+                })
             });
         },
     );
@@ -77,9 +80,9 @@ fn popup_escape_is_consumed_before_folder_return() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../little-clip-core/tests/fixtures/calendar/harbor.ics");
     let (mut viewers, ctx) = open(&path);
-    ctx.memory_mut(|memory| memory.open_popup(egui::Id::new("viewer-popup")));
+    egui::Popup::open_id(&ctx, egui::Id::unique("viewer-popup"));
     assert!(!frame(&mut viewers, &ctx, vec![escape()]).0);
-    assert!(!ctx.memory(|memory| memory.any_popup_open()));
+    assert!(!egui::Popup::is_any_open(&ctx));
     assert!(frame(&mut viewers, &ctx, vec![escape()]).0);
 }
 #[test]

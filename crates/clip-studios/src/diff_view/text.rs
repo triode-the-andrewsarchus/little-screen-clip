@@ -22,18 +22,18 @@ impl DiffViewerState {
         let b_low = crate::hex_to_c32(&palette.colors.console_surface);
         let b_med = crate::hex_to_c32(&palette.chrome_border);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(b_low)
-            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
+            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_SM))
             .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.add(
                             egui::Label::new(self.layout_job.clone())
-                                .wrap(false)
+                                .extend()
                                 .sense(egui::Sense::click()),
                         );
                     });
@@ -48,14 +48,14 @@ impl DiffViewerState {
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::SPACE_MD,
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
+            )))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
                 let tabs = [

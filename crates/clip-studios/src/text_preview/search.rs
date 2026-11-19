@@ -275,17 +275,17 @@ impl TextPreviewState {
 
     pub(super) fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.add_space(crate::ui_ext::SPACE_SM);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.surface_recessed))
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
             ))
-            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
-            .inner_margin(egui::Margin::symmetric(
+            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::BUTTON_PADDING_X,
                 crate::ui_ext::BUTTON_PADDING_Y,
-            ))
+            )))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.colors.text_secondary));

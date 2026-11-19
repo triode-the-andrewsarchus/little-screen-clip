@@ -161,7 +161,7 @@ impl ConstellationState {
         ui.add_space(4.0);
         // Errors and persistence completions remain visible below the rack.
         egui::ScrollArea::vertical()
-            .id_source("selected_pad_editor")
+            .id_salt("selected_pad_editor")
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
                 if let Some((message, time)) = &self.browser_status
@@ -241,7 +241,7 @@ impl ConstellationState {
                         } else {
                             visuals.widgets.noninteractive.bg_stroke
                         };
-                        painter.rect(rect, 4.0, fill, stroke);
+                        painter.rect(rect, 4.0, fill, stroke, egui::StrokeKind::Middle);
                         let key = if show_midi_notes {
                             super::ui::freq_to_note_str(
                                 440.0 * 2.0_f32.powf((36.0 + index as f32 - 69.0) / 12.0),
@@ -325,6 +325,7 @@ impl ConstellationState {
                                 rect.shrink(1.0),
                                 4.0,
                                 Stroke::new(2.0_f32, visuals.selection.stroke.color),
+                                egui::StrokeKind::Middle,
                             );
                         }
                         if response.hovered() {
@@ -462,7 +463,7 @@ impl ConstellationState {
         let mut remove = None;
         let mut studio_layer = None;
         // One layer at a time keeps the waveform and controls at a predictable height.
-        let layer_id = ui.id().with(("edited_layer", index));
+        let layer_id = ui.scope_id().with(("edited_layer", index));
         let mut selected_layer =
             self.selected_layers[index].min(slot.samples.len().saturating_sub(1));
         if !slot.samples.is_empty() {
@@ -507,7 +508,11 @@ impl ConstellationState {
                         ui.cursor().min,
                         Vec2::new((width - 78.0).max(80.0), 200.0),
                     );
-                    let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
+                    let mut canvas = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(wave)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
                     canvas.set_clip_rect(ui.clip_rect().intersect(Rect::from_min_max(
                         wave.min,
                         egui::pos2(wave.right(), ui.clip_rect().bottom()),
@@ -555,8 +560,8 @@ impl ConstellationState {
                     .response.on_hover_text("Change choke priority or leave the group. Right-click a pad for the same controls.");
             }
             ui.menu_button("Pad actions", |ui| {
-                if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
-                if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close_menu(); }
+                if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close(); }
+                if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close(); }
             });
             if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.add(ButtonRole::Secondary.button("Retry audio", palette).small()).clicked() {
                 for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
@@ -585,7 +590,7 @@ impl ConstellationState {
         }
         let mut preview = None;
         egui::ScrollArea::vertical()
-            .id_source("saved_pack_list")
+            .id_salt("saved_pack_list")
             .max_height(150.0)
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -662,7 +667,7 @@ impl ConstellationState {
         });
         let mut audition = None;
         egui::ScrollArea::vertical()
-            .id_source("saved_pack_preview")
+            .id_salt("saved_pack_preview")
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
                 if let Some((_, bank)) = self
@@ -719,18 +724,21 @@ mod tests {
             1.0,
         );
         let mut frame = |events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 180.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default()
-                        .frame(egui::Frame::none())
-                        .show(ctx, |ui| {
-                            ConstellationState::render_layer_waveform(ui, &mut sample);
-                        });
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| {
+                                ConstellationState::render_layer_waveform(ui, &mut sample);
+                            })
+                    });
                 },
             )
         };

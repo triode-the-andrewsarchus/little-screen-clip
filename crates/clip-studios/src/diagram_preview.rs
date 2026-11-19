@@ -150,7 +150,7 @@ impl Preview {
             source: Some((Format::Excalidraw, source.into(), None)),
             texture: Some(ctx.load_texture(
                 "drawing fixture",
-                egui::ColorImage::new([2, 2], egui::Color32::WHITE),
+                egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
                 egui::TextureOptions::LINEAR,
             )),
             artwork: Artwork {
@@ -171,7 +171,7 @@ impl Preview {
     ) -> (Self, egui::TextureId) {
         let texture = ctx.load_texture(
             "equation geometry fixture",
-            egui::ColorImage::new([1, 1], egui::Color32::GREEN),
+            egui::ColorImage::filled([1, 1], egui::Color32::GREEN),
             egui::TextureOptions::LINEAR,
         );
         let id = texture.id();
@@ -509,19 +509,21 @@ mod tests {
     fn drawing_revisions_keep_old_pixels_but_disable_old_geometry_for_new_source() {
         let ctx = egui::Context::default();
         let mut preview = Preview::drawing_fixture(&ctx, "old source");
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(
-                    preview
-                        .native_frame(ui, Format::Excalidraw, "old source")
-                        .unwrap()
-                        .fresh
-                );
-                let old = preview
-                    .native_frame(ui, Format::Excalidraw, "new source")
-                    .unwrap();
-                assert!(!old.fresh);
-                assert_eq!(old.layout.size, [100.0; 2]);
+        let _ = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    assert!(
+                        preview
+                            .native_frame(ui, Format::Excalidraw, "old source")
+                            .unwrap()
+                            .fresh
+                    );
+                    let old = preview
+                        .native_frame(ui, Format::Excalidraw, "new source")
+                        .unwrap();
+                    assert!(!old.fresh);
+                    assert_eq!(old.layout.size, [100.0; 2]);
+                })
             });
         });
         preview.suspend();

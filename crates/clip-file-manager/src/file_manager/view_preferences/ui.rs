@@ -35,7 +35,7 @@ impl Preferences {
                     display_path(origin)
                 )
             };
-            ui.add(egui::Label::new(&description).truncate(true))
+            ui.add(egui::Label::new(&description).truncate())
                 .on_hover_text(description);
         } else {
             ui.label("No saved view for this folder.");

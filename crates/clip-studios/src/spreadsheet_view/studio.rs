@@ -42,9 +42,9 @@ impl SpreadsheetViewerState {
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.harmonies.warm_attention);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg)
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
                 let mut shell = StudioShell::new(&self.title, Icon::Spreadsheet, palette, close)
@@ -122,7 +122,7 @@ impl SpreadsheetViewerState {
                         .map(|r| r.join("\t"))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    ui.output_mut(|o| o.copied_text = tsv);
+                    ui.ctx().copy_text(tsv);
                     self.status_toast.set("Copied table as TSV", now);
                 }
 
@@ -199,7 +199,7 @@ impl SpreadsheetViewerState {
                 }
                 if self.column_width_cache[self.active_sheet_idx].is_none() {
                     let mut measured = vec![0.0f32; col_count];
-                    ui.fonts(|fonts| {
+                    ui.fonts_mut(|fonts| {
                         for row in sheet.rows.iter().take(40) {
                             for (column, cell) in row.iter().enumerate().take(col_count) {
                                 let width = fonts
@@ -256,7 +256,7 @@ impl SpreadsheetViewerState {
                         .fill(b_low)
                         .min_size(Vec2::new(corner_width, header_height))
                         .stroke(Stroke::new(0.5_f32, b_med))
-                        .rounding(Rounding::ZERO);
+                        .corner_radius(CornerRadius::ZERO);
                     if ui
                         .add(corner_btn)
                         .on_hover_text("Click to copy entire sheet as TSV")
@@ -270,7 +270,7 @@ impl SpreadsheetViewerState {
                         egui::Sense::hover(),
                     );
                     ui.painter()
-                        .rect_filled(col_header_rect, Rounding::ZERO, b_med);
+                        .rect_filled(col_header_rect, CornerRadius::ZERO, b_med);
 
                     let col_header_ui_rect = egui::Rect::from_min_max(
                         egui::pos2(
@@ -285,9 +285,10 @@ impl SpreadsheetViewerState {
                         ),
                     );
 
-                    let mut header_child_ui = ui.child_ui(
-                        col_header_ui_rect,
-                        egui::Layout::left_to_right(egui::Align::Center),
+                    let mut header_child_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(col_header_ui_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
                     header_child_ui.set_clip_rect(col_header_rect);
                     header_child_ui.spacing_mut().item_spacing = table_spacing;
@@ -319,7 +320,7 @@ impl SpreadsheetViewerState {
                         .fill(col_bg)
                         .min_size(Vec2::new(cell_w, header_height))
                         .stroke(Stroke::new(0.5_f32, b_low))
-                        .rounding(Rounding::ZERO);
+                        .corner_radius(CornerRadius::ZERO);
 
                         let cell_rect = egui::Rect::from_min_size(
                             egui::pos2(
@@ -351,7 +352,7 @@ impl SpreadsheetViewerState {
                         egui::Sense::hover(),
                     );
                     ui.painter()
-                        .rect_filled(row_strip_rect, Rounding::ZERO, b_low);
+                        .rect_filled(row_strip_rect, CornerRadius::ZERO, b_low);
 
                     let gutter_rows = visible_row_range(
                         self.scroll_offset.y,
@@ -372,8 +373,11 @@ impl SpreadsheetViewerState {
                         ),
                     );
 
-                    let mut row_child_ui =
-                        ui.child_ui(row_strip_ui_rect, egui::Layout::top_down(egui::Align::Min));
+                    let mut row_child_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_strip_ui_rect)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
                     row_child_ui.set_clip_rect(row_strip_rect);
                     row_child_ui.spacing_mut().item_spacing = table_spacing;
 
@@ -402,7 +406,7 @@ impl SpreadsheetViewerState {
                         .fill(row_bg)
                         .min_size(Vec2::new(corner_width, row_height))
                         .stroke(Stroke::new(0.5_f32, b_med))
-                        .rounding(Rounding::ZERO);
+                        .corner_radius(CornerRadius::ZERO);
 
                         let resp = row_child_ui.add(row_btn);
                         if resp.clicked() {
@@ -414,7 +418,6 @@ impl SpreadsheetViewerState {
                     // Main Data Grid (ScrollArea::both)
                     // Invert horizontal scroll delta so horizontal scrolling moves naturally
                     ui.input_mut(|i| {
-                        i.raw_scroll_delta.x = -i.raw_scroll_delta.x;
                         i.smooth_scroll_delta.x = -i.smooth_scroll_delta.x;
                     });
 
@@ -443,7 +446,7 @@ impl SpreadsheetViewerState {
                                 ),
                                 Vec2::new(total_content_width, rows.len() as f32 * row_stride),
                             );
-                            ui.allocate_ui_at_rect(row_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
                                 ui.spacing_mut().item_spacing = table_spacing;
                                 ui.skip_ahead_auto_ids(rows.start);
                                 ui.vertical(|ui| {
@@ -508,7 +511,7 @@ impl SpreadsheetViewerState {
                                                 .fill(cell_bg)
                                                 .min_size(Vec2::new(cell_w, row_height))
                                                 .stroke(Stroke::new(0.5_f32, b_med))
-                                                .rounding(Rounding::ZERO);
+                                                .corner_radius(CornerRadius::ZERO);
 
                                                 let resp = ui.add(btn);
                                                 if resp.clicked() {
@@ -533,11 +536,10 @@ impl SpreadsheetViewerState {
 
                     // Restore horizontal scroll delta
                     ui.input_mut(|i| {
-                        i.raw_scroll_delta.x = -i.raw_scroll_delta.x;
                         i.smooth_scroll_delta.x = -i.smooth_scroll_delta.x;
                     });
 
-                    new_scroll_offset = Some(scroll_output.state.offset);
+                    new_scroll_offset = Some(scroll_output.state.clamped_offset());
                 });
 
                 if let Some(offset) = new_scroll_offset {
@@ -551,7 +553,7 @@ impl SpreadsheetViewerState {
                         .map(|r| r.join("\t"))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    ui.output_mut(|o| o.copied_text = tsv);
+                    ui.ctx().copy_text(tsv);
                     self.status_toast.set("Copied entire table as TSV", now);
                 }
 
@@ -563,7 +565,7 @@ impl SpreadsheetViewerState {
                         .filter_map(|r| r.get(c_idx).cloned())
                         .collect::<Vec<_>>()
                         .join("\n");
-                    ui.output_mut(|o| o.copied_text = col_text);
+                    ui.ctx().copy_text(col_text);
                     self.status_toast.set(
                         format!("Copied Column {} ({})", c_idx + 1, col_label(c_idx)),
                         now,
@@ -573,14 +575,14 @@ impl SpreadsheetViewerState {
                 if let Some((r_idx, row_cells)) = clicked_row {
                     self.selected_cell = Some((r_idx, 0));
                     let tsv = row_cells.join("\t");
-                    ui.output_mut(|o| o.copied_text = tsv);
+                    ui.ctx().copy_text(tsv);
                     self.status_toast
                         .set(format!("Copied Row {}", r_idx + 1), now);
                 }
 
                 if let Some((r_idx, c_idx, val)) = clicked_cell {
                     self.selected_cell = Some((r_idx, c_idx));
-                    ui.output_mut(|o| o.copied_text = val.clone());
+                    ui.ctx().copy_text(val.clone());
                     self.status_toast.set(format!("Copied: {}", val), now);
                 }
 

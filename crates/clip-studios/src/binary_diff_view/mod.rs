@@ -6,7 +6,7 @@
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, PanelState, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
-use egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, FontId, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{BackgroundJobs, JobTicket};
 #[cfg(test)]
@@ -345,7 +345,7 @@ impl BinaryDiffViewState {
             }
             return;
         }
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {

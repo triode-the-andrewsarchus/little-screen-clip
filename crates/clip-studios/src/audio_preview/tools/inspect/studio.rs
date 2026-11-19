@@ -39,7 +39,7 @@ impl AudioPreviewState {
         track_min_x: f32,
         track_width: f32,
     ) {
-        let requested = !ctx.wants_keyboard_input()
+        let requested = !ctx.egui_wants_keyboard_input()
             && ui.input(|input| {
                 input.key_pressed(egui::Key::N)
                     && !input.modifiers.ctrl
@@ -159,7 +159,7 @@ impl AudioPreviewState {
         let accepts_tool_shortcuts = ui.is_enabled()
             && !self.save_dialog_open
             && !self.stem_separation.save_dialog_open
-            && !ctx.wants_keyboard_input();
+            && !ctx.egui_wants_keyboard_input();
         if accepts_tool_shortcuts
             && matches!(
                 self.active_mode,
@@ -401,7 +401,7 @@ impl AudioPreviewState {
                 let play_btn = clip_ui::buttons::ButtonRole::Primary
                     .button_with_icon(Some(play_icon), play_label, palette)
                     .min_size(Vec2::new(play_width, crate::ui_ext::CONTROL_HEIGHT))
-                    .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                    .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                 if ui.add(play_btn).clicked() {
                     self.toggle_play();
@@ -585,7 +585,7 @@ impl AudioPreviewState {
 
                         let copy_btn = clip_ui::buttons::ButtonRole::Primary
                             .button_with_icon(Some(crate::icons::Icon::Copy), copy_label, palette)
-                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -627,7 +627,7 @@ impl AudioPreviewState {
                         };
                         let save_btn = clip_ui::buttons::ButtonRole::Primary
                             .button_with_icon(Some(crate::icons::Icon::Save), save_label, palette)
-                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
                                 self.open_save_dialog();
                             }
@@ -642,7 +642,7 @@ impl AudioPreviewState {
 
                         let copy_btn = clip_ui::buttons::ButtonRole::Primary
                             .button_with_icon(Some(crate::icons::Icon::Copy), copy_label, palette)
-                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -689,7 +689,7 @@ impl AudioPreviewState {
                         };
                         let save_btn = clip_ui::buttons::ButtonRole::Primary
                             .button_with_icon(Some(crate::icons::Icon::Save), save_label, palette)
-                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                            .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui
                             .add(save_btn)
                             .on_hover_text(
@@ -756,10 +756,10 @@ impl AudioPreviewState {
             Vec2::new(ui.available_width(), workspace_height),
             egui::Layout::top_down(egui::Align::Min),
             |workspace| {
-                egui::TopBottomPanel::bottom(workspace.make_persistent_id("audio_inspect_help_footer"))
-                    .exact_height(footer_height)
-                    .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 3.0)))
-                    .show_inside(workspace, |ui| {
+                egui::Panel::bottom(workspace.make_persistent_id("audio_inspect_help_footer"))
+                    .exact_size(footer_height)
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 3)))
+                    .show(workspace, |ui| {
                         ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                         let (row_rect, response) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), footer_galley.size().y),

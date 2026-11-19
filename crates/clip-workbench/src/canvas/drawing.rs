@@ -10,7 +10,7 @@ pub(super) fn render_grid(
     palette: &AppPalette,
 ) {
     // Editing canvas and a quiet alignment grid.
-    painter.rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.colors.canvas));
+    painter.rect_filled(rect, CornerRadius::ZERO, hex_to_c32(&palette.colors.canvas));
 
     let grid_size = 32.0 * zoom;
     if grid_size > 8.0 {
@@ -216,14 +216,15 @@ pub(super) fn draw_active_cable(
         // Badge background
         painter.rect_filled(
             badge_rect,
-            Rounding::same(6.0 * zoom),
+            CornerRadius::from(6.0 * zoom),
             hex_to_c32_alpha(&palette.colors.surface_recessed, 235),
         );
         // Badge border
         painter.rect_stroke(
             badge_rect,
-            Rounding::same(6.0 * zoom),
+            CornerRadius::from(6.0 * zoom),
             Stroke::new(1.5 * zoom, main_color),
+            egui::StrokeKind::Middle,
         );
         // Text inside badge
         painter.galley(
@@ -308,13 +309,14 @@ pub(super) fn render_node_card(
     // Card body background
     painter.rect_filled(
         rect,
-        Rounding::same(8.0 * zoom),
+        CornerRadius::from(8.0 * zoom),
         hex_to_c32(&palette.colors.surface_raised),
     );
     painter.rect_stroke(
         rect,
-        Rounding::same(8.0 * zoom),
+        CornerRadius::from(8.0 * zoom),
         Stroke::new(if is_selected { 2.0_f32 } else { 1.2_f32 }, border_col),
+        egui::StrokeKind::Middle,
     );
 
     // Category accent edge keeps node types recognizable without a saturated banner.
@@ -323,11 +325,11 @@ pub(super) fn render_node_card(
     let cat_color = get_node_category_color(&node.kind, palette);
     painter.rect_filled(
         header_rect,
-        Rounding {
-            nw: 8.0 * zoom,
-            ne: 8.0 * zoom,
-            sw: 0.0,
-            se: 0.0,
+        CornerRadius {
+            nw: (8.0 * zoom).round() as u8,
+            ne: (8.0 * zoom).round() as u8,
+            sw: 0,
+            se: 0,
         },
         hex_to_c32(&palette.colors.surface_panel),
     );
@@ -336,7 +338,7 @@ pub(super) fn render_node_card(
             header_rect.min + Vec2::new(0.0, 6.0 * zoom),
             Vec2::new(3.0 * zoom, header_h - 6.0 * zoom),
         ),
-        Rounding::ZERO,
+        CornerRadius::ZERO,
         cat_color,
     );
     let category_text = crate::ui_ext::contrast_text_c32_on(
@@ -469,7 +471,11 @@ pub(super) fn render_node_card(
         let content_max = Pos2::new(rect.max.x - 12.0 * zoom, rect.max.y - 8.0 * zoom);
         let content_rect = Rect::from_min_max(content_min, content_max);
 
-        let mut child_ui = ui.child_ui(content_rect, egui::Layout::top_down(egui::Align::Min));
+        let mut child_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(content_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
         child_ui.set_clip_rect(content_rect);
 
         render_node_properties(&mut child_ui, node, zoom, palette, script_to_edit)

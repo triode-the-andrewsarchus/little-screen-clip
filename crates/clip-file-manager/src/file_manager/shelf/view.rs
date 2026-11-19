@@ -26,13 +26,13 @@ impl FileManager {
 
     fn shelf_header(&mut self, ui: &mut Ui, palette: &AppPalette, action: &mut Option<Action>) {
         let colors = WorkbenchColors::from_palette(palette);
-        egui::ScrollArea::horizontal().id_source("shelf_actions").max_height(28.0).show(ui, |ui| ui.horizontal(|ui| {
+        egui::ScrollArea::horizontal().id_salt("shelf_actions").max_height(28.0).show(ui, |ui| ui.horizontal(|ui| {
             ui.add(Icon::Layers.label(egui::RichText::new("Shelf").strong()));
             ui.small(format!("{} collected", self.shelf.entries.len()));
             self.shelf.selected_controls(ui, self.directory.is_some(), action, palette);
             ui.menu_button("More", |ui| {
-                if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Refresh hands and previews")).clicked() { *action = Some(Action::Refresh); ui.close_menu(); }
-                if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Check file references")).clicked() { *action = Some(Action::Check); ui.close_menu(); }
+                if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Refresh hands and previews")).clicked() { *action = Some(Action::Refresh); ui.close(); }
+                if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Check file references")).clicked() { *action = Some(Action::Check); ui.close(); }
                 ui.separator();
                 ui.label("Collections stay for this session. File cards use live references; content cards retain captured bytes.");
                 if let Some(error) = &self.shelf.inventory_error { ui.colored_label(colors.warning, error); }
@@ -306,12 +306,12 @@ fn card_row(
                             .small()
                             .color(colors.text_secondary),
                     )
-                    .wrap(false),
+                    .extend(),
                 );
             },
         );
         egui::ScrollArea::horizontal()
-            .id_source(("shelf_row", label))
+            .id_salt(("shelf_row", label))
             .max_height(height)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -351,6 +351,7 @@ fn collection_actions(
             3.0,
             colors.recessed,
             Stroke::new(1.0_f32, colors.border),
+            egui::StrokeKind::Middle,
         );
         Icon::Plus.paint(
             &painter,
@@ -403,13 +404,7 @@ fn card_ui(
     height: f32,
     action: &mut Option<Action>,
 ) {
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(196.0, height),
-        Sense {
-            focusable: false,
-            ..Sense::click()
-        },
-    );
+    let (rect, response) = ui.allocate_exact_size(vec2(196.0, height), egui::Sense::CLICK);
     if ui.is_rect_visible(rect) {
         request_preview(previews, card);
         if card.id.is_some_and(|id| previews.get(id).is_none()) {
@@ -481,6 +476,7 @@ fn paint_card(
             colors.panel
         },
         Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, border),
+        egui::StrokeKind::Middle,
     );
     painter.line_segment(
         [
@@ -546,6 +542,7 @@ fn paint_compact_card(
         3.0,
         colors.panel,
         Stroke::new(1.0_f32, if selected { colors.focus } else { card.color }),
+        egui::StrokeKind::Middle,
     );
     let size = (rect.height() - 6.0).max(1.0);
     let media = Rect::from_center_size(
@@ -575,7 +572,7 @@ fn paint_media(ui: &Ui, rect: Rect, ready: Option<&Ready>, colors: WorkbenchColo
         );
     } else if let Some(ready) = ready {
         if ui.ctx().data(|data| {
-            data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+            data.get_temp::<bool>(egui::Id::unique("audio_dadaspec"))
                 .unwrap_or(false)
         }) && let Some(texture) = &ready.spectrum_texture
         {
@@ -673,7 +670,7 @@ fn entry_menu(
             .clicked()
         {
             *action = Some(Action::Send(entry.payload.clone(), hand));
-            ui.close_menu();
+            ui.close();
         }
     }
     if let Some(selected) = selected
@@ -682,7 +679,7 @@ fn entry_menu(
             .clicked()
     {
         *action = Some(Action::Remove(selected));
-        ui.close_menu();
+        ui.close();
     }
 }
 

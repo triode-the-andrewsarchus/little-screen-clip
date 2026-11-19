@@ -99,11 +99,13 @@ fn video_hover(
     };
     previews.hover(ui.ctx(), entry, metadata, time);
     // Scrubbing must bypass the ordinary tooltip's stationary-pointer delay.
-    egui::show_tooltip_at_pointer(
-        ui.ctx(),
-        Id::new(("video_timeline_hover", &entry.path)),
-        |ui| previews.hover_ui(ui),
-    );
+    egui::Tooltip::always_open(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        Id::unique(("video_timeline_hover", &entry.path)),
+        egui::PopupAnchor::Pointer,
+    )
+    .show(|ui| previews.hover_ui(ui));
     Some(time)
 }
 

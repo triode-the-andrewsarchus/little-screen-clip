@@ -43,7 +43,7 @@ impl WorkbenchApp {
                     .on_hover_text("Click to copy converted unit")
                     .clicked()
                 {
-                    ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
+                    ui.ctx().copy_text(conv.primary_conversion.clone());
                     self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
                 }
             } else if let Some(net) = detect_network_preview(trimmed) {
@@ -64,7 +64,7 @@ impl WorkbenchApp {
                     .clicked()
                 {
                     let lines = net.summary_lines().join("\n");
-                    ui.output_mut(|o| o.copied_text = lines.clone());
+                    ui.ctx().copy_text(lines.clone());
                     self.status_msg = Some("Copied network info".to_string());
                 }
             } else if let Some(ts) = detect_timestamp(trimmed) {
@@ -83,14 +83,15 @@ impl WorkbenchApp {
                     ))
                     .clicked()
                 {
-                    ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
+                    ui.ctx().copy_text(ts.utc_iso.clone());
                     self.status_msg = Some(format!("Copied ISO 8601: {}", ts.utc_iso));
                 }
             }
         }
     }
 
-    pub(crate) fn render_workbench_header(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_workbench_header(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
         if self.view == WorkbenchView::Palette && (self.dirty_mirror || self.mirror_job.is_some()) {
             self.update_mirror_texture(ctx);
         }
@@ -99,13 +100,16 @@ impl WorkbenchApp {
         let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
         let sub_color = hex_to_c32(&self.ui_palette.colors.text_secondary);
 
-        egui::TopBottomPanel::top("header_panel")
+        egui::Panel::top("header_panel")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(header_bg)
-                    .inner_margin(egui::Margin::symmetric(crate::ui_ext::PANEL_INSET, 10.0)),
+                    .inner_margin(egui::Margin::from(egui::vec2(
+                        crate::ui_ext::PANEL_INSET,
+                        10.0,
+                    ))),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let (brand_rect, _) = ui.allocate_exact_size(
                         egui::Vec2::splat(ui_ext::CONTROL_HEIGHT),
@@ -113,7 +117,7 @@ impl WorkbenchApp {
                     );
                     ui.painter().rect_filled(
                         brand_rect,
-                        egui::Rounding::same(ui_ext::CARD_CORNER_RADIUS),
+                        egui::CornerRadius::from(ui_ext::CARD_CORNER_RADIUS),
                         brand_color,
                     );
                     Icon::Clipboard

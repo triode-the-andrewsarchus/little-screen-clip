@@ -2,8 +2,8 @@ use crate::hex_to_c32;
 use crate::icons::Icon;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{
-    self, Color32, FontFamily, FontId, Pos2, Rect, Response, RichText, Rounding, Stroke, TextStyle,
-    Ui, Vec2,
+    self, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Response, RichText, Stroke,
+    TextStyle, Ui, Vec2,
 };
 use little_clip_core::palette::{AppPalette, contrast_ratio};
 
@@ -58,6 +58,41 @@ pub const CONTROL_HEIGHT: f32 = 36.0;
 /// Minimum hit height for compact toolbar actions at the standard text size.
 pub const COMPACT_CONTROL_HEIGHT: f32 = 24.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
+/// Returns the unfiltered wheel movement for a canvas gesture.
+pub fn wheel_delta(ctx: &egui::Context) -> Vec2 {
+    let options = ctx.options(|options| options.input_options);
+    ctx.input(|input| {
+        input.events.iter().fold(Vec2::ZERO, |total, event| {
+            let egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                phase: egui::TouchPhase::Move,
+                ..
+            } = event
+            else {
+                return total;
+            };
+            if modifiers.matches_any(options.zoom_modifier) {
+                return total;
+            }
+            let points = match unit {
+                egui::MouseWheelUnit::Point => 1.0,
+                egui::MouseWheelUnit::Line => options.line_scroll_speed,
+                egui::MouseWheelUnit::Page => input.viewport_rect().height(),
+            };
+            let delta = if modifiers.matches_any(options.horizontal_scroll_modifier) {
+                egui::vec2(delta.x + delta.y, 0.0)
+            } else if modifiers.matches_any(options.vertical_scroll_modifier) {
+                egui::vec2(0.0, delta.x + delta.y)
+            } else {
+                *delta
+            };
+            total + delta * points
+        })
+    })
+}
+
 pub const BODY_FONT_SIZE: f32 = 16.0;
 pub const SPACE_XS: f32 = 4.0;
 pub const SPACE_SM: f32 = 8.0;
@@ -219,15 +254,16 @@ impl CanvasBadge<'_> {
             .unwrap_or(0.0);
         let size = Vec2::new(width, heading_height + value_height + padding.y * 2.0);
         let rect = clamp_overlay_rect(anchor.anchor_size(position, size).min, size, bounds);
-        painter.rect_filled(rect, Rounding::same(CONTROL_CORNER_RADIUS), background);
+        painter.rect_filled(rect, CornerRadius::from(CONTROL_CORNER_RADIUS), background);
         painter.rect_stroke(
             rect,
-            Rounding::same(CONTROL_CORNER_RADIUS),
+            CornerRadius::from(CONTROL_CORNER_RADIUS),
             Stroke::new(
                 1.0_f32,
                 self.accent
                     .unwrap_or_else(|| hex_to_c32(&palette.colors.surface_panel)),
             ),
+            egui::StrokeKind::Middle,
         );
         let text_min = rect.min + padding;
         painter.galley(text_min, heading, heading_color);
@@ -303,7 +339,8 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
         "Fira Sans".to_owned(),
         egui::FontData::from_static(include_bytes!(
             "../../little-clip-render/assets/fonts/FiraSans-Regular.ttf"
-        )),
+        ))
+        .into(),
     );
     fonts
         .families
@@ -313,12 +350,12 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
     let fallback = "Noto Sans CJK JP";
     fonts.font_data.insert(
         fallback.to_owned(),
-        egui::FontData::from_static(little_clip_core::font_assets::CJK_FONT_BYTES),
+        egui::FontData::from_static(little_clip_core::font_assets::CJK_FONT_BYTES).into(),
     );
     let emoji_fallback = "Noto Emoji Full";
     fonts.font_data.insert(
         emoji_fallback.to_owned(),
-        egui::FontData::from_static(little_clip_core::font_assets::EMOJI_FONT_BYTES),
+        egui::FontData::from_static(little_clip_core::font_assets::EMOJI_FONT_BYTES).into(),
     );
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let fonts_for_family = fonts.families.entry(family).or_default();
@@ -326,7 +363,7 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
         fonts_for_family.push(emoji_fallback.to_owned());
     }
     ctx.set_fonts(fonts);
-    ctx.style_mut(|style| {
+    ctx.all_styles_mut(|style| {
         style.text_styles.insert(
             TextStyle::Small,
             FontId::new(BODY_FONT_SIZE, FontFamily::Proportional),
@@ -356,7 +393,7 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
 /// Minimum width shared by related buttons, measured from their longest label.
 pub fn equal_button_width(ui: &Ui, labels: &[&str], with_icon: bool) -> f32 {
     let font = TextStyle::Button.resolve(ui.style());
-    let text_width = ui.fonts(|fonts| {
+    let text_width = ui.fonts_mut(|fonts| {
         labels
             .iter()
             .map(|label| {
@@ -452,7 +489,7 @@ pub struct StyledButton<'a> {
     fill: Color32,
     shade: Color32,
     stroke: Stroke,
-    rounding: Rounding,
+    rounding: CornerRadius,
 }
 
 impl<'a> StyledButton<'a> {
@@ -489,7 +526,7 @@ impl<'a> StyledButton<'a> {
             fill,
             shade,
             stroke: Stroke::new(1.0_f32, border),
-            rounding: Rounding::same(CONTROL_CORNER_RADIUS),
+            rounding: CornerRadius::from(CONTROL_CORNER_RADIUS),
         }
     }
 
@@ -518,7 +555,7 @@ impl<'a> StyledButton<'a> {
         self
     }
 
-    pub fn rounding(mut self, rounding: impl Into<Rounding>) -> Self {
+    pub fn corner_radius(mut self, rounding: impl Into<CornerRadius>) -> Self {
         self.rounding = rounding.into();
         self
     }
@@ -554,8 +591,8 @@ impl egui::Widget for StyledButton<'_> {
                         self.rounding,
                         Color32::from_black_alpha(35),
                     ),
-                    gradient_surface(rect, self.rounding.nw, top, bottom, false),
-                    egui::Shape::rect_stroke(rect, self.rounding, stroke),
+                    gradient_surface(rect, self.rounding.nw as f32, top, bottom, false),
+                    egui::Shape::rect_stroke(rect, self.rounding, stroke, egui::StrokeKind::Middle),
                 ]),
             );
         }
@@ -1148,7 +1185,7 @@ impl StatusToast {
                         .strong()
                         .color(color),
                 )
-                .truncate(true),
+                .truncate(),
             )
             .on_hover_text(&msg.text);
         }
@@ -1165,11 +1202,11 @@ impl StatusToast {
                 colors.success
             };
             let fg = contrast_text_c32(bg, Some(stroke), palette);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(bg)
                 .stroke(Stroke::new(1.0_f32, stroke))
-                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS))
+                .corner_radius(CornerRadius::from(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(egui::vec2(SPACE_SM, SPACE_XS)))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
@@ -1189,10 +1226,10 @@ impl StatusToast {
                 colors.accent
             };
             let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(bg)
-                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::symmetric(BUTTON_PADDING_X, SPACE_XS))
+                .corner_radius(CornerRadius::from(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::from(egui::vec2(BUTTON_PADDING_X, SPACE_XS)))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
@@ -1230,11 +1267,14 @@ pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palet
     let colors = WorkbenchColors::from_palette(palette);
     let bg = colors.raised;
     let fg = contrast_text_c32(bg, accent.or(Some(colors.text_secondary)), palette);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(bg)
-        .rounding(Rounding::same(BADGE_CORNER_RADIUS))
+        .corner_radius(CornerRadius::from(BADGE_CORNER_RADIUS))
         .stroke(Stroke::new(1.0_f32, accent.unwrap_or(colors.border)))
-        .inner_margin(egui::Margin::symmetric(BADGE_PADDING_X, BADGE_PADDING_Y))
+        .inner_margin(egui::Margin::from(egui::vec2(
+            BADGE_PADDING_X,
+            BADGE_PADDING_Y,
+        )))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(label).color(fg));
         });
@@ -1313,7 +1353,7 @@ pub fn zoom_control_bar(
 /// Actual height of a single-line selection row at the current text scale.
 pub fn selectable_text_row_height(ui: &Ui, minimum: f32) -> f32 {
     let font = TextStyle::Button.resolve(ui.style());
-    (ui.fonts(|fonts| fonts.row_height(&font)) + ui.spacing().button_padding.y * 2.0)
+    (ui.fonts_mut(|fonts| fonts.row_height(&font)) + ui.spacing().button_padding.y * 2.0)
         .max(ui.spacing().interact_size.y)
         .max(minimum)
 }
@@ -1332,10 +1372,10 @@ pub fn selectable_text_row(
         (ui.available_width() - 12.0).max(1.0),
     );
     layout.wrap.max_rows = 1;
-    let galley = ui.fonts(|fonts| fonts.layout_job(layout));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(layout));
     ui.add_sized(
         Vec2::new(ui.available_width(), height),
-        egui::SelectableLabel::new(selected, galley),
+        egui::Button::selectable(selected, galley),
     )
 }
 
@@ -1350,14 +1390,17 @@ mod tests {
             let ctx = egui::Context::default();
             let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), size);
             let color = Color32::from_gray(28);
-            let output = ctx.run(
+            let output = crate::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        paint_canvas_edge_fade(ui.painter(), rect, color, 28.0)
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            paint_canvas_edge_fade(ui.painter(), rect, color, 28.0)
+                        })
                     });
                 },
             );
@@ -1395,12 +1438,14 @@ mod tests {
             }
         }
         let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                for fade in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-                    paint_canvas_edge_fade(ui.painter(), ui.max_rect(), Color32::BLACK, fade);
-                }
-                paint_canvas_edge_fade(ui.painter(), Rect::NOTHING, Color32::BLACK, 28.0);
+        let output = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    for fade in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+                        paint_canvas_edge_fade(ui.painter(), ui.max_rect(), Color32::BLACK, fade);
+                    }
+                    paint_canvas_edge_fade(ui.painter(), Rect::NOTHING, Color32::BLACK, 28.0);
+                })
             });
         });
         assert!(
@@ -1422,7 +1467,8 @@ mod tests {
                 "Fira Sans".to_owned(),
                 egui::FontData::from_static(include_bytes!(
                     "../../little-clip-render/assets/fonts/FiraSans-Regular.ttf"
-                )),
+                ))
+                .into(),
             );
             latin_fonts
                 .families
@@ -1433,17 +1479,17 @@ mod tests {
             configure_workbench_style(&configured);
             for ctx in [&defaults, &configured] {
                 ctx.set_pixels_per_point(scale);
-                let _ = ctx.run(egui::RawInput::default(), |_| {});
+                let _ = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |_| {});
             }
             for font in [
                 FontId::proportional(BODY_FONT_SIZE),
                 FontId::monospace(MONO_FONT_SIZE),
             ] {
                 let latin = "clipboard test ";
-                let original = defaults.fonts(|fonts| {
+                let original = defaults.fonts_mut(|fonts| {
                     fonts.layout_no_wrap(latin.to_owned(), font.clone(), Color32::WHITE)
                 });
-                configured.fonts(|fonts| {
+                configured.fonts_mut(|fonts| {
                     let unchanged =
                         fonts.layout_no_wrap(latin.to_owned(), font.clone(), Color32::WHITE);
                     assert_eq!(unchanged.size(), original.size());
@@ -1453,7 +1499,7 @@ mod tests {
                         .zip(&original.rows[0].glyphs)
                     {
                         assert_eq!(actual.pos, expected.pos);
-                        assert_eq!(actual.size, expected.size);
+                        assert_eq!(actual.size(), expected.size());
                     }
 
                     let text =
@@ -1503,7 +1549,8 @@ mod tests {
             enabled: bool,
         ) -> (egui::FullOutput, Rect) {
             let mut button_rect = Rect::NOTHING;
-            let output = ctx.run(
+            let output = crate::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
@@ -1513,14 +1560,16 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let response = ui.add_enabled(enabled, egui::Button::new("Open"));
-                        button_rect = response.rect;
-                        on_hover_text_with_disabled_reason(
-                            response,
-                            "Open the viewer",
-                            "Wait for loading to finish",
-                        );
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let response = ui.add_enabled(enabled, egui::Button::new("Open"));
+                            button_rect = response.rect;
+                            on_hover_text_with_disabled_reason(
+                                response,
+                                "Open the viewer",
+                                "Wait for loading to finish",
+                            );
+                        })
                     });
                 },
             );
@@ -1532,7 +1581,7 @@ mod tests {
             (false, "Wait for loading to finish"),
         ] {
             let ctx = egui::Context::default();
-            ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
+            ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
             let (_, button_rect) = draw(&ctx, 0.0, None, enabled);
             let _ = draw(&ctx, 1.0, Some(button_rect.center()), enabled);
             let (output, _) = draw(&ctx, 1.1, Some(button_rect.center()), enabled);
@@ -1549,53 +1598,55 @@ mod tests {
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
             let ctx = egui::Context::default();
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let bounds =
-                        Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(320.0, 140.0));
-                    let value = "WEBP · 554.4 KB";
-                    let before = CanvasBadge {
-                        heading: "BEFORE",
-                        value: Some(value),
-                        accent: None,
-                    };
-                    let after = CanvasBadge {
-                        heading: "AFTER",
-                        value: Some(value),
-                        accent: Some(hex_to_c32(&palette.harmonies.base)),
-                    };
-                    let left = before.paint(
-                        ui.painter(),
-                        bounds.min + Vec2::splat(8.0),
-                        egui::Align2::LEFT_TOP,
-                        bounds,
-                        148.0,
-                        &palette,
-                    );
-                    let right = after.paint(
-                        ui.painter(),
-                        bounds.max - Vec2::new(8.0, bounds.height() - 8.0),
-                        egui::Align2::RIGHT_TOP,
-                        bounds,
-                        148.0,
-                        &palette,
-                    );
-                    assert!(bounds.contains_rect(left) && bounds.contains_rect(right));
-                    assert!(left.right() < right.left());
-                    let wide =
-                        Rect::from_min_size(Pos2::new(20.0, 200.0), Vec2::new(1000.0, 200.0));
-                    let badge = before.paint(
-                        ui.painter(),
-                        wide.min,
-                        egui::Align2::LEFT_TOP,
-                        wide,
-                        480.0,
-                        &palette,
-                    );
-                    assert!(
-                        badge.width() < 200.0,
-                        "a short badge must retain its natural width"
-                    );
+            let output = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let bounds =
+                            Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(320.0, 140.0));
+                        let value = "WEBP · 554.4 KB";
+                        let before = CanvasBadge {
+                            heading: "BEFORE",
+                            value: Some(value),
+                            accent: None,
+                        };
+                        let after = CanvasBadge {
+                            heading: "AFTER",
+                            value: Some(value),
+                            accent: Some(hex_to_c32(&palette.harmonies.base)),
+                        };
+                        let left = before.paint(
+                            ui.painter(),
+                            bounds.min + Vec2::splat(8.0),
+                            egui::Align2::LEFT_TOP,
+                            bounds,
+                            148.0,
+                            &palette,
+                        );
+                        let right = after.paint(
+                            ui.painter(),
+                            bounds.max - Vec2::new(8.0, bounds.height() - 8.0),
+                            egui::Align2::RIGHT_TOP,
+                            bounds,
+                            148.0,
+                            &palette,
+                        );
+                        assert!(bounds.contains_rect(left) && bounds.contains_rect(right));
+                        assert!(left.right() < right.left());
+                        let wide =
+                            Rect::from_min_size(Pos2::new(20.0, 200.0), Vec2::new(1000.0, 200.0));
+                        let badge = before.paint(
+                            ui.painter(),
+                            wide.min,
+                            egui::Align2::LEFT_TOP,
+                            wide,
+                            480.0,
+                            &palette,
+                        );
+                        assert!(
+                            badge.width() < 200.0,
+                            "a short badge must retain its natural width"
+                        );
+                    })
                 });
             });
             let background = hex_to_c32(&palette.colors.surface_recessed);
@@ -1624,9 +1675,11 @@ mod tests {
         egui_extras::install_image_loaders(&ctx);
         let mut radius = 0.0;
         let center = Pos2::new(100.0, 100.0);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                radius = paint_split_handle(ui.painter(), center, &AppPalette::default());
+        let output = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    radius = paint_split_handle(ui.painter(), center, &AppPalette::default());
+                })
             });
         });
         let icon = output
@@ -1676,7 +1729,7 @@ mod tests {
             let ctx = egui::Context::default();
             configure_workbench_style(&ctx);
             crate::ui_appearance::apply_visuals(&ctx, &palette);
-            let style = ctx.style();
+            let style = ctx.global_style();
             assert!(TextStyle::Small.resolve(&style).size >= BODY_FONT_SIZE);
             assert!(TextStyle::Button.resolve(&style).size >= BODY_FONT_SIZE);
             drop(style);
@@ -1690,49 +1743,51 @@ mod tests {
             };
             let mut heights = Vec::new();
             let mut input_text = String::new();
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        heights.push(
-                            ui.add(mode_tab_button("Inspect", true, &palette))
+            let _ = crate::test_support::run_frame(&ctx, input, |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            heights.push(
+                                ui.add(mode_tab_button("Inspect", true, &palette))
+                                    .rect
+                                    .height(),
+                            );
+                            heights.push(
+                                ui.add(action_button("Copy", colors.success, &palette))
+                                    .rect
+                                    .height(),
+                            );
+                            heights.push(
+                                ui.add(secondary_button("Reset", colors.recessed, &palette))
+                                    .rect
+                                    .height(),
+                            );
+                            heights.push(
+                                ui.add(danger_button("Delete", colors.danger, &palette))
+                                    .rect
+                                    .height(),
+                            );
+                            heights.push(
+                                ui.add(icon_button(
+                                    Icon::Close,
+                                    CONTROL_ICON_SIZE,
+                                    colors.panel,
+                                    None,
+                                    &palette,
+                                ))
                                 .rect
                                 .height(),
-                        );
-                        heights.push(
-                            ui.add(action_button("Copy", colors.success, &palette))
+                            );
+                            heights.push(
+                                ui.add_sized(
+                                    [150.0, CONTROL_HEIGHT],
+                                    egui::TextEdit::singleline(&mut input_text),
+                                )
                                 .rect
                                 .height(),
-                        );
-                        heights.push(
-                            ui.add(secondary_button("Reset", colors.recessed, &palette))
-                                .rect
-                                .height(),
-                        );
-                        heights.push(
-                            ui.add(danger_button("Delete", colors.danger, &palette))
-                                .rect
-                                .height(),
-                        );
-                        heights.push(
-                            ui.add(icon_button(
-                                Icon::Close,
-                                CONTROL_ICON_SIZE,
-                                colors.panel,
-                                None,
-                                &palette,
-                            ))
-                            .rect
-                            .height(),
-                        );
-                        heights.push(
-                            ui.add_sized(
-                                [150.0, CONTROL_HEIGHT],
-                                egui::TextEdit::singleline(&mut input_text),
-                            )
-                            .rect
-                            .height(),
-                        );
-                    });
+                            );
+                        });
+                    })
                 });
             });
             assert_eq!(heights.len(), 6);
@@ -1892,18 +1947,25 @@ mod tests {
                 // Let font/icon upload and first-frame layout settle, then inspect
                 // an otherwise idle frame. An initial zero delay cannot prove expiry.
                 for frame in 0..8 {
-                    let output = ctx.run(
+                    let output = crate::test_support::run_frame(
+                        &ctx,
                         egui::RawInput {
                             time: Some(frame as f64 * 0.016),
                             ..Default::default()
                         },
                         |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| match style {
-                                0 => toast.render(ui, 10.25, &palette),
-                                1 => toast.render_pill(ui, &palette, 10.25),
-                                _ => {
-                                    StatusToast::render_opt(&toast.toast, 4.0, ui, &palette, 10.25)
-                                }
+                            ctx.root_ui(|ui| {
+                                egui::CentralPanel::default().show(ui, |ui| match style {
+                                    0 => toast.render(ui, 10.25, &palette),
+                                    1 => toast.render_pill(ui, &palette, 10.25),
+                                    _ => StatusToast::render_opt(
+                                        &toast.toast,
+                                        4.0,
+                                        ui,
+                                        &palette,
+                                        10.25,
+                                    ),
+                                })
                             });
                         },
                     );
@@ -1922,9 +1984,11 @@ mod tests {
         let mut toast = StatusToast::with_duration(f64::MAX);
         toast.set("unrepresentably distant expiry", 0.0);
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default()
-                .show(ctx, |ui| toast.render(ui, 0.0, &AppPalette::default()));
+        let _ = crate::test_support::run_frame(&ctx, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default()
+                    .show(ui, |ui| toast.render(ui, 0.0, &AppPalette::default()))
+            });
         });
     }
 

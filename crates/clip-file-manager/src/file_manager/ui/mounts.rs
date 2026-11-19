@@ -15,7 +15,7 @@ impl FileManager {
         let mut unmount_target = None;
 
         egui::ScrollArea::vertical()
-            .id_source("files_mount_rows")
+            .id_salt("files_mount_rows")
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
             .show_rows(ui, ROW_HEIGHT, self.mounts.entries.len(), |ui, rows| {
@@ -131,12 +131,12 @@ fn allocate_mount_row(
             pos2(rect.max.x - 4.0, rect.max.y - 2.0),
         );
         let b_rect = Rect::from_min_max(rect.min, pos2(e_rect.min.x, rect.max.y));
-        let e_resp = ui.interact(e_rect, Id::new(("mount_eject", index)), Sense::click());
+        let e_resp = ui.interact(e_rect, Id::unique(("mount_eject", index)), Sense::click());
         (b_rect, Some(e_rect), Some(e_resp))
     } else {
         (rect, None, None)
     };
-    let response = ui.interact(body_rect, Id::new(("mount_row", index)), Sense::click());
+    let response = ui.interact(body_rect, Id::unique(("mount_row", index)), Sense::click());
     (body_rect, eject_rect, eject_response, response)
 }
 
@@ -187,8 +187,12 @@ fn render_eject_button(
 ) -> bool {
     if e_resp.hovered() {
         ui.painter().rect_filled(e_rect, 3.0, colors.recessed);
-        ui.painter()
-            .rect_stroke(e_rect, 3.0, egui::Stroke::new(1.0_f32, colors.accent));
+        ui.painter().rect_stroke(
+            e_rect,
+            3.0,
+            egui::Stroke::new(1.0_f32, colors.accent),
+            egui::StrokeKind::Middle,
+        );
     }
     let eject_icon_rect = Rect::from_min_size(e_rect.center() - vec2(8.0, 8.0), vec2(16.0, 16.0));
     let eject_icon_color = if e_resp.hovered() {
@@ -240,7 +244,7 @@ fn mount_context_menu(
             && ui.button("Open in Files").clicked()
         {
             *open = Some(mp.clone());
-            ui.close_menu();
+            ui.close();
         }
         if entry.is_removable {
             let label = if entry.kind == MountKind::FuseBinwalk {
@@ -250,18 +254,18 @@ fn mount_context_menu(
             };
             if ui.button(label).clicked() {
                 *unmount = Some(entry.clone());
-                ui.close_menu();
+                ui.close();
             }
         }
     } else if ui.button("Mount").clicked() {
         *mount = Some(entry.clone());
-        ui.close_menu();
+        ui.close();
     }
 
     if let Some(target) = entry.mount_point.as_ref().or(entry.device_path.as_ref())
         && ui.button("Copy path").clicked()
     {
-        ui.output_mut(|o| o.copied_text = target.display().to_string());
-        ui.close_menu();
+        ui.ctx().copy_text(target.display().to_string());
+        ui.close();
     }
 }

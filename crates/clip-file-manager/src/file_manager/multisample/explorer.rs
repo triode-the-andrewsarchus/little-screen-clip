@@ -167,7 +167,7 @@ impl Explorer {
                 self.zoom = 1.0;
             }
         });
-        if !ui.ctx().wants_keyboard_input() {
+        if !ui.ctx().egui_wants_keyboard_input() {
             for key in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, Num0] {
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
                     self.apply_key(key);
@@ -233,9 +233,9 @@ impl Explorer {
         if !super::super::ui::preview_hovered(ui, rect) {
             return;
         }
-        let (scroll, pointer, delta, pan) = ui.input(|i| {
+        let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
+        let (pointer, delta, pan) = ui.input(|i| {
             (
-                i.raw_scroll_delta.y,
                 i.pointer.hover_pos(),
                 i.pointer.delta(),
                 i.pointer.secondary_down() || i.pointer.middle_down(),
@@ -250,7 +250,6 @@ impl Explorer {
             let anchor = pointer.unwrap_or(rect.center()) - rect.center();
             self.pan = anchor - (anchor - self.pan) * (self.zoom / old);
             ui.input_mut(|i| {
-                i.raw_scroll_delta = egui::Vec2::ZERO;
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
             });
         }
@@ -408,7 +407,13 @@ pub(super) fn chord(root: u8, quality: Quality, voicing: Voicing) -> Option<Vec<
 }
 
 fn harmony_tooltip(ui: &egui::Ui, notes: Option<&[u8]>, regions: &[Region], velocity: u8) {
-    egui::show_tooltip_at_pointer(ui.ctx(), ui.id().with("chord-details"), |ui| {
+    egui::Tooltip::always_open(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        ui.scope_id().with("chord-details"),
+        egui::PopupAnchor::Pointer,
+    )
+    .show(|ui| {
         ui.strong(format!("Velocity {velocity}"));
         if let Some(notes) = notes {
             for &key in notes {
@@ -461,7 +466,12 @@ pub(super) fn mapping(
         let (r, g, b) = palette.midi_note_color(0, 0, 1, region.root, 100);
         let color = egui::Color32::from_rgb(r, g, b);
         painter.rect_filled(zone.shrink(0.5), 2.0, color.gamma_multiply(0.25));
-        painter.rect_stroke(zone, 2.0, Stroke::new(1.0_f32, color));
+        painter.rect_stroke(
+            zone,
+            2.0,
+            Stroke::new(1.0_f32, color),
+            egui::StrokeKind::Middle,
+        );
         if (region.key[0]..=region.key[1]).contains(&region.root) {
             painter.circle_filled(
                 pos2(x(region.root as f32 + 0.5), zone.center().y),

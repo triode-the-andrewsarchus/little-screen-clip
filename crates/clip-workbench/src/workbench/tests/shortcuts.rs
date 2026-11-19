@@ -6,7 +6,8 @@ fn quick_palette_space_routes_to_both_hands_only_without_audio_selection() {
     app.selected_slots = vec![SlotId::LeftPrior1];
     let ctx = egui::Context::default();
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![space_key_event()],
             ..Default::default()
@@ -20,7 +21,8 @@ fn quick_palette_space_routes_to_both_hands_only_without_audio_selection() {
     assert_eq!(app.selected_action_index, 0);
 
     app.selected_slots = vec![SlotId::LeftPrior1];
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![space_key_event()],
             ..Default::default()
@@ -45,7 +47,8 @@ fn palette_digit_shortcuts_select_exact_slot_sets() {
     for (key, expected_slots) in cases {
         let mut app = test_workbench_app(None, VecDeque::new());
         app.selected_slots = vec![SlotId::RightPrior2];
-        let _ = egui::Context::default().run(
+        let _ = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
             egui::RawInput {
                 events: vec![key_press_event(key)],
                 ..Default::default()
@@ -157,16 +160,20 @@ fn modified_palette_swap_keys_do_not_swap_slots() {
         app.search_query.clear();
         let mut swap_calls = 0;
 
-        let _ = egui::Context::default().run(
+        let _ = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
             egui::RawInput {
-                events: vec![egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                }],
-                modifiers,
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }])
+                    .collect(),
+
                 ..Default::default()
             },
             |ctx| app.handle_empty_search_shortcuts_with_swap(ctx, false, |_| swap_calls += 1),
@@ -196,7 +203,8 @@ fn unmodified_palette_swap_shortcuts_request_one_slot_swap() {
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
         let mut swap_calls = 0;
 
-        let _ = egui::Context::default().run(
+        let _ = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
             egui::RawInput {
                 events: vec![key_press_event(key)],
                 ..Default::default()
@@ -223,7 +231,8 @@ fn palette_action_navigation_wraps_in_both_directions() {
     app.search_query = "Navigation Fixture".to_owned();
     assert_eq!(ready_palette_actions(&mut app).len(), 2);
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             events: vec![key_press_event(egui::Key::ArrowDown)],
             ..Default::default()
@@ -232,7 +241,8 @@ fn palette_action_navigation_wraps_in_both_directions() {
     );
     assert_eq!(app.selected_action_index, 1, "Down selects the next action");
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             events: vec![key_press_event(egui::Key::ArrowDown)],
             ..Default::default()
@@ -244,7 +254,8 @@ fn palette_action_navigation_wraps_in_both_directions() {
         "Down wraps to the first action"
     );
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             events: vec![key_press_event(egui::Key::ArrowUp)],
             ..Default::default()
@@ -259,24 +270,28 @@ fn rolling_audio_space_requires_selection_and_yields_to_focused_text() {
     let mut query = String::new();
     let mut eligible = false;
     let focused_ctx = egui::Context::default();
-    let _ = focused_ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &focused_ctx,
         egui::RawInput {
             events: vec![space_key_event()],
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut query))
-                    .request_focus();
-                assert!(ctx.wants_keyboard_input());
-                assert!(!audio_strip_space_pressed(ctx, true));
-                assert!(!audio_strip_space_pressed(ctx, false));
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut query))
+                        .request_focus();
+                    assert!(ctx.egui_wants_keyboard_input());
+                    assert!(!audio_strip_space_pressed(ctx, true));
+                    assert!(!audio_strip_space_pressed(ctx, false));
+                })
             });
         },
     );
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![space_key_event()],
             ..Default::default()
@@ -295,7 +310,8 @@ fn rolling_audio_f5_dispatches_one_snapshot_refresh_request() {
     app.rolling_audio_strip = Some(RollingAudioStripState::empty_test_strip());
     let ctx = egui::Context::default();
     let mut refresh_requests = 0;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -305,11 +321,13 @@ fn rolling_audio_f5_dispatches_one_snapshot_refresh_request() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |_ui| {
-                app.handle_audio_strip_refresh_with_load(ctx, |strip| {
-                    refresh_requests += 1;
-                    assert!(!strip.is_loaded);
-                });
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |_ui| {
+                    app.handle_audio_strip_refresh_with_load(ctx, |strip| {
+                        refresh_requests += 1;
+                        assert!(!strip.is_loaded);
+                    });
+                })
             });
         },
     );
@@ -332,16 +350,19 @@ fn auto_actions_chrome_stays_inside_compact_and_wide_hosts() {
         let mut host = egui::Rect::NOTHING;
         let mut rendered = None;
 
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 ..Default::default()
             },
             |ctx| {
                 ui_appearance::apply_visuals(ctx, &palette);
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    host = ui.available_rect_before_wrap();
-                    rendered = Some(render_auto_actions(ui, &mut config, &palette));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        host = ui.available_rect_before_wrap();
+                        rendered = Some(render_auto_actions(ui, &mut config, &palette));
+                    })
                 });
             },
         );
@@ -430,7 +451,8 @@ fn auto_actions_escape_returns_to_palette_and_requests_search_focus() {
 fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
     fn press_shortcut(app: &mut WorkbenchApp, key: egui::Key) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
@@ -492,7 +514,8 @@ fn palette_f1_opens_node_machine_through_global_shortcuts() {
     assert_eq!(app.view, WorkbenchView::Palette);
     let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             events: vec![key_press_event(egui::Key::F1)],
             ..Default::default()
@@ -515,7 +538,8 @@ fn palette_f4_and_f6_switch_workbench_and_display_palettes_together() {
     let mut saved = Vec::new();
 
     for (key, expected) in [(egui::Key::F4, initial.toggled()), (egui::Key::F6, initial)] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![key_press_event(key)],
                 ..Default::default()
@@ -555,7 +579,8 @@ fn palette_f3_opens_auto_actions_through_global_shortcuts() {
     assert_eq!(app.view, WorkbenchView::Palette);
     let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
 
-    let _ = egui::Context::default().run(
+    let _ = clip_ui::test_support::run_frame(
+        &egui::Context::default(),
         egui::RawInput {
             events: vec![key_press_event(egui::Key::F3)],
             ..Default::default()
@@ -592,7 +617,8 @@ fn node_canvas_state_persists_across_palette_and_auto_actions_routes() {
         (egui::Key::F1, WorkbenchView::NodeMachine),
     ] {
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key,
@@ -625,7 +651,8 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
     fn frame_with_key(app: &mut WorkbenchApp, key: egui::Key) -> bool {
         let ctx = egui::Context::default();
         let mut modal_active = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -641,7 +668,7 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
                 ..Default::default()
             },
             |ctx| {
-                modal_active = app.render_modal_viewers(ctx);
+                modal_active = ctx.root_ui(|ui| app.render_modal_viewers(ui));
                 // Match update(): the prompt/viewer renderer owns the frame and
                 // returns before workbench shortcut dispatch or canvas rendering.
                 if modal_active {

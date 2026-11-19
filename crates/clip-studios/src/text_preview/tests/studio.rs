@@ -4,28 +4,33 @@ use super::*;
 fn find_shortcut_yields_to_focused_text_control() {
     let ctx = egui::Context::default();
     let mut text = String::new();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let response = ui.add(egui::TextEdit::singleline(&mut text));
-            response.request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let response = ui.add(egui::TextEdit::singleline(&mut text));
+                response.request_focus();
+            })
         });
     });
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
 
     let mut state =
         TextPreviewState::from_text("editable content".to_owned(), None, &AppConfig::default());
     let mut close = false;
     let modifiers = egui::Modifiers::COMMAND;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
-            modifiers,
-            events: vec![egui::Event::Key {
-                key: egui::Key::F,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
+            events: [egui::Event::ModifiersChanged(modifiers)]
+                .into_iter()
+                .chain(vec![egui::Event::Key {
+                    key: egui::Key::F,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }])
+                .collect(),
             ..Default::default()
         },
         |ctx| state.handle_shortcuts(ctx, &mut close),
@@ -42,31 +47,37 @@ fn find_shortcut_focuses_search_and_escape_dismisses_only_find() {
         TextPreviewState::from_text("searchable content".to_owned(), None, &AppConfig::default());
     let mut close = false;
     let modifiers = egui::Modifiers::COMMAND;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
-            modifiers,
-            events: vec![egui::Event::Key {
-                key: egui::Key::F,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
+            events: [egui::Event::ModifiersChanged(modifiers)]
+                .into_iter()
+                .chain(vec![egui::Event::Key {
+                    key: egui::Key::F,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }])
+                .collect(),
             ..Default::default()
         },
         |ctx| {
             state.handle_shortcuts(ctx, &mut close);
             if state.show_find {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_search_toolbar(ui, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_search_toolbar(ui, &palette);
+                    })
                 });
             }
         },
     );
     assert!(state.show_find);
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Escape,
@@ -179,7 +190,8 @@ fn text_search_toolbar_wraps_status_and_controls_at_compact_widths() {
                 state.match_count = spool.len();
                 state.matches = Some(spool);
             }
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -188,8 +200,10 @@ fn text_search_toolbar_wraps_status_and_controls_at_compact_widths() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_search_toolbar(ui, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_search_toolbar(ui, &palette);
+                        })
                     });
                 },
             );
@@ -235,7 +249,8 @@ fn text_viewer_chrome_stays_inside_compact_and_wide_hosts() {
         state.show_line_numbers = true;
         state.wrap_lines = true;
         let mut close = false;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -244,8 +259,10 @@ fn text_viewer_chrome_stays_inside_compact_and_wide_hosts() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    })
                 });
             },
         );
@@ -300,7 +317,8 @@ fn rendered_copy_all_button_copies_full_text_preview_source() {
     let mut time = 0.0;
     let mut render = |state: &mut TextPreviewState, time: &mut f64, events: Vec<egui::Event>| {
         *time += 0.1;
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -311,8 +329,10 @@ fn rendered_copy_all_button_copies_full_text_preview_source() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    })
                 });
             },
         )
@@ -361,7 +381,10 @@ fn rendered_copy_all_button_copies_full_text_preview_source() {
         ],
     );
 
-    assert_eq!(copied.platform_output.copied_text, content);
+    assert_eq!(
+        clip_ui::test_support::copied_text(&copied.platform_output),
+        content
+    );
     assert!(!close);
 }
 
@@ -380,7 +403,8 @@ fn markdown_body_list_and_quote_wrap_without_clipping_at_compact_and_wide_widths
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette = AppPalette::default();
         let mut state = TextPreviewState::from_text(content.clone(), None, &AppConfig::default());
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -389,8 +413,10 @@ fn markdown_body_list_and_quote_wrap_without_clipping_at_compact_and_wide_widths
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_markdown_view(ui, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_markdown_view(ui, &palette);
+                    })
                 });
             },
         );

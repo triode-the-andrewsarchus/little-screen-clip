@@ -181,8 +181,8 @@ The backend selection phases remain below the hotspot threshold.
   Worker/reference tests and the eleven-format host matrix pass afterward.
 
 - [x] Give Escape priority to an open video context menu before fullscreen or
-  viewer dismissal. Egui 0.27 context menus have their own state, so retain the
-  response's open state before the menu processes Escape. Overlay areas stay
+  viewer dismissal. Read the menu state before egui handles Escape so the same press cannot exit
+  fullscreen. Overlay areas stay
   below menus, and an open menu keeps the overlay visible. The regression test
   verifies menu, fullscreen and viewer dismissal in that order.
 

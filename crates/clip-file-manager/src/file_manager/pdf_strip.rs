@@ -167,28 +167,30 @@ impl Pages {
             .checked(&entry.path, &self.context),
         );
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
-        egui::show_tooltip_at_pointer(
-            ui.ctx(),
-            egui::Id::new(("pdf_strip_hover", &entry.path)),
-            |ui| {
-                ui.label(format!("{} · Page {page}", entry.name));
-                if let Some(texture) = texture {
-                    let screen = ui.ctx().screen_rect();
-                    let bounds = egui::vec2(
-                        (screen.width() - 40.0).clamp(1.0, 400.0),
-                        (screen.height() - 80.0).clamp(1.0, 480.0),
-                    );
-                    let size = texture.size_vec2();
-                    let scale = (bounds.x / size.x).min(bounds.y / size.y);
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
-                } else if let Some(ready) = ready {
-                    ui.label(&ready.data.text);
-                } else {
-                    ui.spinner();
-                    ui.label("Loading page preview…");
-                }
-            },
-        );
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique(("pdf_strip_hover", &entry.path)),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            ui.label(format!("{} · Page {page}", entry.name));
+            if let Some(texture) = texture {
+                let screen = ui.ctx().content_rect();
+                let bounds = egui::vec2(
+                    (screen.width() - 40.0).clamp(1.0, 400.0),
+                    (screen.height() - 80.0).clamp(1.0, 480.0),
+                );
+                let size = texture.size_vec2();
+                let scale = (bounds.x / size.x).min(bounds.y / size.y);
+                ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+            } else if let Some(ready) = ready {
+                ui.label(&ready.data.text);
+            } else {
+                ui.spinner();
+                ui.label("Loading page preview…");
+            }
+        });
     }
 }
 

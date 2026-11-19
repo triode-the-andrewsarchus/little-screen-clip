@@ -72,13 +72,13 @@ impl AudioWorkspace {
         controls: impl FnOnce(&mut egui::Ui),
     ) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.recessed)
             .stroke(Stroke::new(1.0_f32, colors.panel))
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::CONTROL_ROW_INSET_Y,
-            ))
+            )))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(controls);
@@ -92,16 +92,16 @@ impl AudioWorkspace {
         contents: impl FnOnce(&mut egui::Ui),
     ) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.panel)
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32_alpha(&palette.harmonies.base, 100),
             ))
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::FOOTER_INSET_Y,
-            ))
+            )))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 contents(ui);
@@ -122,10 +122,10 @@ impl AudioWorkspace {
 
     fn section_title(ui: &mut egui::Ui, palette: &AppPalette, label: &str) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.panel)
-            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-            .inner_margin(egui::Margin::symmetric(crate::ui_ext::SPACE_SM, 0.0))
+            .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .inner_margin(egui::Margin::from(egui::vec2(crate::ui_ext::SPACE_SM, 0.0)))
             .show(ui, |ui| {
                 Self::inline_label(ui, &format!("{label}:"), colors.text_primary);
             });
@@ -134,10 +134,11 @@ impl AudioWorkspace {
     /// A readable label centered against the shared control row height.
     pub(super) fn inline_label(ui: &mut egui::Ui, label: &str, color: Color32) {
         let font = egui::TextStyle::Body.resolve(ui.style());
-        let width = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, color).size().x);
+        let width =
+            ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font, color).size().x);
         ui.add_sized(
             [width + 4.0, Self::BUTTON_HEIGHT],
-            egui::Label::new(egui::RichText::new(label).strong().color(color)).wrap(false),
+            egui::Label::new(egui::RichText::new(label).strong().color(color)).extend(),
         );
     }
 
@@ -166,9 +167,9 @@ impl AudioWorkspace {
     pub(super) fn show(ui: &mut egui::Ui, palette: &AppPalette, body: impl FnOnce(&mut egui::Ui)) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let rect = ui.available_rect_before_wrap();
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.painter()
-                .rect_filled(rect, Rounding::ZERO, colors.canvas);
+                .rect_filled(rect, CornerRadius::ZERO, colors.canvas);
             ui.add_space(crate::ui_ext::SPACE_SM);
             body(ui);
         });
@@ -323,7 +324,7 @@ impl AudioPreviewState {
                     crate::ui_ext::CONTROL_ICON_SIZE,
                     ui.visuals().text_color(),
                 );
-                ui.add(egui::Label::new(&message.text).truncate(true))
+                ui.add(egui::Label::new(&message.text).truncate())
                     .on_hover_text(&message.text);
             });
             ctx.request_repaint_after(Duration::from_secs_f64((4.5 - (now - started)).max(0.01)));
@@ -348,12 +349,12 @@ impl AudioPreviewState {
 
     pub(crate) fn render_audio_tool_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::FOOTER_INSET_Y,
-            ))
+            )))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 let stereo = self.is_stereo();
@@ -420,17 +421,19 @@ mod tests {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut button_rect = None;
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    AudioWorkspace::inline_label(ui, "Mode:", Color32::WHITE);
-                    button_rect = Some(
-                        ui.add(AudioWorkspace::toggle_button_icon(
-                            None, "Normal", true, &palette,
-                        ))
-                        .rect,
-                    );
-                });
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        AudioWorkspace::inline_label(ui, "Mode:", Color32::WHITE);
+                        button_rect = Some(
+                            ui.add(AudioWorkspace::toggle_button_icon(
+                                None, "Normal", true, &palette,
+                            ))
+                            .rect,
+                        );
+                    });
+                })
             });
         });
         let control = button_rect.expect("mode button should render");
@@ -455,15 +458,17 @@ mod tests {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut heights = Vec::new();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                for button in [
-                    clip_ui::buttons::ButtonRole::Primary.button("Play", &palette),
-                    clip_ui::buttons::ButtonRole::Secondary.button("Start", &palette),
-                    AudioWorkspace::toggle_button("Loop", true, &palette),
-                ] {
-                    heights.push(ui.add(button).rect.height());
-                }
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    for button in [
+                        clip_ui::buttons::ButtonRole::Primary.button("Play", &palette),
+                        clip_ui::buttons::ButtonRole::Secondary.button("Start", &palette),
+                        AudioWorkspace::toggle_button("Loop", true, &palette),
+                    ] {
+                        heights.push(ui.add(button).rect.height());
+                    }
+                })
             });
         });
 
@@ -489,14 +494,17 @@ mod tests {
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
             let host = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 180.0));
             let mut active_mode = AudioToolMode::Inspect;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(host),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        render_audio_tool_tabs(ui, &mut active_mode, &palette, stereo);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            render_audio_tool_tabs(ui, &mut active_mode, &palette, stereo);
+                        })
                     });
                 },
             );

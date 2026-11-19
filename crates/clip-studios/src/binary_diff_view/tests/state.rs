@@ -79,7 +79,8 @@ fn binary_diff_tab_shortcut_recomputes_raw_result() {
     let previous_generation = state.current_generation;
     let ctx = egui::Context::default();
     let mut close = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::Tab,
@@ -265,16 +266,19 @@ fn modified_s_does_not_swap_binary_diff_operands() {
     ] {
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
-                modifiers,
-                events: vec![egui::Event::Key {
-                    key: egui::Key::S,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                }],
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Key {
+                        key: egui::Key::S,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| state.handle_global_shortcuts(ctx, &mut close),
@@ -320,7 +324,8 @@ fn binary_diff_queue_saturation_is_visible_and_recovers() {
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
     let expected = "Binary diff failed: background job queue is full";
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -329,8 +334,10 @@ fn binary_diff_queue_saturation_is_visible_and_recovers() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
@@ -500,7 +507,8 @@ fn test_layout_fits_window() {
 
         let ctx = egui::Context::default();
         // Frame 1
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -509,17 +517,20 @@ fn test_layout_fits_window() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none())
-                    .show(ctx, |ui| {
-                        let mut close_req = false;
-                        state.render_ui(ui, ctx, &palette, &mut close_req);
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| {
+                            let mut close_req = false;
+                            state.render_ui(ui, ctx, &palette, &mut close_req);
+                        })
+                });
             },
         );
 
         // Frame 2
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -528,19 +539,21 @@ fn test_layout_fits_window() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none())
-                    .show(ctx, |ui| {
-                        let mut close_req = false;
-                        state.render_ui(ui, ctx, &palette, &mut close_req);
-                        println!("[TEST BPR={}] min_rect: {:?}", bpr, ui.min_rect());
-                        assert!(
-                            ui.min_rect().max.x <= 1180.5,
-                            "bpr={} overflows width: max.x={}",
-                            bpr,
-                            ui.min_rect().max.x
-                        );
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| {
+                            let mut close_req = false;
+                            state.render_ui(ui, ctx, &palette, &mut close_req);
+                            println!("[TEST BPR={}] min_rect: {:?}", bpr, ui.min_rect());
+                            assert!(
+                                ui.min_rect().max.x <= 1180.5,
+                                "bpr={} overflows width: max.x={}",
+                                bpr,
+                                ui.min_rect().max.x
+                            );
+                        })
+                });
             },
         );
     }
@@ -579,15 +592,18 @@ fn wide_rows_fit_without_horizontal_scrolling() {
     let mut output = None;
     for _ in 0..4 {
         time += 0.05;
-        output = Some(ctx.run(
+        output = Some(clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 time: Some(time),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         ));
@@ -656,14 +672,17 @@ fn alternating_row_bands_follow_row_positions() {
     let stripe = hex_to_c32_alpha(&palette.colors.text_muted, 4);
     let ctx = egui::Context::default();
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
-    let output = ctx.run(
+    let output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
@@ -680,7 +699,11 @@ fn alternating_row_bands_follow_row_positions() {
     bands.sort_by(|a, b| a.top().total_cmp(&b.top()));
     assert_eq!(bands.len(), 2, "only odd-numbered rows should be striped");
     assert!(bands[0].height() > 0.0);
-    assert!((bands[1].top() - bands[0].top() - 2.0 * bands[0].height()).abs() < 0.1);
+    assert!(
+        (bands[1].top() - bands[0].top() - 2.0 * bands[0].height()).abs()
+            <= 1.0 / ctx.pixels_per_point(),
+        "row bands should follow the snapped row geometry: {bands:?}"
+    );
 }
 
 #[test]
@@ -823,35 +846,41 @@ fn binary_diff_search_field_updates_matches_and_navigates_while_focused() {
 
     let ctx = egui::Context::default();
     crate::ui_ext::configure_workbench_style(&ctx);
-    let search_id = egui::Id::new("binary_diff_search_field");
+    let search_id = egui::Id::unique("binary_diff_search_field");
     ctx.memory_mut(|memory| memory.request_focus(search_id));
     let palette = AppPalette::default();
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
 
     let mut keyboard_focus_kept = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             events: vec![egui::Event::Text("ABC".to_string())],
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
-            keyboard_focus_kept = ctx.wants_keyboard_input();
+            keyboard_focus_kept = ctx.egui_wants_keyboard_input();
         },
     );
     assert!(keyboard_focus_kept);
@@ -900,26 +929,30 @@ fn focused_binary_diff_search_escape_clears_query_before_close() {
 
     let ctx = egui::Context::default();
     crate::ui_ext::configure_workbench_style(&ctx);
-    let search_id = egui::Id::new("binary_diff_search_field");
+    let search_id = egui::Id::unique("binary_diff_search_field");
     ctx.memory_mut(|memory| memory.request_focus(search_id));
     let palette = AppPalette::default();
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut false);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                })
             });
         },
     );
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
 
     let mut close_requested = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(screen_rect),
             events: vec![egui::Event::Key {
@@ -932,8 +965,10 @@ fn focused_binary_diff_search_escape_clears_query_before_close() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                })
             });
         },
     );
@@ -953,16 +988,19 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
     ) -> bool {
         let mut wants_keyboard_before_render = false;
         let palette = AppPalette::default();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                wants_keyboard_before_render = ctx.wants_keyboard_input();
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                wants_keyboard_before_render = ctx.egui_wants_keyboard_input();
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -998,7 +1036,7 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
 
     let ctx = egui::Context::default();
     crate::ui_ext::configure_workbench_style(&ctx);
-    let search_id = egui::Id::new("binary_diff_search_field");
+    let search_id = egui::Id::unique("binary_diff_search_field");
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
     ctx.memory_mut(|memory| memory.request_focus(search_id));
     let _ = render_frame(&mut state, &ctx, screen_rect, Vec::new());

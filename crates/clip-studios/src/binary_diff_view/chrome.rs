@@ -104,9 +104,9 @@ impl BinaryDiffViewState {
                 ));
         }
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
@@ -130,7 +130,7 @@ impl BinaryDiffViewState {
                                 res.mode,
                                 alignment_note
                             );
-                            ctx.output_mut(|o| o.copied_text = summary);
+                            ctx.copy_text(summary);
                             self.status_toast.set("Summary copied to clipboard!", now);
                         }
 
@@ -228,16 +228,16 @@ impl BinaryDiffViewState {
         let mut prev_search = false;
         let mut do_search = false;
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::SPACE_MD,
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
+            )))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let tabs = [
                         crate::ui_tabs::Tab::new(BinaryDiffMode::Aligned, "Aligned [Tab]"),
                         crate::ui_tabs::Tab::new(BinaryDiffMode::Raw, "Raw"),
@@ -320,7 +320,11 @@ impl BinaryDiffViewState {
                         palette,
                     );
 
-                    // Right side of bar: Search & Diff nav
+                    // Keep the search field reachable when the status pills fill the row.
+                    let nav_width = if search_len > 0 { 465.0 } else { 365.0 };
+                    if ui.available_width() < nav_width {
+                        ui.end_row();
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let next_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                             Some(Icon::ArrowDown),
@@ -378,7 +382,7 @@ impl BinaryDiffViewState {
                         let search_edit = ui.add_sized(
                             [180.0, crate::ui_ext::CONTROL_HEIGHT],
                             egui::TextEdit::singleline(&mut self.search_query)
-                                .id(egui::Id::new("binary_diff_search_field"))
+                                .id(egui::Id::unique("binary_diff_search_field"))
                                 .hint_text("Search Hex / ASCII..."),
                         );
                         if search_edit.changed() {

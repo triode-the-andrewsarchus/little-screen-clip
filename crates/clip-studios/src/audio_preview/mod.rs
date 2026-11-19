@@ -5,7 +5,7 @@
 
 use crate::shell::{CommonShortcut, EscapeHatch, ShortcutDispatcher, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
-use egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::audio::{
     AudioAnalysisProgress, AudioFilterChain, AudioMetadata, AudioRegionEdit,
     DEFAULT_TRANSIENT_SENSITIVITY, FullAudioAnalysis, MAX_TRANSIENT_SENSITIVITY,
@@ -556,7 +556,7 @@ impl InlineAudioWaveform {
         let canvas = hex_to_c32(&palette.colors.surface_recessed);
         let accent = hex_to_c32(&palette.harmonies.base);
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, Rounding::same(4.0), canvas);
+        painter.rect_filled(rect, CornerRadius::same(4), canvas);
 
         let frames = self.source_analysis.total_frames;
         if frames == 0 {

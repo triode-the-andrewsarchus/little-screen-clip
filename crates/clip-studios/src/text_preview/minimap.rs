@@ -207,7 +207,7 @@ pub(super) fn render_code_minimap(
     let painter = ui.painter();
     painter.rect_filled(
         map_rect,
-        Rounding::same(3.0),
+        CornerRadius::same(3),
         hex_to_c32(&palette.colors.surface_panel),
     );
 
@@ -243,7 +243,7 @@ pub(super) fn render_code_minimap(
                     egui::pos2(x_start, row_top),
                     egui::pos2(x_end, row_bottom),
                 ),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 map_syntect_color_to_theme(segment.color, palette),
             );
         }
@@ -259,13 +259,14 @@ pub(super) fn render_code_minimap(
     );
     painter.rect_filled(
         view_rect,
-        Rounding::ZERO,
+        CornerRadius::ZERO,
         hex_to_c32_alpha(&palette.harmonies.base, 45),
     );
     painter.rect_stroke(
         view_rect,
-        Rounding::ZERO,
+        CornerRadius::ZERO,
         Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
+        egui::StrokeKind::Middle,
     );
 
     response

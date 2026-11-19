@@ -249,7 +249,7 @@ impl Settings {
                 ui.separator();
                 ui.collapsing("Excluded search paths", |ui| {
                     ui.small("One exact absolute file or folder address per line. A folder excludes its descendants. Use the resolved address from the browser; no glob syntax. Source files are unchanged.");
-                    ui.add(egui::TextEdit::multiline(&mut self.exclusions).id_source("search_excluded_paths").desired_rows(3).desired_width(f32::INFINITY));
+                    ui.add(egui::TextEdit::multiline(&mut self.exclusions).id_salt("search_excluded_paths").desired_rows(3).desired_width(f32::INFINITY));
                     ui.small("Apply with Save preferences above. Protected exclusions cannot be removed.");
                 });
                 ui.separator();
@@ -272,8 +272,8 @@ impl Settings {
                 }
                 ui.collapsing("Index storage limits", |ui| {
                     ui.small("Soft limits for the database, WAL and pending writes. Model weights are separate. Reaching a limit pauses indexing and preserves existing data.");
-                    ui.horizontal(|ui| { ui.label("MiB"); ui.add(egui::DragValue::new(&mut self.draft.limits.max_mib).clamp_range(16..=1_048_576)); });
-                    ui.horizontal(|ui| { ui.label("Vectors"); ui.add(egui::DragValue::new(&mut self.draft.limits.max_vectors).clamp_range(1..=100_000_000)); });
+                    ui.horizontal(|ui| { ui.label("MiB"); ui.add(egui::DragValue::new(&mut self.draft.limits.max_mib).range(16..=1_048_576)); });
+                    ui.horizontal(|ui| { ui.label("Vectors"); ui.add(egui::DragValue::new(&mut self.draft.limits.max_vectors).range(1..=100_000_000)); });
                 });
                 ui.collapsing("Index maintenance", |ui| {
                     command = self.maintenance_ui(ui, busy, has_index, outcome, palette).or(command.take());
@@ -365,7 +365,7 @@ mod tests {
                 paused,
                 ..Default::default()
             };
-            let _ = context.run(Default::default(), |context| {
+            let _ = clip_ui::test_support::run_frame(&context, Default::default(), |context| {
                 settings.show(context, &busy, &AppPalette::default());
             });
             assert!(settings.maintenance_pending);
@@ -373,7 +373,7 @@ mod tests {
                 paused,
                 ..Default::default()
             };
-            let _ = context.run(Default::default(), |context| {
+            let _ = clip_ui::test_support::run_frame(&context, Default::default(), |context| {
                 settings.show(context, &completed, &AppPalette::default());
             });
             assert!(!settings.maintenance_pending);

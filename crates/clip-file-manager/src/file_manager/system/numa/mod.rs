@@ -776,7 +776,8 @@ mod rendering_tests {
             let palette = AppPalette::for_appearance(appearance);
             let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
             let context = egui::Context::default();
-            let output = context.run(
+            let output = clip_ui::test_support::run_frame(
+                &context,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -785,8 +786,10 @@ mod rendering_tests {
                     ..Default::default()
                 },
                 |context| {
-                    egui::CentralPanel::default().show(context, |ui| {
-                        paint(ui, rect, &data, colors, &palette);
+                    context.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            paint(ui, rect, &data, colors, &palette);
+                        })
                     });
                 },
             );

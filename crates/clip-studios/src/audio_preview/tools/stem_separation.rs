@@ -336,8 +336,13 @@ impl AudioPreviewState {
         } else {
             hex_to_c32(&palette.harmonies.base)
         };
-        painter.rect_filled(rect, Rounding::same(4.0), bg);
-        painter.rect_stroke(rect, Rounding::same(4.0), Stroke::new(1.0_f32, accent));
+        painter.rect_filled(rect, CornerRadius::same(4), bg);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(4),
+            Stroke::new(1.0_f32, accent),
+            egui::StrokeKind::Middle,
+        );
         let Some(preview) = preview else {
             painter.text(
                 rect.center(),
@@ -424,7 +429,7 @@ impl AudioPreviewState {
 
         let viewport_height = ui.available_height();
         egui::ScrollArea::vertical()
-            .id_source("stem_tool_scroll")
+            .id_salt("stem_tool_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -477,10 +482,10 @@ impl AudioPreviewState {
                 ui.add_space(5.0);
                 if self.stem_separation.stems.is_empty() {
                     for name in ["VOCALS", "DRUMS", "BASS", "OTHER"] {
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(hex_to_c32(&palette.colors.surface_panel))
-                            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
-                            .rounding(Rounding::same(5.0))
+                            .inner_margin(egui::Margin::symmetric(10, 5))
+                            .corner_radius(CornerRadius::same(5))
                             .show(ui, |ui| {
                                 ui.label(egui::RichText::new(name).strong());
                                 let _ = Self::render_stem_waveform(
@@ -543,13 +548,13 @@ impl AudioPreviewState {
                     for (index, stem) in self.stem_separation.stems.iter_mut().enumerate() {
                         let selected_now = self.stem_separation.selected_stem == index;
                         let effectively_muted = !stem_is_audible(index, stem.muted, solo_stem);
-                        egui::Frame::none()
+                        egui::Frame::NONE
                             .fill(if selected_now {
                                 hex_to_c32_alpha(&palette.harmonies.base, 18)
                             } else {
                                 hex_to_c32(&palette.colors.surface_panel)
                             })
-                            .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                            .inner_margin(egui::Margin::symmetric(10, 4))
                             .stroke(Stroke::new(
                                 if selected_now { 2.0_f32 } else { 1.0_f32 },
                                 if selected_now {
@@ -558,7 +563,7 @@ impl AudioPreviewState {
                                     hex_to_c32(&palette.colors.surface_panel)
                                 },
                             ))
-                            .rounding(Rounding::same(5.0))
+                            .corner_radius(CornerRadius::same(5))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     if ui
@@ -1025,10 +1030,11 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
                 Vec::new(),
                 vec![
                     egui::Event::PointerMoved(Pos2::new(30.0, 30.0)),
-                    egui::Event::Scroll(Vec2::new(0.0, -100.0)),
+                    clip_ui::test_support::scroll(Vec2::new(0.0, -100.0)),
                 ],
             ] {
-                let _ = ctx.run(
+                let _ = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
@@ -1038,16 +1044,19 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            scroll_id = ui.make_persistent_id(egui::Id::new("stem_tool_scroll"));
-                            state.render_stem_separation_ui(ui, ctx, &palette, &mut false);
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                scroll_id = ui.make_persistent_id("stem_tool_scroll");
+                                state.render_stem_separation_ui(ui, ctx, &palette, &mut false);
+                            })
                         });
                     },
                 );
             }
             let scroll = egui::scroll_area::State::load(&ctx, scroll_id).unwrap();
             assert_eq!(
-                scroll.offset.y, 0.0,
+                scroll.clamped_offset().y,
+                0.0,
                 "completed stems overflow a {height}-point viewport"
             );
         }
@@ -1093,18 +1102,21 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let starts = std::cell::Cell::new(0);
         let render = |state: &mut AudioPreviewState, events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui_with_start(ui, ctx, &palette, &mut false, |state| {
-                            starts.set(starts.get() + 1);
-                            state.stem_separation.in_progress = true;
-                        });
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ui_with_start(ui, ctx, &palette, &mut false, |state| {
+                                starts.set(starts.get() + 1);
+                                state.stem_separation.in_progress = true;
+                            });
+                        })
                     });
                 },
             )
@@ -1217,15 +1229,18 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut close = false;
         let mut render = |events| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui(ui, ctx, &palette, &mut close);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut close);
+                        })
                     });
                 },
             )
@@ -1346,7 +1361,8 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut close = false;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1362,8 +1378,10 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    })
                 });
             },
         );

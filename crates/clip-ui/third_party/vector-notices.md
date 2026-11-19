@@ -7,8 +7,8 @@ The library is unmodified. Its default image-loading and text-layout features
 are disabled; the application already owns bounded image admission and native
 drawing glyph outlines. No example font or artwork is imported.
 
-The shared UI runtime uses this dependency with the existing egui 0.27 / eframe
-OpenGL renderer. The private desktop probe validates native vector drawing,
+The shared UI runtime uses this dependency with eframe 0.37
+and its Glow renderer. The private desktop probe validates native vector drawing,
 ordinary egui painting after the callback, zoom/pan, resize and resource cleanup
 on the same context. Context ownership stays with each desktop application.
 There is no separate windowing or browser engine dependency in the renderer.

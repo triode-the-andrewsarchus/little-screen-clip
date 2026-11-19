@@ -476,7 +476,7 @@ impl ImagePreviewState {
                     img_rect.min,
                     Pos2::new(img_rect.max.x, crop_screen_rect.min.y),
                 ),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 mask_col,
             );
         }
@@ -486,7 +486,7 @@ impl ImagePreviewState {
                     Pos2::new(img_rect.min.x, crop_screen_rect.max.y),
                     img_rect.max,
                 ),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 mask_col,
             );
         }
@@ -496,7 +496,7 @@ impl ImagePreviewState {
                     Pos2::new(img_rect.min.x, crop_screen_rect.min.y),
                     Pos2::new(crop_screen_rect.min.x, crop_screen_rect.max.y),
                 ),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 mask_col,
             );
         }
@@ -506,7 +506,7 @@ impl ImagePreviewState {
                     Pos2::new(crop_screen_rect.max.x, crop_screen_rect.min.y),
                     Pos2::new(img_rect.max.x, crop_screen_rect.max.y),
                 ),
-                Rounding::ZERO,
+                CornerRadius::ZERO,
                 mask_col,
             );
         }
@@ -562,8 +562,9 @@ impl ImagePreviewState {
         // 3. Crisp Crop Outline
         painter.rect_stroke(
             crop_screen_rect,
-            Rounding::ZERO,
+            CornerRadius::ZERO,
             Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+            egui::StrokeKind::Middle,
         );
 
         // 4. Handles definitions & drawing
@@ -615,13 +616,14 @@ impl ImagePreviewState {
             let handle_rect = Rect::from_center_size(*pos, Vec2::splat(handle_radius * 2.0));
             painter.rect_filled(
                 handle_rect,
-                Rounding::same(1.0),
+                CornerRadius::same(1),
                 hex_to_c32(&palette.harmonies.base),
             );
             painter.rect_stroke(
                 handle_rect,
-                Rounding::same(1.0),
+                CornerRadius::same(1),
                 Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+                egui::StrokeKind::Middle,
             );
         }
 
@@ -650,11 +652,12 @@ impl ImagePreviewState {
             badge_text_col,
         );
         let badge_rect = Rect::from_center_size(badge_pos, galley.size() + Vec2::new(12.0, 4.0));
-        painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
+        painter.rect_filled(badge_rect, CornerRadius::same(4), b_low);
         painter.rect_stroke(
             badge_rect,
-            Rounding::same(4.0),
+            CornerRadius::same(4),
             Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
+            egui::StrokeKind::Middle,
         );
         painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, badge_text_col);
 

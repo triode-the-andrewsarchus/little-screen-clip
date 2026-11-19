@@ -24,7 +24,8 @@ fn notebook_view_omits_pdf_tools_and_ignores_their_shortcuts_in_both_themes() {
                 },
             })
             .collect();
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -34,8 +35,10 @@ fn notebook_view_omits_pdf_tools_and_ignores_their_shortcuts_in_both_themes() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut false));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut false))
+                });
             },
         );
         let labels = output
@@ -112,18 +115,21 @@ fn pdf_sibling_panes_stay_inside_compact_and_wide_hosts() {
             let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
             let mut panes = Vec::new();
             let mut pane_width_budget = 0.0;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(host),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        pane_width_budget = ui.available_width()
-                            - 24.0
-                            - (ui.spacing().item_spacing.x * 2.0 + 1.0)
-                                * if right.is_some() { 2.0 } else { 1.0 };
-                        state.render_ui(ui, ctx, &palette, &mut false);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            pane_width_budget = ui.available_width()
+                                - 24.0
+                                - (ui.spacing().item_spacing.x * 2.0 + 1.0)
+                                    * if right.is_some() { 2.0 } else { 1.0 };
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        })
                     });
                 },
             );
@@ -178,21 +184,24 @@ fn selected_pdf_page_preview_stays_inside_compact_and_wide_panes() {
         }
         let texture = ctx.load_texture(
             "pdf-preview-fit-test",
-            egui::ColorImage::new([16, 16], egui::Color32::WHITE),
+            egui::ColorImage::filled([16, 16], egui::Color32::WHITE),
             egui::TextureOptions::LINEAR,
         );
         let texture_id = texture.id();
         state.pages[0].texture = Some(texture);
 
         let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(host),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    })
                 });
             },
         );
@@ -215,7 +224,7 @@ fn selected_pdf_page_preview_stays_inside_compact_and_wide_panes() {
             .shapes
             .iter()
             .filter_map(|clipped| match &clipped.shape {
-                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
+                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id() == texture_id => {
                     Some(rect.rect)
                 }
                 egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture_id => Some(
@@ -246,7 +255,8 @@ fn zoom_detail_replaces_texture_without_blanking_or_resampling_pdf_text() {
     let (source, raster) = gallery_pdf_page_source().unwrap();
     let mut state = PdfEditorState::from_shared_page_raster(source, raster);
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             max_texture_side: Some(4096),
             ..Default::default()
@@ -362,7 +372,8 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
     let mut frame = |view: &mut PdfPageViewport, events| {
         time += 0.05;
         let mut rect = egui::Rect::NOTHING;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -373,8 +384,10 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    rect = view.show(ui, texture.id(), (200, 400)).rect;
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        rect = view.show(ui, texture.id(), (200, 400)).rect;
+                    })
                 });
             },
         );
@@ -387,7 +400,7 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
         &mut view,
         vec![
             egui::Event::PointerMoved(center),
-            egui::Event::Scroll(egui::vec2(0.0, 200.0)),
+            clip_ui::test_support::scroll(egui::vec2(0.0, 200.0)),
         ],
     );
     assert!(view.zoom > 1.0 && view.zoom < 2.0);
@@ -432,14 +445,14 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
         &mut view,
         vec![
             egui::Event::PointerMoved(pointer),
-            egui::Event::Scroll(egui::vec2(0.0, 100.0)),
+            clip_ui::test_support::scroll(egui::vec2(0.0, 100.0)),
         ],
     );
     let after = view.page_rect(rect, (200, 400));
     assert!(((pointer - after.min) / after.size() - source_point).length() < 0.0001);
     frame(
         &mut view,
-        vec![egui::Event::Scroll(egui::vec2(0.0, -2000.0))],
+        vec![clip_ui::test_support::scroll(egui::vec2(0.0, -2000.0))],
     );
     assert_eq!(view.zoom, 0.25);
     assert_eq!(view.pan, Vec2::ZERO);
@@ -482,9 +495,11 @@ fn accepted_pdf_edits_block_header_escape_and_viewport_close_until_completion() 
             },
             ..Default::default()
         };
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default()
-                .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+        let output = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default()
+                    .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut close))
+            });
         });
         assert!(!close, "accepted edit lost on escape={escape}");
         assert!(
@@ -500,9 +515,11 @@ fn accepted_pdf_edits_block_header_escape_and_viewport_close_until_completion() 
                 result: Err("controlled PDF failure".into()),
             }))
             .unwrap();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default()
-                .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default()
+                    .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut close))
+            });
         });
         assert!(!state.file_write_pending());
         assert!(

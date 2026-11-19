@@ -252,12 +252,12 @@ impl Viewer {
 
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.details(ui, palette);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.toolbar(ui, palette);
 
@@ -480,7 +480,7 @@ impl Viewer {
                 ("Hillshade", BasemapStyle::Hillshade),
             ] {
                 let enabled = style == BasemapStyle::Natural || terrain_available;
-                let button = egui::SelectableLabel::new(self.style == style, label);
+                let button = egui::Button::selectable(self.style == style, label);
                 if ui
                     .add_enabled(enabled, button)
                     .on_disabled_hover_text(
@@ -557,9 +557,9 @@ impl Viewer {
         {
             return;
         }
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if let Some(pack) = self.downloader.active {
@@ -822,7 +822,7 @@ impl Viewer {
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut chosen = None;
         egui::ScrollArea::vertical()
-            .id_source("geography-features")
+            .id_salt("geography-features")
             .max_height((ui.available_height() * 0.3).max(height))
             .min_scrolled_height(0.0)
             .show_rows(ui, height, self.document.features.len(), |ui, rows| {
@@ -845,7 +845,7 @@ impl Viewer {
         }
         ui.separator();
         egui::ScrollArea::vertical()
-            .id_source("geography-details")
+            .id_salt("geography-details")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -881,7 +881,7 @@ impl Viewer {
                     }
                     radiation::show_reading(ui, &sample.point);
                     if !sample.point.time.is_empty() {
-                        ui.add(egui::Label::new(&sample.point.time).wrap(true));
+                        ui.add(egui::Label::new(&sample.point.time).wrap());
                     }
                     ui.label(format!(
                         "Along feature {}",
@@ -890,10 +890,10 @@ impl Viewer {
                 }
                 for (name, value) in &feature.properties {
                     ui.strong(name);
-                    ui.add(egui::Label::new(value).wrap(true));
+                    ui.add(egui::Label::new(value).wrap());
                 }
                 for note in &self.document.notes {
-                    ui.add(egui::Label::new(note).wrap(true));
+                    ui.add(egui::Label::new(note).wrap());
                 }
             });
     }
@@ -937,7 +937,7 @@ fn paint_cities(
         } else {
             12.0
         };
-        let galley = ui.fonts(|f| {
+        let galley = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 city.name.clone(),
                 egui::FontId::proportional(font_size),
@@ -990,7 +990,7 @@ fn paint_scale_and_contour_overlay(
             units.elevation_range(local_elev_range[0] as f64, local_elev_range[1] as f64)
         ));
     }
-    let galley = ui.fonts(|f| {
+    let galley = ui.fonts_mut(|f| {
         f.layout_no_wrap(
             text,
             egui::FontId::proportional(11.5),
@@ -1103,7 +1103,13 @@ fn paint_strip_map(
 }
 
 fn show_position(ui: &egui::Ui, name: &str, sample: &Sample) {
-    egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("geographic-position"), |ui| {
+    egui::Tooltip::always_open(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        egui::Id::unique("geographic-position"),
+        egui::PopupAnchor::Pointer,
+    )
+    .show(|ui| {
         ui.label(name);
         ui.label(format!("{:.6}, {:.6}", sample.point.lat, sample.point.lon));
         radiation::show_reading(ui, &sample.point);
@@ -1275,24 +1281,27 @@ mod tests {
         let scale = radiation::DoseScale([0.06, 0.17]);
         for mode in [ProjectionMode::Map2D, ProjectionMode::Globe3D] {
             viewer.camera.mode = mode;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(rect),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        viewer.overlay.paint_copy(
-                            ui.painter(),
-                            overlay::Projection {
-                                camera: &viewer.camera,
-                                rect,
-                                offset: 0.0,
-                            },
-                            Some(0),
-                            colors,
-                            None,
-                        );
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            viewer.overlay.paint_copy(
+                                ui.painter(),
+                                overlay::Projection {
+                                    camera: &viewer.camera,
+                                    rect,
+                                    offset: 0.0,
+                                },
+                                Some(0),
+                                colors,
+                                None,
+                            );
+                        })
                     });
                 },
             );
@@ -1301,7 +1310,7 @@ mod tests {
                 .iter()
                 .position(|shape| {
                     matches!(&shape.shape,
-                        egui::Shape::Path(path) if path.stroke.color == egui::Color32::BLACK
+                        egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(egui::Color32::BLACK)
                             && path.stroke.width > 4.5 && path.points.len() == 4
                     )
                 })
@@ -1311,7 +1320,7 @@ mod tests {
                     output.shapes[outline_index + 1..]
                         .iter()
                         .any(|shape| matches!(&shape.shape,
-                            egui::Shape::Path(path) if path.stroke.color == scale.color(rate)
+                            egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(scale.color(rate))
                         )),
                     "Missing dose color for {rate} in {mode:?}"
                 );

@@ -127,9 +127,11 @@ fn inline_waveform_and_audio_views_share_analysis_but_keep_view_state_independen
     assert_eq!(inline.source_analysis.total_frames, 256);
     let palette = AppPalette::default();
     let context = egui::Context::default();
-    let _ = context.run(Default::default(), |context| {
-        egui::CentralPanel::default().show(context, |ui| {
-            inline.render(ui, &palette);
+    let _ = clip_ui::test_support::run_frame(&context, Default::default(), |context| {
+        context.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                inline.render(ui, &palette);
+            })
         });
     });
     for view in [&first, &second] {
@@ -775,14 +777,17 @@ fn audio_image_copies_publish_captured_png_and_surface_clipboard_failures() {
         );
         let ctx = egui::Context::default();
         let mut close = false;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![super::key_press_event(egui::Key::Escape)],
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &AppPalette::default(), &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(ui, ctx, &AppPalette::default(), &mut close);
+                    })
                 });
             },
         );

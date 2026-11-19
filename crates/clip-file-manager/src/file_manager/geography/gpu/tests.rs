@@ -164,7 +164,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             384,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
-            glow::PixelPackData::Slice(&mut pixels),
+            glow::PixelPackData::Slice(Some(&mut pixels)),
         );
         assert!(
             pixels
@@ -218,7 +218,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             1,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
-            glow::PixelPackData::Slice(&mut detail_pixel),
+            glow::PixelPackData::Slice(Some(&mut detail_pixel)),
         );
         assert!(
             (35..45).contains(&detail_pixel[0]) && (65..76).contains(&detail_pixel[1]),
@@ -236,7 +236,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
             1,
             glow::RGBA,
             glow::UNSIGNED_BYTE,
-            glow::PixelPackData::Slice(&mut detail_pixel),
+            glow::PixelPackData::Slice(Some(&mut detail_pixel)),
         );
         assert_eq!(detail_pixel, [0, 0, 0, 255]);
         assert_eq!(
@@ -286,7 +286,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
                 1,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(&mut detail_pixel),
+                glow::PixelPackData::Slice(Some(&mut detail_pixel)),
             );
             assert_eq!(
                 detail_pixel,

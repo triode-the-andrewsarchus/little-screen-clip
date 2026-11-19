@@ -70,7 +70,7 @@ impl BinaryDiffViewState {
 
         let rem_h = ui.available_height();
         let mut scroll_area = egui::ScrollArea::vertical()
-            .id_source("binary_diff_hex_scroll")
+            .id_salt("binary_diff_hex_scroll")
             .auto_shrink([false, false])
             .max_height(rem_h)
             // Width is fitted by `layout_metrics`; the minimap remains the vertical navigator.
@@ -123,12 +123,12 @@ impl BinaryDiffViewState {
                     Vec2::new(row_rect.width(), row_height),
                 );
                 ui.painter()
-                    .rect_filled(actual_row_rect, Rounding::ZERO, bg_color);
+                    .rect_filled(actual_row_rect, CornerRadius::ZERO, bg_color);
 
                 if is_selected_diff {
                     ui.painter().rect_filled(
                         egui::Rect::from_min_size(actual_row_rect.min, Vec2::new(3.5, row_height)),
-                        Rounding::ZERO,
+                        CornerRadius::ZERO,
                         hex_to_c32(&palette.harmonies.base),
                     );
                     ui.painter().line_segment(
@@ -185,7 +185,7 @@ impl BinaryDiffViewState {
 
                         if let Some(pill) = pill_bg {
                             ui.painter()
-                                .rect_filled(rect.expand(0.5), Rounding::same(2.0), pill);
+                                .rect_filled(rect.expand(0.5), CornerRadius::same(2), pill);
                         }
 
                         ui.painter().text(
@@ -199,8 +199,9 @@ impl BinaryDiffViewState {
                         if is_cell_hovered {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
-                                Rounding::same(2.0),
+                                CornerRadius::same(2),
                                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+                                egui::StrokeKind::Middle,
                             );
                         }
 
@@ -232,8 +233,9 @@ impl BinaryDiffViewState {
                         if is_cell_hovered {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
-                                Rounding::same(2.0),
+                                CornerRadius::same(2),
                                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+                                egui::StrokeKind::Middle,
                             );
                         }
 
@@ -281,7 +283,7 @@ impl BinaryDiffViewState {
 
                         if let Some(pill) = pill_bg {
                             ui.painter()
-                                .rect_filled(rect.expand(0.5), Rounding::same(2.0), pill);
+                                .rect_filled(rect.expand(0.5), CornerRadius::same(2), pill);
                         }
 
                         ui.painter().text(
@@ -295,8 +297,9 @@ impl BinaryDiffViewState {
                         if is_cell_hovered {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
-                                Rounding::same(2.0),
+                                CornerRadius::same(2),
                                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+                                egui::StrokeKind::Middle,
                             );
                         }
 
@@ -328,8 +331,9 @@ impl BinaryDiffViewState {
                         if is_cell_hovered {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
-                                Rounding::same(2.0),
+                                CornerRadius::same(2),
                                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+                                egui::StrokeKind::Middle,
                             );
                         }
 
@@ -359,7 +363,7 @@ impl BinaryDiffViewState {
             }
         });
 
-        self.current_scroll_offset_y = output.state.offset.y;
+        self.current_scroll_offset_y = output.state.clamped_offset().y;
         self.visible_row_count = (output.inner_rect.height() / row_height) as usize;
         self.hovered_cell = hovered;
     }

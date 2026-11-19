@@ -133,7 +133,7 @@ mod tests {
         };
         let old_texture = ctx.load_texture(
             "old-spectrum",
-            egui::ColorImage::new([2, 2], Color32::GREEN),
+            egui::ColorImage::filled([2, 2], Color32::GREEN),
             egui::TextureOptions::LINEAR,
         );
         let mut spectra = ChannelSpectra {
@@ -158,7 +158,10 @@ mod tests {
         );
         sender
             .send(Ok(Some(vec![
-                egui::ColorImage::new([2, 2], Color32::BLUE);
+                egui::ColorImage::filled(
+                    [2, 2],
+                    Color32::BLUE
+                );
                 4
             ])))
             .unwrap();

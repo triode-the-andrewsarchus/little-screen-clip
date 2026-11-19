@@ -50,10 +50,10 @@ pub(super) fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
 }
 
 pub(super) fn chip_badge(ui: &mut egui::Ui, text: &str, text_col: Color32, bg_col: Color32) {
-    let frame = egui::Frame::none()
+    let frame = egui::Frame::NONE
         .fill(bg_col)
-        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-        .inner_margin(egui::Margin::symmetric(6.0, 2.0));
+        .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
+        .inner_margin(egui::Margin::symmetric(6, 2));
     frame.show(ui, |ui| {
         ui.label(
             egui::RichText::new(text)
@@ -73,7 +73,7 @@ pub(super) fn draw_checkerboard(
 ) {
     let cell_size = 16.0;
 
-    painter.rect_filled(rect, Rounding::ZERO, dark_col);
+    painter.rect_filled(rect, CornerRadius::ZERO, dark_col);
 
     let min_x = rect.min.x;
     let max_x = rect.max.x;
@@ -92,7 +92,7 @@ pub(super) fn draw_checkerboard(
                 let y1 = (min_y + (r + 1) as f32 * cell_size).min(max_y);
                 painter.rect_filled(
                     Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1)),
-                    Rounding::ZERO,
+                    CornerRadius::ZERO,
                     light_col,
                 );
             }

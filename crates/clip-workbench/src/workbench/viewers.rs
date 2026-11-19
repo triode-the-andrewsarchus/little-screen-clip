@@ -22,7 +22,8 @@ impl WorkbenchApp {
                 .is_some_and(|s| s.selected_region.is_some())
     }
 
-    pub(crate) fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
+    pub(crate) fn render_modal_viewers(&mut self, root: &mut egui::Ui) -> bool {
+        let ctx = &root.ctx().clone();
         self.retire_hidden_rolling_audio();
         if self.render_prompt_modal(ctx) {
             return true;
@@ -36,7 +37,7 @@ impl WorkbenchApp {
                 || self.midi_load_job.is_some()
             {
                 let mut cancel = false;
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(if self.image_load_job.is_some() {
@@ -69,17 +70,17 @@ impl WorkbenchApp {
         let mut gallery_open_request = None;
         match viewer {
             ViewerSession::Diff(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
             ViewerSession::BinaryDiff(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
             ViewerSession::Audio(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
                 if close {
@@ -87,7 +88,7 @@ impl WorkbenchApp {
                 }
             }
             ViewerSession::ImageLoading(_) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Loading image…");
@@ -100,23 +101,23 @@ impl WorkbenchApp {
                 ctx.request_repaint_after(Duration::from_millis(40));
             }
             ViewerSession::Image(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
             ViewerSession::Spreadsheet(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
             ViewerSession::Pdf(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
                 pdf_dirty = close && state.dirty;
             }
             ViewerSession::Midi(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, &self.ui_palette, &mut close);
                 });
                 if close {
@@ -124,18 +125,18 @@ impl WorkbenchApp {
                 }
             }
             ViewerSession::Model3d(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, &self.ui_palette, &mut close);
                 });
             }
             ViewerSession::Splat(state) => {
-                show_viewer_panel(ctx, |ui| state.render_ui(ui, &self.ui_palette, &mut close));
+                show_viewer_panel(root, |ui| state.render_ui(ui, &self.ui_palette, &mut close));
             }
             ViewerSession::TextEditor(state) => {
-                show_viewer_panel(ctx, |ui| state.ui(ui, &self.ui_palette, &mut close));
+                show_viewer_panel(root, |ui| state.ui(ui, &self.ui_palette, &mut close));
             }
             ViewerSession::Text(state) => {
-                show_viewer_panel(ctx, |ui| {
+                show_viewer_panel(root, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
@@ -143,7 +144,7 @@ impl WorkbenchApp {
                 if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                     close = true;
                 } else {
-                    show_viewer_panel(ctx, |ui| {
+                    show_viewer_panel(root, |ui| {
                         state.render_ui(ui, &self.ui_palette, &mut close);
                     });
                     gallery_open_request = state.take_pending_open();
@@ -167,7 +168,7 @@ impl WorkbenchApp {
                     || message.starts_with("Text preview failed:")
             })
         {
-            egui::Area::new(egui::Id::new("image_load_status"))
+            egui::Area::new(egui::Id::unique("image_load_status"))
                 .order(egui::Order::Foreground)
                 .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
                 .show(ctx, |ui| {
@@ -242,14 +243,16 @@ impl WorkbenchApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .fixed_size([500.0, 180.0])
                 .frame(
-                    egui::Frame::window(&ctx.style())
+                    egui::Frame::window(&ctx.global_style())
                         .fill(modal_bg)
                         .stroke(egui::Stroke::new(1.5_f32, modal_stroke))
-                        .rounding(crate::ui_ext::CARD_CORNER_RADIUS)
-                        .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
+                        .corner_radius(crate::ui_ext::CARD_CORNER_RADIUS)
+                        .inner_margin(egui::Margin::symmetric(22, 18)),
                 )
                 .show(ctx, |ui| {
-                    ui.set_enabled(!pending);
+                    if pending {
+                        ui.disable();
+                    }
                     ui.horizontal(|ui| {
                         Icon::Sparkles.ui(
                             ui,

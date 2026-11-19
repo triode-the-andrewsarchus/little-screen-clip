@@ -135,7 +135,7 @@ impl Previews {
         let response = ui
             .interact(
                 enter,
-                ui.id().with(("enter-container", &entry.path)),
+                ui.scope_id().with(("enter-container", &entry.path)),
                 Sense::click_and_drag(),
             )
             .on_hover_text("Open folder");
@@ -206,8 +206,8 @@ impl Previews {
         );
         let mut tiles = Vec::new();
         self.tiles(entry, hidden, 0, &mut tiles);
-        ui.allocate_ui_at_rect(Rect::from_min_max(body.min + vec2(0.0, 10.0), body.max), |ui| {
-            egui::ScrollArea::horizontal().id_source(("container-cards", &entry.path)).auto_shrink([false, false]).show(ui, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_min_max(body.min + vec2(0.0, 10.0), body.max)), |ui| {
+            egui::ScrollArea::horizontal().id_salt(("container-cards", &entry.path)).auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
                 ui.horizontal_centered(|ui| {
                     for tile in &tiles {
@@ -273,6 +273,7 @@ fn card(
             rect,
             3.0,
             egui::Stroke::new(1.0_f32, colors.accent.gamma_multiply(0.25)),
+            egui::StrokeKind::Middle,
         );
     }
     let ready = if ui.clip_rect().intersects(rect) {

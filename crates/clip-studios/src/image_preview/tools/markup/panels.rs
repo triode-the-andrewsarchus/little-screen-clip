@@ -74,14 +74,14 @@ impl ImagePreviewState {
                         let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), egui::Sense::click());
 
                         // Swatch background
-                        ui.painter().rect_filled(rect, Rounding::same(4.0), *col);
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), *col);
                         // Swatch border
                         let border_stroke = if is_active {
                             Stroke::new(2.5_f32, base_accent)
                         } else {
                             Stroke::new(1.0_f32, b_med)
                         };
-                        ui.painter().rect_stroke(rect, Rounding::same(4.0), border_stroke);
+                        ui.painter().rect_stroke(rect, CornerRadius::same(4), border_stroke, egui::StrokeKind::Middle);
 
                         if resp.on_hover_text(*name).clicked() {
                             self.markup_state.active_color = *col;
@@ -323,7 +323,7 @@ impl ImagePreviewState {
                                 b_low
                             };
 
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(row_bg)
                                 .stroke(Stroke::new(
                                     1.0_f32,
@@ -333,10 +333,8 @@ impl ImagePreviewState {
                                         b_med
                                     },
                                 ))
-                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                                .inner_margin(egui::Margin::symmetric(
-                                    crate::ui_ext::ITEM_SPACING_Y,
-                                    crate::ui_ext::SPACE_XS,
+                                .corner_radius(CornerRadius::from(
+                                    crate::ui_ext::CONTROL_CORNER_RADIUS,
                                 ))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {

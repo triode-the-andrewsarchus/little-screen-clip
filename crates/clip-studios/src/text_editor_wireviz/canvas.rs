@@ -97,6 +97,7 @@ impl WireEditor {
                     bounds,
                     2.0,
                     Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, accent),
+                    egui::StrokeKind::Middle,
                 );
             }
         }
@@ -126,7 +127,7 @@ impl WireEditor {
                 ui.label("Pin label");
                 let input = ui.add(
                     egui::TextEdit::singleline(&mut self.label)
-                        .id_source("harness_pin_label")
+                        .id_salt("harness_pin_label")
                         .desired_width(ui.available_width()),
                 );
                 let apply = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -190,7 +191,7 @@ impl WireEditor {
         ui.label("Wire color");
         let input = ui.add(
             egui::TextEdit::singleline(&mut self.color)
-                .id_source("harness_wire_color")
+                .id_salt("harness_wire_color")
                 .desired_width(ui.available_width()),
         );
         let enter = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));

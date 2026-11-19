@@ -536,14 +536,7 @@ impl Icon {
 
     /// Creates an `egui::Image` with the exact square dimension.
     pub fn image(&self, size: f32) -> egui::Image<'static> {
-        // egui 0.27's texture cache ignores the SVG size hint. Distinct raster
-        // sizes need distinct keys, or a small toolbar icon softens larger cards.
-        let uri = format!(
-            "{}-{}px.svg",
-            self.uri().trim_end_matches(".svg"),
-            size.ceil().max(1.0) as u32
-        );
-        egui::Image::from_bytes(uri, self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
+        egui::Image::from_bytes(self.uri(), self.svg_bytes()).fit_to_exact_size(Vec2::splat(size))
     }
 
     /// Creates an `egui::Image` with exact square dimension and color tint.
@@ -558,14 +551,9 @@ impl Icon {
 
     /// Paints an SVG into an existing canvas without creating a widget.
     pub fn paint(self, painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-        // SVGs are rasterized by egui_extras before the renderer scales the
-        // texture. Request physical pixels here so high-DPI displays do not
-        // enlarge a logical-point-sized raster and soften the icon edges.
-        let pixels_per_point = painter.ctx().pixels_per_point();
-        let raster_size = rect.size() * pixels_per_point;
         match self
-            .image(rect.width() * pixels_per_point)
-            .load_for_size(painter.ctx(), raster_size)
+            .image(rect.width())
+            .load_for_size(painter.ctx(), rect.size())
         {
             Ok(egui::load::TexturePoll::Ready { texture }) => {
                 painter.image(
@@ -731,7 +719,10 @@ mod raster_size_tests {
                 .unwrap();
             match texture {
                 egui::load::TexturePoll::Ready { texture } => {
-                    assert_eq!(texture.size, Vec2::splat(edge))
+                    let manager = ctx.tex_manager();
+                    let raster = manager.read().meta(texture.id).unwrap().size;
+                    let pixels = (edge * ctx.pixels_per_point()).round() as usize;
+                    assert_eq!(raster, [pixels; 2]);
                 }
                 _ => panic!("Embedded SVG did not load synchronously"),
             }

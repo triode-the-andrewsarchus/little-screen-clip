@@ -11,14 +11,14 @@ impl ConstellationState {
             .as_ref()
             .map_or(0.000001, |audio| 1.0 / audio.sample_rate as f32);
         let id = ui
-            .id()
+            .scope_id()
             .with(("pad_wave_view", &sample.file_path, duration.to_bits()));
         let style_id = id.with("dadaspec");
         let mut use_dadaspec = ui
             .data(|data| data.get_temp::<bool>(style_id))
             .unwrap_or_else(|| {
                 ui.ctx().data(|data| {
-                    data.get_temp::<bool>(egui::Id::new("audio_dadaspec"))
+                    data.get_temp::<bool>(egui::Id::unique("audio_dadaspec"))
                         .unwrap_or(false)
                 })
             });
@@ -44,8 +44,10 @@ impl ConstellationState {
             outer.max - Vec2::new(12.0, 12.0),
         );
         if response.hovered() && duration >= 0.01 {
-            let (wheel, shift) =
-                ui.input(|input| (input.raw_scroll_delta.y, input.modifiers.shift));
+            let (wheel, shift) = (
+                clip_ui::ui_ext::wheel_delta(ui.ctx()).y,
+                ui.input(|input| input.modifiers.shift),
+            );
             if wheel != 0.0 {
                 ui.input_mut(|input| {
                     input.smooth_scroll_delta = Vec2::ZERO;
@@ -400,7 +402,7 @@ fn edit_fades(
             Rect::from_center_size(Pos2::new(x, rect.top() - offset), Vec2::new(18.0, 12.0));
         let response = ui.interact(
             handle,
-            ui.id().with(("fade", attack)),
+            ui.scope_id().with(("fade", attack)),
             egui::Sense::click_and_drag(),
         );
         let (label, help) = if attack {
@@ -410,7 +412,12 @@ fn edit_fades(
         };
         let color = ui.visuals().hyperlink_color;
         painter.rect_filled(handle, 2.0, ui.visuals().extreme_bg_color);
-        painter.rect_stroke(handle, 2.0, Stroke::new(1.0_f32, color));
+        painter.rect_stroke(
+            handle,
+            2.0,
+            Stroke::new(1.0_f32, color),
+            egui::StrokeKind::Middle,
+        );
         painter.text(
             handle.center(),
             egui::Align2::CENTER_CENTER,
@@ -454,15 +461,18 @@ mod tests {
             let mut sample = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
             sample.playback_speed = speed;
             let mut frame = |events| {
-                ctx.run(
+                clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
                         events,
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ConstellationState::render_layer_waveform(ui, &mut sample)
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                ConstellationState::render_layer_waveform(ui, &mut sample)
+                            })
                         });
                     },
                 )
@@ -500,14 +510,17 @@ mod tests {
             assert_eq!(sample.release_ms, 0.0);
             sample.attack_ms = 500.0;
             sample.release_ms = 500.0;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        ConstellationState::render_layer_waveform(ui, &mut sample)
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ConstellationState::render_layer_waveform(ui, &mut sample)
+                        })
                     });
                 },
             );

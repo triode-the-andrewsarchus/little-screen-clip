@@ -50,10 +50,12 @@ fn benchmark_large_text_preview_frames_across_width_dpi_appearance() {
             .get_mut(&input.viewport_id)
             .expect("root viewport exists")
             .native_pixels_per_point = Some(pixels_per_point);
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut close = false;
-                state.render_ui(ui, ctx, palette, &mut close);
+        let output = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut close = false;
+                    state.render_ui(ui, ctx, palette, &mut close);
+                })
             });
         });
         let shape_count = output.shapes.len();
@@ -170,7 +172,7 @@ fn benchmark_large_text_preview_frames_across_width_dpi_appearance() {
                 pixels_per_point,
                 vec![
                     egui::Event::PointerMoved(pointer),
-                    egui::Event::Scroll(egui::vec2(0.0, delta)),
+                    clip_ui::test_support::scroll(egui::vec2(0.0, delta)),
                 ],
             );
             scroll_ms.push(elapsed);

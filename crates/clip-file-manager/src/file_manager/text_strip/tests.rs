@@ -44,23 +44,25 @@ fn page_metadata_survives_long_descriptions_and_does_not_grow_the_preview_row() 
     let metadata = doc.metadata.as_ref().unwrap();
     assert_eq!(metadata.fields[0].1, "Long page");
     let ctx = egui::Context::default();
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            for width in [320.0, 800.0] {
-                let rect =
-                    egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(width, 64.0));
-                let text = metadata.show(
-                    ui,
-                    rect,
-                    egui::Id::new(width.to_bits()),
-                    &little_clip_core::palette::AppPalette::default(),
-                );
-                assert_eq!(text.top(), rect.top());
-                assert_eq!(text.bottom(), rect.bottom());
-                assert_eq!(text.right(), rect.right());
-                assert!(text.width() >= 160.0);
-                assert_eq!(text == rect, width < 360.0);
-            }
+    let _ = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                for width in [320.0, 800.0] {
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(width, 64.0));
+                    let text = metadata.show(
+                        ui,
+                        rect,
+                        egui::Id::unique(width.to_bits()),
+                        &little_clip_core::palette::AppPalette::default(),
+                    );
+                    assert_eq!(text.top(), rect.top());
+                    assert_eq!(text.bottom(), rect.bottom());
+                    assert_eq!(text.right(), rect.right());
+                    assert!(text.width() >= 160.0);
+                    assert_eq!(text == rect, width < 360.0);
+                }
+            })
         });
     });
 }

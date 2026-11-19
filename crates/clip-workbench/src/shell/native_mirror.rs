@@ -159,6 +159,7 @@ pub(super) fn paint(
                     accent
                 },
             ),
+            egui::StrokeKind::Middle,
         );
         let hero = matches!(slot, SlotId::LeftHand | SlotId::RightHand);
         let x = card.min.x + 14.0 * scale;
@@ -506,7 +507,8 @@ mod tests {
                     let mut vertices = 0;
                     for round in 0..230 {
                         let start = Instant::now();
-                        let output = ctx.run(
+                        let output = clip_ui::test_support::run_frame(
+                            &ctx,
                             egui::RawInput {
                                 screen_rect: Some(Rect::from_min_size(
                                     Pos2::ZERO,
@@ -515,16 +517,18 @@ mod tests {
                                 ..Default::default()
                             },
                             |ctx| {
-                                egui::CentralPanel::default().show(ctx, |ui| {
-                                    let mut dragging = None;
-                                    super::super::screen_mirror::ScreenMirrorWidget::new(
-                                        Some(&texture),
-                                        2,
-                                        &mut dragging,
-                                        &[],
-                                    )
-                                    .with_native(native.then_some(&data))
-                                    .show(ui, &palette);
+                                ctx.root_ui(|ui| {
+                                    egui::CentralPanel::default().show(ui, |ui| {
+                                        let mut dragging = None;
+                                        super::super::screen_mirror::ScreenMirrorWidget::new(
+                                            Some(&texture),
+                                            2,
+                                            &mut dragging,
+                                            &[],
+                                        )
+                                        .with_native(native.then_some(&data))
+                                        .show(ui, &palette);
+                                    })
                                 });
                             },
                         );

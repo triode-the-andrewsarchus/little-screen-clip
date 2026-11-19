@@ -89,7 +89,7 @@ impl Hover {
         fallback: Option<&TextureHandle>,
         palette: &AppPalette,
     ) {
-        let screen = ui.ctx().screen_rect().shrink(8.0);
+        let screen = ui.ctx().content_rect().shrink(8.0);
         let top = anchor.bottom() + 6.0;
         let height = (screen.bottom() - top).min(360.0);
         if height < 16.0 {
@@ -128,7 +128,7 @@ impl Hover {
             .or(fallback);
         super::super::ui::preview_popup(
             ui,
-            egui::Id::new("scene-strip-live-hover"),
+            egui::Id::unique("scene-strip-live-hover"),
             anchor,
             size,
             texture,

@@ -215,7 +215,7 @@ impl ScriptEditor {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, node: &mut NodeInstance, palette: &AppPalette) {
-        let id = Id::new(("script-code", node.id));
+        let id = Id::unique(("script-code", node.id));
         let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         ui.heading(if node.kind == NodeKind::PythonScript {
             "Python Script"
@@ -236,7 +236,6 @@ impl ScriptEditor {
         let search = self.render_search(ui, id, palette);
         if search != SearchAction::None {
             self.apply_search(search, &mut state, ui.input(|i| i.time));
-            ui.memory_mut(|m| m.request_focus(id));
             state_changed = true;
         }
         if state_changed {
@@ -252,18 +251,12 @@ impl ScriptEditor {
             egui::Label::new(
                 "Ctrl+S Save · Ctrl+F Find · Ctrl+Z Undo · Ctrl+Shift+Z / Ctrl+Y Redo",
             )
-            .wrap(true),
+            .wrap(),
         );
-        self.render_code(
-            ui,
-            node,
-            palette,
-            matches!(search, SearchAction::Next | SearchAction::Replace),
-        );
+        self.render_code(ui, node, palette, search);
     }
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, id: Id) -> Vec<EditorCommand> {
-        let code_focused = ui.memory(|m| m.has_focus(id));
         if !ui.memory(|m| {
             [id, id.with("find"), id.with("replace")]
                 .into_iter()
@@ -276,17 +269,6 @@ impl ScriptEditor {
             self.focus_find = true;
         }
         let mut commands = Vec::new();
-        // egui 0.27 matches Ctrl+Shift+Z as Ctrl+Z before its redo branch.
-        if code_focused
-            && ui.input_mut(|i| {
-                i.consume_key(
-                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                    egui::Key::Z,
-                ) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
-            })
-        {
-            commands.push(EditorCommand::Redo);
-        }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
             commands.push(EditorCommand::Save);
         }
@@ -474,7 +456,7 @@ impl ScriptEditor {
                         self.text.matches(&self.find).count()
                     }
                 ))
-                .wrap(false),
+                .extend(),
             );
         });
         action
@@ -516,9 +498,9 @@ impl ScriptEditor {
         ui: &mut egui::Ui,
         node: &NodeInstance,
         palette: &AppPalette,
-        reveal_selection: bool,
+        search: SearchAction,
     ) {
-        let id = Id::new(("script-code", node.id));
+        let id = Id::unique(("script-code", node.id));
         let lang = if node.kind == NodeKind::PythonScript {
             "py"
         } else {
@@ -537,17 +519,18 @@ impl ScriptEditor {
             ));
         }
         let cached = &self.cached.as_ref().unwrap().2;
-        let mut layouter = |ui: &egui::Ui, text: &str, _: f32| {
+        let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _: f32| {
+            let text = buffer.as_str();
             let mut job = if text == cached.text {
                 cached.clone()
             } else {
                 build_highlighted_layout_job(text, find_syntax(lang), palette, &[])
             };
             job.wrap.max_width = f32::INFINITY;
-            ui.fonts(|f| f.layout_job(job))
+            ui.fonts_mut(|f| f.layout_job(job))
         };
         egui::ScrollArea::both()
-            .id_source(("script-scroll", node.id))
+            .id_salt(("script-scroll", node.id))
             .show(ui, |ui| {
                 let output = egui::TextEdit::multiline(&mut self.text)
                     .id(id)
@@ -556,11 +539,16 @@ impl ScriptEditor {
                     .desired_rows(20)
                     .layouter(&mut layouter)
                     .show(ui);
-                if reveal_selection && let Some(cursor) = output.cursor_range {
+                if search != SearchAction::None {
+                    output.response.request_focus();
+                }
+                if matches!(search, SearchAction::Next | SearchAction::Replace)
+                    && let Some(cursor) = output.cursor_range
+                {
                     ui.scroll_to_rect(
                         output
                             .galley
-                            .pos_from_cursor(&cursor.primary)
+                            .pos_from_cursor(cursor.primary)
                             .translate(output.galley_pos.to_vec2()),
                         None,
                     );
@@ -576,7 +564,7 @@ impl ScriptEditor {
         if self.find.is_empty() {
             return None;
         }
-        let chars = selection.sorted();
+        let chars = selection.sorted_cursors();
         let index = if include_selection {
             chars[0].index
         } else {
@@ -585,7 +573,7 @@ impl ScriptEditor {
         let offset = self
             .text
             .char_indices()
-            .nth(index)
+            .nth(index.0)
             .map_or(self.text.len(), |(byte, _)| byte);
         self.text[offset..]
             .find(&self.find)
@@ -853,11 +841,12 @@ mod tests {
         let ctx = egui::Context::default();
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let id = Id::new(("script-code", node.id));
+        let id = Id::unique(("script-code", node.id));
         let mut time = 0.0;
         let mut frame = |editor: &mut ScriptEditor, events| {
             time += 0.1;
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -868,8 +857,10 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| editor.ui(ui, &mut node, &palette));
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| editor.ui(ui, &mut node, &palette))
+                    });
                 },
             )
         };

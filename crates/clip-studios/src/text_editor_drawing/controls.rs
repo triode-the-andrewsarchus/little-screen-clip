@@ -22,7 +22,7 @@ impl DrawingEditor {
         let colors = WorkbenchColors::from_palette(palette);
         // A single row stays a single row even in the smaller workbench host.
         egui::ScrollArea::horizontal()
-            .id_source("drawing_tools")
+            .id_salt("drawing_tools")
             .show(ui, |ui| {
                 let tools_width = 9.0 * 40.0 + 8.0 * ui.spacing().item_spacing.x;
                 ui.horizontal(|ui| {
@@ -68,7 +68,8 @@ impl DrawingEditor {
                         );
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(
-                                egui::WidgetType::SelectableLabel,
+                                egui::Role::Button,
+                                response.enabled(),
                                 selected,
                                 label,
                             )
@@ -197,7 +198,12 @@ impl DrawingEditor {
                         egui::Stroke::new(width as f32, ui.visuals().text_color()),
                     );
                     response.widget_info(|| {
-                        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, active, label)
+                        egui::WidgetInfo::selected(
+                            egui::Role::Button,
+                            response.enabled(),
+                            active,
+                            label,
+                        )
                     });
                     if response.on_hover_text(label).clicked() {
                         self.paint_control(Paint::Width(width));
@@ -286,11 +292,13 @@ fn swatches(ui: &mut egui::Ui, selected: &str, colors: &[&str]) -> Option<String
                     rect.expand(2.0),
                     5.0,
                     egui::Stroke::new(2.0_f32, ui.visuals().selection.stroke.color),
+                    egui::StrokeKind::Middle,
                 );
             }
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
-                    egui::WidgetType::SelectableLabel,
+                    egui::Role::Button,
+                    response.enabled(),
                     selected == color,
                     color,
                 )

@@ -33,7 +33,7 @@ const RETIRED: u8 = 5;
 const ARTWORK_FAILURE: u8 = 6;
 
 fn key() -> egui::Id {
-    egui::Id::new("clip_ui_native_vector_runtime")
+    egui::Id::unique("clip_ui_native_vector_runtime")
 }
 
 #[derive(Clone)]
@@ -244,7 +244,7 @@ fn paint_with(
     let ctx = ui.ctx().clone();
     ui.painter_at(rect)
         .add(egui::Shape::Callback(egui::PaintCallback {
-            rect: ui.ctx().screen_rect(),
+            rect: ui.ctx().content_rect(),
             callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
                 if handle.error().is_some() {
                     return;
@@ -377,13 +377,15 @@ mod tests {
         let runtime = owner(&ctx);
         runtime.handle.fail(CONTEXT_MISMATCH);
         runtime.handle.fail(GL_FAILURE);
-        let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let error = paint(ui, ui.available_rect_before_wrap(), |_| {
-                    panic!("a rejected callback must never draw");
+        let output = crate::test_support::run_frame(&ctx, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let error = paint(ui, ui.available_rect_before_wrap(), |_| {
+                        panic!("a rejected callback must never draw");
+                    })
+                    .unwrap_err();
+                    assert!(error.contains("different OpenGL context"));
                 })
-                .unwrap_err();
-                assert!(error.contains("different OpenGL context"));
             });
         });
         assert!(
@@ -393,13 +395,15 @@ mod tests {
                 .any(|shape| matches!(shape.shape, egui::Shape::Callback(_)))
         );
         drop(runtime);
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(
-                    paint(ui, ui.available_rect_before_wrap(), |_| {})
-                        .unwrap_err()
-                        .contains("unavailable")
-                );
+        let _ = crate::test_support::run_frame(&ctx, Default::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    assert!(
+                        paint(ui, ui.available_rect_before_wrap(), |_| {})
+                            .unwrap_err()
+                            .contains("unavailable")
+                    );
+                })
             });
         });
     }

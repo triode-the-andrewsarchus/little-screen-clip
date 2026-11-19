@@ -126,18 +126,21 @@ fn inline_image_previews_render_shared_pixels_with_independent_zoom_state() {
                   events: Vec<egui::Event>,
                   first_rect: &mut Rect,
                   second_rect: &mut Rect| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(viewport),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical(|ui| {
-                        *first_rect = first.show(ui, Vec2::new(300.0, 180.0)).rect;
-                        *second_rect = second.show(ui, Vec2::new(220.0, 120.0)).rect;
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            *first_rect = first.show(ui, Vec2::new(300.0, 180.0)).rect;
+                            *second_rect = second.show(ui, Vec2::new(220.0, 120.0)).rect;
+                        });
+                    })
                 });
             },
         )
@@ -183,7 +186,7 @@ fn inline_image_previews_render_shared_pixels_with_independent_zoom_state() {
         &mut second,
         vec![
             egui::Event::PointerMoved(first_rect.center()),
-            egui::Event::Scroll(Vec2::new(0.0, 120.0)),
+            clip_ui::test_support::scroll(Vec2::new(0.0, 120.0)),
         ],
         &mut first_rect,
         &mut second_rect,
@@ -244,38 +247,44 @@ fn clipped_inline_image_preview_defers_texture_upload() {
     let mut preview = InlineImagePreview::new(source);
     let ctx = egui::Context::default();
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(240.0, 100.0))),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(60.0)
-                    .show(ui, |ui| {
-                        ui.add_space(240.0);
-                        preview.show(ui, Vec2::new(120.0, 80.0));
-                    });
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(60.0)
+                        .show(ui, |ui| {
+                            ui.add_space(240.0);
+                            preview.show(ui, Vec2::new(120.0, 80.0));
+                        });
+                })
             });
         },
     );
 
     assert!(preview.texture.is_none());
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(240.0, 500.0))),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(400.0)
-                    .show(ui, |ui| {
-                        ui.add_space(240.0);
-                        preview.show(ui, Vec2::new(120.0, 80.0));
-                    });
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .show(ui, |ui| {
+                            ui.add_space(240.0);
+                            preview.show(ui, Vec2::new(120.0, 80.0));
+                        });
+                })
             });
         },
     );

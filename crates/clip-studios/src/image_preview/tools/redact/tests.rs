@@ -176,23 +176,26 @@ fn selected_redaction_size_badge_stays_inside_compact_and_wide_viewports() {
         let ctx = egui::Context::default();
         let palette = AppPalette::default();
         let mut viewport = None;
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, viewport_size)),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let image_rect = ui.max_rect();
-                    let response = ui.allocate_rect(image_rect, egui::Sense::click_and_drag());
-                    state.render_redact_overlay(
-                        ui,
-                        &ui.painter().clone(),
-                        &response,
-                        image_rect,
-                        &palette,
-                    );
-                    viewport = Some(image_rect);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let image_rect = ui.max_rect();
+                        let response = ui.allocate_rect(image_rect, egui::Sense::click_and_drag());
+                        state.render_redact_overlay(
+                            ui,
+                            &ui.painter().clone(),
+                            &response,
+                            image_rect,
+                            &palette,
+                        );
+                        viewport = Some(image_rect);
+                    })
                 });
             },
         );

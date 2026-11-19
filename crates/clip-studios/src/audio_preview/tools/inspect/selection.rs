@@ -155,7 +155,7 @@ impl AudioPreviewState {
                     let active_idx = self.active_multi_index;
 
                     egui::ScrollArea::horizontal()
-                        .id_source("multi_slices_scroll")
+                        .id_salt("multi_slices_scroll")
                         .show(ui, |ui| {
                             for (idx, &(s, e)) in slices_copy.iter().enumerate() {
                                 let is_active = active_idx == Some(idx);
@@ -189,7 +189,7 @@ impl AudioPreviewState {
                                 )
                                 .fill(bg_col)
                                 .stroke(Stroke::new(1.0_f32, border_col))
-                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                                .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                                 let btn_resp = ui.add(btn).on_hover_text(

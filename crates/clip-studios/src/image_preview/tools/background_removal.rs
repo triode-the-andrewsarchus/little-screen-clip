@@ -1218,7 +1218,7 @@ impl ImagePreviewState {
                     .clicked()
                 {
                     let install_cmd = "uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-screen-clip/nobg-venv && uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg";
-                    ctx.output_mut(|output| output.copied_text = install_cmd.to_string());
+                    ctx.copy_text(install_cmd.to_string());
                     self.show_toast("Copied setup command to clipboard");
                 }
             }

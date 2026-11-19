@@ -196,6 +196,7 @@ impl DrawingEditor {
             });
             output
                 .response
+                .response
                 .on_hover_text("Wrapped or unsupported bindings can be edited in Source.");
         });
         if apply {
@@ -349,8 +350,10 @@ mod tests {
         editor.text_selection = Some("caption".into());
         editor.text_draft = Some(newer.clone());
         let context = egui::Context::default();
-        let _ = context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| editor.text_controls(ui));
+        let _ = clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |context| {
+            context.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| editor.text_controls(ui))
+            });
         });
         assert!(editor.text_draft.as_ref() == Some(&newer));
     }

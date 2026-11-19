@@ -322,18 +322,20 @@ mod tests {
             let palette = AppPalette::default();
             let mut value = 0.5;
             let mut render = |input| {
-                ctx.run(input, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        render_context_slider(
-                            ui,
-                            "Amount",
-                            &mut value,
-                            -12.0..=12.0,
-                            0.0,
-                            suffix,
-                            120.0,
-                            &palette,
-                        );
+                crate::test_support::run_frame(&ctx, input, |ctx| {
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            render_context_slider(
+                                ui,
+                                "Amount",
+                                &mut value,
+                                -12.0..=12.0,
+                                0.0,
+                                suffix,
+                                120.0,
+                                &palette,
+                            );
+                        })
                     });
                 })
             };
@@ -404,18 +406,20 @@ mod tests {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
             ..Default::default()
         };
-        let _ = ctx.run(raw_input.clone(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, raw_input.clone(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -431,18 +435,20 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click1_down, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click1_down, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -454,18 +460,20 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click1_up, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click1_up, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -481,18 +489,20 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click2_down, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click2_down, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -505,18 +515,20 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         });
         let mut changed_on_double_click = false;
-        let _ = ctx.run(click2_up, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                changed_on_double_click = render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click2_up, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    changed_on_double_click = render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -538,18 +550,20 @@ mod tests {
         };
 
         // Pass 1: Initial layout
-        let _ = ctx.run(raw_input.clone(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, raw_input.clone(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -563,18 +577,20 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click_down, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click_down, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -586,18 +602,20 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click_up, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                render_context_slider(
-                    ui,
-                    "Exposure",
-                    &mut val,
-                    -1.0..=1.0,
-                    default_val,
-                    "",
-                    120.0,
-                    &palette,
-                );
+        let _ = crate::test_support::run_frame(&ctx, click_up, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    render_context_slider(
+                        ui,
+                        "Exposure",
+                        &mut val,
+                        -1.0..=1.0,
+                        default_val,
+                        "",
+                        120.0,
+                        &palette,
+                    );
+                })
             });
         });
 
@@ -617,13 +635,15 @@ mod tests {
         };
 
         // Pass 1: Initial layout
-        let _ = ctx.run(raw_input.clone(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
-                let is_dc = slider_double_clicked(ui, &resp);
-                if is_dc {
-                    seed = default_seed;
-                }
+        let _ = crate::test_support::run_frame(&ctx, raw_input.clone(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                    let is_dc = slider_double_clicked(ui, &resp);
+                    if is_dc {
+                        seed = default_seed;
+                    }
+                })
             });
         });
 
@@ -639,13 +659,15 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click1_down, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
-                let is_dc = slider_double_clicked(ui, &resp);
-                if is_dc {
-                    seed = default_seed;
-                }
+        let _ = crate::test_support::run_frame(&ctx, click1_down, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                    let is_dc = slider_double_clicked(ui, &resp);
+                    if is_dc {
+                        seed = default_seed;
+                    }
+                })
             });
         });
 
@@ -657,13 +679,15 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click1_up, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
-                let is_dc = slider_double_clicked(ui, &resp);
-                if is_dc {
-                    seed = default_seed;
-                }
+        let _ = crate::test_support::run_frame(&ctx, click1_up, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                    let is_dc = slider_double_clicked(ui, &resp);
+                    if is_dc {
+                        seed = default_seed;
+                    }
+                })
             });
         });
 
@@ -676,13 +700,15 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click2_down, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
-                let is_dc = slider_double_clicked(ui, &resp);
-                if is_dc {
-                    seed = default_seed;
-                }
+        let _ = crate::test_support::run_frame(&ctx, click2_down, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                    let is_dc = slider_double_clicked(ui, &resp);
+                    if is_dc {
+                        seed = default_seed;
+                    }
+                })
             });
         });
 
@@ -694,13 +720,15 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(click2_up, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
-                let is_dc = slider_double_clicked(ui, &resp);
-                if is_dc {
-                    seed = default_seed;
-                }
+        let _ = crate::test_support::run_frame(&ctx, click2_up, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                    let is_dc = slider_double_clicked(ui, &resp);
+                    if is_dc {
+                        seed = default_seed;
+                    }
+                })
             });
         });
 

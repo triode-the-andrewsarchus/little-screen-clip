@@ -12,7 +12,7 @@ pub struct ShortcutDispatcher;
 impl ShortcutDispatcher {
     /// Detects undo and redo when keyboard focus is outside text fields.
     pub fn check_common(ctx: &egui::Context) -> Option<CommonShortcut> {
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return None;
         }
 

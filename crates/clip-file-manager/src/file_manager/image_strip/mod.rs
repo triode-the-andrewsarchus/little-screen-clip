@@ -193,19 +193,21 @@ mod tests {
             ..Default::default()
         };
 
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_clip_rect(screen);
-                show(
-                    ui,
-                    row,
-                    &entry,
-                    None,
-                    identity,
-                    Some(&ready),
-                    &mut hover,
-                    colors,
-                );
+        let _ = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_clip_rect(screen);
+                    show(
+                        ui,
+                        row,
+                        &entry,
+                        None,
+                        identity,
+                        Some(&ready),
+                        &mut hover,
+                        colors,
+                    );
+                })
             });
         });
 
@@ -236,26 +238,28 @@ mod tests {
             ..Default::default()
         };
 
-        let click_output = ctx.run(click_input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_clip_rect(screen);
-                show(
-                    ui,
-                    row,
-                    &entry,
-                    None,
-                    identity,
-                    Some(&ready),
-                    &mut hover,
-                    colors,
-                );
+        let click_output = clip_ui::test_support::run_frame(&ctx, click_input, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_clip_rect(screen);
+                    show(
+                        ui,
+                        row,
+                        &entry,
+                        None,
+                        identity,
+                        Some(&ready),
+                        &mut hover,
+                        colors,
+                    );
+                })
             });
         });
 
         assert!(
-            click_output.platform_output.copied_text.starts_with('#'),
+            clip_ui::test_support::copied_text(&click_output.platform_output).starts_with('#'),
             "Clicking hilbert strip should copy hex color, got {:?}",
-            click_output.platform_output.copied_text
+            clip_ui::test_support::copied_text(&click_output.platform_output)
         );
 
         // Now hover over thumb: veil should NOT be active
@@ -264,19 +268,21 @@ mod tests {
             events: vec![egui::Event::PointerMoved(thumb.center())],
             ..Default::default()
         };
-        let _ = ctx.run(thumb_input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_clip_rect(screen);
-                show(
-                    ui,
-                    row,
-                    &entry,
-                    None,
-                    identity,
-                    Some(&ready),
-                    &mut hover,
-                    colors,
-                );
+        let _ = clip_ui::test_support::run_frame(&ctx, thumb_input, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_clip_rect(screen);
+                    show(
+                        ui,
+                        row,
+                        &entry,
+                        None,
+                        identity,
+                        Some(&ready),
+                        &mut hover,
+                        colors,
+                    );
+                })
             });
         });
 
@@ -342,19 +348,21 @@ mod tests {
             events: vec![egui::Event::PointerMoved(left_pos)],
             ..Default::default()
         };
-        let _ = ctx.run(input1, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_clip_rect(screen);
-                show(
-                    ui,
-                    row,
-                    &entry,
-                    None,
-                    identity,
-                    Some(&ready),
-                    &mut hover,
-                    colors,
-                );
+        let _ = clip_ui::test_support::run_frame(&ctx, input1, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_clip_rect(screen);
+                    show(
+                        ui,
+                        row,
+                        &entry,
+                        None,
+                        identity,
+                        Some(&ready),
+                        &mut hover,
+                        colors,
+                    );
+                })
             });
         });
 
@@ -368,19 +376,21 @@ mod tests {
             events: vec![egui::Event::PointerMoved(right_pos)],
             ..Default::default()
         };
-        let _ = ctx.run(input2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_clip_rect(screen);
-                show(
-                    ui,
-                    row,
-                    &entry,
-                    None,
-                    identity,
-                    Some(&ready),
-                    &mut hover,
-                    colors,
-                );
+        let _ = clip_ui::test_support::run_frame(&ctx, input2, |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_clip_rect(screen);
+                    show(
+                        ui,
+                        row,
+                        &entry,
+                        None,
+                        identity,
+                        Some(&ready),
+                        &mut hover,
+                        colors,
+                    );
+                })
             });
         });
 
@@ -395,25 +405,28 @@ mod tests {
         let mut prev_c = c2;
         // Verify progressive smoothing across frames 3 through 6
         for frame in 3..=6 {
-            let _ = ctx.run(
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(screen),
                     events: vec![egui::Event::PointerMoved(right_pos)],
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.set_clip_rect(screen);
-                        show(
-                            ui,
-                            row,
-                            &entry,
-                            None,
-                            identity,
-                            Some(&ready),
-                            &mut hover,
-                            colors,
-                        );
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ui.set_clip_rect(screen);
+                            show(
+                                ui,
+                                row,
+                                &entry,
+                                None,
+                                identity,
+                                Some(&ready),
+                                &mut hover,
+                                colors,
+                            );
+                        })
                     });
                 },
             );

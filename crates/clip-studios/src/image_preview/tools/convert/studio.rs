@@ -42,7 +42,7 @@ impl ImagePreviewState {
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(warning),
                         )
-                        .truncate(true),
+                        .truncate(),
                     );
                 } else if let Some(status) = &self.convert_state.render_queue_status {
                     ui.add(
@@ -51,7 +51,7 @@ impl ImagePreviewState {
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(warning),
                         )
-                        .truncate(true),
+                        .truncate(),
                     );
                 } else if let Some(status) = &self.convert_state.optipng_queue_status {
                     ui.add(
@@ -60,7 +60,7 @@ impl ImagePreviewState {
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(warning),
                         )
-                        .truncate(true),
+                        .truncate(),
                     );
                 } else if self.convert_state.is_running_optipng {
                     ui.add(egui::Spinner::new().size(13.0).color(accent));

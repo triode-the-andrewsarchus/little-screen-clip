@@ -82,14 +82,15 @@ impl ImagePreviewState {
                     if *filled {
                         painter.rect_filled(
                             s_rect,
-                            Rounding::same(*rounding * image_scale),
+                            CornerRadius::from(*rounding * image_scale),
                             *color,
                         );
                     } else {
                         painter.rect_stroke(
                             s_rect,
-                            Rounding::same(*rounding * image_scale),
+                            CornerRadius::from(*rounding * image_scale),
                             Stroke::new(sw, *color),
+                            egui::StrokeKind::Middle,
                         );
                     }
                 }
@@ -114,7 +115,7 @@ impl ImagePreviewState {
                     let s_rect = to_screen_rect(*rect);
                     let highlight_col =
                         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90);
-                    painter.rect_filled(s_rect, Rounding::same(2.0_f32), highlight_col);
+                    painter.rect_filled(s_rect, CornerRadius::from(2.0_f32), highlight_col);
                 }
                 MarkupShape::StepBadge {
                     center,
@@ -173,13 +174,14 @@ impl ImagePreviewState {
 
                     painter.rect_filled(
                         box_rect,
-                        Rounding::same(3.0_f32),
+                        CornerRadius::from(3.0_f32),
                         Color32::from_rgba_unmultiplied(12, 12, 12, 245),
                     );
                     painter.rect_stroke(
                         box_rect,
-                        Rounding::same(3.0_f32),
+                        CornerRadius::from(3.0_f32),
                         Stroke::new(1.0_f32, Color32::from_gray(70)),
+                        egui::StrokeKind::Middle,
                     );
                     painter.galley(p_screen + Vec2::new(pad_x, pad_y), galley, Color32::WHITE);
                 }
@@ -269,14 +271,15 @@ impl ImagePreviewState {
                     if *filled {
                         painter.rect_filled(
                             s_rect,
-                            Rounding::same(*rounding * image_scale),
+                            CornerRadius::from(*rounding * image_scale),
                             *color,
                         );
                     } else {
                         painter.rect_stroke(
                             s_rect,
-                            Rounding::same(*rounding * image_scale),
+                            CornerRadius::from(*rounding * image_scale),
                             Stroke::new(sw, *color),
+                            egui::StrokeKind::Middle,
                         );
                     }
 
@@ -309,7 +312,7 @@ impl ImagePreviewState {
                     let s_rect = to_screen_rect(*rect);
                     let highlight_col =
                         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 90);
-                    painter.rect_filled(s_rect, Rounding::same(2.0), highlight_col);
+                    painter.rect_filled(s_rect, CornerRadius::same(2), highlight_col);
 
                     if is_selected {
                         draw_selection_bounding_box(painter, s_rect, base_accent, handle_radius);
@@ -392,12 +395,12 @@ impl ImagePreviewState {
                     // Solid black expanding box
                     painter.rect_filled(
                         box_rect,
-                        Rounding::same(3.0),
+                        CornerRadius::same(3),
                         Color32::from_rgba_unmultiplied(12, 12, 12, 245),
                     );
                     painter.rect_stroke(
                         box_rect,
-                        Rounding::same(3.0),
+                        CornerRadius::same(3),
                         Stroke::new(
                             1.0_f32,
                             if is_editing || is_selected {
@@ -406,6 +409,7 @@ impl ImagePreviewState {
                                 Color32::from_gray(70)
                             },
                         ),
+                        egui::StrokeKind::Middle,
                     );
 
                     if is_editing {
@@ -413,7 +417,7 @@ impl ImagePreviewState {
                         let text_edit = egui::TextEdit::singleline(&mut temp_text)
                             .font(FontId::proportional(scaled_font_size))
                             .text_color(Color32::WHITE)
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .desired_width(edit_w);
 
                         let edit_rect = Rect::from_min_size(
@@ -481,14 +485,15 @@ impl ImagePreviewState {
                     if self.markup_state.active_filled {
                         painter.rect_filled(
                             r,
-                            Rounding::same(RECTANGLE_CORNER_RADIUS * image_scale),
+                            CornerRadius::from(RECTANGLE_CORNER_RADIUS * image_scale),
                             active_col,
                         );
                     } else {
                         painter.rect_stroke(
                             r,
-                            Rounding::same(RECTANGLE_CORNER_RADIUS * image_scale),
+                            CornerRadius::from(RECTANGLE_CORNER_RADIUS * image_scale),
                             Stroke::new(sw, active_col),
+                            egui::StrokeKind::Middle,
                         );
                     }
                 }
@@ -509,7 +514,7 @@ impl ImagePreviewState {
                         active_col.b(),
                         90,
                     );
-                    painter.rect_filled(r, Rounding::same(2.0), highlight_col);
+                    painter.rect_filled(r, CornerRadius::same(2), highlight_col);
                 }
                 MarkupToolType::Text => {
                     let r = Rect::from_two_pos(s_screen, c_screen);
@@ -524,10 +529,15 @@ impl ImagePreviewState {
                     // Solid dark background for the box preview
                     painter.rect_filled(
                         r,
-                        Rounding::same(3.0),
+                        CornerRadius::same(3),
                         Color32::from_rgba_unmultiplied(12, 12, 12, 240),
                     );
-                    painter.rect_stroke(r, Rounding::same(3.0), Stroke::new(1.5_f32, base_accent));
+                    painter.rect_stroke(
+                        r,
+                        CornerRadius::same(3),
+                        Stroke::new(1.5_f32, base_accent),
+                        egui::StrokeKind::Middle,
+                    );
 
                     // Live preview of text fitting inside the box height
                     if r.height() >= 12.0 {
@@ -976,11 +986,12 @@ impl ImagePreviewState {
 }
 pub(super) fn draw_handle(painter: &egui::Painter, center: Pos2, radius: f32, fill_col: Color32) {
     let r = Rect::from_center_size(center, Vec2::splat(radius * 2.0));
-    painter.rect_filled(r, Rounding::same(1.5_f32), fill_col);
+    painter.rect_filled(r, CornerRadius::from(1.5_f32), fill_col);
     painter.rect_stroke(
         r,
-        Rounding::same(1.5_f32),
+        CornerRadius::from(1.5_f32),
         Stroke::new(1.0_f32, Color32::BLACK),
+        egui::StrokeKind::Middle,
     );
 }
 
@@ -990,7 +1001,12 @@ pub(super) fn draw_selection_bounding_box(
     accent: Color32,
     handle_radius: f32,
 ) {
-    painter.rect_stroke(rect, Rounding::ZERO, Stroke::new(1.5_f32, accent));
+    painter.rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(1.5_f32, accent),
+        egui::StrokeKind::Middle,
+    );
     let handles = get_box_handles(rect);
     for (_, pos, _) in &handles {
         draw_handle(painter, *pos, handle_radius, Color32::WHITE);

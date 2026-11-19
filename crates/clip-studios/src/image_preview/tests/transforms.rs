@@ -453,7 +453,8 @@ fn pick_color_hover_renders_loupe_and_click_records_sampled_pixel() {
         let ctx = egui::Context::default();
         let render = |state: &mut ImagePreviewState, time, events| {
             let mut canvas_bounds = None;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, viewport_size)),
@@ -461,20 +462,24 @@ fn pick_color_hover_renders_loupe_and_click_records_sampled_pixel() {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let (response, painter) =
-                            ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
-                        let bounds = response.rect;
-                        let sample_area = bounds.shrink(12.0);
-                        state.render_pick_color_overlay(
-                            ui,
-                            &painter,
-                            &response,
-                            sample_area,
-                            bounds,
-                            &palette,
-                        );
-                        canvas_bounds = Some(bounds);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let (response, painter) = ui.allocate_painter(
+                                ui.available_size(),
+                                egui::Sense::click_and_drag(),
+                            );
+                            let bounds = response.rect;
+                            let sample_area = bounds.shrink(12.0);
+                            state.render_pick_color_overlay(
+                                ui,
+                                &painter,
+                                &response,
+                                sample_area,
+                                bounds,
+                                &palette,
+                            );
+                            canvas_bounds = Some(bounds);
+                        })
                     });
                 },
             );

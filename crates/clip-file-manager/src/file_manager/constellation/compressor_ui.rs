@@ -159,7 +159,7 @@ impl ConstellationState {
             painter.circle_stroke(handle, 6.0, Stroke::new(2.0_f32, accent));
             let response = ui.interact(
                 Rect::from_center_size(handle, Vec2::splat(22.0)),
-                ui.id().with(label),
+                ui.scope_id().with(label),
                 egui::Sense::click_and_drag(),
             );
             if !self.pack_bank.compressor_bypass
@@ -312,7 +312,8 @@ mod tests {
         state.pack_bank.compressor_attack_ms = 75.0;
         state.pack_bank.compressor_release_ms = 600.0;
         let render = |state: &mut ConstellationState, events, time| {
-            ctx.run(
+            clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 800.0))),
                     events,
@@ -320,7 +321,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| state.render_compressor(ui));
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| state.render_compressor(ui))
+                    });
                 },
             )
         };

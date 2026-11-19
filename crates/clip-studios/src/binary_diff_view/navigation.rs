@@ -20,13 +20,14 @@ impl BinaryDiffViewState {
         // Background groove
         ui.painter().rect_filled(
             rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             hex_to_c32(&palette.colors.surface_recessed),
         );
         ui.painter().rect_stroke(
             rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+            egui::StrokeKind::Middle,
         );
 
         // Aggregate into screen-sized bins. Millions of tiny blocks should
@@ -64,7 +65,7 @@ impl BinaryDiffViewState {
                 ),
             );
             ui.painter()
-                .rect_filled(marker_rect, Rounding::same(1.0), marker_color);
+                .rect_filled(marker_rect, CornerRadius::same(1), marker_color);
         }
 
         // Viewport position indicator
@@ -83,13 +84,14 @@ impl BinaryDiffViewState {
 
         ui.painter().rect_filled(
             view_rect,
-            Rounding::same(2.0),
+            CornerRadius::same(2),
             hex_to_c32_alpha(&palette.colors.text_primary, 25),
         );
         ui.painter().rect_stroke(
             view_rect,
-            Rounding::same(2.0),
+            CornerRadius::same(2),
             Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+            egui::StrokeKind::Middle,
         );
 
         // Click / Drag to jump
@@ -147,9 +149,9 @@ impl BinaryDiffViewState {
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
                 // Header bar
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
-                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                    .inner_margin(egui::Margin::symmetric(8, 5))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
@@ -224,7 +226,7 @@ impl BinaryDiffViewState {
                 let card_height = 100.0;
                 ui.spacing_mut().item_spacing.y = 4.0;
                 let mut cards_scroll = egui::ScrollArea::vertical()
-                    .id_source("binary_diff_cards_scroll")
+                    .id_salt("binary_diff_cards_scroll")
                     .auto_shrink([false, false])
                     .max_height(rem_h);
                 if self.last_scrolled_diff_id != self.nav.selected_diff_block
@@ -274,19 +276,21 @@ impl BinaryDiffViewState {
                                 palette,
                             );
 
-                            let frame = egui::Frame::none()
+                            let frame = egui::Frame::NONE
                                 .fill(card_fill)
                                 .stroke(if is_selected {
                                     Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
                                 } else {
                                     Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel))
                                 })
-                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                                .corner_radius(CornerRadius::from(
+                                    crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                ))
                                 .inner_margin(egui::Margin {
-                                    left: card_margin_x,
-                                    right: card_margin_x,
-                                    top: 4.0,
-                                    bottom: 4.0,
+                                    left: card_margin_x as i8,
+                                    right: card_margin_x as i8,
+                                    top: 4,
+                                    bottom: 4,
                                 });
 
                             ui.push_id(block.id, |ui| {
@@ -409,10 +413,10 @@ impl BinaryDiffViewState {
             let l_cell = row.left_cells.get(col_idx);
             let r_cell = row.right_cells.get(col_idx);
 
-            egui::Frame::none()
+            egui::Frame::NONE
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)))
-                    .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+                    .inner_margin(egui::Margin::symmetric(14, 6))
                     .show(ui, |ui| {
                         let inspection_surface = hex_to_c32(&palette.colors.surface_recessed);
                         let inspection_text = |preferred| {

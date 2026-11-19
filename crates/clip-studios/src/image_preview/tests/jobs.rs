@@ -327,7 +327,8 @@ fn barcode_copy_actions_emit_exact_payloads() {
     let palette = AppPalette::for_appearance(little_clip_core::config::WorkbenchAppearance::Dark);
     let ctx = egui::Context::default();
     let render = |state: &mut ImagePreviewState, time, events| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(time),
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 500.0))),
@@ -335,8 +336,10 @@ fn barcode_copy_actions_emit_exact_payloads() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_barcode_toolbar(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_barcode_toolbar(ui, ctx, &palette);
+                    })
                 });
             },
         )
@@ -387,19 +390,23 @@ fn barcode_copy_actions_emit_exact_payloads() {
     let initial = render(&mut state, 0.1, vec![]);
     let all_pos = text_center(&initial, "Copy All");
     let copied_all = click(&mut state, all_pos, 0.2);
-    assert_eq!(copied_all.platform_output.copied_text, payloads.join("\n"));
+    assert_eq!(
+        clip_ui::test_support::copied_text(&copied_all.platform_output),
+        payloads.join("\n")
+    );
 
     let after_copy_all = render(&mut state, 0.5, vec![]);
     let selected_pos = text_center(&after_copy_all, "Copy");
     let copied_selected = click(&mut state, selected_pos, 0.6);
-    assert_eq!(copied_selected.platform_output.copied_text, payloads[0]);
+    assert_eq!(
+        clip_ui::test_support::copied_text(&copied_selected.platform_output),
+        payloads[0]
+    );
 
     let with_url_action = render(&mut state, 0.9, vec![]);
     let open_url_pos = text_center(&with_url_action, "Open");
     let opened = click(&mut state, open_url_pos, 1.0);
-    let open_url = opened
-        .platform_output
-        .open_url
+    let open_url = clip_ui::test_support::opened_url(&opened.platform_output)
         .expect("clicking a URL result requests opening its link");
     assert_eq!(open_url.url, payloads[0]);
     assert!(open_url.new_tab);
@@ -418,7 +425,7 @@ fn barcode_copy_actions_emit_exact_payloads() {
         ),
         "non-URL payloads must not render an Open action"
     );
-    assert!(text_only.platform_output.open_url.is_none());
+    assert!(clip_ui::test_support::opened_url(&text_only.platform_output).is_none());
 }
 
 #[test]

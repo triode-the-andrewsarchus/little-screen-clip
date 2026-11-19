@@ -317,14 +317,17 @@ fn document_controls_expose_all_methods_and_only_syntheticdoc_illumination() {
         DeskewMethod::SyntheticDoc,
     ] {
         state.select_deskew_method(method);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(360.0, 900.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_deskew_toolbar(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_deskew_toolbar(ui, ctx, &palette);
+                    })
                 });
             },
         );

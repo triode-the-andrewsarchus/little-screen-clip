@@ -197,7 +197,8 @@ mod tests {
             .playback_status
             .set("playback information", crate::ui_ext::feedback_time() - 1.0);
         preview.playback = Some((1, playback));
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(100.0),
                 ..Default::default()
@@ -219,7 +220,9 @@ mod tests {
         copy.status_toast
             .set(StatusMessage::error("copy failure"), 0.0);
         preview.copying = Some(copy);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| preview.tick(ctx));
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            preview.tick(ctx)
+        });
         preview
             .playback_notice
             .set(StatusMessage::error("old playback failure"), 0.0);
@@ -254,14 +257,17 @@ mod tests {
         preview.playback_notice.set("temporary feedback", 0.0);
         let mut output = egui::FullOutput::default();
         for _ in 0..8 {
-            output = ctx.run(
+            output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     time: Some(0.25),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| preview.render_feedback(ui, &palette));
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| preview.render_feedback(ui, &palette))
+                    });
                 },
             );
         }
@@ -273,13 +279,17 @@ mod tests {
         preview
             .copy_notice
             .set(StatusMessage::error("persistent copy failure"), 0.0);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(100.0),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| preview.render_feedback(ui, &palette));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| preview.render_feedback(ui, &palette))
+                });
             },
         );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,

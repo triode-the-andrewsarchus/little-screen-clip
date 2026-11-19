@@ -63,7 +63,7 @@ impl ImagePreviewState {
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         }
         let image_shortcuts_enabled =
-            ui.is_enabled() && !save_modal_active && !ctx.wants_keyboard_input();
+            ui.is_enabled() && !save_modal_active && !ctx.egui_wants_keyboard_input();
 
         // Global hotkey handling
         if image_shortcuts_enabled
@@ -533,15 +533,15 @@ impl ImagePreviewState {
             }
         }
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.canvas))
             .show(ui, |ui| {
                 let toast = self.status_toast.clone();
                 let mut shell = self.create_studio_shell(palette, close);
-                egui::TopBottomPanel::bottom(ui.make_persistent_id("image_studio_footer"))
-                    .frame(egui::Frame::none())
+                egui::Panel::bottom(ui.make_persistent_id("image_studio_footer"))
+                    .frame(egui::Frame::NONE)
                     .resizable(false)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         shell.render_footer_with_center(ui, &toast, now, 184.0, |ui| {
                             self.render_zoom_controls(ui, palette)
                         });
@@ -809,12 +809,12 @@ impl ImagePreviewState {
     }
 
     pub(super) fn render_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(hex_to_c32(&palette.colors.surface_recessed))
-            .inner_margin(egui::Margin::symmetric(
+            .inner_margin(egui::Margin::from(egui::vec2(
                 crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
+            )))
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
@@ -863,11 +863,11 @@ impl ImagePreviewState {
         // Keep ownership for this whole frame, even if Save or Cancel closes the dialog.
         let save_modal_active = self.show_fallback_save_modal;
         if save_modal_active {
-            egui::Area::new(egui::Id::new("image_save_backdrop"))
+            egui::Area::new(egui::Id::unique("image_save_backdrop"))
                 .order(egui::Order::Middle)
-                .fixed_pos(ctx.screen_rect().min)
+                .fixed_pos(ctx.content_rect().min)
                 .show(ctx, |ui| {
-                    let rect = ctx.screen_rect();
+                    let rect = ctx.content_rect();
                     ui.allocate_rect(rect, egui::Sense::click());
                     ui.painter().rect_filled(
                         rect,

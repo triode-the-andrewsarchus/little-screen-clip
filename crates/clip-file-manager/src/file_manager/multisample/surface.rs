@@ -89,6 +89,7 @@ pub(super) fn strip_keys(
                 cell.shrink(1.0),
                 3.0,
                 Stroke::new(2.0_f32, colors.text_primary),
+                egui::StrokeKind::Middle,
             );
         }
         if width >= 15.0 {
@@ -109,7 +110,13 @@ pub(super) fn strip_keys(
             };
             hovered = Some(strike);
             painter.circle_filled(point, 3.0, colors.text_primary);
-            egui::show_tooltip_at_pointer(ui.ctx(), ui.id().with("strip-note"), |ui| {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                ui.scope_id().with("strip-note"),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
                 ui.strong(format!("{} · velocity {}", note(key), strike.velocity));
                 ui.label(if !mapped {
                     "Unmapped"
@@ -131,9 +138,13 @@ pub(super) fn gesture(
     name: &str,
     hovered: Option<Strike>,
 ) -> Option<Strike> {
-    let response = ui.interact(rect, ui.id().with(name), egui::Sense::click_and_drag());
+    let response = ui.interact(
+        rect,
+        ui.scope_id().with(name),
+        egui::Sense::click_and_drag(),
+    );
     let pressed = response.clicked() || response.drag_started() || response.dragged();
-    let id = ui.id().with((name, "last-strike"));
+    let id = ui.scope_id().with((name, "last-strike"));
     let previous = ui.data(|data| data.get_temp::<Strike>(id));
     if !ui.input(|i| i.pointer.primary_down()) {
         ui.data_mut(|data| data.remove::<Strike>(id));
@@ -211,15 +222,30 @@ pub(super) fn keyboard(
         }
     }
     if let Some(key) = hit {
-        egui::show_tooltip_at_pointer(ui.ctx(), ui.id().with("piano-note"), |ui| {
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            ui.scope_id().with("piano-note"),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
             ui.label(format!("{} · MIDI {key} · click to audition", note(key)));
         });
     }
-    painter.rect_stroke(rect, 2.0, Stroke::new(1.0_f32, colors.border));
-    ui.interact(rect, ui.id().with("piano-reference"), egui::Sense::click())
-        .clicked()
-        .then_some(hit)
-        .flatten()
+    painter.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0_f32, colors.border),
+        egui::StrokeKind::Middle,
+    );
+    ui.interact(
+        rect,
+        ui.scope_id().with("piano-reference"),
+        egui::Sense::click(),
+    )
+    .clicked()
+    .then_some(hit)
+    .flatten()
 }
 
 #[cfg(test)]

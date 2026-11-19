@@ -12,7 +12,7 @@ use crate::ansi::ansi_to_layout_job;
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
-use egui::{self, Color32, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Stroke, Vec2};
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::jobs::task::Task;

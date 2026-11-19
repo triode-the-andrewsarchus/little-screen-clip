@@ -114,19 +114,19 @@ impl Viewer {
         }
         .allocate(ui);
         if let Some(right) = layout.right {
-            ui.allocate_ui_at_rect(right, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
                 ui.set_clip_rect(right.intersect(ui.clip_rect()));
                 self.attachments(ui);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.message(ui, palette);
         });
     }
     fn message(&self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::ScrollArea::vertical()
-            .id_source("mail-body")
+            .id_salt("mail-body")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -138,7 +138,7 @@ impl Viewer {
                     .show(ui, |ui| {
                         for (name, value) in &self.document.headers {
                             ui.strong(name);
-                            ui.add(egui::Label::new(value).wrap(true));
+                            ui.add(egui::Label::new(value).wrap());
                             ui.end_row();
                         }
                     });
@@ -157,7 +157,7 @@ impl Viewer {
                             ui.heading(text);
                         }
                         Block::Text(text) => {
-                            ui.add(egui::Label::new(text).wrap(true));
+                            ui.add(egui::Label::new(text).wrap());
                             ui.add_space(8.0);
                         }
                         Block::Image(_, _) => (),
@@ -178,7 +178,7 @@ impl Viewer {
         ui.separator();
         let row_height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         egui::ScrollArea::vertical()
-            .id_source("mail-attachments")
+            .id_salt("mail-attachments")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show_rows(
@@ -261,16 +261,18 @@ pub(super) fn show_list(
         );
         if super::ui::preview_hovered(ui, cell) {
             hovered = Some(index);
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("mail-attachment", index)),
-                |ui| {
-                    ui.label(format!(
-                        "{} · {} · {} bytes",
-                        attachment.name, attachment.content_type, attachment.bytes
-                    ));
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("mail-attachment", index)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(format!(
+                    "{} · {} · {} bytes",
+                    attachment.name, attachment.content_type, attachment.bytes
+                ));
+            });
         }
         x += width + 5.0;
     }

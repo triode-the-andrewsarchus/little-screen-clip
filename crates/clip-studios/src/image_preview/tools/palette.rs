@@ -156,7 +156,7 @@ impl ImagePreviewState {
         csv: String,
         copy: impl FnOnce(&str) + Send + 'static,
     ) {
-        ctx.output_mut(|output| output.copied_text = csv.clone());
+        ctx.copy_text(csv.clone());
         super::schedule_system_clipboard_copy_on(jobs, csv, copy);
         self.show_toast("Copied palette hex codes to clipboard");
     }
@@ -385,11 +385,12 @@ impl ImagePreviewState {
                 let (swatch, response) =
                     ui.allocate_exact_size(Vec2::splat(34.0), egui::Sense::click());
                 ui.painter()
-                    .rect_filled(swatch, Rounding::same(4.0), color.color);
+                    .rect_filled(swatch, CornerRadius::same(4), color.color);
                 ui.painter().rect_stroke(
                     swatch,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(1.0_f32, surface),
+                    egui::StrokeKind::Middle,
                 );
 
                 ui.vertical(|ui| {
@@ -469,13 +470,17 @@ mod tests {
         let context = egui::Context::default();
         let (copy_tx, copy_rx) = mpsc::channel();
         let csv = state.palette_csv();
-        let copied = context.run(Default::default(), |ctx| {
-            state.copy_palette_csv_on(ctx, &jobs, csv, move |text| {
+        let copied = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
+            let copy_tx = copy_tx.clone();
+            state.copy_palette_csv_on(ctx, &jobs, csv.clone(), move |text| {
                 copy_tx.send(text.to_owned()).unwrap();
             });
         });
 
-        assert_eq!(copied.platform_output.copied_text, "#123456, #FEDCBA");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&copied.platform_output),
+            "#123456, #FEDCBA"
+        );
         assert_eq!(
             copy_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
             "#123456, #FEDCBA"
@@ -520,13 +525,17 @@ mod tests {
         let prior_colors = state.palette_state.extracted_colors.clone();
         let context = egui::Context::default();
         let csv = state.palette_csv();
-        let output = context.run(Default::default(), |ctx| {
-            state.copy_palette_csv_on(ctx, &jobs, csv, move |text| {
+        let output = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
+            let copy_tx = copy_tx.clone();
+            state.copy_palette_csv_on(ctx, &jobs, csv.clone(), move |text| {
                 copy_tx.send(text.to_owned()).unwrap();
             });
         });
 
-        assert_eq!(output.platform_output.copied_text, "#123456, #FEDCBA");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&output.platform_output),
+            "#123456, #FEDCBA"
+        );
         assert_eq!(state.palette_state.extracted_colors, prior_colors);
         assert_eq!(
             state.status_toast.as_ref().map(|(toast, _)| toast.as_str()),
@@ -632,14 +641,17 @@ mod tests {
         let expected = "Palette extraction failed: background job queue is full";
         assert_eq!(state.palette_state.error.as_deref(), Some(expected));
         let palette = AppPalette::default();
-        let output = context.run(
+        let output = clip_ui::test_support::run_frame(
+            &context,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_palette_panel(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_palette_panel(ui, ctx, &palette);
+                    })
                 });
             },
         );
@@ -672,14 +684,17 @@ mod tests {
 
         let context = egui::Context::default();
         let palette = AppPalette::default();
-        let output = context.run(
+        let output = clip_ui::test_support::run_frame(
+            &context,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_palette_panel(ui, ctx, &palette);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_palette_panel(ui, ctx, &palette);
+                    })
                 });
             },
         );
@@ -802,7 +817,8 @@ mod tests {
         let palette = AppPalette::default();
         let context = egui::Context::default();
         let render = |state: &mut ImagePreviewState, time, events| {
-            context.run(
+            clip_ui::test_support::run_frame(
+                &context,
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
@@ -810,8 +826,10 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_palette_panel(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_palette_panel(ui, ctx, &palette);
+                        })
                     });
                 },
             )
@@ -846,6 +864,6 @@ mod tests {
                 },
             ],
         );
-        assert!(clicked.platform_output.copied_text.is_empty());
+        assert!(clip_ui::test_support::copied_text(&clicked.platform_output).is_empty());
     }
 }

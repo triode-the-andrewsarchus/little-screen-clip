@@ -116,9 +116,11 @@ pub(super) fn wait_for_decode(state: &mut PdfEditorState, page_num: usize, ctx: 
 }
 
 pub(super) fn show_inline_frame(ctx: &egui::Context, preview: &mut InlinePdfPagePreview) {
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            preview.show(ui, ctx, Vec2::new(64.0, 64.0));
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                preview.show(ui, ctx, Vec2::new(64.0, 64.0));
+            })
         });
     });
 }

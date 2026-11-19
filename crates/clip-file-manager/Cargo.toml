@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+ui-inspection = ["eframe/inspection"]
+
 [dependencies]
 rustix.workspace = true
 clip-search = { path = "../clip-search" }
@@ -14,10 +17,10 @@ little-clip-core = { path = "../little-clip-core" }
 little-clip-render = { path = "../little-clip-render" }
 little-clip-scene = { path = "../little-clip-scene" }
 little-clip-ops = { path = "../little-clip-ops" }
-eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "wayland"] }
-egui = "0.27"
-egui-winit = { version = "0.27", default-features = false, features = ["wayland"] }
-egui_extras = { version = "0.27", features = ["svg"] }
+eframe.workspace = true
+egui.workspace = true
+egui-winit.workspace = true
+egui_extras.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
@@ -64,6 +67,8 @@ midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
+egui_kittest.workspace = true
+clip-ui = { path = "../clip-ui", features = ["test-support"] }
 little-clip-render = { path = "../little-clip-render", features = ["test-support"] }
 clip-search = { path = "../clip-search", features = ["test-support"] }
 clip-studios = { path = "../clip-studios", features = ["test-support"] }

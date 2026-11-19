@@ -20,7 +20,7 @@ pub struct FileEditor {
 }
 impl FileEditor {
     fn id() -> Id {
-        Id::new("files_editor_host_chrome")
+        Id::unique("files_editor_host_chrome")
     }
     pub fn current(ctx: &Context) -> Option<Self> {
         ctx.data(|data| data.get_temp(Self::id()))
@@ -66,7 +66,7 @@ impl FileEditor {
         let response = ui
             .add(
                 egui::Label::new(egui::RichText::new(title).strong().size(22.0).color(color))
-                    .truncate(true)
+                    .truncate()
                     .selectable(!can_rename)
                     .sense(if can_rename {
                         egui::Sense::click()
@@ -149,19 +149,22 @@ mod tests {
     #[test]
     fn dialog_typing_is_hidden_from_editor_shortcuts_and_restored_for_the_dialog() {
         let ctx = Context::default();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
-                modifiers: egui::Modifiers::CTRL,
-                events: vec![
-                    egui::Event::Key {
-                        key: egui::Key::R,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::CTRL,
-                    },
-                    egui::Event::Text("renamed.wav".into()),
-                ],
+                events: [egui::Event::ModifiersChanged(egui::Modifiers::CTRL)]
+                    .into_iter()
+                    .chain(vec![
+                        egui::Event::Key {
+                            key: egui::Key::R,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::CTRL,
+                        },
+                        egui::Event::Text("renamed.wav".into()),
+                    ])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| {
@@ -209,7 +212,8 @@ mod tests {
                     ..Default::default()
                 };
                 let mut height = 0.0;
-                let _ = ctx.run(
+                let _ = clip_ui::test_support::run_frame(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -219,31 +223,33 @@ mod tests {
                     },
                     |ctx| {
                         chrome.clone().scope(ctx, || {
-                            egui::CentralPanel::default().show(ctx, |ui| {
-                                let start = ui.cursor().top();
-                                let mut close = false;
-                                let shell = StudioShell::new(
-                                    "Photo",
-                                    crate::icons::Icon::Image,
-                                    &palette,
-                                    &mut close,
-                                )
-                                .with_footer_hints("Scroll to zoom; drag to pan");
-                                shell.render_footer_with_center(ui, &None, 0.0, 184.0, |ui| {
-                                    ui.add_sized(
-                                        egui::vec2(56.0, 24.0),
-                                        clip_ui::buttons::ButtonRole::Secondary
-                                            .button("Reset", &palette)
-                                            .small(),
-                                    );
-                                    ui.add_sized(
-                                        egui::vec2(40.0, 24.0),
-                                        clip_ui::buttons::ButtonRole::Secondary
-                                            .button("1:1", &palette)
-                                            .small(),
-                                    );
-                                });
-                                height = ui.cursor().top() - start;
+                            ctx.root_ui(|ui| {
+                                egui::CentralPanel::default().show(ui, |ui| {
+                                    let start = ui.cursor().top();
+                                    let mut close = false;
+                                    let shell = StudioShell::new(
+                                        "Photo",
+                                        crate::icons::Icon::Image,
+                                        &palette,
+                                        &mut close,
+                                    )
+                                    .with_footer_hints("Scroll to zoom; drag to pan");
+                                    shell.render_footer_with_center(ui, &None, 0.0, 184.0, |ui| {
+                                        ui.add_sized(
+                                            egui::vec2(56.0, 24.0),
+                                            clip_ui::buttons::ButtonRole::Secondary
+                                                .button("Reset", &palette)
+                                                .small(),
+                                        );
+                                        ui.add_sized(
+                                            egui::vec2(40.0, 24.0),
+                                            clip_ui::buttons::ButtonRole::Secondary
+                                                .button("1:1", &palette)
+                                                .small(),
+                                        );
+                                    });
+                                    height = ui.cursor().top() - start;
+                                })
                             })
                         });
                         assert!(FileEditor::current(ctx).is_none());

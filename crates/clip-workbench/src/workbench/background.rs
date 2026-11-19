@@ -365,7 +365,7 @@ mod tests {
             (
                 ScreenRenderer::fallback(config),
                 Ok((
-                    egui::ColorImage::new([1, 1], egui::Color32::RED),
+                    egui::ColorImage::filled([1, 1], egui::Color32::RED),
                     Some(shell::native_mirror::NativeMirrorData::prepare(
                         &stale_state,
                         vec![(

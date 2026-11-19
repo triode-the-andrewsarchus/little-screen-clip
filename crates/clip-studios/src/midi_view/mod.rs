@@ -10,7 +10,7 @@ mod transport;
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{self, StatusToast, ZoomAction};
-use egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use little_clip_core::{BackgroundJobs, HandSide, JobError, JobTicket};
@@ -51,7 +51,7 @@ impl InlineMidiPreview {
         Self {
             data,
             host_size,
-            id: egui::Id::new((
+            id: egui::Id::unique((
                 "inline-midi-preview",
                 NEXT_INLINE_MIDI_ID.fetch_add(1, Ordering::Relaxed),
             )),
@@ -78,13 +78,14 @@ impl InlineMidiPreview {
         let border = crate::hex_to_c32(&palette.colors.surface_panel);
         painter.rect_filled(
             rect,
-            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
             panel,
         );
         painter.rect_stroke(
             rect,
-            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
             Stroke::new(1.0_f32, border),
+            egui::StrokeKind::Middle,
         );
 
         let header_height = 22.0_f32.min(rect.height() * 0.35);
@@ -156,12 +157,13 @@ impl InlineMidiPreview {
                     note.velocity,
                 );
                 let color = Color32::from_rgb(r, g, b);
-                canvas_painter.rect_filled(note_rect, Rounding::same(2.0), color);
+                canvas_painter.rect_filled(note_rect, CornerRadius::same(2), color);
                 if self.selected_note == Some(index) {
                     canvas_painter.rect_stroke(
                         note_rect,
-                        Rounding::same(2.0),
+                        CornerRadius::same(2),
                         Stroke::new(1.5_f32, crate::hex_to_c32(&palette.colors.text_primary)),
+                        egui::StrokeKind::Middle,
                     );
                 }
                 note_rects.push((index, note_rect));

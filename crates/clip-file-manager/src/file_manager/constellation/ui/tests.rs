@@ -1,20 +1,48 @@
 use super::*;
 
+// Panels store their sizes under the parent Ui scope in egui 0.37.
+pub(super) fn remember_panel_id(ui: &egui::Ui, salt: &'static str) {
+    let id = ui.scope_id().with_salt(egui::IdSalt::new(salt));
+    let key = egui::Id::unique(("constellation_test_panel", salt));
+    ui.ctx().data_mut(|data| data.insert_temp(key, id));
+}
+
+fn panel_id(ctx: &egui::Context, salt: &'static str) -> egui::Id {
+    let key = egui::Id::unique(("constellation_test_panel", salt));
+    ctx.data(|data| data.get_temp(key))
+        .expect("panel was rendered")
+}
+
 fn render_map_frame(
     ctx: &egui::Context,
     state: &mut ConstellationState,
     events: Vec<egui::Event>,
     play: &mut dyn FnMut(&std::path::Path),
 ) -> egui::FullOutput {
-    ctx.run(
+    render_map_frame_with_uploads(ctx, state, events, play).0
+}
+
+fn render_map_frame_with_uploads(
+    ctx: &egui::Context,
+    state: &mut ConstellationState,
+    events: Vec<egui::Event>,
+    play: &mut dyn FnMut(&std::path::Path),
+) -> (
+    egui::FullOutput,
+    Vec<(egui::TextureId, egui::epaint::ImageDelta)>,
+) {
+    clip_ui::test_support::run_frame_with_uploads(
+        ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             events,
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_starfield(ui, std::path::Path::new("/samples"), play, &mut |_| {});
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_starfield(ui, std::path::Path::new("/samples"), play, &mut |_| {});
+                })
             });
         },
     )
@@ -159,11 +187,11 @@ fn close_pitch_views_keep_exact_projection_and_cover_all_stem_bases() {
     let ctx = egui::Context::default();
     state.zoom = 1.0;
     let (scale, center, points) = state.layout_map_points(viewport, viewport, 4.0, "");
-    let output = ctx.run(Default::default(), |ctx| {
+    let output = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
         let painter = ctx
             .layer_painter(egui::LayerId::new(
                 egui::Order::Background,
-                egui::Id::new("plane"),
+                egui::Id::unique("plane"),
             ))
             .with_clip_rect(viewport);
         state.paint_reference_plane(&painter, center, scale);
@@ -630,7 +658,8 @@ fn explore_overrides_ranges_and_escape_distinguishes_clicked_notes_from_hover() 
         "1 / 4 samples · piano · 3 notes"
     );
     let escape = |state: &mut ConstellationState| {
-        let _ = egui::Context::default().run(
+        let _ = clip_ui::test_support::run_frame(
+            &egui::Context::default(),
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Escape,
@@ -848,20 +877,23 @@ fn middle_drag_on_a_sample_pans_without_creating_a_file_drag_or_audition() {
     state.samples.push(sample_fixture(0));
     let mut auditions = 0;
     let mut frame = |events| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_starfield(
-                        ui,
-                        std::path::Path::new("/samples"),
-                        &mut |_| auditions += 1,
-                        &mut |_| {},
-                    )
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_starfield(
+                            ui,
+                            std::path::Path::new("/samples"),
+                            &mut |_| auditions += 1,
+                            &mut |_| {},
+                        )
+                    })
                 });
             },
         )
@@ -927,21 +959,24 @@ fn selecting_a_folded_set_keeps_its_dot_and_canvas_fixed_at_high_zoom() {
     state.zoom = 3.0;
     let mut selections = 0;
     let mut frame = |state: &mut ConstellationState, events| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0))),
                 events,
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(
-                        ui,
-                        std::path::Path::new("/a"),
-                        &Default::default(),
-                        &mut |_| {},
-                        &mut |_| selections += 1,
-                    );
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(
+                            ui,
+                            std::path::Path::new("/a"),
+                            &Default::default(),
+                            &mut |_| {},
+                            &mut |_| selections += 1,
+                        );
+                    })
                 });
             },
         )
@@ -1042,7 +1077,8 @@ fn duration_handles_keep_the_grabbed_endpoint_and_reset_on_double_click() {
     state.samples = (0..2).map(sample_fixture).collect();
     state.samples[1].duration_seconds = 2.0;
     let render = |state: &mut ConstellationState, events, time| {
-        ctx.run(
+        clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 300.0))),
                 events,
@@ -1050,7 +1086,9 @@ fn duration_handles_keep_the_grabbed_endpoint_and_reset_on_double_click() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| state.render_duration_range(ui));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| state.render_duration_range(ui))
+                });
             },
         )
     };
@@ -1121,7 +1159,8 @@ fn n_advances_only_when_unbound_and_outside_text_entry() {
         state.focus_search = editing;
         state.playback.lock().unwrap().show_midi_notes = true;
         let mut auditions = Vec::new();
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::N,
@@ -1133,14 +1172,16 @@ fn n_advances_only_when_unbound_and_outside_text_entry() {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(
-                        ui,
-                        std::path::Path::new("/samples"),
-                        &Default::default(),
-                        &mut |path| auditions.push(path.to_owned()),
-                        &mut |_| {},
-                    )
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        state.render_ui(
+                            ui,
+                            std::path::Path::new("/samples"),
+                            &Default::default(),
+                            &mut |path| auditions.push(path.to_owned()),
+                            &mut |_| {},
+                        )
+                    })
                 });
             },
         );
@@ -1440,7 +1481,7 @@ fn category_and_duration_exclusions_render_only_faint_soft_density() {
     for sample in played_samples {
         state.record_played_sample(&sample);
     }
-    let output = render_map_frame(&ctx, &mut state, vec![], &mut |_| {});
+    let (output, uploads) = render_map_frame_with_uploads(&ctx, &mut state, vec![], &mut |_| {});
     let meshes: Vec<_> = output
         .shapes
         .iter()
@@ -1479,9 +1520,7 @@ fn category_and_duration_exclusions_render_only_faint_soft_density() {
             .any(|shape| matches!(shape.shape, egui::Shape::Circle(_))),
         "excluded selection, collection and history must not produce bright markers"
     );
-    let atlas = output
-        .textures_delta
-        .set
+    let atlas = uploads
         .iter()
         .find_map(|(_, delta)| match &delta.image {
             egui::ImageData::Color(image) if image.size == [64, 32] => Some(image),
@@ -1566,20 +1605,23 @@ pub(super) fn render_frame(
     palette: &little_clip_core::palette::AppPalette,
     size: Vec2,
 ) -> egui::FullOutput {
-    ctx.run(
+    clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(
-                    ui,
-                    std::path::Path::new("/samples"),
-                    palette,
-                    &mut |_| {},
-                    &mut |_| {},
-                );
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(
+                        ui,
+                        std::path::Path::new("/samples"),
+                        palette,
+                        &mut |_| {},
+                        &mut |_| {},
+                    );
+                })
             });
         },
     )
@@ -1594,7 +1636,7 @@ fn mixer_controls_and_filename_tabs_remain_visible_at_every_editor_width() {
     ] {
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         let palette = little_clip_core::palette::AppPalette::for_appearance(appearance);
         crate::ui_appearance::apply_visuals(&ctx, &palette);
         let mut state = ConstellationState::new();
@@ -1620,10 +1662,10 @@ fn mixer_controls_and_filename_tabs_remain_visible_at_every_editor_width() {
 
             let editor = egui::containers::panel::PanelState::load(
                 &ctx,
-                egui::Id::new("constellation_selected_pad"),
+                panel_id(&ctx, "constellation_selected_pad"),
             )
             .unwrap()
-            .rect;
+            .outer_rect;
             assert!(
                 !output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Rect(rect) if rect.rect.width() <= 12.0
@@ -1792,26 +1834,26 @@ fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
                 }
                 let panel = egui::containers::panel::PanelState::load(
                     &ctx,
-                    egui::Id::new("constellation_pack_shelf_panel"),
+                    panel_id(&ctx, "constellation_pack_shelf_panel"),
                 )
                 .unwrap();
                 assert!(
-                    panel.rect.width() <= 361.0,
+                    panel.outer_rect.width() <= 361.0,
                     "rack expanded on frame {frame}: {:?}",
-                    panel.rect
+                    panel.outer_rect
                 );
             }
         }
-        let id = egui::Id::new("constellation_pack_shelf_panel");
+        let id = panel_id(&ctx, "constellation_pack_shelf_panel");
         let mut user_panel = egui::containers::panel::PanelState::load(&ctx, id).unwrap();
-        user_panel.rect.min.x = user_panel.rect.max.x - 312.0;
+        user_panel.outer_rect.min.x = user_panel.outer_rect.max.x - 312.0;
         ctx.data_mut(|data| data.insert_persisted(id, user_panel));
         for _ in 0..30 {
             render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
             assert!(
                 (egui::containers::panel::PanelState::load(&ctx, id)
                     .unwrap()
-                    .rect
+                    .outer_rect
                     .width()
                     - 312.0)
                     .abs()
@@ -1825,7 +1867,7 @@ fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
         assert!(
             (egui::containers::panel::PanelState::load(&ctx, id)
                 .unwrap()
-                .rect
+                .outer_rect
                 .width()
                 - 312.0)
                 .abs()
@@ -1838,10 +1880,10 @@ fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
         render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
         let panel = egui::containers::panel::PanelState::load(
             &ctx,
-            egui::Id::new("constellation_pack_shelf_panel"),
+            panel_id(&ctx, "constellation_pack_shelf_panel"),
         )
         .unwrap();
-        assert!(panel.rect.width() <= 361.0 && panel.rect.bottom() <= 550.0);
+        assert!(panel.outer_rect.width() <= 361.0 && panel.outer_rect.bottom() <= 550.0);
         assert!(!ctx.memory(|memory| {
             memory
                 .areas()
@@ -1877,12 +1919,14 @@ fn pad_assignment_uses_configured_keys_and_only_text_focus_blocks_it() {
     };
     state.selected_path = Some(sample.file_path.clone());
     state.samples.push(sample);
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.button("Canvas control").request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.button("Canvas control").request_focus();
+            })
         });
     });
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     let input = || egui::RawInput {
         events: vec![
             egui::Event::Key {
@@ -1904,19 +1948,21 @@ fn pad_assignment_uses_configured_keys_and_only_text_focus_blocks_it() {
         ],
         ..Default::default()
     };
-    let _ = ctx.run(input(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, input(), |ctx| {
         state.handle_shelf_keyboard_shortcuts(ctx);
         assert!(ctx.input(|input| input.events.is_empty()));
     });
     assert_eq!(state.pack_bank.slots[12].samples.len(), 1);
     assert_eq!(state.pack_bank.slots[13].samples.len(), 1);
     let mut text = String::new();
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.text_edit_singleline(&mut text).request_focus();
+    let _ = clip_ui::test_support::run_frame(&ctx, Default::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            })
         });
     });
-    let _ = ctx.run(input(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, input(), |ctx| {
         state.handle_shelf_keyboard_shortcuts(ctx);
         assert!(!ctx.input(|input| input.events.is_empty()));
     });
@@ -1929,17 +1975,19 @@ fn escape_clears_search_before_the_text_edit_surrenders_focus() {
     let mut state = ConstellationState::new();
     state.search_query = "kick".into();
     state.focus_search = true;
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_toolbar(
-                ui,
-                std::path::Path::new("/samples"),
-                &mut |_| {},
-                &little_clip_core::palette::AppPalette::default(),
-            );
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_toolbar(
+                    ui,
+                    std::path::Path::new("/samples"),
+                    &mut |_| {},
+                    &little_clip_core::palette::AppPalette::default(),
+                );
+            })
         });
     });
-    assert!(ctx.wants_keyboard_input());
+    assert!(ctx.egui_wants_keyboard_input());
     let input = egui::RawInput {
         events: vec![egui::Event::Key {
             key: egui::Key::Escape,
@@ -1950,14 +1998,16 @@ fn escape_clears_search_before_the_text_edit_surrenders_focus() {
         }],
         ..Default::default()
     };
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_toolbar(
-                ui,
-                std::path::Path::new("/samples"),
-                &mut |_| {},
-                &little_clip_core::palette::AppPalette::default(),
-            );
+    let _ = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+        ctx.root_ui(|ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_toolbar(
+                    ui,
+                    std::path::Path::new("/samples"),
+                    &mut |_| {},
+                    &little_clip_core::palette::AppPalette::default(),
+                );
+            })
         });
     });
     assert!(state.search_query.is_empty());

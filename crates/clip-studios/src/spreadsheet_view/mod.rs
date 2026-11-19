@@ -8,7 +8,7 @@ mod studio;
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, StatusToast};
-use egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
+use egui::{self, CornerRadius, FontId, Stroke, TextStyle, Vec2};
 use little_clip_ops::spreadsheet::SpreadsheetData;
 #[cfg(any(test, feature = "test-support"))]
 use little_clip_ops::spreadsheet::SpreadsheetSheet;

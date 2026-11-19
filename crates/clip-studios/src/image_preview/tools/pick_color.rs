@@ -29,7 +29,7 @@ impl ImagePreviewState {
         copy: impl FnOnce(&str) + Send + 'static,
     ) {
         let hex = format!("#{:02X}{:02X}{:02X}", col.r(), col.g(), col.b());
-        ctx.output_mut(|o| o.copied_text = hex.clone());
+        ctx.copy_text(hex.clone());
 
         schedule_system_clipboard_copy_on(jobs, hex.clone(), copy);
 
@@ -199,11 +199,12 @@ impl ImagePreviewState {
         card_min = card_rect.min;
 
         // Card background & sleek harmonic border
-        painter.rect_filled(card_rect, Rounding::same(8.0), card_bg);
+        painter.rect_filled(card_rect, CornerRadius::same(8), card_bg);
         painter.rect_stroke(
             card_rect,
-            Rounding::same(8.0),
+            CornerRadius::same(8),
             Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+            egui::StrokeKind::Middle,
         );
 
         // Loupe Grid
@@ -232,29 +233,31 @@ impl ImagePreviewState {
                     let half = cell_size / 2.0;
                     painter.rect_filled(
                         Rect::from_min_size(cell_min, Vec2::splat(half)),
-                        Rounding::ZERO,
+                        CornerRadius::ZERO,
                         Color32::from_gray(180),
                     );
                     painter.rect_filled(
                         Rect::from_min_size(cell_min + Vec2::splat(half), Vec2::splat(half)),
-                        Rounding::ZERO,
+                        CornerRadius::ZERO,
                         Color32::from_gray(180),
                     );
                 }
 
-                painter.rect_filled(cell_rect, Rounding::ZERO, cell_col);
+                painter.rect_filled(cell_rect, CornerRadius::ZERO, cell_col);
 
                 // Highlight center cell
                 if dx == 0 && dy == 0 {
                     painter.rect_stroke(
                         cell_rect,
-                        Rounding::ZERO,
+                        CornerRadius::ZERO,
                         Stroke::new(2.0_f32, hex_to_c32(&palette.colors.text_primary)),
+                        egui::StrokeKind::Middle,
                     );
                     painter.rect_stroke(
                         cell_rect.expand(1.0),
-                        Rounding::ZERO,
+                        CornerRadius::ZERO,
                         Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
+                        egui::StrokeKind::Middle,
                     );
                 }
             }
@@ -266,11 +269,12 @@ impl ImagePreviewState {
             Pos2::new(card_min.x + card_padding, swatch_y),
             Vec2::new(grid_w, 16.0),
         );
-        painter.rect_filled(swatch_rect, Rounding::same(3.0), col);
+        painter.rect_filled(swatch_rect, CornerRadius::same(3), col);
         painter.rect_stroke(
             swatch_rect,
-            Rounding::same(3.0),
+            CornerRadius::same(3),
             Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+            egui::StrokeKind::Middle,
         );
 
         // Stacked rows remain legible without a long line overflowing
@@ -350,9 +354,13 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             let (swatch, _) = ui.allocate_exact_size(Vec2::splat(54.0), egui::Sense::hover());
             ui.painter()
-                .rect_filled(swatch, Rounding::same(5.0), current);
-            ui.painter()
-                .rect_stroke(swatch, Rounding::same(5.0), Stroke::new(1.0_f32, surface));
+                .rect_filled(swatch, CornerRadius::same(5), current);
+            ui.painter().rect_stroke(
+                swatch,
+                CornerRadius::same(5),
+                Stroke::new(1.0_f32, surface),
+                egui::StrokeKind::Middle,
+            );
 
             ui.vertical(|ui| {
                 ui.label(
@@ -437,18 +445,20 @@ impl ImagePreviewState {
                 .map(|color| format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            ctx.output_mut(|output| output.copied_text = colors);
+            ctx.copy_text(colors);
         }
 
         for color in self.pick_color_state.picked_colors.clone() {
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 let (swatch, _) = ui.allocate_exact_size(Vec2::splat(34.0), egui::Sense::hover());
-                ui.painter().rect_filled(swatch, Rounding::same(4.0), color);
+                ui.painter()
+                    .rect_filled(swatch, CornerRadius::same(4), color);
                 ui.painter().rect_stroke(
                     swatch,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(1.0_f32, surface),
+                    egui::StrokeKind::Middle,
                 );
                 ui.label(
                     egui::RichText::new(format!(
@@ -506,13 +516,17 @@ mod tests {
         let context = egui::Context::default();
         let mut state = state();
         let color = Color32::from_rgb(0x12, 0x34, 0x56);
-        let output = context.run(Default::default(), |ctx| {
+        let output = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
+            let text_tx = text_tx.clone();
             state.copy_color_to_clipboard_on(color, ctx, &jobs, move |text| {
                 text_tx.send(text.to_owned()).unwrap();
             });
         });
 
-        assert_eq!(output.platform_output.copied_text, "#123456");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&output.platform_output),
+            "#123456"
+        );
         assert_eq!(state.pick_color_state.last_picked, Some(color));
         assert_eq!(state.pick_color_state.recent_colors, vec![color]);
         assert!(
@@ -541,15 +555,25 @@ mod tests {
         state.pick_color_state.hovered_color = Some(color);
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
         let mut render = |events, copy: Box<dyn FnOnce(&str) + Send>| {
-            context.run(
+            let mut copy = Some(copy);
+            clip_ui::test_support::run_frame(
+                &context,
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_pick_color_results_with_copy(ui, ctx, &palette, &jobs, copy);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            state.render_pick_color_results_with_copy(
+                                ui,
+                                ctx,
+                                &palette,
+                                &jobs,
+                                copy.take().unwrap_or_else(|| Box::new(|_| {})),
+                            );
+                        })
                     });
                 },
             )
@@ -598,7 +622,10 @@ mod tests {
             Box::new(move |text| text_tx.send(text.to_owned()).unwrap()),
         );
 
-        assert_eq!(copied.platform_output.copied_text, "#123456");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&copied.platform_output),
+            "#123456"
+        );
         assert_eq!(
             text_rx
                 .recv_timeout(std::time::Duration::from_secs(1))
@@ -626,13 +653,17 @@ mod tests {
         let context = egui::Context::default();
         let mut state = state();
         let color = Color32::from_rgb(0xAB, 0xCD, 0xEF);
-        let output = context.run(Default::default(), |ctx| {
+        let output = clip_ui::test_support::run_frame(&context, Default::default(), |ctx| {
+            let copied_tx = copied_tx.clone();
             state.copy_color_to_clipboard_on(color, ctx, &jobs, move |text| {
                 copied_tx.send(text.to_owned()).unwrap();
             });
         });
 
-        assert_eq!(output.platform_output.copied_text, "#ABCDEF");
+        assert_eq!(
+            clip_ui::test_support::copied_text(&output.platform_output),
+            "#ABCDEF"
+        );
         assert_eq!(state.pick_color_state.recent_colors, vec![color]);
         assert!(
             state

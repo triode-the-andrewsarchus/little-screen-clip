@@ -7,7 +7,7 @@
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
-use egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
+use egui::{self, Color32, CornerRadius, Pos2, Stroke, Vec2};
 use little_clip_core::JobTicket;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
@@ -95,7 +95,7 @@ impl InlineModel3dPreview {
         Self {
             mesh,
             host_size,
-            id: egui::Id::new((
+            id: egui::Id::unique((
                 "inline-model3d-preview",
                 NEXT_INLINE_MODEL3D_ID.fetch_add(1, Ordering::Relaxed),
             )),
@@ -128,7 +128,7 @@ impl InlineModel3dPreview {
         {
             self.pan_offset += response.drag_delta();
         }
-        let scroll = ui.input(|input| input.raw_scroll_delta.y);
+        let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
         if scroll.abs() > 0.1 && response.hovered() {
             self.zoom = (self.zoom * if scroll > 0.0 { 1.15 } else { 0.85 }).clamp(0.1, 20.0);
         }
@@ -137,13 +137,14 @@ impl InlineModel3dPreview {
         let background = crate::hex_to_c32(&palette.colors.surface_recessed);
         painter.rect_filled(
             rect,
-            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
             background,
         );
         painter.rect_stroke(
             rect,
-            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
             Stroke::new(1.0_f32, crate::hex_to_c32(&palette.colors.surface_panel)),
+            egui::StrokeKind::Middle,
         );
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         render_mesh_projection(
@@ -321,9 +322,9 @@ impl Model3dViewerState {
         f_high: Color32,
     ) {
         ui.ctx().request_repaint_after(Duration::from_millis(50));
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg)
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let mut shell = StudioShell::new(&self.title, Icon::Model3d, palette, close)
                     .with_badge("Parsing 3D Model...".to_string(), None)
@@ -336,7 +337,7 @@ impl Model3dViewerState {
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(
                     rect,
-                    Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+                    CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
                     b_low,
                 );
 
@@ -367,9 +368,9 @@ impl Model3dViewerState {
         b_low: Color32,
         f_high: Color32,
     ) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg)
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let mut shell = StudioShell::new(&self.title, Icon::Alert, palette, close)
                     .with_badge("Failed to load".to_string(), None)
@@ -405,7 +406,7 @@ impl Model3dViewerState {
                     let painter = ui.painter_at(rect);
                     painter.rect_filled(
                         rect,
-                        Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+                        CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS),
                         b_low,
                     );
 
@@ -456,9 +457,9 @@ impl Model3dViewerState {
         let mut wire_clicked = false;
         let mut reset_clicked = false;
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(bg)
-            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
+            .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let info_badge = format!(
                     "{} • {} triangles • {:.1}×{:.1}×{:.1} mm",
@@ -501,12 +502,12 @@ impl Model3dViewerState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Toolbar
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(b_low)
                     .stroke(Stroke::new(1.0_f32, b_med))
-                    .inner_margin(egui::Margin::symmetric(
-                        crate::ui_ext::PANEL_INSET,
-                        crate::ui_ext::CONTROL_GROUP_INSET_Y,
+                    .inner_margin(egui::Margin::from(
+                        egui::vec2(crate::ui_ext::PANEL_INSET,
+                        crate::ui_ext::CONTROL_GROUP_INSET_Y),
                     ))
                     .show(ui, |ui| {
                         // Keep every viewer action one click away while allowing
@@ -600,7 +601,7 @@ impl Model3dViewerState {
                 let painter = ui.painter_at(canvas_rect);
 
                 // Background dark canvas
-                painter.rect_filled(canvas_rect, Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS), b_low);
+                painter.rect_filled(canvas_rect, CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS), b_low);
 
                 // Mouse interaction
                 if response.dragged_by(egui::PointerButton::Primary) {
@@ -616,7 +617,7 @@ impl Model3dViewerState {
                     self.pan_offset += response.drag_delta();
                 }
 
-                let scroll = ui.input(|i| i.raw_scroll_delta.y);
+                let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
                 if scroll.abs() > 0.1 && response.hovered() {
                     let zoom_factor = if scroll > 0.0 { 1.15 } else { 0.85 };
                     self.zoom = (self.zoom * zoom_factor).clamp(0.1, 20.0);
@@ -819,7 +820,8 @@ mod tests {
     ) -> (egui::FullOutput, [egui::Rect; 2]) {
         let palette = AppPalette::default();
         let mut rects = [egui::Rect::NOTHING; 2];
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     Pos2::ZERO,
@@ -830,11 +832,13 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        rects[0] = first.show(ui, &palette).rect;
-                        rects[1] = second.show(ui, &palette).rect;
-                    });
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            rects[0] = first.show(ui, &palette).rect;
+                            rects[1] = second.show(ui, &palette).rect;
+                        });
+                    })
                 });
             },
         );
@@ -921,7 +925,7 @@ mod tests {
             &mut second,
             vec![
                 egui::Event::PointerMoved(rects[0].center()),
-                egui::Event::Scroll(Vec2::new(0.0, 80.0)),
+                clip_ui::test_support::scroll(Vec2::new(0.0, 80.0)),
             ],
             0.4,
         );
@@ -1048,15 +1052,18 @@ endsolid test_cache
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette = AppPalette::default();
         let host = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(host),
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut close = false;
-                    viewer.render_ui(ui, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut close = false;
+                        viewer.render_ui(ui, &palette, &mut close);
+                    })
                 });
             },
         );
@@ -1087,7 +1094,8 @@ endsolid test_cache
     ) -> egui::Rect {
         let palette = AppPalette::default();
         let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
-        let output = ctx.run(
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1098,9 +1106,11 @@ endsolid test_cache
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut close = false;
-                    viewer.render_ui(ui, &palette, &mut close);
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut close = false;
+                        viewer.render_ui(ui, &palette, &mut close);
+                    })
                 });
             },
         );
@@ -1379,7 +1389,7 @@ endsolid test_cache
                 (index + 1) as f64 * 0.01,
                 vec![
                     egui::Event::PointerMoved(canvas_pointer),
-                    egui::Event::Scroll(Vec2::new(0.0, 20.0)),
+                    clip_ui::test_support::scroll(Vec2::new(0.0, 20.0)),
                 ],
             );
         }
@@ -1392,7 +1402,7 @@ endsolid test_cache
                 0.33 + index as f64 * 0.01,
                 vec![
                     egui::Event::PointerMoved(canvas_pointer),
-                    egui::Event::Scroll(Vec2::new(0.0, -20.0)),
+                    clip_ui::test_support::scroll(Vec2::new(0.0, -20.0)),
                 ],
             );
         }

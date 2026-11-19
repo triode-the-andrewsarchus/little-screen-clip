@@ -94,12 +94,12 @@ impl Viewer {
         StudioShell::new("Toolpath", Icon::Code, palette, close).render_header(ui, |_| {});
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.details(ui, palette);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let colors = WorkbenchColors::from_palette(palette);
             let (rect, response) = ui.allocate_exact_size(
@@ -145,7 +145,7 @@ impl Viewer {
                 );
             }
             source_area
-                .id_source("toolpath-source")
+                .id_salt("toolpath-source")
                 .auto_shrink([false, false])
                 .min_scrolled_height(0.0)
                 .show_rows(ui, row_height, self.lines.len(), |ui, rows| {
@@ -202,14 +202,14 @@ impl Viewer {
             self.zoom = 1.0;
         }
         ui.label("Accent: feed / cutting\nGreen: extrusion\nMuted: rapid travel");
-        egui::ScrollArea::vertical().id_source("toolpath-details").auto_shrink([false,false]).min_scrolled_height(0.0).show(ui,|ui|{
+        egui::ScrollArea::vertical().id_salt("toolpath-details").auto_shrink([false,false]).min_scrolled_height(0.0).show(ui,|ui|{
             if let Some(movement)=self.current(){
                 ui.strong(format!("Source line {}",movement.line));
                 for (axis,label) in ["X","Y","Z"].iter().enumerate(){ui.label(format!("{label} {:.3} mm",movement.to[axis]));}
                 if let Some(feed)=movement.feed_mm_min {ui.label(format!("Feed {feed:.1} mm/min"));}
                 ui.label(if movement.rapid {"Rapid travel"} else if movement.extruding {"Extruding"} else {"Feed / cutting move"});
             }
-            for note in &self.document.notes {ui.add(egui::Label::new(note).wrap(true));}
+            for note in &self.document.notes {ui.add(egui::Label::new(note).wrap());}
             ui.label("Arc drawing uses intervals of at most 2 degrees. Length is the sampled path, not a machine cycle estimate. G90/G91 also reset extrusion mode; M82/M83 can override it.");
         });
     }

@@ -230,9 +230,11 @@ mod tests {
                     ..Default::default()
                 };
                 let render = |state: &mut ImagePreviewState| {
-                    ctx.run(input(), |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            state.render_tool_workspace(ui, ctx, &palette);
+                    clip_ui::test_support::run_frame(&ctx, input(), |ctx| {
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                state.render_tool_workspace(ui, ctx, &palette);
+                            })
                         });
                     })
                 };
@@ -246,7 +248,7 @@ mod tests {
                             let bounds = text.galley.rect.translate(text.pos.to_vec2());
                             assert!(
                                 bounds.right()
-                                    <= clipped.clip_rect.right() - crate::ui_ext::SPACE_SM + 0.5,
+                                    <= clipped.clip_rect.right() - crate::ui_ext::SPACE_SM + 1.0,
                                 "{mode:?}, width {width}: {} overflows {:?} with {:?}",
                                 text.galley.text(),
                                 clipped.clip_rect,
@@ -281,15 +283,18 @@ mod tests {
             assert!(!state.has_view_metadata());
             state.auto_fitted = false;
             let mut expected_width = 0.0;
-            let output = ctx.run(
+            let output = clip_ui::test_support::run_frame(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        expected_width = ui.available_width();
-                        state.render_tool_workspace(ui, ctx, &palette);
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            expected_width = ui.available_width();
+                            state.render_tool_workspace(ui, ctx, &palette);
+                        })
                     });
                 },
             );

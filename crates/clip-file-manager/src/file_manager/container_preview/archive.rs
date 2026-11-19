@@ -255,10 +255,10 @@ impl Viewer {
             );
         }
         let rows = directory_rows(&self.inventory, &self.folder);
-        egui::SidePanel::left("archive-members")
-            .default_width(260.0)
-            .width_range(140.0..=500.0)
-            .show_inside(ui, |ui| {
+        egui::Panel::left("archive-members")
+            .default_size(260.0)
+            .size_range(140.0..=500.0)
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical().show_rows(ui, 26.0, rows.len(), |ui, range| {
                     for (name, directory, ordinal) in &rows[range] {
                         let label = format!("{} {}", if *directory { "▸" } else { "" }, name);
@@ -281,8 +281,8 @@ impl Viewer {
                 });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(8.0))
-            .show_inside(ui, |ui| {
+            .frame(egui::Frame::NONE.inner_margin(8.0))
+            .show(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 self.selected_ui(ui);
             });
@@ -301,7 +301,7 @@ impl Viewer {
         else {
             return;
         };
-        ui.add(egui::Label::new(name).truncate(true))
+        ui.add(egui::Label::new(name).truncate())
             .on_hover_text(name);
         ui.weak(format!(
             "{} · archive member · read-only",
@@ -325,7 +325,7 @@ impl Viewer {
             let lines: Vec<_> = ready.data.text.lines().collect();
             egui::ScrollArea::both().show_rows(ui, 18.0, lines.len(), |ui, range| {
                 for line in &lines[range] {
-                    ui.add(egui::Label::new(egui::RichText::new(*line).monospace()).wrap(false));
+                    ui.add(egui::Label::new(egui::RichText::new(*line).monospace()).extend());
                 }
             });
         }

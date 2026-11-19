@@ -17,7 +17,7 @@ impl AudioPreviewState {
         mut start_stem_separation: impl FnMut(&mut Self),
     ) -> bool {
         let dialog_open = self.save_dialog_open || self.stem_separation.save_dialog_open;
-        let tool_shortcuts_enabled = !dialog_open && !ctx.wants_keyboard_input();
+        let tool_shortcuts_enabled = !dialog_open && !ctx.egui_wants_keyboard_input();
         if tool_shortcuts_enabled {
             // Priority matches the former sequential checks when a frame has
             // more than one pressed key; modified keys belong to other controls.

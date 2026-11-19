@@ -261,7 +261,7 @@ impl Inspector {
         });
         self.header(ui);
         let action = egui::ScrollArea::vertical()
-            .id_source((
+            .id_salt((
                 "system-inspector-document",
                 &self.document.path,
                 self.document.generation,
@@ -336,7 +336,7 @@ impl Inspector {
                     if fact.value.is_none() && fact.outcome == super::model::Outcome::Missing {
                         continue;
                     }
-                    ui.add(egui::Label::new(&fact.label).wrap(true));
+                    ui.add(egui::Label::new(&fact.label).wrap());
                     let display = match &fact.value {
                         Some(value) if fact.retained => {
                             format!("{value} · {} (last observation)", fact.outcome)
@@ -344,7 +344,7 @@ impl Inspector {
                         Some(value) => value.clone(),
                         None => fact.outcome.to_string(),
                     };
-                    ui.add(egui::Label::new(display).wrap(true))
+                    ui.add(egui::Label::new(display).wrap())
                         .on_hover_text(format!(
                             "{}\n{} · {}\nObserved {}ms ago · generation {}{}",
                             fact.source.display(),
@@ -364,7 +364,7 @@ impl Inspector {
                             .add(ButtonRole::Secondary.button("Copy value", palette).small())
                             .clicked()
                         {
-                            ui.output_mut(|out| out.copied_text = value.clone());
+                            ui.ctx().copy_text(value.clone());
                         }
                     } else {
                         ui.label("");
@@ -476,14 +476,17 @@ mod tests {
         let context = egui::Context::default();
         let mut action = None;
         let mut frame = |events| {
-            context.run(
+            clip_ui::test_support::run_frame(
+                &context,
                 egui::RawInput {
                     events,
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        action = inspector.relations_ui(ui, &AppPalette::default());
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            action = inspector.relations_ui(ui, &AppPalette::default());
+                        })
                     });
                 },
             )
@@ -593,10 +596,13 @@ mod tests {
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
             let mut close = false;
-            let first = context.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| inspector.ui(ui, &mut close, &palette));
-            });
+            let first =
+                clip_ui::test_support::run_frame(&context, egui::RawInput::default(), |ctx| {
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default()
+                            .show(ui, |ui| inspector.ui(ui, &mut close, &palette))
+                    });
+                });
             let position = first
                 .shapes
                 .iter()
@@ -610,7 +616,8 @@ mod tests {
                 })
                 .expect("rendered inspector Back button");
             for pressed in [true, false] {
-                let _ = context.run(
+                let _ = clip_ui::test_support::run_frame(
+                    &context,
                     egui::RawInput {
                         events: vec![
                             egui::Event::PointerMoved(position),
@@ -624,8 +631,10 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::CentralPanel::default()
-                            .show(ctx, |ui| inspector.ui(ui, &mut close, &palette));
+                        ctx.root_ui(|ui| {
+                            egui::CentralPanel::default()
+                                .show(ui, |ui| inspector.ui(ui, &mut close, &palette))
+                        });
                     },
                 );
             }

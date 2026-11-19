@@ -61,7 +61,7 @@ impl Viewer {
         let document = model::load(path, &AtomicBool::new(false))?;
         let summary = summarize(&document);
         Ok(Self {
-            id: egui::Id::new(("notebook-session", uuid::Uuid::new_v4())),
+            id: egui::Id::unique(("notebook-session", uuid::Uuid::new_v4())),
             document: Arc::new(document),
             summary,
             selected: 0,
@@ -143,12 +143,12 @@ impl Viewer {
         self.poll(ui);
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.outline(ui);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.body(ui, palette);
         });
@@ -177,7 +177,7 @@ impl Viewer {
                 let mut index = self.selected + 1;
                 ui.add(
                     egui::DragValue::new(&mut index)
-                        .clamp_range(1..=self.document.cells.len())
+                        .range(1..=self.document.cells.len())
                         .prefix("Cell "),
                 );
                 self.select(index - 1);
@@ -188,7 +188,7 @@ impl Viewer {
     fn outline(&mut self, ui: &mut Ui) {
         ui.label("Cells");
         let mut scroll = egui::ScrollArea::vertical()
-            .id_source((self.id, "outline"))
+            .id_salt((self.id, "outline"))
             .auto_shrink([false, false]);
         if std::mem::take(&mut self.scroll_outline) {
             scroll = scroll.vertical_scroll_offset(self.selected as f32 * 26.0);
@@ -226,7 +226,7 @@ impl Viewer {
                 .add(ButtonRole::Secondary.button("Copy cell source", palette))
                 .clicked()
             {
-                ui.output_mut(|output| output.copied_text = cell.source.as_str().to_owned());
+                ui.ctx().copy_text(cell.source.as_str().to_owned());
             }
         });
         if cell.kind == Kind::Markdown {
@@ -244,7 +244,7 @@ impl Viewer {
             ui.spinner();
             return;
         };
-        egui::ScrollArea::vertical().id_source((self.id, "cell", self.selected)).auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt((self.id, "cell", self.selected)).auto_shrink([false, false]).show(ui, |ui| {
             if cell.kind == Kind::Markdown && self.mode == Mode::Rendered {
                 crate::text_preview::render_markdown_lines(ui, view.markdown.iter().cloned(), palette);
                 if view.markdown_truncated { ui.label("Rendered preview limited to 64 KiB / 512 lines. Source shows the full cell."); }
@@ -266,7 +266,7 @@ fn metadata(ui: &mut Ui, label: &str, text: &str, palette: &AppPalette) {
             .add(ButtonRole::Secondary.button("Copy metadata", palette))
             .clicked()
         {
-            ui.output_mut(|output| output.copied_text = text.into());
+            ui.ctx().copy_text(text.into());
         }
         ui.monospace(text.chars().take(4096).collect::<String>());
         if text.chars().take(4097).count() > 4096 {
@@ -335,7 +335,7 @@ impl OutputView {
                         .add(ButtonRole::Secondary.button("Copy output", palette))
                         .clicked()
                     {
-                        ui.output_mut(|output| output.copied_text = text.as_str().to_owned());
+                        ui.ctx().copy_text(text.as_str().to_owned());
                     }
                 });
                 preview.resize(vec2(
@@ -368,8 +368,8 @@ mod tests {
         assert_eq!(viewer.selected, 0);
         assert!(viewer.submitted.is_none());
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| viewer.poll(ui));
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| viewer.poll(ui)));
         });
         assert_eq!(viewer.submitted, Some(0));
         assert!(viewer.pending.is_some() || viewer.cell.is_some());

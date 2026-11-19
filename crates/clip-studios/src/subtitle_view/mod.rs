@@ -19,7 +19,7 @@ impl Viewer {
             document,
             selected: 0,
             scroll_to_selected: true,
-            id: egui::Id::new(uuid::Uuid::new_v4()),
+            id: egui::Id::unique(uuid::Uuid::new_v4()),
         }
     }
     pub fn select(&mut self, cue: usize) {
@@ -81,7 +81,7 @@ impl Viewer {
                 if ui
                     .add(
                         egui::DragValue::new(&mut number)
-                            .clamp_range(1..=self.document.cues.len())
+                            .range(1..=self.document.cues.len())
                             .prefix("Cue "),
                     )
                     .changed()
@@ -95,12 +95,12 @@ impl Viewer {
             .with_left()
             .allocate(ui);
         if let Some(left) = layout.left {
-            ui.allocate_ui_at_rect(left, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
                 self.outline(ui);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.caption(ui, palette);
         });
@@ -108,7 +108,7 @@ impl Viewer {
     fn outline(&mut self, ui: &mut Ui) {
         ui.label("Cues");
         let mut scroll = egui::ScrollArea::vertical()
-            .id_source((self.id, "cues"))
+            .id_salt((self.id, "cues"))
             .auto_shrink([false, false]);
         if std::mem::take(&mut self.scroll_to_selected) {
             scroll = scroll.vertical_scroll_offset(self.selected as f32 * 28.0);
@@ -154,12 +154,12 @@ impl Viewer {
             .add(clip_ui::buttons::ButtonRole::Secondary.button("Copy cue text", palette))
             .clicked()
         {
-            ui.output_mut(|output| output.copied_text = cue.text.clone());
+            ui.ctx().copy_text(cue.text.clone());
         }
-        egui::ScrollArea::vertical().id_source((self.id,"caption",self.selected)).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt((self.id,"caption",self.selected)).show(ui, |ui| {
             let prefix: String = cue.text.chars().take(800).collect();
             let display = prefix.lines().take(20).collect::<Vec<_>>().join("\n");
-            ui.add(egui::Label::new(egui::RichText::new(&display).size(24.0)).wrap(true).selectable(true));
+            ui.add(egui::Label::new(egui::RichText::new(&display).size(24.0)).wrap().selectable(true));
             if display.len() < cue.text.len() { ui.label("Caption display limited to 800 characters / 20 lines; Raw / Code shows the full cue."); }
             if !cue.settings.is_empty() { ui.label(format!("Cue settings: {}", cue.settings.chars().take(256).collect::<String>())); }
         });
@@ -216,26 +216,32 @@ pub fn paint(
             pos2(x(start), rect.top()),
             pos2(x(end).max(x(start) + 1.0), rect.bottom()),
         );
-        ui.painter()
-            .rect_stroke(selected, 0.0, egui::Stroke::new(2.0_f32, colors.focus));
+        ui.painter().rect_stroke(
+            selected,
+            0.0,
+            egui::Stroke::new(2.0_f32, colors.focus),
+            egui::StrokeKind::Middle,
+        );
     }
     let pointer = pointer.filter(|point| rect.intersect(ui.clip_rect()).contains(*point))?;
     let bin = ((pointer.x - rect.left()) / width) as usize;
     let bin = bin.min(timeline.bins.len() - 1);
     let cue = timeline.bins[bin].cue?;
     let time = timeline.duration_ms as f64 * bin as f64 / timeline.bins.len() as f64;
-    egui::show_tooltip_at_pointer(
-        ui.ctx(),
-        egui::Id::new(("subtitle-time", rect.min.x.to_bits(), rect.min.y.to_bits())),
-        |ui| {
-            ui.label(format!(
-                "Around {} · peak {} at once · cue {}",
-                format_time(time as u64),
-                timeline.bins[bin].peak,
-                cue + 1
-            ));
-            ui.label(&timeline.bins[bin].excerpt);
-        },
-    );
+    egui::Tooltip::always_open(
+        ui.ctx().clone(),
+        ui.layer_id(),
+        egui::Id::unique(("subtitle-time", rect.min.x.to_bits(), rect.min.y.to_bits())),
+        egui::PopupAnchor::Pointer,
+    )
+    .show(|ui| {
+        ui.label(format!(
+            "Around {} · peak {} at once · cue {}",
+            format_time(time as u64),
+            timeline.bins[bin].peak,
+            cue + 1
+        ));
+        ui.label(&timeline.bins[bin].excerpt);
+    });
     Some(cue)
 }

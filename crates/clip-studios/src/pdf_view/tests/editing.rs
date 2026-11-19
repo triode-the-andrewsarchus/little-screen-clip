@@ -258,7 +258,8 @@ fn idle_r_rotates_selected_pdf_page_and_adopts_sibling_output() {
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let mut close = false;
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -274,8 +275,10 @@ fn idle_r_rotates_selected_pdf_page_and_adopts_sibling_output() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -287,7 +290,7 @@ fn idle_r_rotates_selected_pdf_page_and_adopts_sibling_output() {
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while state.edit_in_progress && std::time::Instant::now() < deadline {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             state.poll_edit_worker(ctx, 1.0)
         });
         std::thread::sleep(Duration::from_millis(10));
@@ -303,7 +306,7 @@ fn idle_r_rotates_selected_pdf_page_and_adopts_sibling_output() {
     assert!(rotated_page_width < rotated_page_height);
 
     while state.info_job.is_some() && std::time::Instant::now() < deadline {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             state.poll_info_worker(ctx, 1.0)
         });
         std::thread::sleep(Duration::from_millis(10));
@@ -338,7 +341,8 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
         modifiers: egui::Modifiers::default(),
     };
     let mut close = false;
-    let busy_output = ctx.run(
+    let busy_output = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -348,8 +352,10 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -381,7 +387,8 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
             result: Err("synthetic worker failure".to_owned()),
         }))
         .unwrap();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -390,8 +397,10 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -404,7 +413,8 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
         Some("Failed to rotate page: synthetic worker failure")
     );
 
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -414,8 +424,10 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                })
             });
         },
     );
@@ -435,7 +447,7 @@ fn missing_pdf_metadata_completes_after_initial_view_creation() {
     let ctx = egui::Context::default();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while state.info_job.is_some() && std::time::Instant::now() < deadline {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             state.poll_info_worker(ctx, 0.0)
         });
         std::thread::sleep(Duration::from_millis(10));
@@ -492,7 +504,7 @@ fn failed_edit_preserves_existing_sibling_output() {
         .unwrap();
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         state.poll_edit_worker(ctx, 0.0)
     });
     assert_eq!(std::fs::read(output).unwrap(), b"prior edit");
@@ -523,7 +535,7 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
     // an accepted publication or bind the new derivative to the old revision.
     state.read_check = crate::file_source::ReadCheck::new(|_| Err("old source unavailable".into()));
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         state.poll_edit_worker(ctx, 0.0)
     });
     assert_eq!(std::fs::read(&output).unwrap(), b"validated edit");

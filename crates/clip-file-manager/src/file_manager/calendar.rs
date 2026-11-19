@@ -131,12 +131,12 @@ impl Viewer {
         }
         let layout = StudioPanelLayout::default().with_right().allocate(ui);
         if let Some(right) = layout.right {
-            ui.allocate_ui_at_rect(right, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
                 ui.set_clip_rect(right.intersect(ui.clip_rect()));
                 self.details(ui, palette);
             });
         }
-        ui.allocate_ui_at_rect(layout.center, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             if self.mode == Mode::Agenda {
                 self.agenda(ui);
@@ -156,7 +156,7 @@ impl Viewer {
         ));
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         let mut scroll = egui::ScrollArea::vertical()
-            .id_source("calendar-agenda")
+            .id_salt("calendar-agenda")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0);
         if self.scroll_selected {
@@ -203,7 +203,7 @@ impl Viewer {
             return;
         }
         let previous = self.plan;
-        egui::ComboBox::from_id_source("calendar-basis")
+        egui::ComboBox::from_id_salt("calendar-basis")
             .selected_text(self.document.plans[self.plan].basis.label())
             .show_ui(ui, |ui| {
                 for (index, plan) in self.document.plans.iter().enumerate() {
@@ -227,7 +227,7 @@ impl Viewer {
         let plan = &self.document.plans[self.plan];
         let width = ui.available_width().max(1.0) * self.zoom;
         egui::ScrollArea::both()
-            .id_source("calendar-timeline")
+            .id_salt("calendar-timeline")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -252,7 +252,7 @@ impl Viewer {
     }
     fn details(&self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::ScrollArea::vertical()
-            .id_source("calendar-details")
+            .id_salt("calendar-details")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
@@ -285,7 +285,7 @@ impl Viewer {
                     }
                     if !event.description.is_empty() {
                         ui.separator();
-                        ui.add(egui::Label::new(&event.description).wrap(true));
+                        ui.add(egui::Label::new(&event.description).wrap());
                     }
                     for note in &event.notes {
                         ui.colored_label(WorkbenchColors::from_palette(palette).warning, note);
@@ -308,7 +308,7 @@ impl Viewer {
 fn properties(ui: &mut egui::Ui, fields: &[(String, String)]) {
     for (name, value) in fields {
         ui.strong(name);
-        ui.add(egui::Label::new(value).wrap(true));
+        ui.add(egui::Label::new(value).wrap());
     }
 }
 fn paint_plan(
@@ -374,6 +374,7 @@ fn paint_plan(
                 cell.shrink(1.0),
                 2.0,
                 egui::Stroke::new(2.0_f32, colors.focus),
+                egui::StrokeKind::Middle,
             );
         }
         if axis {
@@ -387,21 +388,23 @@ fn paint_plan(
         }
         if super::ui::preview_hovered(ui, cell) {
             hovered = Some(bar.event);
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
-                egui::Id::new(("calendar-event", bar.event)),
-                |ui| {
-                    ui.label(&bar.title);
-                    ui.label(format!(
-                        "{} · {}",
-                        tick_label(bar.start, plan.basis == Basis::Date),
-                        plan.basis.label()
-                    ));
-                    if bar.cancelled {
-                        ui.label("Cancelled");
-                    }
-                },
-            );
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::unique(("calendar-event", bar.event)),
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(&bar.title);
+                ui.label(format!(
+                    "{} · {}",
+                    tick_label(bar.start, plan.basis == Basis::Date),
+                    plan.basis.label()
+                ));
+                if bar.cancelled {
+                    ui.label("Cancelled");
+                }
+            });
         }
     }
     hovered

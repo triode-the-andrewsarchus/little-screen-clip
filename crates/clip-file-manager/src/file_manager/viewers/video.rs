@@ -112,13 +112,12 @@ impl Video {
             shell.render_header(ui, |_| {});
         }
         let was_fullscreen = self.fullscreen;
-        if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
+        if ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
             shortcuts(ui, player, &mut self.fullscreen);
         }
         let response = picture(ui, player, self.fullscreen);
         let rect = response.rect;
-        let menu_was_open =
-            response.context_menu_opened() || ui.ctx().memory(|m| m.any_popup_open());
+        let menu_was_open = response.context_menu_opened() || egui::Popup::is_any_open(ui.ctx());
         response.context_menu(|ui| playback_menu(ui, player));
         let overlay_visible = overlay_visibility(
             ui,
@@ -165,7 +164,7 @@ impl Video {
 fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool, menu_was_open: bool) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         if menu_was_open {
-            ui.ctx().memory_mut(|m| m.close_popup());
+            egui::Popup::close_all(ui.ctx());
         } else if *fullscreen {
             *fullscreen = false;
             ui.ctx()
@@ -185,7 +184,7 @@ fn overlay_visibility(ui: &Ui, fullscreen_changed: bool, last_activity: &mut f64
     {
         *last_activity = now;
     }
-    now - *last_activity < 0.5 || ui.ctx().memory(|m| m.any_popup_open())
+    now - *last_activity < 0.5 || egui::Popup::is_any_open(ui.ctx())
 }
 
 fn picture(ui: &mut Ui, player: &Session, fullscreen: bool) -> egui::Response {
@@ -227,7 +226,7 @@ fn fullscreen_controls(
     let mut back = false;
     let mut exit = false;
     let ctx = ui.ctx().clone();
-    egui::Area::new(egui::Id::new("video_fullscreen_title"))
+    egui::Area::new(egui::Id::unique("video_fullscreen_title"))
         .order(egui::Order::Middle)
         .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
         .show(&ctx, |ui| {
@@ -253,7 +252,7 @@ fn fullscreen_controls(
                 });
             });
         });
-    egui::Area::new(egui::Id::new("video_fullscreen_transport"))
+    egui::Area::new(egui::Id::unique("video_fullscreen_transport"))
         .order(egui::Order::Middle)
         .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
         .show(&ctx, |ui| {
@@ -363,7 +362,7 @@ fn clock(ms: u64) -> String {
 
 fn playback_menu(ui: &mut Ui, player: &mut Session) {
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        ui.close_menu();
+        ui.close();
         return;
     }
     let mut options = player.options().clone();
@@ -408,10 +407,10 @@ fn playback_menu(ui: &mut Ui, player: &mut Session) {
 }
 
 fn overlay_frame() -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(egui::Color32::from_black_alpha(160))
         .inner_margin(8.0)
-        .rounding(6.0)
+        .corner_radius(6.0)
 }
 
 #[cfg(test)]
@@ -435,9 +434,11 @@ mod tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             });
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    dismiss_key(ui, &mut fullscreen, &mut close, menu_was_open)
+            let _ = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        dismiss_key(ui, &mut fullscreen, &mut close, menu_was_open)
+                    })
                 });
             });
             assert_eq!((fullscreen, close), (expected_fullscreen, expected_close));

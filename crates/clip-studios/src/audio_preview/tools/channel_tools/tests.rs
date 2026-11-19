@@ -134,7 +134,8 @@ fn channel_tab_shortcut_requires_exactly_two_channels_and_monitor_is_tool_local(
             format: "WAV".into(),
         });
         state.active_mode = AudioToolMode::Inspect;
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::C,
@@ -153,7 +154,8 @@ fn channel_tab_shortcut_requires_exactly_two_channels_and_monitor_is_tool_local(
             state.active_mode == AudioToolMode::ChannelTools,
             channels == 2
         );
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::C,
@@ -233,16 +235,19 @@ fn press_number(
     modifiers: egui::Modifiers,
 ) {
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
-                modifiers,
-                events: vec![egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed,
-                    repeat: false,
-                    modifiers,
-                }],
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers,
+                    }])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| {
@@ -364,7 +369,8 @@ fn stereo_number_shortcut_keeps_playhead_and_multi_region_number_does_not_previe
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     for (key, monitor) in [(egui::Key::Num7, 1), (egui::Key::Num0, 0)] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
                 events: vec![egui::Event::Key {
@@ -377,8 +383,10 @@ fn stereo_number_shortcut_keeps_playhead_and_multi_region_number_does_not_previe
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut false));
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut false))
+                });
             },
         );
         assert_eq!(state.channel_tools.solo, monitor);

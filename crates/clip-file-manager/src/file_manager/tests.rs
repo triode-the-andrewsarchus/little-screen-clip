@@ -476,7 +476,8 @@ fn frame(
 ) -> egui::FullOutput {
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-    ctx.run(
+    clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -487,7 +488,12 @@ fn frame(
         },
         |ctx| {
             manager.handle_address_escape(ctx);
-            egui::CentralPanel::default().show(ctx, |ui| manager.ui(ui, &palette));
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    manager.tick(little_clip_core::BackgroundJobs::global());
+                    manager.ui(ui, &palette)
+                })
+            });
         },
     )
 }
@@ -539,7 +545,7 @@ fn list_and_columns_default_keyboard_focus_and_restore_it_before_the_first_retur
         );
         // The host sets a handoff flag after a viewer closes. It must take
         // effect before this frame's keys, rather than one frame afterward.
-        ctx.memory_mut(|m| m.request_focus(egui::Id::new("departed-studio")));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::unique("departed-studio")));
         manager.focus_list = true;
         press(
             &mut manager,
@@ -557,8 +563,8 @@ fn list_and_columns_default_keyboard_focus_and_restore_it_before_the_first_retur
             egui::Modifiers::NONE,
         );
         assert_eq!(manager.location().unwrap().selected, selected);
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_address"))));
-        ctx.memory_mut(|m| m.request_focus(egui::Id::new("file_manager_tree_focus")));
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("file_manager_address"))));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::unique("file_manager_tree_focus")));
         frame(&mut manager, &ctx, vec![]);
         press(
             &mut manager,
@@ -567,7 +573,7 @@ fn list_and_columns_default_keyboard_focus_and_restore_it_before_the_first_retur
             egui::Modifiers::NONE,
         );
         assert_eq!(manager.location().unwrap().selected, selected);
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("file_manager_tree_focus"))));
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("file_manager_tree_focus"))));
     }
 }
 
@@ -578,7 +584,7 @@ fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
     std::fs::create_dir(&child).unwrap();
     let (mut manager, jobs, ctx) = rendered(temp.path());
     press(&mut manager, &ctx, egui::Key::L, egui::Modifiers::CTRL);
-    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("file_manager_address"))));
+    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::unique("file_manager_address"))));
     frame(
         &mut manager,
         &ctx,
@@ -599,7 +605,7 @@ fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
     );
     press(&mut manager, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
     assert_eq!(manager.address, display_path(&child));
-    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("file_manager_list_focus"))));
+    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::unique("file_manager_list_focus"))));
     assert!(manager.pending.is_none());
 }
 
@@ -703,7 +709,8 @@ fn type_navigation_recursive_fallback_debounces_and_cancels_without_enrollment()
     let (mut manager, _jobs) = loaded(temp.path());
     let ctx = egui::Context::default();
     for (time, text) in [(10.0, Some("unmatched-name")), (10.2, None), (10.4, None)] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(time),
                 events: text
@@ -780,7 +787,7 @@ fn type_navigation_respects_hidden_entries_address_fields_and_navigation() {
 fn type_navigation_yields_to_rename_dialogs_and_other_browser_focus_targets() {
     let (temp, child) = folder_fixture();
     let (mut manager, _jobs, ctx) = rendered(temp.path());
-    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_tree_focus")));
+    ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("file_manager_tree_focus")));
     frame(&mut manager, &ctx, vec![]);
     frame(&mut manager, &ctx, vec![egui::Event::Text("child".into())]);
     assert_type_navigation(&manager, &ctx, None, None);
@@ -821,11 +828,15 @@ fn type_navigation_timeout_starts_a_new_query_and_modified_text_is_ignored() {
         ),
         (14.0, "alpha", egui::Modifiers::CTRL, "beta", None),
     ] {
-        let _ = ctx.run(
+        let _ = clip_ui::test_support::run_frame(
+            &ctx,
             egui::RawInput {
                 time: Some(time),
-                modifiers,
-                events: vec![egui::Event::Text(text.into())],
+
+                events: [egui::Event::ModifiersChanged(modifiers)]
+                    .into_iter()
+                    .chain(vec![egui::Event::Text(text.into())])
+                    .collect(),
                 ..Default::default()
             },
             |ctx| manager.type_navigation_keys(ctx),
@@ -862,7 +873,7 @@ fn type_navigation_applies_batched_text_before_enter() {
 fn keyboard_arrows_select_without_navigating_and_enter_opens_a_folder() {
     let (temp, child) = folder_fixture();
     let (mut manager, jobs, ctx) = rendered(temp.path());
-    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_list_focus")));
+    ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("file_manager_list_focus")));
     // Publish the requested focus and its lock filter before sending a key.
     frame(&mut manager, &ctx, vec![]);
     press(
@@ -1070,7 +1081,7 @@ fn waveform_keyboard_focus_survives_frames_and_routes_clipboard_keys() {
         assert!(ctx.memory(|memory| memory.has_focus(id)));
         assert_eq!(
             ctx.data(|data| data
-                .get_temp::<bool>(egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
+                .get_temp::<bool>(egui::Id::unique(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
             Some(true)
         );
     }
@@ -1169,7 +1180,7 @@ fn stalled_directory_worker_leaves_address_navigation_responsive() {
 fn tree_keyboard_expansion_selection_and_navigation_are_separate() {
     let (temp, child) = folder_fixture();
     let (mut manager, jobs, ctx) = rendered(temp.path());
-    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_tree_focus")));
+    ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("file_manager_tree_focus")));
     frame(&mut manager, &ctx, vec![]);
     press(
         &mut manager,
@@ -1431,7 +1442,7 @@ fn clicking_sort_headers_returns_keyboard_shortcuts_to_the_selected_file_list() 
         );
         assert_eq!(
             ctx.data(|data| data
-                .get_temp::<bool>(egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
+                .get_temp::<bool>(egui::Id::unique(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
             Some(true)
         );
         assert_eq!(
@@ -1925,7 +1936,8 @@ fn command_prefix_is_captured_before_filename_navigation_and_respects_editors() 
     std::fs::write(temp.path().join("1-first.txt"), "first").unwrap();
     let (mut manager, _) = loaded(temp.path());
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Text(":10kb..2MB foo".into())],
             ..Default::default()
@@ -1943,11 +1955,12 @@ fn command_prefix_is_captured_before_filename_navigation_and_respects_editors() 
     );
 
     manager.close_search();
-    let editor = egui::Id::new("unrelated_editor");
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let editor = egui::Id::unique("unrelated_editor");
+    let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
         ctx.memory_mut(|memory| memory.request_focus(editor));
     });
-    let _ = ctx.run(
+    let _ = clip_ui::test_support::run_frame(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Text(":image".into())],
             ..Default::default()

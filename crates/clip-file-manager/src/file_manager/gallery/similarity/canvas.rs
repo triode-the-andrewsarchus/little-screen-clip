@@ -1203,7 +1203,7 @@ impl SimilarityCanvas {
 
         let pointer_pos = pointer_pos_raw.unwrap_or(canvas_rect.center());
         if canvas_rect.contains(pointer_pos) {
-            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll_delta = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll_delta.abs() > 0.01 {
                 let zoom_factor = (1.0 + scroll_delta * SCROLL_ZOOM_SENSITIVITY)
                     .clamp(MIN_SCROLL_ZOOM_FACTOR, MAX_SCROLL_ZOOM_FACTOR);

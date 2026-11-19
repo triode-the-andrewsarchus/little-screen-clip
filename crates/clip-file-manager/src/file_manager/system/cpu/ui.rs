@@ -59,7 +59,12 @@ pub(in crate::file_manager::system) fn paint(
             palette,
         );
         if bin.selected {
-            painter.rect_stroke(cell, 2.0, egui::Stroke::new(2.0_f32, foreground));
+            painter.rect_stroke(
+                cell,
+                2.0,
+                egui::Stroke::new(2.0_f32, foreground),
+                egui::StrokeKind::Middle,
+            );
         }
         if bin.total == 1 && cell.height() >= 13.0 && cell.width() > 16.0 {
             painter.text(
@@ -95,7 +100,7 @@ pub(in crate::file_manager::system) fn paint(
         if !crate::file_manager::ui::popup_open(ui.ctx()) {
             ui.interact(
                 cell,
-                ui.id().with(("cpu-membership", index)),
+                ui.scope_id().with(("cpu-membership", index)),
                 Sense::hover(),
             )
             .on_hover_text(tooltip);

@@ -393,11 +393,12 @@ impl ImagePreviewState {
                     galley.size() + Vec2::new(30.0, 6.0),
                     overlay_bounds,
                 );
-                painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
+                painter.rect_filled(badge_rect, CornerRadius::same(4), b_low);
                 painter.rect_stroke(
                     badge_rect,
-                    Rounding::same(4.0),
+                    CornerRadius::same(4),
                     Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)),
+                    egui::StrokeKind::Middle,
                 );
                 crate::icons::Icon::Crosshair.paint(
                     painter,
@@ -429,11 +430,12 @@ impl ImagePreviewState {
                 banner_size,
                 overlay_bounds,
             );
-            painter.rect_filled(banner_rect, Rounding::same(4.0), b_low);
+            painter.rect_filled(banner_rect, CornerRadius::same(4), b_low);
             painter.rect_stroke(
                 banner_rect,
-                Rounding::same(4.0),
+                CornerRadius::same(4),
                 Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
+                egui::StrokeKind::Middle,
             );
             crate::icons::Icon::Crosshair.paint(
                 painter,
@@ -563,11 +565,12 @@ impl ImagePreviewState {
                 badge_size,
                 overlay_bounds,
             );
-            painter.rect_filled(badge_rect, Rounding::same(4.0), badge_bg);
+            painter.rect_filled(badge_rect, CornerRadius::same(4), badge_bg);
             painter.rect_stroke(
                 badge_rect,
-                Rounding::same(4.0),
+                CornerRadius::same(4),
                 Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
+                egui::StrokeKind::Middle,
             );
             crate::icons::Icon::Crosshair.paint(
                 painter,
@@ -617,11 +620,12 @@ impl ImagePreviewState {
                             h_galley.size() + Vec2::new(28.0, 4.0),
                             overlay_bounds,
                         );
-                        painter.rect_filled(h_rect, Rounding::same(3.0), b_low);
+                        painter.rect_filled(h_rect, CornerRadius::same(3), b_low);
                         painter.rect_stroke(
                             h_rect,
-                            Rounding::same(3.0),
+                            CornerRadius::same(3),
                             Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+                            egui::StrokeKind::Middle,
                         );
                         crate::icons::Icon::Crosshair.paint(
                             painter,

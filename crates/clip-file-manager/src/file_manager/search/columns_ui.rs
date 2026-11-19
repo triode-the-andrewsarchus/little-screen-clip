@@ -119,7 +119,7 @@ impl FileManager {
                         colors.accent,
                     );
                 }
-                let response = ui.interact(cell, Id::new(("answer_header", column.id)), Sense::click()).on_hover_text(format!("{}\n{:?} · {} / {} rows complete\nClick to sort; right-click for column actions. Dates group by precision; numbers group by exact currency/unit.\n{}", column.title, column.query.answer_type, column.finished, column.total, column.query.date_summary().unwrap_or_default()));
+                let response = ui.interact(cell, Id::unique(("answer_header", column.id)), Sense::click()).on_hover_text(format!("{}\n{:?} · {} / {} rows complete\nClick to sort; right-click for column actions. Dates group by precision; numbers group by exact currency/unit.\n{}", column.title, column.query.answer_type, column.finished, column.total, column.query.date_summary().unwrap_or_default()));
                 if response.clicked() {
                     action = Some(Action::Sort(column.id));
                 }
@@ -128,15 +128,15 @@ impl FileManager {
                     ui.text_edit_singleline(&mut column.title);
                     if ui.button("Retry missing/failed answers").clicked() {
                         action = Some(Action::Retry(column.id));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Refresh all answers").clicked() {
                         action = Some(Action::Refresh(column.id));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Remove column").clicked() {
                         action = Some(Action::Remove(column.id));
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             }
@@ -193,7 +193,7 @@ impl Columns {
             );
             ui.interact(
                 cell,
-                Id::new(("answer_cell", column.id, &entry.path)),
+                Id::unique(("answer_cell", column.id, &entry.path)),
                 Sense::hover(),
             )
             .on_hover_ui(|ui| {

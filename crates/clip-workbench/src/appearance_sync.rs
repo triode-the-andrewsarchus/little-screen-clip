@@ -66,17 +66,17 @@ impl AppearanceSync {
         };
         let colors = WorkbenchColors::from_palette(palette);
         let mut dismiss = false;
-        egui::Area::new(egui::Id::new("appearance_reload_error"))
+        egui::Area::new(egui::Id::unique("appearance_reload_error"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
             .show(ctx, |ui| {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(colors.panel)
                     .stroke(egui::Stroke::new(1.0_f32, colors.danger))
-                    .inner_margin(egui::Margin::symmetric(
+                    .inner_margin(egui::Margin::from(egui::vec2(
                         crate::ui_ext::SPACE_MD,
                         crate::ui_ext::SPACE_SM,
-                    ))
+                    )))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(error).color(colors.text_primary));
