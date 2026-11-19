@@ -357,6 +357,16 @@ impl Preview {
             })
     }
 
+    pub(crate) fn paint_math_linked(
+        &self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        id: egui::Id,
+    ) -> egui::Response {
+        self.paint_artwork(ui, rect, rect);
+        ui.interact(rect, id, egui::Sense::click())
+    }
+
     pub(crate) fn math_error(&self) -> Option<&str> {
         self.error.as_deref()
     }

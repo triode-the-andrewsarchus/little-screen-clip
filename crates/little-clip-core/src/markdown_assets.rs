@@ -16,13 +16,20 @@ const MAX_DIR_SCAN: usize = 1024;
 /// searched for Hugo `static/`, `assets/`, `public/`, and `themes/*/static/`
 /// roots. External URIs (`http:`, `https:`, `data:`, `file:`, etc.) and
 /// traversal escapes above `static/` return `None`.
-pub fn resolve_document_asset(doc_path: &Path, reference: &str) -> Option<PathBuf> {
-    let candidates = clean_reference_variants(reference)?;
-    let doc_dir = if doc_path.is_dir() {
+fn document_base_dir(doc_path: &Path) -> &Path {
+    if doc_path.is_dir() {
         doc_path
     } else {
-        doc_path.parent().unwrap_or(Path::new("."))
-    };
+        doc_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+    }
+}
+
+pub fn resolve_document_asset(doc_path: &Path, reference: &str) -> Option<PathBuf> {
+    let candidates = clean_reference_variants(reference)?;
+    let doc_dir = document_base_dir(doc_path);
 
     for cleaned in candidates {
         if let Some(found) = resolve_cleaned(doc_dir, &cleaned) {
@@ -42,11 +49,7 @@ pub fn resolve_document_asset(doc_path: &Path, reference: &str) -> Option<PathBu
 /// fragment-only links, and traversal escapes return `None`.
 pub fn resolve_document_link(doc_path: &Path, reference: &str) -> Option<PathBuf> {
     let candidates = clean_reference_variants(reference)?;
-    let doc_dir = if doc_path.is_dir() {
-        doc_path
-    } else {
-        doc_path.parent().unwrap_or(Path::new("."))
-    };
+    let doc_dir = document_base_dir(doc_path);
     let hugo_roots = collect_hugo_content_roots(doc_dir);
     let site_ceiling = hugo_roots
         .iter()
@@ -182,6 +185,10 @@ fn hex_val(byte: u8) -> Option<u8> {
 }
 
 fn try_regular_file(path: PathBuf) -> Option<PathBuf> {
+    let canon = std::fs::canonicalize(&path).ok()?;
+    if is_system_path(&canon) {
+        return None;
+    }
     crate::file_source::open_regular_file(&path, true)
         .ok()
         .map(|_| path)
@@ -716,5 +723,17 @@ mod tests {
             Some(repo_readme)
         );
         assert_eq!(resolve_document_link(&repo_guide, "guide.md"), None);
+        assert_eq!(document_base_dir(Path::new("README.md")), Path::new("."));
+
+        #[cfg(unix)]
+        {
+            let sys_link = repo_dir.join("docs/hosts.png");
+            if std::path::Path::new("/etc/hosts").exists()
+                && std::os::unix::fs::symlink("/etc/hosts", &sys_link).is_ok()
+            {
+                assert_eq!(resolve_document_asset(&repo_guide, "hosts.png"), None);
+                assert_eq!(resolve_document_link(&repo_guide, "hosts.png"), None);
+            }
+        }
     }
 }

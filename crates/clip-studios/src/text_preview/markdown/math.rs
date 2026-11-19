@@ -719,15 +719,15 @@ fn paint_atom(
     line: &LineContext<'_>,
     media: &mut DocMedia<'_>,
 ) -> egui::Response {
+    let sense = if atom.link.is_some() {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
     match &atom.content {
         Content::Text(galley) => {
             ui.painter()
                 .galley(rect.min, galley.clone(), line.prose_color);
-            let sense = if atom.link.is_some() {
-                egui::Sense::click()
-            } else {
-                egui::Sense::hover()
-            };
             ui.interact(rect, id, sense)
         }
         Content::Equation {
@@ -736,7 +736,7 @@ fn paint_atom(
             display,
             fallback,
         } => {
-            let resp = if let Some(previews) = media.previews.as_deref_mut() {
+            if let Some(previews) = media.previews.as_deref_mut() {
                 let preview = previews.entry(*key).or_default();
                 if ui.is_rect_visible(rect) {
                     preview.prepare_math(ui, source, *display, line.prose_color);
@@ -746,26 +746,23 @@ fn paint_atom(
                 if let Some(galley) = fallback {
                     ui.painter()
                         .galley(rect.min, galley.clone(), line.prose_color);
-                    let r = ui.interact(rect, id, egui::Sense::hover());
+                    let r = ui.interact(rect, id, sense);
                     if atom.link.is_none() {
                         r.clone()
                             .on_hover_text(source.chars().take(2048).collect::<String>());
                     }
                     r
+                } else if atom.link.is_some() {
+                    preview.paint_math_linked(ui, rect, id)
                 } else {
                     preview.paint_math(ui, rect, source, id)
                 }
             } else if let Some(galley) = fallback {
                 ui.painter()
                     .galley(rect.min, galley.clone(), line.prose_color);
-                ui.interact(rect, id, egui::Sense::hover())
+                ui.interact(rect, id, sense)
             } else {
-                ui.interact(rect, id, egui::Sense::hover())
-            };
-            if atom.link.is_some() {
-                ui.interact(rect, id.with("link"), egui::Sense::click())
-            } else {
-                resp
+                ui.interact(rect, id, sense)
             }
         }
         Content::Image {
@@ -776,11 +773,6 @@ fn paint_atom(
             egui::Image::new(texture)
                 .rounding(*rounding)
                 .paint_at(ui, rect);
-            let sense = if atom.link.is_some() {
-                egui::Sense::click()
-            } else {
-                egui::Sense::hover()
-            };
             let response = ui.interact(rect, id, sense);
             if !alt.is_empty() && atom.link.is_none() {
                 response.clone().on_hover_text(alt);

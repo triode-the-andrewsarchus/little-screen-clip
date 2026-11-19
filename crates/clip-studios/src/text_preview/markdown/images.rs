@@ -157,7 +157,16 @@ fn spawn_image_load(doc_path: PathBuf, reference: String) -> Task<Option<LoadedI
             1,
             cancel,
         )?;
-        let pixel_size = [thumb.width.max(1), thumb.height.max(1)];
+        if thumb.width == 0 || thumb.height == 0 {
+            return None;
+        }
+        let expected_bytes = (thumb.width as usize)
+            .checked_mul(thumb.height as usize)?
+            .checked_mul(4)?;
+        if thumb.premultiplied_rgba.len() != expected_bytes {
+            return None;
+        }
+        let pixel_size = [thumb.width, thumb.height];
         let color_image = egui::ColorImage::from_rgba_premultiplied(
             [thumb.width as usize, thumb.height as usize],
             &thumb.premultiplied_rgba,
