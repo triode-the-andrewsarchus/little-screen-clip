@@ -52,6 +52,8 @@ pub struct BrushDynamics {
     pub(super) opacity: Option<DabCurve>,
     pub(super) flow: Option<DabCurve>,
     pub(super) spacing: Option<DabCurve>,
+    pub(super) axis_spacing: bool,
+    pub(super) auto_spacing: Option<f32>,
     pub(super) scatter: Option<DabCurve>,
     pub(super) angle: Option<DabCurve>,
     pub(super) random_angle: Option<DabCurve>,

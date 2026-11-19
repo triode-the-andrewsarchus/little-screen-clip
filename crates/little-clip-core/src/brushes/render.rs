@@ -161,8 +161,44 @@ fn draw_stroke(
                 sample_dab(preset, radius, sample),
             );
         }
-        distance += (dab.radius * 2.0 * dab.spacing).max(step_floor);
+        distance += dab_gap(preset, dab, radius, sample.direction).max(step_floor);
     }
+}
+
+fn dab_gap(preset: &BrushPreset, dab: Dab, base_radius: f32, direction: f32) -> f32 {
+    let dynamics = &preset.params.dynamics;
+    let diameter = 2.0 * dab.radius;
+    if !dynamics.axis_spacing && dynamics.auto_spacing.is_none() {
+        return diameter * dab.spacing;
+    }
+    let axis_scale = if dynamics.axis_spacing {
+        match &preset.tip {
+            BrushTipKind::AlphaMask { width, height, .. } => {
+                let longest = (*width).max(*height).max(1) as f32;
+                (*width as f32 / longest, *height as f32 / longest)
+            }
+            BrushTipKind::Parametric { aspect_ratio, .. } => {
+                (1.0, (aspect_ratio * dab.aspect).max(1.0).recip())
+            }
+        }
+    } else {
+        (1.0, 1.0)
+    };
+    let axis_gap = |axis: f32| {
+        if let Some(coefficient) = dynamics.auto_spacing {
+            // Compute Krita's automatic gap at source size, then scale it
+            // together with the current dab into preview pixels.
+            let source_diameter = preset.params.size_px * dab.radius / base_radius;
+            let source_axis = source_diameter * axis;
+            coefficient * source_axis.min(source_axis.sqrt()) * diameter / source_diameter
+        } else {
+            diameter * axis * dab.spacing
+        }
+    };
+    let (sin, cos) = (direction - dab.angle.to_radians()).sin_cos();
+    let x_gap = axis_gap(axis_scale.0).max(f32::EPSILON);
+    let y_gap = axis_gap(axis_scale.1).max(f32::EPSILON);
+    (cos / x_gap).hypot(sin / y_gap).recip()
 }
 
 #[derive(Clone, Copy)]
@@ -382,6 +418,41 @@ mod tests {
         );
         assert_eq!(coverage[22 * 32 + 16], 1.0);
         assert_eq!(coverage[16 * 32 + 22], 0.0);
+    }
+
+    #[test]
+    fn automatic_spacing_is_calculated_on_source_axes_before_preview_scaling() {
+        let mut preset = BrushPreset {
+            name: "Flat tip".into(),
+            tip: BrushTipKind::AlphaMask {
+                width: 4,
+                height: 1,
+                alpha: [255; 4].into(),
+            },
+            params: super::super::BrushStrokeParams {
+                size_px: 100.0,
+                ..Default::default()
+            },
+            detail: String::new(),
+        };
+        preset.params.dynamics.axis_spacing = true;
+        let dab = Dab {
+            x: 0.0,
+            y: 0.0,
+            radius: 10.0,
+            angle: 0.0,
+            opacity: 1.0,
+            flow: 1.0,
+            hardness: None,
+            aspect: 1.0,
+            spacing: 0.5,
+        };
+        assert_eq!(dab_gap(&preset, dab, 10.0, 0.0), 10.0);
+        assert_eq!(dab_gap(&preset, dab, 10.0, PI / 2.0), 2.5);
+
+        preset.params.dynamics.auto_spacing = Some(2.0);
+        assert_eq!(dab_gap(&preset, dab, 10.0, 0.0), 4.0);
+        assert_eq!(dab_gap(&preset, dab, 10.0, PI / 2.0), 2.0);
     }
 
     #[test]

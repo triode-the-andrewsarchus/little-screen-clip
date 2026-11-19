@@ -1,6 +1,6 @@
 use super::{
-    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, MAX_BRUSH_LABEL_BYTES,
-    ParametricShape, bounded_label, mask,
+    BrushDynamics, BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind,
+    MAX_BRUSH_LABEL_BYTES, ParametricShape, bounded_label, mask,
 };
 
 use std::sync::Arc;
@@ -83,6 +83,10 @@ pub(super) fn parse_gbr_at(
             params: BrushStrokeParams {
                 size_px: width.max(height) as f32,
                 spacing,
+                dynamics: BrushDynamics {
+                    axis_spacing: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             detail,
@@ -392,6 +396,10 @@ pub(super) fn parse_vbr_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
             spacing,
             angle_deg: -angle_deg,
             hardness,
+            dynamics: BrushDynamics {
+                axis_spacing: true,
+                ..Default::default()
+            },
             ..Default::default()
         },
         detail,

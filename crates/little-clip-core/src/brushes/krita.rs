@@ -100,6 +100,7 @@ fn paintbrush_params<'a>(param: &impl Fn(&str) -> Option<&'a str>) -> BrushStrok
             (1.0 - 2.0 * v) * strength
         });
     }
+    params.dynamics.axis_spacing = param("Spacing/Isotropic") != Some("true");
     params
 }
 
@@ -164,6 +165,13 @@ fn parse_brush_definition(
 ) -> Option<BrushTipKind> {
     if let Some(spacing) = attribute_number(brush, "spacing") {
         params.spacing = spacing.clamp(0.03, 2.0);
+    }
+    if matches!(brush.attribute("useAutoSpacing"), Some("1" | "true")) {
+        params.dynamics.auto_spacing = Some(
+            attribute_number(brush, "autoSpacingCoeff")
+                .unwrap_or(1.0)
+                .clamp(0.0, 10.0),
+        );
     }
     if let Some(angle) = attribute_number(brush, "angle") {
         params.angle_deg = angle.to_degrees();
