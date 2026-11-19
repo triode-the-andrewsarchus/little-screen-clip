@@ -238,34 +238,33 @@ pub(super) fn css_text_color_on(bg: Color32, raw: RgbaColor, palette: &AppPalett
     }
 }
 
-pub(super) fn build_inline_css_text_format(
+fn inline_css_bg(css: InlineCss, bg_color: Color32, palette: &AppPalette) -> (Color32, bool) {
+    if let Some(raw_bg) = css.background.filter(|c| c.a > 0) {
+        (blend_rgba_on(bg_color, raw_bg), true)
+    } else if css.mark {
+        let highlight = RgbaColor {
+            r: 235,
+            g: 190,
+            b: 55,
+            a: 85,
+        };
+        (blend_rgba_on(bg_color, highlight), true)
+    } else if css.kbd || css.monospace {
+        (hex_to_c32(&palette.colors.surface_panel), true)
+    } else {
+        (bg_color, false)
+    }
+}
+
+fn inline_css_fg(
     css: InlineCss,
     has_link: bool,
-    base_size: f32,
+    effective_bg: Color32,
     prose_color: Color32,
     bold_color: Color32,
-    bg_color: Color32,
     palette: &AppPalette,
-) -> egui::TextFormat {
-    let effective_bg = if let Some(raw_bg) = css.background.filter(|c| c.a > 0) {
-        blend_rgba_on(bg_color, raw_bg)
-    } else if css.mark {
-        blend_rgba_on(
-            bg_color,
-            RgbaColor {
-                r: 235,
-                g: 190,
-                b: 55,
-                a: 85,
-            },
-        )
-    } else if css.kbd || css.monospace {
-        hex_to_c32(&palette.colors.surface_panel)
-    } else {
-        bg_color
-    };
-
-    let color = if let Some(raw_fg) = css.color {
+) -> Color32 {
+    if let Some(raw_fg) = css.color {
         css_text_color_on(effective_bg, raw_fg, palette)
     } else if has_link {
         crate::ui_ext::contrast_text_c32_on(
@@ -291,47 +290,72 @@ pub(super) fn build_inline_css_text_format(
         bold_color
     } else {
         prose_color
-    };
+    }
+}
 
+pub(super) fn build_inline_css_text_format(
+    css: InlineCss,
+    has_link: bool,
+    base_size: f32,
+    prose_color: Color32,
+    bold_color: Color32,
+    bg_color: Color32,
+    palette: &AppPalette,
+) -> egui::TextFormat {
+    let (effective_bg, has_bg) = inline_css_bg(css, bg_color, palette);
+    let color = inline_css_fg(
+        css,
+        has_link,
+        effective_bg,
+        prose_color,
+        bold_color,
+        palette,
+    );
+    let mono = css.monospace || css.kbd;
     let size = if css.superscript || css.subscript {
         (base_size * 0.78).max(11.0)
     } else if css.small {
         (base_size * 0.80).max(12.0)
-    } else if css.monospace || css.kbd {
+    } else if mono {
         (base_size * 0.9).max(13.0)
     } else {
         base_size
     };
-
-    let font_id = if css.monospace || css.kbd {
+    let font_id = if mono {
         FontId::monospace(size)
     } else {
         FontId::proportional(size)
     };
+    let valign = if css.superscript {
+        egui::Align::TOP
+    } else if css.subscript {
+        egui::Align::BOTTOM
+    } else {
+        egui::Align::Center
+    };
 
-    let mut fmt = egui::TextFormat {
+    egui::TextFormat {
         font_id,
         color,
-        italics: css.italic,
-        valign: if css.superscript {
-            egui::Align::TOP
-        } else if css.subscript {
-            egui::Align::BOTTOM
+        background: if has_bg {
+            effective_bg
         } else {
-            egui::Align::Center
+            Color32::TRANSPARENT
         },
+        italics: css.italic,
+        underline: if css.underline || has_link {
+            Stroke::new(1.0_f32, color)
+        } else {
+            Stroke::NONE
+        },
+        strikethrough: if css.strikethrough {
+            Stroke::new(1.0_f32, color)
+        } else {
+            Stroke::NONE
+        },
+        valign,
         ..Default::default()
-    };
-    if css.background.is_some_and(|c| c.a > 0) || css.mark || css.kbd || css.monospace {
-        fmt.background = effective_bg;
     }
-    if css.underline || has_link {
-        fmt.underline = Stroke::new(1.0_f32, color);
-    }
-    if css.strikethrough {
-        fmt.strikethrough = Stroke::new(1.0_f32, color);
-    }
-    fmt
 }
 
 pub(super) fn compute_image_display_size(
@@ -896,6 +920,313 @@ fn render_image_fallback_badge(
     }
 }
 
+fn render_frontmatter_block(
+    ui: &mut egui::Ui,
+    metadata: &little_clip_core::markdown_metadata::FrontMatter,
+    prose_color: Color32,
+    bold_color: Color32,
+    path: u64,
+) {
+    egui::CollapsingHeader::new(format!("{} metadata", metadata.format.name()))
+        .id_source(("frontmatter", path))
+        .default_open(true)
+        .show(ui, |ui| {
+            if let Err(error) = &metadata.value {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+                return;
+            }
+            egui::Grid::new(("frontmatter_grid", path))
+                .striped(true)
+                .spacing(Vec2::new(16.0, 6.0))
+                .show(ui, |ui| {
+                    for (key, value) in metadata.display_fields() {
+                        ui.label(
+                            egui::RichText::new(key)
+                                .size(BODY_FONT_SIZE)
+                                .color(bold_color),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(value)
+                                    .size(BODY_FONT_SIZE)
+                                    .color(prose_color),
+                            )
+                            .wrap(true),
+                        );
+                        ui.end_row();
+                    }
+                });
+        });
+    ui.add_space(crate::ui_ext::SPACE_SM);
+}
+
+fn quote_accent_and_label(
+    kind: Option<QuoteKind>,
+    palette: &AppPalette,
+) -> (Color32, Option<&'static str>) {
+    match kind {
+        Some(QuoteKind::Note) => (hex_to_c32(&palette.harmonies.base), Some("Note")),
+        Some(QuoteKind::Tip) => (hex_to_c32(&palette.diff_add), Some("Tip")),
+        Some(QuoteKind::Important) => (hex_to_c32(&palette.harmonies.triadic_1), Some("Important")),
+        Some(QuoteKind::Warning) => (
+            hex_to_c32(&palette.harmonies.warm_attention),
+            Some("Warning"),
+        ),
+        Some(QuoteKind::Caution) => (hex_to_c32(&palette.diff_del), Some("Caution")),
+        None => (hex_to_c32(&palette.harmonies.base), None),
+    }
+}
+
+fn render_quote_block(
+    ui: &mut egui::Ui,
+    kind: Option<QuoteKind>,
+    blocks: &[MarkdownBlock],
+    palette: &AppPalette,
+    path: u64,
+    ctx: BlockStyleContext,
+    mut media: DocMedia<'_>,
+) {
+    let (accent, label) = quote_accent_and_label(kind, palette);
+    let bg = hex_to_c32(&palette.colors.surface_recessed);
+    let frame_response = egui::Frame::none()
+        .fill(bg)
+        .inner_margin(egui::Margin {
+            left: 14.0,
+            right: 12.0,
+            top: 8.0,
+            bottom: 6.0,
+        })
+        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .show(ui, |ui| {
+            if let Some(title) = label {
+                let title_color =
+                    crate::ui_ext::contrast_text_c32_on(bg, bg, Some(accent), palette);
+                ui.label(
+                    egui::RichText::new(title)
+                        .size(BODY_FONT_SIZE)
+                        .color(title_color),
+                );
+                ui.add_space(4.0);
+            }
+            let quote_ctx = BlockStyleContext {
+                compact_spacing: true,
+                bg_color: bg,
+                ..ctx
+            };
+            render_block_slice(
+                ui,
+                blocks,
+                palette,
+                path,
+                false,
+                quote_ctx,
+                media.reborrow(),
+            );
+        });
+    let rect = frame_response.response.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + 3.0, rect.bottom()),
+        ),
+        Rounding::same(1.5),
+        accent,
+    );
+    ui.add_space(if ctx.compact_spacing { 4.0 } else { 8.0 });
+}
+
+struct DetailsContent<'a> {
+    summary: &'a [MarkdownSpan],
+    open: bool,
+    blocks: &'a [MarkdownBlock],
+}
+
+fn render_details_block(
+    ui: &mut egui::Ui,
+    details: DetailsContent<'_>,
+    palette: &AppPalette,
+    path: u64,
+    ctx: BlockStyleContext,
+    mut media: DocMedia<'_>,
+) {
+    let summary_color = hex_to_c32(&palette.colors.text_primary);
+    let built_summary = build_prose_layout_job_with_options(
+        details.summary,
+        BODY_FONT_SIZE,
+        summary_color,
+        summary_color,
+        ctx.bg_color,
+        palette,
+        ui.available_width().max(1.0),
+        egui::Align::LEFT,
+        ProseFormatOptions::default(),
+        None,
+    );
+    egui::Frame::none()
+        .fill(hex_to_c32(&palette.colors.surface_recessed))
+        .stroke(Stroke::new(
+            1.0_f32,
+            hex_to_c32_alpha(&palette.chrome_border, 120),
+        ))
+        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .show(ui, |ui| {
+            egui::CollapsingHeader::new(built_summary.job)
+                .id_source(("md_details", path))
+                .default_open(details.open)
+                .show(ui, |ui| {
+                    let details_ctx = BlockStyleContext {
+                        compact_spacing: true,
+                        bg_color: hex_to_c32(&palette.colors.surface_recessed),
+                        ..ctx
+                    };
+                    render_block_slice(
+                        ui,
+                        details.blocks,
+                        palette,
+                        path,
+                        false,
+                        details_ctx,
+                        media.reborrow(),
+                    );
+                });
+        });
+    ui.add_space(if ctx.compact_spacing { 4.0 } else { 8.0 });
+}
+
+fn render_styled_container_block(
+    ui: &mut egui::Ui,
+    style: little_clip_render::markdown::BlockBoxStyle,
+    blocks: &[MarkdownBlock],
+    palette: &AppPalette,
+    path: u64,
+    ctx: BlockStyleContext,
+    mut media: DocMedia<'_>,
+) {
+    if style.margin_top > 0.0 && !ctx.compact_spacing {
+        ui.add_space(style.margin_top);
+    }
+    let has_visible_bg = style.background.is_some_and(|c| c.a > 0);
+    let bg = if let Some(raw_bg) = style.background.filter(|c| c.a > 0) {
+        blend_rgba_on(ctx.bg_color, raw_bg)
+    } else {
+        ctx.bg_color
+    };
+    let text_color = if let Some(raw_fg) = style.text_color {
+        css_text_color_on(bg, raw_fg, palette)
+    } else if has_visible_bg {
+        crate::ui_ext::contrast_text_c32_on(bg, bg, None, palette)
+    } else {
+        ctx.text_color
+    };
+    let child_ctx = BlockStyleContext {
+        align: style.align.map(map_text_align).unwrap_or(ctx.align),
+        text_color,
+        bg_color: bg,
+        ..ctx
+    };
+    let has_chrome =
+        has_visible_bg || style.border_width > 0.0 || style.padding.iter().any(|p| *p > 0.0);
+    let mut draw_children = |ui: &mut egui::Ui| {
+        render_block_slice(
+            ui,
+            blocks,
+            palette,
+            path,
+            false,
+            child_ctx,
+            media.reborrow(),
+        );
+    };
+    if has_chrome {
+        let mut frame = egui::Frame::none()
+            .inner_margin(egui::Margin {
+                top: style.padding[0],
+                right: style.padding[1],
+                bottom: style.padding[2],
+                left: style.padding[3],
+            })
+            .rounding(Rounding::same(style.border_radius));
+        if has_visible_bg {
+            frame = frame.fill(bg);
+        }
+        if style.border_width > 0.0 {
+            let stroke_color = style
+                .border_color
+                .map(|raw| blend_rgba_on(bg, raw))
+                .unwrap_or_else(|| hex_to_c32_alpha(&palette.chrome_border, 160));
+            frame = frame.stroke(Stroke::new(style.border_width, stroke_color));
+        }
+        frame.show(ui, draw_children);
+    } else {
+        draw_children(ui);
+    }
+    let trailing = style
+        .margin_bottom
+        .max(if ctx.compact_spacing { 3.0 } else { 8.0 });
+    ui.add_space(trailing);
+}
+
+fn render_code_or_diagram_block(
+    ui: &mut egui::Ui,
+    language: &str,
+    text: &str,
+    palette: &AppPalette,
+    path: u64,
+    compact_spacing: bool,
+    mut media: DocMedia<'_>,
+) {
+    if let Some(format) = little_clip_core::diagram::Format::from_language(language)
+        && let Some(previews) = media.previews.as_deref_mut()
+    {
+        previews
+            .entry(PreviewKey::Block(path))
+            .or_default()
+            .show(ui, format, text);
+        egui::CollapsingHeader::new("Diagram source")
+            .id_source(("diagram_source", path))
+            .show(ui, |ui| {
+                render_styled_code_block(ui, text, language, palette, path);
+            });
+    } else {
+        render_styled_code_block(ui, text, language, palette, path);
+    }
+    ui.add_space(if compact_spacing { 4.0 } else { 8.0 });
+}
+
+fn render_footnote_block(
+    ui: &mut egui::Ui,
+    label: &str,
+    blocks: &[MarkdownBlock],
+    palette: &AppPalette,
+    path: u64,
+    ctx: BlockStyleContext,
+    mut media: DocMedia<'_>,
+) {
+    egui::Frame::none()
+        .fill(hex_to_c32(&palette.colors.surface_recessed))
+        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("[^{label}]"))
+                        .size(BODY_FONT_SIZE)
+                        .color(hex_to_c32(&palette.colors.text_muted)),
+                );
+                ui.vertical(|ui| {
+                    let fn_ctx = BlockStyleContext {
+                        compact_spacing: true,
+                        bg_color: hex_to_c32(&palette.colors.surface_recessed),
+                        ..ctx
+                    };
+                    render_block_slice(ui, blocks, palette, path, false, fn_ctx, media.reborrow());
+                });
+            });
+        });
+    ui.add_space(6.0);
+}
+
 fn render_block(
     ui: &mut egui::Ui,
     block: &MarkdownBlock,
@@ -905,48 +1236,16 @@ fn render_block(
     mut media: DocMedia<'_>,
 ) {
     let prose_color = ctx.text_color;
-    let bold_color = hex_to_c32(&palette.colors.text_primary);
     let bold_color = if ctx.text_color != hex_to_c32(&palette.colors.text_secondary) {
         ctx.text_color
     } else {
-        bold_color
+        hex_to_c32(&palette.colors.text_primary)
     };
     let compact_spacing = ctx.compact_spacing;
-    let list_depth = ctx.list_depth;
 
     match block {
         MarkdownBlock::FrontMatter(metadata) => {
-            egui::CollapsingHeader::new(format!("{} metadata", metadata.format.name()))
-                .id_source(("frontmatter", path))
-                .default_open(true)
-                .show(ui, |ui| {
-                    if let Err(error) = &metadata.value {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    } else {
-                        egui::Grid::new(("frontmatter_grid", path))
-                            .striped(true)
-                            .spacing(Vec2::new(16.0, 6.0))
-                            .show(ui, |ui| {
-                                for (key, value) in metadata.display_fields() {
-                                    ui.label(
-                                        egui::RichText::new(key)
-                                            .size(BODY_FONT_SIZE)
-                                            .color(bold_color),
-                                    );
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(value)
-                                                .size(BODY_FONT_SIZE)
-                                                .color(prose_color),
-                                        )
-                                        .wrap(true),
-                                    );
-                                    ui.end_row();
-                                }
-                            });
-                    }
-                });
-            ui.add_space(crate::ui_ext::SPACE_SM);
+            render_frontmatter_block(ui, metadata, prose_color, bold_color, path);
         }
         MarkdownBlock::Heading { level, spans, .. } => {
             render_heading(ui, *level, spans, palette, path, ctx, media);
@@ -975,82 +1274,22 @@ fn render_block(
             ui.add_space(if compact_spacing { 3.0 } else { 8.0 });
         }
         MarkdownBlock::Quote { kind, blocks } => {
-            let (accent, label) = match kind {
-                Some(QuoteKind::Note) => (hex_to_c32(&palette.harmonies.base), Some("Note")),
-                Some(QuoteKind::Tip) => (hex_to_c32(&palette.diff_add), Some("Tip")),
-                Some(QuoteKind::Important) => {
-                    (hex_to_c32(&palette.harmonies.triadic_1), Some("Important"))
-                }
-                Some(QuoteKind::Warning) => (
-                    hex_to_c32(&palette.harmonies.warm_attention),
-                    Some("Warning"),
-                ),
-                Some(QuoteKind::Caution) => (hex_to_c32(&palette.diff_del), Some("Caution")),
-                None => (hex_to_c32(&palette.harmonies.base), None),
-            };
-            let bg = hex_to_c32(&palette.colors.surface_recessed);
-            let frame_response = egui::Frame::none()
-                .fill(bg)
-                .inner_margin(egui::Margin {
-                    left: 14.0,
-                    right: 12.0,
-                    top: 8.0,
-                    bottom: 6.0,
-                })
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    if let Some(title) = label {
-                        let title_color =
-                            crate::ui_ext::contrast_text_c32_on(bg, bg, Some(accent), palette);
-                        ui.label(
-                            egui::RichText::new(title)
-                                .size(BODY_FONT_SIZE)
-                                .color(title_color),
-                        );
-                        ui.add_space(4.0);
-                    }
-                    let quote_ctx = BlockStyleContext {
-                        compact_spacing: true,
-                        bg_color: bg,
-                        ..ctx
-                    };
-                    render_block_slice(
-                        ui,
-                        blocks,
-                        palette,
-                        path,
-                        false,
-                        quote_ctx,
-                        media.reborrow(),
-                    );
-                });
-            let rect = frame_response.response.rect;
-            ui.painter().rect_filled(
-                egui::Rect::from_min_max(
-                    rect.left_top(),
-                    egui::pos2(rect.left() + 3.0, rect.bottom()),
-                ),
-                Rounding::same(1.5),
-                accent,
-            );
-            ui.add_space(if compact_spacing { 4.0 } else { 8.0 });
+            render_quote_block(ui, *kind, blocks, palette, path, ctx, media);
         }
         MarkdownBlock::PullQuote {
             big,
             source,
             blocks,
-        } => {
-            render_pull_quote(
-                ui,
-                *big,
-                source,
-                blocks,
-                palette,
-                path,
-                ctx,
-                media.reborrow(),
-            );
-        }
+        } => render_pull_quote(
+            ui,
+            *big,
+            source,
+            blocks,
+            palette,
+            path,
+            ctx,
+            media.reborrow(),
+        ),
         MarkdownBlock::Tabs { tabs } => {
             render_tabs_block(ui, tabs, palette, path, ctx, media.reborrow());
         }
@@ -1058,136 +1297,36 @@ fn render_block(
             dividers,
             bottom_rule,
             columns,
-        } => {
-            render_columns_block(
-                ui,
-                *dividers,
-                *bottom_rule,
-                columns,
-                palette,
-                path,
-                ctx,
-                media.reborrow(),
-            );
-        }
+        } => render_columns_block(
+            ui,
+            *dividers,
+            *bottom_rule,
+            columns,
+            palette,
+            path,
+            ctx,
+            media.reborrow(),
+        ),
         MarkdownBlock::Details {
             summary,
             open,
             blocks,
         } => {
-            let built_summary = build_prose_layout_job_with_options(
-                summary,
-                BODY_FONT_SIZE,
-                bold_color,
-                bold_color,
-                ctx.bg_color,
+            render_details_block(
+                ui,
+                DetailsContent {
+                    summary,
+                    open: *open,
+                    blocks,
+                },
                 palette,
-                ui.available_width().max(1.0),
-                egui::Align::LEFT,
-                ProseFormatOptions::default(),
-                None,
+                path,
+                ctx,
+                media,
             );
-            egui::Frame::none()
-                .fill(hex_to_c32(&palette.colors.surface_recessed))
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    hex_to_c32_alpha(&palette.chrome_border, 120),
-                ))
-                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    egui::CollapsingHeader::new(built_summary.job)
-                        .id_source(("md_details", path))
-                        .default_open(*open)
-                        .show(ui, |ui| {
-                            let details_ctx = BlockStyleContext {
-                                compact_spacing: true,
-                                bg_color: hex_to_c32(&palette.colors.surface_recessed),
-                                ..ctx
-                            };
-                            render_block_slice(
-                                ui,
-                                blocks,
-                                palette,
-                                path,
-                                false,
-                                details_ctx,
-                                media.reborrow(),
-                            );
-                        });
-                });
-            ui.add_space(if compact_spacing { 4.0 } else { 8.0 });
         }
         MarkdownBlock::StyledContainer { style, blocks } => {
-            if style.margin_top > 0.0 && !compact_spacing {
-                ui.add_space(style.margin_top);
-            }
-            let bg = if let Some(raw_bg) = style.background.filter(|c| c.a > 0) {
-                blend_rgba_on(ctx.bg_color, raw_bg)
-            } else {
-                ctx.bg_color
-            };
-            let text_color = if let Some(raw_fg) = style.text_color {
-                css_text_color_on(bg, raw_fg, palette)
-            } else if style.background.is_some_and(|c| c.a > 0) {
-                crate::ui_ext::contrast_text_c32_on(bg, bg, None, palette)
-            } else {
-                ctx.text_color
-            };
-            let child_ctx = BlockStyleContext {
-                align: style.align.map(map_text_align).unwrap_or(ctx.align),
-                text_color,
-                bg_color: bg,
-                ..ctx
-            };
-            let has_chrome = style.background.is_some_and(|c| c.a > 0)
-                || style.border_width > 0.0
-                || style.padding.iter().any(|p| *p > 0.0);
-            if has_chrome {
-                let mut frame = egui::Frame::none()
-                    .inner_margin(egui::Margin {
-                        top: style.padding[0],
-                        right: style.padding[1],
-                        bottom: style.padding[2],
-                        left: style.padding[3],
-                    })
-                    .rounding(Rounding::same(style.border_radius));
-                if style.background.is_some_and(|c| c.a > 0) {
-                    frame = frame.fill(bg);
-                }
-                if style.border_width > 0.0 {
-                    let stroke_color = style
-                        .border_color
-                        .map(|raw| blend_rgba_on(bg, raw))
-                        .unwrap_or_else(|| hex_to_c32_alpha(&palette.chrome_border, 160));
-                    frame = frame.stroke(Stroke::new(style.border_width, stroke_color));
-                }
-                frame.show(ui, |ui| {
-                    render_block_slice(
-                        ui,
-                        blocks,
-                        palette,
-                        path,
-                        false,
-                        child_ctx,
-                        media.reborrow(),
-                    );
-                });
-            } else {
-                render_block_slice(
-                    ui,
-                    blocks,
-                    palette,
-                    path,
-                    false,
-                    child_ctx,
-                    media.reborrow(),
-                );
-            }
-            let trailing = style
-                .margin_bottom
-                .max(if compact_spacing { 3.0 } else { 8.0 });
-            ui.add_space(trailing);
+            render_styled_container_block(ui, *style, blocks, palette, path, ctx, media);
         }
         MarkdownBlock::List {
             ordered,
@@ -1198,59 +1337,14 @@ fn render_block(
             ui.add_space(if compact_spacing { 3.0 } else { 8.0 });
         }
         MarkdownBlock::Code { language, text } => {
-            if let Some(format) = little_clip_core::diagram::Format::from_language(language)
-                && let Some(previews) = media.previews.as_deref_mut()
-            {
-                previews
-                    .entry(PreviewKey::Block(path))
-                    .or_default()
-                    .show(ui, format, text);
-                egui::CollapsingHeader::new("Diagram source")
-                    .id_source(("diagram_source", path))
-                    .show(ui, |ui| {
-                        render_styled_code_block(ui, text, language, palette, path);
-                    });
-            } else {
-                render_styled_code_block(ui, text, language, palette, path);
-            }
-            ui.add_space(if compact_spacing { 4.0 } else { 8.0 });
+            render_code_or_diagram_block(ui, language, text, palette, path, compact_spacing, media);
         }
         MarkdownBlock::Table(table) => {
             render_markdown_table(ui, table, palette, path, media);
             ui.add_space(if compact_spacing { 4.0 } else { 10.0 });
         }
         MarkdownBlock::Footnote { label, blocks } => {
-            egui::Frame::none()
-                .fill(hex_to_c32(&palette.colors.surface_recessed))
-                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("[^{label}]"))
-                                .size(BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.colors.text_muted)),
-                        );
-                        ui.vertical(|ui| {
-                            let fn_ctx = BlockStyleContext {
-                                compact_spacing: true,
-                                list_depth,
-                                bg_color: hex_to_c32(&palette.colors.surface_recessed),
-                                ..ctx
-                            };
-                            render_block_slice(
-                                ui,
-                                blocks,
-                                palette,
-                                path,
-                                false,
-                                fn_ctx,
-                                media.reborrow(),
-                            );
-                        });
-                    });
-                });
-            ui.add_space(6.0);
+            render_footnote_block(ui, label, blocks, palette, path, ctx, media);
         }
         MarkdownBlock::Rule => {
             ui.add_space(6.0);
@@ -2060,6 +2154,68 @@ impl<'a> ProseJobBuilder<'a> {
         self.char_cursor += len_chars;
     }
 
+    fn append_styled_span(
+        &mut self,
+        text: &str,
+        url: Option<&str>,
+        css: InlineCss,
+        spoiler_reveal: Option<bool>,
+    ) {
+        let mut fmt = build_inline_css_text_format(
+            css,
+            url.is_some(),
+            self.size,
+            self.prose_color,
+            self.bold_color,
+            self.bg_color,
+            self.palette,
+        );
+        fmt.italics |= self.options.base_italics;
+        if self.options.extra_letter_spacing != 0.0 {
+            fmt.extra_letter_spacing = self.options.extra_letter_spacing;
+        }
+        if self.options.line_height.is_some() {
+            fmt.line_height = self.options.line_height;
+        }
+        let link = url.map(|raw| {
+            let target = self.resolve_target(raw, fmt.color);
+            if target.is_internal() {
+                fmt.underline = Stroke::NONE;
+            }
+            target
+        });
+        self.append_text(text, fmt, link, spoiler_reveal);
+    }
+
+    fn append_image_placeholder(
+        &mut self,
+        alt: &str,
+        url: &str,
+        href: Option<&str>,
+        spoiler_reveal: Option<bool>,
+    ) {
+        let label = if alt.is_empty() {
+            "[image]".to_owned()
+        } else {
+            format!("[image: {alt}]")
+        };
+        let link_fg = self.link_fg;
+        let link = href
+            .map(|raw| self.resolve_target(raw, link_fg))
+            .or_else(|| {
+                (!url.is_empty()).then(|| LinkTarget {
+                    raw_url: url.to_owned(),
+                    internal_path: None,
+                    dash_color: link_fg,
+                })
+            });
+        let mut fmt = self.make_format(FontId::proportional(self.size), self.muted_fg, true);
+        if link.as_ref().is_some_and(LinkTarget::is_internal) {
+            fmt.underline = Stroke::NONE;
+        }
+        self.append_text(&label, fmt, link, spoiler_reveal);
+    }
+
     fn append_spans(&mut self, spans: &[MarkdownSpan], spoiler_reveal: Option<bool>) {
         let size = self.size;
         let prose_color = self.prose_color;
@@ -2108,30 +2264,7 @@ impl<'a> ProseJobBuilder<'a> {
                     }
                 }
                 MarkdownSpan::Styled { text, url, css } => {
-                    let mut fmt = build_inline_css_text_format(
-                        *css,
-                        url.is_some(),
-                        size,
-                        prose_color,
-                        bold_color,
-                        self.bg_color,
-                        self.palette,
-                    );
-                    fmt.italics |= self.options.base_italics;
-                    if self.options.extra_letter_spacing != 0.0 {
-                        fmt.extra_letter_spacing = self.options.extra_letter_spacing;
-                    }
-                    if self.options.line_height.is_some() {
-                        fmt.line_height = self.options.line_height;
-                    }
-                    let link = url.as_deref().map(|raw| {
-                        let target = self.resolve_target(raw, fmt.color);
-                        if target.is_internal() {
-                            fmt.underline = Stroke::NONE;
-                        }
-                        target
-                    });
-                    self.append_text(text, fmt, link, spoiler_reveal);
+                    self.append_styled_span(text, url.as_deref(), *css, spoiler_reveal);
                 }
                 MarkdownSpan::Link { label, url } => {
                     let target = self.resolve_target(url, link_fg);
@@ -2144,40 +2277,10 @@ impl<'a> ProseJobBuilder<'a> {
                     self.append_text(label, fmt, Some(target), spoiler_reveal);
                 }
                 MarkdownSpan::Image { alt, url } => {
-                    let label = if alt.is_empty() {
-                        "[image]".to_owned()
-                    } else {
-                        format!("[image: {alt}]")
-                    };
-                    let fmt = self.make_format(FontId::proportional(size), muted_fg, true);
-                    let link = (!url.is_empty()).then(|| LinkTarget {
-                        raw_url: url.clone(),
-                        internal_path: None,
-                        dash_color: link_fg,
-                    });
-                    self.append_text(&label, fmt, link, spoiler_reveal);
+                    self.append_image_placeholder(alt, url, None, spoiler_reveal);
                 }
                 MarkdownSpan::StyledImage { alt, url, href, .. } => {
-                    let label = if alt.is_empty() {
-                        "[image]".to_owned()
-                    } else {
-                        format!("[image: {alt}]")
-                    };
-                    let link = href
-                        .as_deref()
-                        .map(|raw| self.resolve_target(raw, link_fg))
-                        .or_else(|| {
-                            (!url.is_empty()).then(|| LinkTarget {
-                                raw_url: url.clone(),
-                                internal_path: None,
-                                dash_color: link_fg,
-                            })
-                        });
-                    let mut fmt = self.make_format(FontId::proportional(size), muted_fg, true);
-                    if link.as_ref().is_some_and(LinkTarget::is_internal) {
-                        fmt.underline = Stroke::NONE;
-                    }
-                    self.append_text(&label, fmt, link, spoiler_reveal);
+                    self.append_image_placeholder(alt, url, href.as_deref(), spoiler_reveal);
                 }
                 MarkdownSpan::Math { source, .. } => {
                     let fmt = self.make_format(
@@ -2466,32 +2569,53 @@ struct MeasuredRow<'a> {
     height: f32,
 }
 
-fn render_markdown_table(
-    ui: &mut egui::Ui,
-    table: &MarkdownTable,
+fn map_table_alignment(table: &MarkdownTable, col_idx: usize) -> egui::Align {
+    match table
+        .alignments
+        .get(col_idx)
+        .copied()
+        .unwrap_or(TableAlignment::None)
+    {
+        TableAlignment::Center => egui::Align::Center,
+        TableAlignment::Right => egui::Align::RIGHT,
+        TableAlignment::None | TableAlignment::Left => egui::Align::LEFT,
+    }
+}
+
+fn table_row_background(
+    is_header: bool,
+    r_idx: usize,
+    canvas_bg: Color32,
+    palette: &AppPalette,
+) -> Color32 {
+    if is_header {
+        hex_to_c32(&palette.colors.surface_panel)
+    } else if r_idx % 2 == 1 {
+        hex_to_c32(&palette.colors.surface_recessed)
+    } else {
+        canvas_bg
+    }
+}
+
+struct TableThemeColors {
+    canvas_bg: Color32,
+    prose: Color32,
+    bold: Color32,
+}
+
+fn measure_table_col_widths(
+    ui: &egui::Ui,
+    all_rows: &[(bool, &Vec<Vec<MarkdownSpan>>)],
+    col_count: usize,
+    avail_w: f32,
     palette: &AppPalette,
     path: u64,
-    mut media: DocMedia<'_>,
-) {
-    let col_count = table
-        .alignments
-        .len()
-        .max(table.headers.len())
-        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0))
-        .max(1);
-    let avail_w = ui.available_width().max(1.0);
+    media: &mut DocMedia<'_>,
+) -> (Vec<f32>, bool) {
     let canvas_bg = hex_to_c32(&palette.colors.canvas);
     let prose_color = hex_to_c32(&palette.colors.text_secondary);
     let bold_color = hex_to_c32(&palette.colors.text_primary);
-
-    // Pass 1: measure natural width of every column so short columns stay compact
-    // and wide text columns get proportionally more space for wrapping.
     let mut natural = vec![48.0_f32; col_count];
-    let header_iter = (!table.headers.is_empty()).then_some((true, &table.headers));
-    let all_rows: Vec<(bool, &Vec<Vec<MarkdownSpan>>)> = header_iter
-        .into_iter()
-        .chain(table.rows.iter().map(|r| (false, r)))
-        .collect();
 
     for (r_idx, (is_header, row)) in all_rows.iter().enumerate() {
         let color = if *is_header { bold_color } else { prose_color };
@@ -2533,268 +2657,295 @@ fn render_markdown_table(
     }
 
     let total_natural: f32 = natural.iter().sum();
-    let mut needs_h_scroll = false;
-    let col_widths: Vec<f32> = if total_natural <= avail_w {
-        if col_count >= 2 && total_natural >= avail_w * 0.72 {
+    if total_natural <= avail_w {
+        let widths = if col_count >= 2 && total_natural >= avail_w * 0.72 {
             let scale = avail_w / total_natural;
             natural.iter().map(|w| w * scale).collect()
         } else {
             natural
-        }
+        };
+        return (widths, false);
+    }
+
+    let min_cols: Vec<f32> = natural.iter().map(|w| w.min(TABLE_MIN_COL_WIDTH)).collect();
+    let total_min: f32 = min_cols.iter().sum();
+    if total_min > avail_w {
+        let widths = natural
+            .iter()
+            .map(|w| w.clamp(TABLE_MIN_COL_WIDTH, TABLE_SCROLL_MAX_COL_WIDTH))
+            .collect();
+        return (widths, true);
+    }
+
+    let surplus = avail_w - total_min;
+    let flex: Vec<f32> = natural
+        .iter()
+        .zip(&min_cols)
+        .map(|(n, m)| (n - m).max(0.0))
+        .collect();
+    let total_flex: f32 = flex.iter().sum();
+    let widths = if total_flex > 0.0 {
+        min_cols
+            .iter()
+            .zip(&flex)
+            .map(|(m, f)| m + surplus * (f / total_flex))
+            .collect()
     } else {
-        let min_cols: Vec<f32> = natural.iter().map(|w| w.min(TABLE_MIN_COL_WIDTH)).collect();
-        let total_min: f32 = min_cols.iter().sum();
-        if total_min <= avail_w {
-            let surplus = avail_w - total_min;
-            let flex: Vec<f32> = natural
-                .iter()
-                .zip(&min_cols)
-                .map(|(n, m)| (n - m).max(0.0))
-                .collect();
-            let total_flex: f32 = flex.iter().sum();
-            if total_flex > 0.0 {
-                min_cols
-                    .iter()
-                    .zip(&flex)
-                    .map(|(m, f)| m + surplus * (f / total_flex))
-                    .collect()
+        min_cols
+    };
+    (widths, false)
+}
+
+fn measure_table_rows<'a>(
+    ui: &egui::Ui,
+    table: &'a MarkdownTable,
+    all_rows: &[(bool, &'a Vec<Vec<MarkdownSpan>>)],
+    col_widths: &[f32],
+    palette: &AppPalette,
+    path: u64,
+    media: &mut DocMedia<'_>,
+) -> Vec<MeasuredRow<'a>> {
+    let col_count = col_widths.len();
+    let colors = TableThemeColors {
+        canvas_bg: hex_to_c32(&palette.colors.canvas),
+        prose: hex_to_c32(&palette.colors.text_secondary),
+        bold: hex_to_c32(&palette.colors.text_primary),
+    };
+    let mut measured_rows = Vec::with_capacity(all_rows.len());
+
+    for (r_idx, (is_header, row)) in all_rows.iter().enumerate() {
+        let color = if *is_header {
+            colors.bold
+        } else {
+            colors.prose
+        };
+        let row_bg = table_row_background(*is_header, r_idx, colors.canvas_bg, palette);
+        let mut cells = Vec::with_capacity(col_count);
+        let mut max_h = BODY_FONT_SIZE;
+        for (c_idx, &col_w) in col_widths.iter().enumerate() {
+            let inner_w = (col_w - TABLE_CELL_PAD_X * 2.0).max(1.0);
+            let align = map_table_alignment(table, c_idx);
+            let spans: &[MarkdownSpan] = row.get(c_idx).map_or(&[], Vec::as_slice);
+            let cell_path = child_path(path, r_idx * col_count + c_idx + 1);
+            if math::needs_inline_flow(spans) {
+                let mut m = media.reborrow();
+                let size = math::measure_spans_size(
+                    ui,
+                    spans,
+                    inner_w,
+                    math::SpanRenderStyle {
+                        size: BODY_FONT_SIZE,
+                        prose_color: color,
+                        bold_color: colors.bold,
+                        palette,
+                        block: cell_path,
+                    },
+                    &mut m,
+                );
+                max_h = max_h.max(size.y);
+                cells.push(MeasuredCell::Math(spans));
             } else {
-                min_cols
+                let built = build_prose_layout_job_with_options(
+                    spans,
+                    BODY_FONT_SIZE,
+                    color,
+                    colors.bold,
+                    row_bg,
+                    palette,
+                    inner_w,
+                    align,
+                    ProseFormatOptions {
+                        reveal_ctx: Some((ui.ctx(), cell_path)),
+                        ..Default::default()
+                    },
+                    media.links.as_deref_mut(),
+                );
+                let galley = ui.fonts(|f| f.layout_job(built.job));
+                max_h = max_h.max(galley.size().y);
+                cells.push(MeasuredCell::Prose {
+                    galley,
+                    links: built.links,
+                    spoilers: built.spoilers,
+                    path: cell_path,
+                });
+            }
+        }
+        measured_rows.push(MeasuredRow {
+            is_header: *is_header,
+            cells,
+            height: max_h + TABLE_CELL_PAD_Y * 2.0,
+        });
+    }
+    measured_rows
+}
+
+fn paint_measured_table(
+    ui: &mut egui::Ui,
+    table: &MarkdownTable,
+    col_widths: &[f32],
+    measured_rows: Vec<MeasuredRow<'_>>,
+    palette: &AppPalette,
+    path: u64,
+    media: &mut DocMedia<'_>,
+) {
+    let col_count = col_widths.len();
+    let table_w: f32 = col_widths.iter().sum();
+    let total_h: f32 = measured_rows.iter().map(|r| r.height).sum();
+    let row_count = measured_rows.len();
+    let (table_rect, _) = ui.allocate_exact_size(Vec2::new(table_w, total_h), egui::Sense::hover());
+    let border_outer = hex_to_c32_alpha(&palette.chrome_border, 170);
+    let border_inner = hex_to_c32_alpha(&palette.chrome_border, 85);
+    let canvas_bg = hex_to_c32(&palette.colors.canvas);
+    let prose_color = hex_to_c32(&palette.colors.text_secondary);
+    let bold_color = hex_to_c32(&palette.colors.text_primary);
+    let rounding = Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS);
+
+    ui.painter().rect_filled(table_rect, rounding, canvas_bg);
+
+    let mut y = table_rect.top();
+    for (r_idx, row) in measured_rows.into_iter().enumerate() {
+        let row_rect = egui::Rect::from_min_size(
+            egui::pos2(table_rect.left(), y),
+            Vec2::new(table_w, row.height),
+        );
+        let row_bg = table_row_background(row.is_header, r_idx, canvas_bg, palette);
+        let row_rounding = if r_idx == 0 {
+            Rounding {
+                nw: crate::ui_ext::BADGE_CORNER_RADIUS,
+                ne: crate::ui_ext::BADGE_CORNER_RADIUS,
+                sw: 0.0,
+                se: 0.0,
             }
         } else {
-            needs_h_scroll = true;
-            natural
-                .iter()
-                .map(|w| w.clamp(TABLE_MIN_COL_WIDTH, TABLE_SCROLL_MAX_COL_WIDTH))
-                .collect()
-        }
-    };
+            Rounding::ZERO
+        };
+        ui.painter().rect_filled(row_rect, row_rounding, row_bg);
 
-    let draw_table = |ui: &mut egui::Ui, mut media: DocMedia<'_>| {
-        let table_w: f32 = col_widths.iter().sum();
-        let mut measured_rows = Vec::with_capacity(all_rows.len());
-
-        for (r_idx, (is_header, row)) in all_rows.iter().enumerate() {
-            let color = if *is_header { bold_color } else { prose_color };
-            let row_bg = if *is_header {
-                hex_to_c32(&palette.colors.surface_panel)
-            } else if r_idx % 2 == 1 {
-                hex_to_c32(&palette.colors.surface_recessed)
-            } else {
-                canvas_bg
+        let mut x = table_rect.left();
+        for (c_idx, cell) in row.cells.into_iter().enumerate() {
+            let col_w = col_widths[c_idx];
+            let inner_w = (col_w - TABLE_CELL_PAD_X * 2.0).max(1.0);
+            let align = map_table_alignment(table, c_idx);
+            let cell_rect = egui::Rect::from_min_size(
+                egui::pos2(x + TABLE_CELL_PAD_X, y + TABLE_CELL_PAD_Y),
+                Vec2::new(inner_w, (row.height - TABLE_CELL_PAD_Y * 2.0).max(1.0)),
+            );
+            let layout = match align {
+                egui::Align::Center => egui::Layout::top_down(egui::Align::Center),
+                egui::Align::RIGHT => egui::Layout::top_down(egui::Align::RIGHT),
+                _ => egui::Layout::top_down(egui::Align::Min),
             };
-            let mut cells = Vec::with_capacity(col_count);
-            let mut max_h = BODY_FONT_SIZE;
-            for (c_idx, &col_w) in col_widths.iter().enumerate().take(col_count) {
-                let inner_w = (col_w - TABLE_CELL_PAD_X * 2.0).max(1.0);
-                let align = match table
-                    .alignments
-                    .get(c_idx)
-                    .copied()
-                    .unwrap_or(TableAlignment::None)
-                {
-                    TableAlignment::Center => egui::Align::Center,
-                    TableAlignment::Right => egui::Align::RIGHT,
-                    TableAlignment::None | TableAlignment::Left => egui::Align::LEFT,
-                };
-                let spans: &[MarkdownSpan] = row.get(c_idx).map_or(&[], Vec::as_slice);
-                if math::needs_inline_flow(spans) {
-                    let cell_path = child_path(path, r_idx * col_count + c_idx + 1);
-                    let mut m = media.reborrow();
-                    let size = math::measure_spans_size(
-                        ui,
-                        spans,
-                        inner_w,
-                        math::SpanRenderStyle {
-                            size: BODY_FONT_SIZE,
-                            prose_color: color,
-                            bold_color,
-                            palette,
-                            block: cell_path,
-                        },
-                        &mut m,
-                    );
-                    max_h = max_h.max(size.y);
-                    cells.push(MeasuredCell::Math(spans));
-                } else {
-                    let cell_path = child_path(path, r_idx * col_count + c_idx + 1);
-                    let built = build_prose_layout_job_with_options(
-                        spans,
-                        BODY_FONT_SIZE,
-                        color,
-                        bold_color,
-                        row_bg,
-                        palette,
-                        inner_w,
-                        align,
-                        ProseFormatOptions {
-                            reveal_ctx: Some((ui.ctx(), cell_path)),
-                            ..Default::default()
-                        },
-                        media.links.as_deref_mut(),
-                    );
-                    let galley = ui.fonts(|f| f.layout_job(built.job));
-                    max_h = max_h.max(galley.size().y);
-                    cells.push(MeasuredCell::Prose {
+            ui.allocate_ui_at_rect(cell_rect, |ui| {
+                ui.with_layout(layout, |ui| match cell {
+                    MeasuredCell::Prose {
                         galley,
-                        links: built.links,
-                        spoilers: built.spoilers,
+                        links,
+                        spoilers,
                         path: cell_path,
-                    });
-                }
-            }
-            measured_rows.push(MeasuredRow {
-                is_header: *is_header,
-                cells,
-                height: max_h + TABLE_CELL_PAD_Y * 2.0,
-            });
-        }
-
-        let total_h: f32 = measured_rows.iter().map(|r| r.height).sum();
-        let (table_rect, _) =
-            ui.allocate_exact_size(Vec2::new(table_w, total_h), egui::Sense::hover());
-        let border_outer = hex_to_c32_alpha(&palette.chrome_border, 170);
-        let border_inner = hex_to_c32_alpha(&palette.chrome_border, 85);
-        let header_bg = hex_to_c32(&palette.colors.surface_panel);
-        let even_bg = canvas_bg;
-        let odd_bg = hex_to_c32(&palette.colors.surface_recessed);
-        let rounding = Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS);
-
-        ui.painter().rect_filled(table_rect, rounding, even_bg);
-
-        let mut y = table_rect.top();
-        for (r_idx, row) in measured_rows.into_iter().enumerate() {
-            let row_rect = egui::Rect::from_min_size(
-                egui::pos2(table_rect.left(), y),
-                Vec2::new(table_w, row.height),
-            );
-            let row_bg = if row.is_header {
-                header_bg
-            } else if r_idx % 2 == 1 {
-                odd_bg
-            } else {
-                even_bg
-            };
-            ui.painter().rect_filled(
-                row_rect,
-                if r_idx == 0 {
-                    Rounding {
-                        nw: crate::ui_ext::BADGE_CORNER_RADIUS,
-                        ne: crate::ui_ext::BADGE_CORNER_RADIUS,
-                        sw: 0.0,
-                        se: 0.0,
-                    }
-                } else {
-                    Rounding::ZERO
-                },
-                row_bg,
-            );
-
-            let mut x = table_rect.left();
-            for (c_idx, cell) in row.cells.into_iter().enumerate() {
-                let col_w = col_widths[c_idx];
-                let inner_w = (col_w - TABLE_CELL_PAD_X * 2.0).max(1.0);
-                let align = match table
-                    .alignments
-                    .get(c_idx)
-                    .copied()
-                    .unwrap_or(TableAlignment::None)
-                {
-                    TableAlignment::Center => egui::Align::Center,
-                    TableAlignment::Right => egui::Align::RIGHT,
-                    TableAlignment::None | TableAlignment::Left => egui::Align::LEFT,
-                };
-                let cell_rect = egui::Rect::from_min_size(
-                    egui::pos2(x + TABLE_CELL_PAD_X, y + TABLE_CELL_PAD_Y),
-                    Vec2::new(inner_w, (row.height - TABLE_CELL_PAD_Y * 2.0).max(1.0)),
-                );
-                let layout = match align {
-                    egui::Align::Center => egui::Layout::top_down(egui::Align::Center),
-                    egui::Align::RIGHT => egui::Layout::top_down(egui::Align::RIGHT),
-                    _ => egui::Layout::top_down(egui::Align::Min),
-                };
-                ui.allocate_ui_at_rect(cell_rect, |ui| {
-                    ui.with_layout(layout, |ui| match cell {
-                        MeasuredCell::Prose {
+                    } => {
+                        render_galley_with_links(
+                            ui,
                             galley,
-                            links,
-                            spoilers,
-                            path: cell_path,
-                        } => {
-                            render_galley_with_links(
-                                ui,
-                                galley,
-                                &links,
-                                &spoilers,
-                                cell_path,
-                                media.navigate_to.as_deref_mut(),
-                            );
-                        }
-                        MeasuredCell::Math(spans) => {
-                            let cell_path = child_path(path, r_idx * col_count + c_idx + 1);
-                            let color = if row.is_header {
-                                bold_color
-                            } else {
-                                prose_color
-                            };
-                            let mut m = media.reborrow();
-                            math::show_spans(
-                                ui,
-                                spans,
-                                math::SpanRenderStyle {
-                                    size: BODY_FONT_SIZE,
-                                    prose_color: color,
-                                    bold_color,
-                                    palette,
-                                    block: cell_path,
-                                },
-                                &mut m,
-                                align,
-                            );
-                        }
-                    });
+                            &links,
+                            &spoilers,
+                            cell_path,
+                            media.navigate_to.as_deref_mut(),
+                        );
+                    }
+                    MeasuredCell::Math(spans) => {
+                        let cell_path = child_path(path, r_idx * col_count + c_idx + 1);
+                        let color = if row.is_header {
+                            bold_color
+                        } else {
+                            prose_color
+                        };
+                        let mut m = media.reborrow();
+                        math::show_spans(
+                            ui,
+                            spans,
+                            math::SpanRenderStyle {
+                                size: BODY_FONT_SIZE,
+                                prose_color: color,
+                                bold_color,
+                                palette,
+                                block: cell_path,
+                            },
+                            &mut m,
+                            align,
+                        );
+                    }
                 });
+            });
 
-                x += col_w;
-                if c_idx + 1 < col_count {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(x, row_rect.top()),
-                            egui::pos2(x, row_rect.bottom()),
-                        ],
-                        Stroke::new(1.0_f32, border_inner),
-                    );
-                }
-            }
-
-            y += row.height;
-            if r_idx + 1 < all_rows.len() {
-                let divider_stroke = if row.is_header {
-                    Stroke::new(1.5_f32, border_outer)
-                } else {
-                    Stroke::new(1.0_f32, border_inner)
-                };
+            x += col_w;
+            if c_idx + 1 < col_count {
                 ui.painter().line_segment(
                     [
-                        egui::pos2(table_rect.left(), y),
-                        egui::pos2(table_rect.right(), y),
+                        egui::pos2(x, row_rect.top()),
+                        egui::pos2(x, row_rect.bottom()),
                     ],
-                    divider_stroke,
+                    Stroke::new(1.0_f32, border_inner),
                 );
             }
         }
 
-        ui.painter()
-            .rect_stroke(table_rect, rounding, Stroke::new(1.0_f32, border_outer));
+        y += row.height;
+        if r_idx + 1 < row_count {
+            let divider_stroke = if row.is_header {
+                Stroke::new(1.5_f32, border_outer)
+            } else {
+                Stroke::new(1.0_f32, border_inner)
+            };
+            ui.painter().line_segment(
+                [
+                    egui::pos2(table_rect.left(), y),
+                    egui::pos2(table_rect.right(), y),
+                ],
+                divider_stroke,
+            );
+        }
+    }
+
+    ui.painter()
+        .rect_stroke(table_rect, rounding, Stroke::new(1.0_f32, border_outer));
+}
+
+fn render_markdown_table(
+    ui: &mut egui::Ui,
+    table: &MarkdownTable,
+    palette: &AppPalette,
+    path: u64,
+    mut media: DocMedia<'_>,
+) {
+    let col_count = table
+        .alignments
+        .len()
+        .max(table.headers.len())
+        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0))
+        .max(1);
+    let avail_w = ui.available_width().max(1.0);
+    let all_rows: Vec<(bool, &Vec<Vec<MarkdownSpan>>)> = (!table.headers.is_empty())
+        .then_some((true, &table.headers))
+        .into_iter()
+        .chain(table.rows.iter().map(|r| (false, r)))
+        .collect();
+
+    let (col_widths, needs_h_scroll) =
+        measure_table_col_widths(ui, &all_rows, col_count, avail_w, palette, path, &mut media);
+
+    let draw_table = |ui: &mut egui::Ui, media: &mut DocMedia<'_>| {
+        let measured_rows =
+            measure_table_rows(ui, table, &all_rows, &col_widths, palette, path, media);
+        paint_measured_table(ui, table, &col_widths, measured_rows, palette, path, media);
     };
 
     if needs_h_scroll {
         egui::ScrollArea::horizontal()
             .id_source(("markdown_table_h", path))
             .max_width(avail_w)
-            .show(ui, |ui| draw_table(ui, media));
+            .show(ui, |ui| draw_table(ui, &mut media));
     } else {
-        draw_table(ui, media);
+        draw_table(ui, &mut media);
     }
 }
 

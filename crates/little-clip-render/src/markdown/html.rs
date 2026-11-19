@@ -969,6 +969,49 @@ fn element_is_hidden(el: ElementRef<'_>) -> bool {
     false
 }
 
+fn apply_inline_css_declaration(css: &mut InlineCss, prop: &str, val: &str) {
+    let lower_val = val.to_ascii_lowercase();
+    match prop.to_ascii_lowercase().as_str() {
+        "color" => {
+            if let Some(c) = parse_css_color(val) {
+                css.color = Some(c);
+            }
+        }
+        "background-color" | "background" => {
+            if let Some(c) = extract_css_color_token(val) {
+                css.background = Some(c);
+            }
+        }
+        "font-weight" => {
+            let numeric = lower_val.parse::<u16>().ok().is_some_and(|w| w >= 600);
+            if matches!(lower_val.as_str(), "bold" | "bolder") || numeric {
+                css.bold = true;
+            }
+        }
+        "font-style" if matches!(lower_val.as_str(), "italic" | "oblique") => {
+            css.italic = true;
+        }
+        "text-decoration" | "text-decoration-line" => {
+            if lower_val.contains("underline") {
+                css.underline = true;
+            }
+            if lower_val.contains("line-through") {
+                css.strikethrough = true;
+            }
+        }
+        "font-family"
+            if ["monospace", "courier", "consolas", "fira", "jetbrains"]
+                .iter()
+                .any(|kw| lower_val.contains(kw)) =>
+        {
+            css.monospace = true;
+        }
+        "vertical-align" if lower_val == "super" => css.superscript = true,
+        "vertical-align" if lower_val == "sub" => css.subscript = true,
+        _ => {}
+    }
+}
+
 fn merge_element_inline_css(el: ElementRef<'_>, css: &mut InlineCss) {
     if let Some(color_attr) = el.attr("color")
         && let Some(c) = parse_css_color(color_attr)
@@ -979,57 +1022,83 @@ fn merge_element_inline_css(el: ElementRef<'_>, css: &mut InlineCss) {
         return;
     };
     for (prop, val) in split_css_declarations(style) {
-        let lower_prop = prop.to_ascii_lowercase();
-        let lower_val = val.to_ascii_lowercase();
-        match lower_prop.as_str() {
-            "color" => {
-                if let Some(c) = parse_css_color(val) {
-                    css.color = Some(c);
-                }
+        apply_inline_css_declaration(css, prop, val);
+    }
+}
+
+fn apply_box_style_declaration(box_style: &mut BlockBoxStyle, prop: &str, val: &str) {
+    const PADDING_SIDES: [&str; 4] = [
+        "padding-top",
+        "padding-right",
+        "padding-bottom",
+        "padding-left",
+    ];
+    let lower_prop = prop.to_ascii_lowercase();
+    if let Some(side_idx) = PADDING_SIDES.iter().position(|&name| name == lower_prop) {
+        box_style.padding[side_idx] = parse_css_length_px(val, 16.0)
+            .unwrap_or(0.0)
+            .clamp(0.0, 48.0);
+        return;
+    }
+    match lower_prop.as_str() {
+        "text-align" => {
+            if let Some(a) = parse_text_align(val) {
+                box_style.align = Some(a);
             }
-            "background-color" | "background" => {
-                if let Some(c) = extract_css_color_token(val) {
-                    css.background = Some(c);
-                }
-            }
-            "font-weight" => {
-                let numeric = lower_val.parse::<u16>().ok().is_some_and(|w| w >= 600);
-                if matches!(lower_val.as_str(), "bold" | "bolder") || numeric {
-                    css.bold = true;
-                }
-            }
-            "font-style" => {
-                if matches!(lower_val.as_str(), "italic" | "oblique") {
-                    css.italic = true;
-                }
-            }
-            "text-decoration" | "text-decoration-line" => {
-                if lower_val.contains("underline") {
-                    css.underline = true;
-                }
-                if lower_val.contains("line-through") {
-                    css.strikethrough = true;
-                }
-            }
-            "font-family" => {
-                if lower_val.contains("monospace")
-                    || lower_val.contains("courier")
-                    || lower_val.contains("consolas")
-                    || lower_val.contains("fira")
-                    || lower_val.contains("jetbrains")
-                {
-                    css.monospace = true;
-                }
-            }
-            "vertical-align" => {
-                if lower_val == "super" {
-                    css.superscript = true;
-                } else if lower_val == "sub" {
-                    css.subscript = true;
-                }
-            }
-            _ => {}
         }
+        "color" => {
+            if let Some(c) = parse_css_color(val) {
+                box_style.text_color = Some(c);
+            }
+        }
+        "background-color" | "background" => {
+            if let Some(c) = extract_css_color_token(val)
+                && c.a > 0
+            {
+                box_style.background = Some(c);
+            }
+        }
+        "border" => {
+            let (width, color) = parse_css_border(val);
+            if width > 0.0 {
+                box_style.border_width = width;
+            }
+            if color.is_some() {
+                box_style.border_color = color;
+            }
+        }
+        "border-color" => {
+            if let Some(c) = parse_css_color(val) {
+                box_style.border_color = Some(c);
+            }
+        }
+        "border-width" => {
+            if let Some(w) = parse_css_length_px(val, 16.0) {
+                box_style.border_width = w.clamp(0.0, 6.0);
+            }
+        }
+        "border-radius" => {
+            if let Some(r) = parse_css_length_px(val, 16.0) {
+                box_style.border_radius = r.clamp(0.0, 24.0);
+            }
+        }
+        "padding" => box_style.padding = parse_css_four_sides(val, 48.0),
+        "margin" => {
+            let sides = parse_css_four_sides(val, 32.0);
+            box_style.margin_top = sides[0];
+            box_style.margin_bottom = sides[2];
+        }
+        "margin-top" => {
+            if let Some(m) = parse_css_length_px(val, 16.0) {
+                box_style.margin_top = m.clamp(0.0, 32.0);
+            }
+        }
+        "margin-bottom" => {
+            if let Some(m) = parse_css_length_px(val, 16.0) {
+                box_style.margin_bottom = m.clamp(0.0, 32.0);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1042,99 +1111,73 @@ fn parse_block_box_style(el: ElementRef<'_>) -> BlockBoxStyle {
         return box_style;
     };
     for (prop, val) in split_css_declarations(style) {
-        let lower_prop = prop.to_ascii_lowercase();
-        match lower_prop.as_str() {
-            "text-align" => {
-                if let Some(a) = parse_text_align(val) {
-                    box_style.align = Some(a);
-                }
-            }
-            "color" => {
-                if let Some(c) = parse_css_color(val) {
-                    box_style.text_color = Some(c);
-                }
-            }
-            "background-color" | "background" => {
-                if let Some(c) = extract_css_color_token(val)
-                    && c.a > 0
-                {
-                    box_style.background = Some(c);
-                }
-            }
-            "border" => {
-                let (width, color) = parse_css_border(val);
-                if width > 0.0 {
-                    box_style.border_width = width;
-                }
-                if color.is_some() {
-                    box_style.border_color = color;
-                }
-            }
-            "border-color" => {
-                if let Some(c) = parse_css_color(val) {
-                    box_style.border_color = Some(c);
-                }
-            }
-            "border-width" => {
-                if let Some(w) = parse_css_length_px(val, 16.0) {
-                    box_style.border_width = w.clamp(0.0, 6.0);
-                }
-            }
-            "border-radius" => {
-                if let Some(r) = parse_css_length_px(val, 16.0) {
-                    box_style.border_radius = r.clamp(0.0, 24.0);
-                }
-            }
-            "padding" => box_style.padding = parse_css_four_sides(val, 48.0),
-            "padding-top" => {
-                box_style.padding[0] = parse_css_length_px(val, 16.0)
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 48.0)
-            }
-            "padding-right" => {
-                box_style.padding[1] = parse_css_length_px(val, 16.0)
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 48.0)
-            }
-            "padding-bottom" => {
-                box_style.padding[2] = parse_css_length_px(val, 16.0)
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 48.0)
-            }
-            "padding-left" => {
-                box_style.padding[3] = parse_css_length_px(val, 16.0)
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 48.0)
-            }
-            "margin" => {
-                let sides = parse_css_four_sides(val, 32.0);
-                box_style.margin_top = sides[0];
-                box_style.margin_bottom = sides[2];
-            }
-            "margin-top" => {
-                if let Some(m) = parse_css_length_px(val, 16.0) {
-                    box_style.margin_top = m.clamp(0.0, 32.0);
-                }
-            }
-            "margin-bottom" => {
-                if let Some(m) = parse_css_length_px(val, 16.0) {
-                    box_style.margin_bottom = m.clamp(0.0, 32.0);
-                }
-            }
-            _ => {}
-        }
+        apply_box_style_declaration(&mut box_style, prop, val);
     }
     box_style
+}
+
+fn apply_image_width(pres: &mut ImagePresentation, raw: &str) {
+    if let Some(frac) = parse_css_percentage(raw) {
+        pres.width_fraction = Some(frac.clamp(0.05, 1.0));
+    } else if let Some(px) = parse_css_length_px(raw, 16.0) {
+        pres.width_px = Some(px);
+    }
+}
+
+fn apply_image_style_declaration(
+    pres: &mut ImagePresentation,
+    prop: &str,
+    val: &str,
+    margin_left_auto: &mut bool,
+    margin_right_auto: &mut bool,
+) {
+    let lower_val = val.to_ascii_lowercase();
+    match prop.to_ascii_lowercase().as_str() {
+        "width" => apply_image_width(pres, &lower_val),
+        "max-width" if pres.width_px.is_none() && pres.width_fraction.is_none() => {
+            apply_image_width(pres, &lower_val);
+        }
+        "height" if lower_val != "auto" => {
+            if let Some(px) = parse_css_length_px(&lower_val, 16.0) {
+                pres.height_px = Some(px);
+            }
+        }
+        "zoom" => {
+            if let Some(frac) = parse_css_percentage(&lower_val) {
+                pres.zoom = Some(frac.clamp(0.05, 4.0));
+            } else if let Ok(scale) = lower_val.trim().parse::<f32>()
+                && scale.is_finite()
+            {
+                pres.zoom = Some(scale.clamp(0.05, 4.0));
+            }
+        }
+        "border-radius" => {
+            if let Some(frac) = parse_css_percentage(&lower_val) {
+                pres.border_radius = Some((frac * 256.0).clamp(0.0, 256.0));
+            } else if let Some(px) = parse_css_length_px(&lower_val, 16.0) {
+                pres.border_radius = Some(px.clamp(0.0, 256.0));
+            }
+        }
+        "float" => match lower_val.as_str() {
+            "right" => pres.float = Some(TextAlign::Right),
+            "left" => pres.float = Some(TextAlign::Left),
+            _ => {}
+        },
+        "margin-left" => *margin_left_auto = lower_val == "auto",
+        "margin-right" => *margin_right_auto = lower_val == "auto",
+        "text-align" => {
+            if let Some(a) = parse_text_align(&lower_val) {
+                pres.align = Some(a);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_image_presentation(el: ElementRef<'_>) -> ImagePresentation {
     let mut pres = ImagePresentation::default();
     if let Some(w) = el.attr("width") {
-        if let Some(frac) = parse_css_percentage(w) {
-            pres.width_fraction = Some(frac.clamp(0.05, 1.0));
-        } else if let Some(px) = parse_css_length_px(w, 16.0) {
-            pres.width_px = Some(px);
-        }
+        apply_image_width(&mut pres, w);
     }
     if let Some(h) = el.attr("height")
         && let Some(px) = parse_css_length_px(h, 16.0)
@@ -1151,62 +1194,13 @@ fn parse_image_presentation(el: ElementRef<'_>) -> ImagePresentation {
     let mut margin_left_auto = false;
     let mut margin_right_auto = false;
     for (prop, val) in split_css_declarations(style) {
-        let lower_prop = prop.to_ascii_lowercase();
-        let lower_val = val.to_ascii_lowercase();
-        match lower_prop.as_str() {
-            "width" => {
-                if let Some(frac) = parse_css_percentage(&lower_val) {
-                    pres.width_fraction = Some(frac.clamp(0.05, 1.0));
-                } else if let Some(px) = parse_css_length_px(&lower_val, 16.0) {
-                    pres.width_px = Some(px);
-                }
-            }
-            "max-width" => {
-                if pres.width_px.is_none() && pres.width_fraction.is_none() {
-                    if let Some(frac) = parse_css_percentage(&lower_val) {
-                        pres.width_fraction = Some(frac.clamp(0.05, 1.0));
-                    } else if let Some(px) = parse_css_length_px(&lower_val, 16.0) {
-                        pres.width_px = Some(px);
-                    }
-                }
-            }
-            "height" => {
-                if lower_val != "auto"
-                    && let Some(px) = parse_css_length_px(&lower_val, 16.0)
-                {
-                    pres.height_px = Some(px);
-                }
-            }
-            "zoom" => {
-                if let Some(frac) = parse_css_percentage(&lower_val) {
-                    pres.zoom = Some(frac.clamp(0.05, 4.0));
-                } else if let Ok(scale) = lower_val.trim().parse::<f32>()
-                    && scale.is_finite()
-                {
-                    pres.zoom = Some(scale.clamp(0.05, 4.0));
-                }
-            }
-            "border-radius" => {
-                if let Some(frac) = parse_css_percentage(&lower_val) {
-                    pres.border_radius = Some((frac * 256.0).clamp(0.0, 256.0));
-                } else if let Some(px) = parse_css_length_px(&lower_val, 16.0) {
-                    pres.border_radius = Some(px.clamp(0.0, 256.0));
-                }
-            }
-            "float" => match lower_val.as_str() {
-                "right" => pres.float = Some(TextAlign::Right),
-                "left" => pres.float = Some(TextAlign::Left),
-                _ => {}
-            },
-            "margin-left" => margin_left_auto = lower_val == "auto",
-            "margin-right" => margin_right_auto = lower_val == "auto",
-            "text-align" => {
-                if let Some(a) = parse_text_align(&lower_val) {
-                    pres.align = Some(a);
-                }
-            }
-            _ => {}
-        }
+        apply_image_style_declaration(
+            &mut pres,
+            prop,
+            val,
+            &mut margin_left_auto,
+            &mut margin_right_auto,
+        );
     }
     if pres.align.is_none() && margin_left_auto && margin_right_auto {
         pres.align = Some(TextAlign::Center);
