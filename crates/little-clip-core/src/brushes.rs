@@ -528,13 +528,21 @@ mod tests {
         let xml = r#"<Preset name="Stamp"><param name="brush_definition"><![CDATA[<Brush type="gbr_brush" filename="seeds.gbr" scale="2"/>]]></param></Preset>"#;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("paintoppresets/stamp.kpp", options).unwrap();
-        zip.write_all(&make_kpp(xml)).unwrap();
         zip.start_file("brushes/seeds.gbr", options).unwrap();
         zip.write_all(&make_gbr("Tip", 7, 3, 20, 200)).unwrap();
+        zip.start_file("paintoppresets/stamp.KPP", options).unwrap();
+        zip.write_all(&make_kpp(xml)).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let library = krita::parse_bundle(&bytes, 1, &AtomicBool::new(false)).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stamp.bundle");
+        std::fs::write(&path, bytes).unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert_eq!(count_brushes(&path, &cancelled).unwrap(), 1);
+        let library = load_brush_library(&path, 64, &cancelled).unwrap();
+        assert_eq!(library.total_count, 1);
+        assert_eq!(library.brushes.len(), 1);
         let preset = &library.brushes[0];
+        assert_eq!(preset.name, "Stamp");
         assert_eq!(preset.params.size_px, 14.0);
         assert!(matches!(
             preset.tip,
@@ -775,7 +783,8 @@ mod tests {
         }
         let bundle_lib =
             load_brush_bytes(BrushFormat::KritaBundle, &bundle_bytes, "pack", 8, &cancel).unwrap();
-        assert_eq!(bundle_lib.brushes.len(), 2);
+        assert_eq!(bundle_lib.brushes.len(), 1);
+        assert_eq!(bundle_lib.brushes[0].name, "Ink Pen");
 
         let myb = br#"{"version":3,"parent_brush_name":"Charcoal","settings":{"radius_logarithmic":{"base_value":2.2},"hardness":{"base_value":0.6}}}"#;
         let myb_lib = load_brush_bytes(BrushFormat::MyPaint, myb, "charcoal", 8, &cancel).unwrap();

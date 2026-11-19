@@ -5,6 +5,7 @@ use super::{
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_PRESET_XML_BYTES: usize = 8 * 1024 * 1024;
@@ -729,6 +730,18 @@ pub(super) fn parse_bundle(
 ) -> Result<BrushLibrary, String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format!("Invalid Krita .bundle archive: {error}"))?;
+    // In preset bundles, the brush bitmaps are resources for the presets.
+    // Tip-only bundles still expose those tips directly.
+    let extensions: &[_] = if archive.file_names().any(|name| {
+        !name.ends_with(['/', '\\'])
+            && Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("kpp"))
+    }) {
+        &["kpp"]
+    } else {
+        &["gbr", "vbr"]
+    };
     let mut brushes = Vec::new();
     let mut total_count = 0usize;
     let mut remaining_decode_bytes = MAX_BUNDLE_DECODE_BYTES;
@@ -746,13 +759,13 @@ pub(super) fn parse_bundle(
             continue;
         }
         drop(entry);
-        let path = std::path::Path::new(&name);
+        let path = Path::new(&name);
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if !matches!(extension.as_str(), "kpp" | "gbr" | "vbr") {
+        if !extensions.contains(&extension.as_str()) {
             continue;
         }
         total_count += 1;
@@ -779,7 +792,6 @@ pub(super) fn parse_bundle(
     if brushes.is_empty() {
         return Err("No readable brushes in Krita .bundle".into());
     }
-    let total_count = total_count.max(brushes.len());
     Ok(BrushLibrary {
         format: BrushFormat::KritaBundle,
         brushes,
@@ -789,7 +801,7 @@ pub(super) fn parse_bundle(
 
 fn bundle_preset(
     bytes: &[u8],
-    path: &std::path::Path,
+    path: &Path,
     extension: &str,
     load_resource: &mut impl FnMut(&str) -> Option<ResourceTip>,
 ) -> Result<BrushPreset, String> {
@@ -811,7 +823,7 @@ fn bundle_resource(
     name: &str,
     remaining: &mut u64,
 ) -> Option<ResourceTip> {
-    if std::path::Path::new(name).file_name()?.to_str()? != name || name.contains('\\') {
+    if Path::new(name).file_name()?.to_str()? != name || name.contains('\\') {
         return None;
     }
     let entry = archive.by_name(&format!("brushes/{name}")).ok()?;
