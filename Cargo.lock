@@ -6319,6 +6319,7 @@ dependencies = [
  "oneyaml",
  "oxideav-pcx",
  "percent-encoding",
+ "png 0.18.1",
  "proj4rs",
  "quick-xml 0.41.0",
  "rayon",

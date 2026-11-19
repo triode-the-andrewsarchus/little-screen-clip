@@ -293,19 +293,63 @@ mod tests {
     }
 
     fn make_kpp(xml: &str) -> Vec<u8> {
-        let png = make_png(8, 8);
-        // Insert tEXt "preset" chunk right before IEND (last 12 bytes).
-        let iend_start = png.len() - 12;
-        let mut chunk_data = b"preset\0".to_vec();
-        chunk_data.extend_from_slice(xml.as_bytes());
-        let mut out = png[..iend_start].to_vec();
-        out.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
-        out.extend_from_slice(b"tEXt");
-        out.extend_from_slice(&chunk_data);
-        // CRC32 isn't checked by our chunk scanner; write 0.
-        out.extend_from_slice(&0_u32.to_be_bytes());
-        out.extend_from_slice(&png[iend_start..]);
-        out
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 8, 8);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.add_itxt_chunk("preset".into(), xml.into()).unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[220; 64]).unwrap();
+        writer.finish().unwrap();
+        bytes
+    }
+
+    #[test]
+    fn krita_generated_rectangle_and_embedded_tip_follow_saved_preset() {
+        use base64::Engine as _;
+
+        let xml = r#"<Preset name="Rectangle" paintopid="paintbrush"><param name="brush_definition"><![CDATA[<Brush type="auto_brush"><MaskGenerator diameter="42" ratio="0.5" hfade="0.25" vfade="0.75" type="rct"/></Brush>]]></param></Preset>"#;
+        let cancelled = AtomicBool::new(false);
+        let lib = load_brush_bytes(
+            BrushFormat::KritaPreset,
+            &make_kpp(xml),
+            "fallback",
+            1,
+            &cancelled,
+        )
+        .unwrap();
+        let tip = &lib.brushes[0];
+        assert_eq!(tip.params.size_px, 42.0);
+        assert!(matches!(
+            tip.tip,
+            BrushTipKind::Parametric {
+                shape: ParametricShape::Square,
+                hardness: 0.5,
+                aspect_ratio: 2.0,
+                ..
+            }
+        ));
+
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(make_gbr("Tip", 8, 4, 20, 200));
+        let xml = format!(
+            r#"<Preset name="Stamp" paintopid="paintbrush"><resources><resource type="brushes" filename="stamp.gbr" md5sum="one">{encoded}</resource></resources><param name="brush_definition"><![CDATA[<Brush type="gbr_brush" filename="renamed.gbr" md5sum="one" scale="2.0"/>]]></param></Preset>"#
+        );
+        let lib = load_brush_bytes(
+            BrushFormat::KritaPreset,
+            &make_kpp(&xml),
+            "fallback",
+            1,
+            &cancelled,
+        )
+        .unwrap();
+        let tip = &lib.brushes[0];
+        assert_eq!(tip.params.size_px, 16.0);
+        assert!(matches!(
+            &tip.tip,
+            BrushTipKind::AlphaMask { width: 8, height: 4, alpha }
+                if alpha == &[200; 32]
+        ));
     }
 
     #[test]
