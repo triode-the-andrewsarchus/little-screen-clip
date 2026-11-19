@@ -4,6 +4,7 @@ use super::{
 };
 use crate::sqlite_snapshot;
 use rusqlite::Connection;
+use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) fn parse_sut(
@@ -74,33 +75,24 @@ pub(super) fn parse_sut(
 }
 
 fn variant_params(conn: &Connection) -> BrushStrokeParams {
-    conn.query_row(
-        "SELECT BrushSize, BrushHardness, BrushInterval, Opacity FROM main.Variant LIMIT 1",
-        [],
-        |row| {
-            let number = |index| {
-                row.get::<_, f64>(index)
-                    .ok()
-                    .map(|value| value as f32)
-                    .filter(|value| value.is_finite())
-            };
-            let mut params = BrushStrokeParams::default();
-            if let Some(size) = number(0) {
-                params.size_px = size.clamp(1.0, 2000.0);
-            }
-            if let Some(hardness) = number(1) {
-                params.hardness = (hardness / 100.0).clamp(0.05, 1.0);
-            }
-            if let Some(interval) = number(2) {
-                params.spacing = (interval / 100.0).clamp(0.04, 2.0);
-            }
-            if let Some(opacity) = number(3) {
-                params.opacity = (opacity / 100.0).clamp(0.05, 1.0);
-            }
-            Ok(params)
-        },
-    )
-    .unwrap_or_default()
+    let number = |column| {
+        conn.query_row(
+            &format!("SELECT {column} FROM main.Variant LIMIT 1"),
+            [],
+            |row| row.get::<_, f64>(0),
+        )
+        .ok()
+        .map(|n| n as f32)
+        .filter(|n| n.is_finite())
+    };
+    BrushStrokeParams {
+        size_px: number("BrushSize").unwrap_or(24.0).clamp(1.0, 2000.0),
+        hardness: (number("BrushHardness").unwrap_or(85.0) / 100.0).clamp(0.0, 1.0),
+        spacing: (number("BrushInterval").unwrap_or(16.0) / 100.0).clamp(0.01, 5.0),
+        opacity: (number("Opacity").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0),
+        angle_deg: number("BrushRotation").unwrap_or(0.0).rem_euclid(360.0),
+        ..Default::default()
+    }
 }
 
 fn has_table(conn: &Connection, name: &str) -> Result<bool, String> {
@@ -123,11 +115,100 @@ fn extract_material_tip(conn: &Connection, cancelled: &AtomicBool) -> Option<Bru
         let Ok(rusqlite::types::ValueRef::Blob(blob)) = row.get_ref(0) else {
             continue;
         };
-        if let Some((png, _)) = mask::embedded_png(blob)
+        if let Some(png) = material_png(blob)
             && let Some((tip, _, _)) = mask::png(png, mask::OpaqueCoverage::Dark)
         {
             return Some(tip);
         }
     }
     None
+}
+
+fn material_png(blob: &[u8]) -> Option<&[u8]> {
+    if blob.get(257..262) != Some(b"ustar") {
+        return mask::embedded_png(blob).map(|(png, _)| png);
+    }
+    // A SUT can contain both texture and brush-pattern material archives.
+    // Only a brush-pattern thumbnail is a substitute for the stored layer.
+    let mut archive = tar::Archive::new(Cursor::new(blob));
+    let mut thumbnail = None;
+    let mut brush_pattern = false;
+    for entry in archive.entries_with_seek().ok()?.raw(true).take(32) {
+        let entry = entry.ok()?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let start = usize::try_from(entry.raw_file_position()).ok()?;
+        let length = usize::try_from(entry.size()).ok()?;
+        match entry.path_bytes().as_ref() {
+            b"icedata/layerData.xml" if length <= 64 * 1024 => {
+                let xml = std::str::from_utf8(blob.get(start..start.checked_add(length)?)?).ok()?;
+                brush_pattern = is_brush_pattern(xml);
+            }
+            b"thumbnail/thumbnail.png" if length <= 4 * 1024 * 1024 => {
+                thumbnail = blob.get(start..start.checked_add(length)?);
+            }
+            _ => {}
+        }
+    }
+    thumbnail.filter(|_| brush_pattern)
+}
+
+fn is_brush_pattern(xml: &str) -> bool {
+    let options = roxmltree::ParsingOptions {
+        nodes_limit: 2048,
+        ..Default::default()
+    };
+    let Ok(doc) = roxmltree::Document::parse_with_options(xml, options) else {
+        return false;
+    };
+    doc.descendants()
+        .filter(|node| node.has_tag_name("datalist") && node.attribute("key") == Some("systemtag"))
+        .flat_map(|node| node.children())
+        .any(|node| node.has_tag_name("data") && node.text() == Some("BrushPattern"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_saved_rotation_without_requiring_every_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Variant(BrushSize REAL, BrushRotation REAL);
+             INSERT INTO Variant VALUES (60, 134);",
+        )
+        .unwrap();
+        sqlite_snapshot::authorize_reads(&conn);
+        let params = variant_params(&conn);
+        assert_eq!(params.size_px, 60.0);
+        assert_eq!(params.angle_deg, 134.0);
+        assert_eq!(params.opacity, 1.0);
+    }
+
+    #[test]
+    fn uses_brush_pattern_material_and_ignores_paper_texture() {
+        for (tag, expected) in [
+            ("BrushPattern", Some(b"tip".as_slice())),
+            ("PaperTexture", None),
+        ] {
+            let mut archive = tar::Builder::new(Vec::new());
+            let xml = format!(
+                r#"<infolist><info><datalist key="systemtag"><data>{tag}</data></datalist></info></infolist>"#
+            );
+            for (name, data) in [
+                ("thumbnail/thumbnail.png", b"tip".as_slice()),
+                ("icedata/layerData.xml", xml.as_bytes()),
+            ] {
+                let mut header = tar::Header::new_ustar();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                archive.append_data(&mut header, name, data).unwrap();
+            }
+            let bytes = archive.into_inner().unwrap();
+            assert_eq!(material_png(&bytes), expected);
+        }
+    }
 }
