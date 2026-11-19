@@ -168,8 +168,8 @@ pub fn load_brush_library(
 /// Counts the brushes represented by a supported file.
 ///
 /// Photoshop, Procreate and native Affinity vector packs use their index.
-/// PNG-based Affinity packs use recognizable tip headers. Other formats reuse the first-preset
-/// parser and its reported library count.
+/// GIMP image hoses and PNG-based Affinity packs use their headers. Other formats
+/// reuse the first-preset parser and its reported library count.
 ///
 /// # Errors
 /// Returns an error for an unreadable or unsupported file, an unrecognized
@@ -179,6 +179,7 @@ pub fn count_brushes(path: &Path, cancelled: &AtomicBool) -> Result<usize, Strin
     let count = match format {
         BrushFormat::Abr | BrushFormat::ProcreateBrushset => brushkit_count(format, &bytes)?,
         BrushFormat::AffinityBrushes => affinity::count(&bytes, cancelled)?,
+        BrushFormat::GimpGih => gimp::count_gih(&bytes)?,
         _ => load_brush_bytes(format, &bytes, "Brush", 1, cancelled)?.total_count,
     };
     if cancelled.load(Ordering::Relaxed) {
@@ -220,10 +221,10 @@ pub fn load_brush_bytes(
         BrushFormat::Abr | BrushFormat::ProcreateBrush | BrushFormat::ProcreateBrushset => {
             load_via_brushkit(format, bytes, fallback_name, max_brushes, cancelled)
         }
-        BrushFormat::KritaPreset => krita::parse_kpp(bytes, fallback_name),
+        BrushFormat::KritaPreset => krita::parse_kpp(bytes, fallback_name, cancelled),
         BrushFormat::KritaBundle => krita::parse_bundle(bytes, max_brushes, cancelled),
         BrushFormat::GimpGbr => gimp::parse_gbr_library(bytes, fallback_name),
-        BrushFormat::GimpGih => gimp::parse_gih(bytes, fallback_name, max_brushes),
+        BrushFormat::GimpGih => gimp::parse_gih(bytes, fallback_name, max_brushes, cancelled),
         BrushFormat::GimpVbr => gimp::parse_vbr(bytes, fallback_name),
         BrushFormat::MyPaint => mypaint::parse_mypaint(bytes, fallback_name),
         BrushFormat::AffinityBrushes => {
@@ -464,7 +465,8 @@ mod tests {
           <param name="SmudgeRadiusValue">80</param>
           <param name="SmudgeRateSmearAlpha">false</param>
         </Preset>"#;
-        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let preset =
+            krita::parse_kpp_preset(&make_kpp(xml), "fallback", &AtomicBool::new(false)).unwrap();
         let legacy = preset.params.dynamics.krita_smudge.unwrap();
         assert!(matches!(legacy.mode, krita::SmudgeMode::Dull));
         assert_eq!(legacy.length.at(0.5), 0.4);
@@ -477,7 +479,9 @@ mod tests {
             "</Preset>",
             r#"<param name="SmudgeRateUseNewEngine">true</param></Preset>"#,
         );
-        let preset = krita::parse_kpp_preset(&make_kpp(&newer), "fallback").unwrap();
+        let preset =
+            krita::parse_kpp_preset(&make_kpp(&newer), "fallback", &AtomicBool::new(false))
+                .unwrap();
         assert!(preset.params.dynamics.krita_smudge.is_none());
     }
 
@@ -490,7 +494,8 @@ mod tests {
           <param name="SmudgeRateValue">0.8</param>
           <param name="PressureColorRate">false</param>
         </Preset>"#;
-        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let preset =
+            krita::parse_kpp_preset(&make_kpp(xml), "fallback", &AtomicBool::new(false)).unwrap();
         let image = render::render_brush_hover_preview(&preset, 100, [[200, 0, 0], [0, 0, 220]]);
         let pixel = |x, y| {
             let index = (y * image.width as usize + x) * 4;
@@ -514,7 +519,8 @@ mod tests {
             <ChildSensor id="pressure"><curve>0,0;1,1;</curve></ChildSensor>
           </params>]]></param>
         </Preset>"#;
-        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let preset =
+            krita::parse_kpp_preset(&make_kpp(xml), "fallback", &AtomicBool::new(false)).unwrap();
         let settings = preset.params.dynamics;
         let pressure = settings.opacity.unwrap().at(0.5);
         let fade = settings.opacity_fade.unwrap();
@@ -568,7 +574,8 @@ mod tests {
           <param name="RotationValue">0.5</param>
           <param name="MaskingBrush/Preset/SizeSensor">ignored</param>
         </Preset>"#;
-        let preset = krita::parse_kpp_preset(&make_kpp(xml), "fallback").unwrap();
+        let preset =
+            krita::parse_kpp_preset(&make_kpp(xml), "fallback", &AtomicBool::new(false)).unwrap();
         let dynamics = preset.params.dynamics;
         assert_eq!(dynamics.size.unwrap().at(0.5), 0.3);
         assert!(dynamics.flow.is_none());
@@ -760,6 +767,34 @@ mod tests {
                 .iter()
                 .any(|p| p[3] > 0)
         );
+    }
+
+    #[test]
+    fn gimp_hose_uses_cells_beyond_the_display_limit() {
+        let mut bytes = b"Hose\n65 ncells:65 dim:1 rank0:65 sel0:incremental\n".to_vec();
+        for index in 0..65 {
+            bytes.extend_from_slice(&make_gbr("Cell", 8, 8, 15, (index + 1) * 3));
+        }
+        let cancelled = AtomicBool::new(false);
+        let library =
+            load_brush_bytes(BrushFormat::GimpGih, &bytes, "Hose", 64, &cancelled).unwrap();
+        assert_eq!(library.brushes.len(), 64);
+        assert_eq!(library.total_count, 65);
+        let sequence = library.brushes[0]
+            .params
+            .dynamics
+            .tip_sequence
+            .as_ref()
+            .unwrap();
+        assert!(matches!(sequence.tip_for_dab(64, 1.0, 0.0, 0),
+            BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 195));
+        assert!(matches!(sequence.tip_for_dab(65, 1.0, 0.0, 0),
+            BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 3));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.gih");
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(count_brushes(&path, &cancelled).unwrap(), 65);
     }
 
     #[test]

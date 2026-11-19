@@ -3,7 +3,9 @@ use super::{
     MAX_BRUSH_LABEL_BYTES, ParametricShape, bounded_label, mask,
 };
 
+use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_GIMP_DIM: u32 = 4096;
 
@@ -21,6 +23,7 @@ pub(super) fn parse_gbr_at(
     fallback_name: &str,
 ) -> Result<(BrushPreset, usize), String> {
     let header = BitmapHeader::read(bytes)?;
+    let end = header.pixel_end(bytes.len())?;
     let BitmapHeader {
         width,
         height,
@@ -43,14 +46,7 @@ pub(super) fn parse_gbr_at(
         parsed_name
     };
 
-    let pixel_count = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or("Overflow")?;
-    let payload_len = pixel_count.checked_mul(bpp).ok_or("Overflow")?;
-    let end = data_offset.checked_add(payload_len).ok_or("Overflow")?;
-    let payload = bytes
-        .get(data_offset..end)
-        .ok_or("Truncated .gbr pixel payload")?;
+    let payload = &bytes[data_offset..end];
     let alpha = match bpp {
         1 => payload.to_vec(),
         2 => payload
@@ -145,75 +141,122 @@ impl BitmapHeader {
             spacing: spacing.clamp(1, 500) as f32 / 100.0,
         })
     }
+
+    fn pixel_end(&self, file_size: usize) -> Result<usize, String> {
+        // The header validates both dimensions and bytes per pixel.
+        let size = self.width as usize * self.height as usize * self.bpp;
+        let end = self.data_offset.checked_add(size).ok_or("Overflow")?;
+        (end <= file_size)
+            .then_some(end)
+            .ok_or_else(|| "Truncated .gbr pixel payload".into())
+    }
+}
+
+struct HoseHeader<'a> {
+    name: &'a [u8],
+    parameters: Cow<'a, str>,
+    cells: usize,
+    body: &'a [u8],
+}
+
+impl<'a> HoseHeader<'a> {
+    fn read(mut bytes: &'a [u8]) -> Result<Self, String> {
+        fn line<'a>(bytes: &mut &'a [u8]) -> Option<&'a [u8]> {
+            const MAX_HEADER_LINE: usize = 8 * 1024;
+            let lf = bytes[..bytes.len().min(MAX_HEADER_LINE)]
+                .iter()
+                .position(|&b| b == b'\n')?;
+            let line = &bytes[..lf];
+            *bytes = &bytes[lf + 1..];
+            Some(line)
+        }
+        let name = line(&mut bytes).ok_or("Invalid .gih header")?;
+        let parameters =
+            String::from_utf8_lossy(line(&mut bytes).ok_or("Invalid .gih parameter line")?);
+        let cells = parameters
+            .split_whitespace()
+            .next()
+            .and_then(|tok| tok.parse::<usize>().ok())
+            .unwrap_or(1)
+            .clamp(1, 512);
+        Ok(Self {
+            name,
+            parameters,
+            cells,
+            body: bytes,
+        })
+    }
+}
+
+pub(super) fn count_gih(bytes: &[u8]) -> Result<usize, String> {
+    let hose = HoseHeader::read(bytes)?;
+    BitmapHeader::read(hose.body)?.pixel_end(hose.body.len())?;
+    Ok(hose.cells)
 }
 
 pub(super) fn parse_gih(
     bytes: &[u8],
     fallback_name: &str,
     max_brushes: usize,
+    cancelled: &AtomicBool,
 ) -> Result<BrushLibrary, String> {
-    const MAX_HEADER_LINE: usize = 8 * 1024;
-    let first_nl = bytes[..bytes.len().min(MAX_HEADER_LINE)]
-        .iter()
-        .position(|&b| b == b'\n')
-        .ok_or("Invalid .gih header")?;
-    let rest = &bytes[first_nl + 1..];
-    let second_nl = rest[..rest.len().min(MAX_HEADER_LINE)]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map(|pos| first_nl + 1 + pos)
-        .ok_or("Invalid .gih parameter line")?;
-
-    let base_name = String::from_utf8_lossy(&bytes[..first_nl.min(MAX_BRUSH_LABEL_BYTES)])
-        .trim()
-        .to_owned();
-    let header_line = String::from_utf8_lossy(&bytes[first_nl + 1..second_nl]);
-    let ncells = header_line
-        .split_whitespace()
-        .next()
-        .and_then(|tok| tok.parse::<usize>().ok())
-        .unwrap_or(1)
-        .clamp(1, 512);
-
-    let mut offset = second_nl + 1;
+    let HoseHeader {
+        name,
+        parameters,
+        cells,
+        mut body,
+    } = HoseHeader::read(bytes)?;
+    let decoded_name = String::from_utf8_lossy(&name[..name.len().min(MAX_BRUSH_LABEL_BYTES)]);
+    let base_name = decoded_name.trim();
+    let base_name = if base_name.is_empty() {
+        fallback_name
+    } else {
+        base_name
+    };
+    let axes = hose_axes(&parameters, cells);
+    // Each swatch may use any cell of a hose. The display limit applies only
+    // to the returned presets. Per-cell downsampling and the header limit
+    // bound the shared masks even for the largest supported hose.
+    let decode_cells = if axes.is_some() {
+        cells
+    } else {
+        cells.min(max_brushes)
+    };
     let mut brushes = Vec::new();
-    for idx in 0..ncells.min(max_brushes) {
-        if offset >= bytes.len() {
-            break;
+    for idx in 0..decode_cells {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
         }
-        let cell_name = if base_name.is_empty() {
-            format!("{fallback_name} #{}", idx + 1)
-        } else {
-            format!("{base_name} #{}", idx + 1)
-        };
-        let Ok((preset, consumed)) = parse_gbr_at(&bytes[offset..], &cell_name) else {
+        let cell_name = format!("{base_name} #{}", idx + 1);
+        let Ok((preset, consumed)) = parse_gbr_at(body, &cell_name) else {
             break;
         };
         brushes.push(preset);
-        offset += consumed;
+        body = &body[consumed..];
     }
 
     if brushes.is_empty() {
         return Err("No valid cells in GIMP .gih hose".into());
     }
-    if brushes.len() == ncells
-        && let Some(axes) = hose_axes(&header_line, ncells)
+    if brushes.len() == cells
+        && let Some(axes) = axes
     {
         let hose = Arc::new(ImageHose {
             tips: brushes.iter().map(|brush| brush.tip.clone()).collect(),
             axes,
         });
-        for (phase, brush) in brushes.iter_mut().enumerate() {
+        for (phase, brush) in brushes.iter_mut().take(max_brushes).enumerate() {
             brush.params.dynamics.tip_sequence = Some(TipSequence {
                 hose: hose.clone(),
                 phase,
             });
         }
     }
+    brushes.truncate(max_brushes);
     Ok(BrushLibrary {
         format: BrushFormat::GimpGih,
         brushes,
-        total_count: ncells,
+        total_count: cells,
     })
 }
 

@@ -12,8 +12,12 @@ const MAX_PRESET_XML_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ZIP_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BUNDLE_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 
-pub(super) fn parse_kpp(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
-    let preset = parse_kpp_preset(bytes, fallback_name)?;
+pub(super) fn parse_kpp(
+    bytes: &[u8],
+    fallback_name: &str,
+    cancelled: &AtomicBool,
+) -> Result<BrushLibrary, String> {
+    let preset = parse_kpp_preset(bytes, fallback_name, cancelled)?;
     Ok(BrushLibrary {
         format: BrushFormat::KritaPreset,
         brushes: vec![preset],
@@ -21,14 +25,19 @@ pub(super) fn parse_kpp(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrar
     })
 }
 
-pub(super) fn parse_kpp_preset(bytes: &[u8], fallback_name: &str) -> Result<BrushPreset, String> {
-    kpp_with_resources(bytes, fallback_name, &mut |_| None)
+pub(super) fn parse_kpp_preset(
+    bytes: &[u8],
+    fallback_name: &str,
+    cancelled: &AtomicBool,
+) -> Result<BrushPreset, String> {
+    kpp_with_resources(bytes, fallback_name, &mut |_| None, cancelled)
 }
 
 fn kpp_with_resources(
     bytes: &[u8],
     fallback_name: &str,
     load_resource: &mut impl FnMut(&str) -> Option<ResourceTip>,
+    cancelled: &AtomicBool,
 ) -> Result<BrushPreset, String> {
     let xml = extract_png_preset_xml(bytes)?;
     let doc = roxmltree::Document::parse_with_options(&xml, preset_xml_options())
@@ -54,7 +63,7 @@ fn kpp_with_resources(
         && let Ok(def_doc) = roxmltree::Document::parse_with_options(def_xml, preset_xml_options())
     {
         let definition = def_doc.root_element();
-        let tip = parse_brush_definition(definition, root, &mut params, load_resource);
+        let tip = parse_brush_definition(definition, root, &mut params, load_resource, cancelled);
         if tip.is_some() {
             params.dynamics.krita_smudge = legacy_smudge(paintop, definition, &param);
         }
@@ -70,6 +79,9 @@ fn kpp_with_resources(
         spikes: 2,
     });
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
     let detail = format!("{paintop} · Ø {:.0}px", params.size_px);
     Ok(BrushPreset {
         name,
@@ -435,6 +447,7 @@ fn parse_brush_definition(
     preset: roxmltree::Node<'_, '_>,
     params: &mut BrushStrokeParams,
     load_resource: &mut impl FnMut(&str) -> Option<ResourceTip>,
+    cancelled: &AtomicBool,
 ) -> Option<BrushTipKind> {
     if let Some(spacing) = attribute_number(brush, "spacing") {
         params.spacing = spacing.clamp(0.03, 2.0);
@@ -451,7 +464,9 @@ fn parse_brush_definition(
     }
     match brush.attribute("type").unwrap_or("auto_brush") {
         "auto_brush" => generated_tip(brush, params),
-        "gbr_brush" | "png_brush" => predefined_tip(brush, preset, params, load_resource),
+        "gbr_brush" | "png_brush" => {
+            predefined_tip(brush, preset, params, load_resource, cancelled)
+        }
         _ => None,
     }
 }
@@ -588,6 +603,7 @@ fn predefined_tip(
     preset: roxmltree::Node<'_, '_>,
     params: &mut BrushStrokeParams,
     load_resource: &mut impl FnMut(&str) -> Option<ResourceTip>,
+    cancelled: &AtomicBool,
 ) -> Option<BrushTipKind> {
     let filename = brush.attribute("filename");
     let encoded = match filename {
@@ -599,7 +615,7 @@ fn predefined_tip(
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded.trim())
                 .ok()?;
-            resource_tip(&bytes, filename)
+            resource_tip(&bytes, filename, cancelled)
         })
         .or_else(|| load_resource(filename?))?;
     params.size_px =
@@ -615,7 +631,11 @@ struct ResourceTip {
     sequence: Option<gimp::TipSequence>,
 }
 
-fn resource_tip(bytes: &[u8], filename: Option<&str>) -> Option<ResourceTip> {
+fn resource_tip(
+    bytes: &[u8],
+    filename: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Option<ResourceTip> {
     if bytes.starts_with(mask::PNG_MAGIC) {
         // Krita's opaque grayscale tip images use white for empty canvas.
         let (tip, width, height) = mask::png(bytes, mask::OpaqueCoverage::Dark)?;
@@ -626,7 +646,7 @@ fn resource_tip(bytes: &[u8], filename: Option<&str>) -> Option<ResourceTip> {
         });
     }
     let preset = if filename.is_some_and(|name| name.ends_with(".gih")) {
-        gimp::parse_gih(bytes, "Krita", 64)
+        gimp::parse_gih(bytes, "Krita", 1, cancelled)
             .ok()?
             .brushes
             .into_iter()
@@ -781,14 +801,19 @@ pub(super) fn parse_bundle(
         let mut load_resource = |name: &str| {
             resources
                 .entry(name.to_owned())
-                .or_insert_with(|| bundle_resource(&mut archive, name, &mut remaining_decode_bytes))
+                .or_insert_with(|| {
+                    bundle_resource(&mut archive, name, &mut remaining_decode_bytes, cancelled)
+                })
                 .clone()
         };
-        if let Ok(preset) = bundle_preset(&buf, path, &extension, &mut load_resource) {
+        if let Ok(preset) = bundle_preset(&buf, path, &extension, &mut load_resource, cancelled) {
             brushes.push(preset);
         }
     }
 
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
     if brushes.is_empty() {
         return Err("No readable brushes in Krita .bundle".into());
     }
@@ -804,6 +829,7 @@ fn bundle_preset(
     path: &Path,
     extension: &str,
     load_resource: &mut impl FnMut(&str) -> Option<ResourceTip>,
+    cancelled: &AtomicBool,
 ) -> Result<BrushPreset, String> {
     let stem = path
         .file_stem()
@@ -811,7 +837,7 @@ fn bundle_preset(
         .map(bounded_label)
         .unwrap_or("Brush");
     match extension {
-        "kpp" => kpp_with_resources(bytes, stem, load_resource),
+        "kpp" => kpp_with_resources(bytes, stem, load_resource, cancelled),
         "gbr" => gimp::parse_gbr_at(bytes, stem).map(|(preset, _)| preset),
         "vbr" => gimp::parse_vbr_preset(bytes, stem),
         _ => Err("Unsupported Krita bundle member".into()),
@@ -822,6 +848,7 @@ fn bundle_resource(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     name: &str,
     remaining: &mut u64,
+    cancelled: &AtomicBool,
 ) -> Option<ResourceTip> {
     if Path::new(name).file_name()?.to_str()? != name || name.contains('\\') {
         return None;
@@ -829,7 +856,7 @@ fn bundle_resource(
     let entry = archive.by_name(&format!("brushes/{name}")).ok()?;
     let size = entry.size();
     let buf = read_bundle_entry(entry, size, remaining)?;
-    resource_tip(&buf, Some(name))
+    resource_tip(&buf, Some(name), cancelled)
 }
 
 fn read_bundle_entry(entry: impl Read, size: u64, remaining: &mut u64) -> Option<Vec<u8>> {
@@ -851,7 +878,8 @@ mod curve_tests {
         let image = image::GrayImage::from_raw(3, 1, vec![255, 128, 0]).unwrap();
         let mut png = Cursor::new(Vec::new());
         image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-        let tip = resource_tip(&png.into_inner(), Some("tip.png")).unwrap();
+        let tip =
+            resource_tip(&png.into_inner(), Some("tip.png"), &AtomicBool::new(false)).unwrap();
         assert!(
             matches!(tip.tip, BrushTipKind::AlphaMask { alpha, .. } if *alpha == [0, 127, 255])
         );
