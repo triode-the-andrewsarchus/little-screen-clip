@@ -655,8 +655,8 @@ mod tests {
             .tip_sequence
             .as_ref()
             .unwrap();
-        let first = cells.tip_for_dab(0, 0.0, 0);
-        let second = cells.tip_for_dab(1, 0.0, 0);
+        let first = cells.tip_for_dab(0, 0.0, 0.0, 0);
+        let second = cells.tip_for_dab(1, 0.0, 0.0, 0);
         assert!(matches!(first, BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 200));
         assert!(matches!(second, BrushTipKind::AlphaMask { alpha, .. } if alpha[0] == 180));
 

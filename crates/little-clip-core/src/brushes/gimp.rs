@@ -148,11 +148,13 @@ pub(super) fn parse_gih(
     fallback_name: &str,
     max_brushes: usize,
 ) -> Result<BrushLibrary, String> {
-    let first_nl = bytes
+    const MAX_HEADER_LINE: usize = 8 * 1024;
+    let first_nl = bytes[..bytes.len().min(MAX_HEADER_LINE)]
         .iter()
         .position(|&b| b == b'\n')
         .ok_or("Invalid .gih header")?;
-    let second_nl = bytes[first_nl + 1..]
+    let rest = &bytes[first_nl + 1..];
+    let second_nl = rest[..rest.len().min(MAX_HEADER_LINE)]
         .iter()
         .position(|&b| b == b'\n')
         .map(|pos| first_nl + 1 + pos)
@@ -190,13 +192,17 @@ pub(super) fn parse_gih(
     if brushes.is_empty() {
         return Err("No valid cells in GIMP .gih hose".into());
     }
-    if let Some(selection) = hose_selection(&header_line, brushes.len()) {
-        let tips: Arc<[BrushTipKind]> = brushes.iter().map(|brush| brush.tip.clone()).collect();
-        for (index, brush) in brushes.iter_mut().enumerate() {
+    if brushes.len() == ncells
+        && let Some(axes) = hose_axes(&header_line, ncells)
+    {
+        let hose = Arc::new(ImageHose {
+            tips: brushes.iter().map(|brush| brush.tip.clone()).collect(),
+            axes,
+        });
+        for (phase, brush) in brushes.iter_mut().enumerate() {
             brush.params.dynamics.tip_sequence = Some(TipSequence {
-                tips: tips.clone(),
-                selection,
-                index,
+                hose: hose.clone(),
+                phase,
             });
         }
     }
@@ -209,47 +215,119 @@ pub(super) fn parse_gih(
 
 #[derive(Clone, Copy, Debug)]
 enum HoseSelection {
+    Constant,
     Incremental,
     Pressure,
     Random,
+    Angular,
+    Velocity,
+    Tilt,
+}
+
+#[derive(Debug)]
+struct HoseAxis {
+    rank: usize,
+    select: HoseSelection,
+}
+
+#[derive(Debug)]
+struct ImageHose {
+    tips: Vec<BrushTipKind>,
+    axes: Vec<HoseAxis>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct TipSequence {
-    tips: Arc<[BrushTipKind]>,
-    selection: HoseSelection,
-    index: usize,
+    hose: Arc<ImageHose>,
+    phase: usize,
 }
 
 impl TipSequence {
-    pub(super) fn tip_for_dab(&self, dab: usize, pressure: f32, seed: u64) -> &BrushTipKind {
-        let count = self.tips.len();
-        let index = match self.selection {
-            HoseSelection::Incremental => (self.index + dab) % count,
-            HoseSelection::Pressure => (pressure * (count - 1) as f32).round() as usize,
-            HoseSelection::Random => (seed % count as u64) as usize,
-        };
-        &self.tips[index]
+    pub(super) fn tip_for_dab(
+        &self,
+        dab: usize,
+        pressure: f32,
+        direction: f32,
+        seed: u64,
+    ) -> &BrushTipKind {
+        let mut index = 0;
+        let mut stride = 1;
+        for (dimension, axis) in self.hose.axes.iter().rev().enumerate() {
+            let phase = self.phase / stride;
+            let random = (seed >> (16 * dimension)) & 0xffff;
+            let coordinate = axis.position(dab, phase, pressure, direction, random);
+            index += stride * coordinate;
+            stride *= axis.rank;
+        }
+        &self.hose.tips[index.min(self.hose.tips.len() - 1)]
     }
 }
 
-fn hose_selection(header: &str, available: usize) -> Option<HoseSelection> {
+impl HoseAxis {
+    fn position(
+        &self,
+        dab: usize,
+        phase: usize,
+        pressure: f32,
+        direction: f32,
+        random: u64,
+    ) -> usize {
+        let rank = self.rank as f32;
+        match self.select {
+            HoseSelection::Constant => 0,
+            HoseSelection::Incremental => (phase + dab) % self.rank,
+            HoseSelection::Pressure => (pressure * (rank - 1.0)).round_ties_even() as usize,
+            HoseSelection::Random => random as usize % self.rank,
+            // GIMP's angular selector points its first sector upward in screen coordinates.
+            HoseSelection::Angular => ((direction / std::f32::consts::TAU + 0.25) * rank)
+                .round_ties_even()
+                .rem_euclid(rank) as usize,
+            // The sample has a steady moderate speed and an upright pen.
+            HoseSelection::Velocity => (0.5 * rank).round() as usize,
+            HoseSelection::Tilt => self.rank / 2,
+        }
+        .min(self.rank - 1)
+    }
+}
+
+fn hose_axes(header: &str, available: usize) -> Option<Vec<HoseAxis>> {
+    if header.split_ascii_whitespace().count() == 1 {
+        return Some(vec![HoseAxis {
+            rank: available,
+            select: HoseSelection::Incremental,
+        }]);
+    }
     let field = |key: &str| {
         header
             .split_ascii_whitespace()
             .filter_map(|token| token.split_once(':'))
             .find_map(|(name, value)| (name == key).then_some(value))
     };
-    let rank = field("rank0")?.parse::<usize>().ok()?;
-    if field("dim") != Some("1") || rank < 2 || rank != available {
+    let dimensions = field("dim")?.parse::<usize>().ok()?;
+    if !(1..=4).contains(&dimensions) {
         return None;
     }
-    match field("sel0") {
-        Some("incremental") => Some(HoseSelection::Incremental),
-        Some("pressure") => Some(HoseSelection::Pressure),
-        Some("random") => Some(HoseSelection::Random),
-        _ => None,
-    }
+    let axes: Vec<_> = (0..dimensions)
+        .map(|dimension| {
+            let rank = field(&format!("rank{dimension}"))?.parse::<usize>().ok()?;
+            if !(1..=512).contains(&rank) {
+                return None;
+            }
+            let select = match field(&format!("sel{dimension}")) {
+                Some("incremental") => HoseSelection::Incremental,
+                Some("pressure") => HoseSelection::Pressure,
+                Some("random") => HoseSelection::Random,
+                Some("angular") => HoseSelection::Angular,
+                Some("velocity") => HoseSelection::Velocity,
+                Some("xtilt" | "ytilt") => HoseSelection::Tilt,
+                _ => HoseSelection::Constant,
+            };
+            Some(HoseAxis { rank, select })
+        })
+        .collect::<Option<_>>()?;
+    axes.iter()
+        .try_fold(1_usize, |cells, axis| cells.checked_mul(axis.rank))?;
+    Some(axes)
 }
 
 pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
@@ -378,6 +456,32 @@ mod generated_tests {
         assert_eq!(tip.params.spacing, 0.6);
         assert_eq!(bytes, float.len());
         assert!(matches!(tip.tip, BrushTipKind::AlphaMask { alpha, .. } if *alpha == [128, 255]));
+    }
+
+    #[test]
+    fn image_hose_combines_pressure_and_angular_axes() {
+        let axes = hose_axes("8 dim:2 rank0:2 sel0:pressure rank1:4 sel1:angular", 8).unwrap();
+        let tips = (0..8)
+            .map(|index| BrushTipKind::AlphaMask {
+                width: 1,
+                height: 1,
+                alpha: [index].into(),
+            })
+            .collect();
+        let hose = TipSequence {
+            hose: Arc::new(ImageHose { tips, axes }),
+            phase: 0,
+        };
+        let choose = |pressure, direction| {
+            let BrushTipKind::AlphaMask { alpha, .. } = hose.tip_for_dab(0, pressure, direction, 0)
+            else {
+                panic!("expected raster tip")
+            };
+            alpha[0]
+        };
+        assert_eq!(choose(0.0, -std::f32::consts::FRAC_PI_2), 0);
+        assert_eq!(choose(1.0, 0.0), 5);
+        assert_eq!(choose(1.0, std::f32::consts::FRAC_PI_2), 6);
     }
 
     #[test]

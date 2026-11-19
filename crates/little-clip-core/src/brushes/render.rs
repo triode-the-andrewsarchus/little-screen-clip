@@ -143,7 +143,7 @@ fn draw_stroke(
             .tip_sequence
             .as_ref()
             .map_or(&preset.tip, |sequence| {
-                sequence.tip_for_dab(index, pen_pressure(t), sample.seed)
+                sequence.tip_for_dab(index, pen_pressure(t), sample.direction, sample.seed)
             });
         stamp_tip(coverage, dimensions, tip, dab);
         let count = (f32::from(count)
