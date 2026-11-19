@@ -16,6 +16,9 @@ pub(super) fn path(source: &FileSource, edge: u32, orientation: u8) -> Option<Pa
     format!("{source:?}").hash(&mut hash);
     edge.hash(&mut hash);
     orientation.hash(&mut hash);
+    if crate::raw_image::is_raw_image_path(source.path()) {
+        "raw-embedded-v2".hash(&mut hash);
+    }
     let directory = store.base_dir().join("gallery-thumbnails-v1");
     BUDGET.maintain(&directory, 0, cache_filename);
     Some(directory.join(format!("{:016x}.png", hash.finish())))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Downloads the CC0 camera RAW test corpus from raw.pixls.us for testing
-flashraw decoders, metadata inspection, and gallery thumbnail generation.
+Downloads representative camera RAW samples from raw.pixls.us for testing
+FlashRAW decoding and gallery thumbnail generation.
 
 Usage:
     python3 scripts/download_raw_samples.py [--output <path>] [--force]
@@ -13,9 +13,13 @@ Default output directory:
 import argparse
 import os
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
+
+MIN_SAMPLE_BYTES = 1024 * 1024
+MAX_SAMPLE_BYTES = 512 * 1024 * 1024
 
 RAW_SAMPLES = [
     (
@@ -69,6 +73,39 @@ RAW_SAMPLES = [
 ]
 
 
+def download_sample(raw_url: str, target_file: str) -> int:
+    parts = urllib.parse.urlsplit(raw_url)
+    encoded_path = urllib.parse.quote(parts.path)
+    url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, encoded_path, parts.query, parts.fragment))
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; LittleClipRawDownloader/1.0)"},
+    )
+
+    temporary = None
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content_length = response.headers.get("Content-Length")
+            declared = int(content_length) if content_length is not None else None
+            if declared is not None and not MIN_SAMPLE_BYTES <= declared <= MAX_SAMPLE_BYTES:
+                raise ValueError(f"unexpected response length: {declared}")
+            with tempfile.NamedTemporaryFile(dir=os.path.dirname(target_file), delete=False) as staged:
+                temporary = staged.name
+                size = 0
+                while chunk := response.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_SAMPLE_BYTES:
+                        raise ValueError("sample exceeds the download limit")
+                    staged.write(chunk)
+            if size < MIN_SAMPLE_BYTES or (declared is not None and size != declared):
+                raise ValueError(f"incomplete sample: {size} bytes")
+        os.replace(temporary, target_file)
+        return size
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.remove(temporary)
+
+
 def download_raw_samples(output_dir: str, force: bool = False):
     output_path = os.path.expanduser(output_dir)
     os.makedirs(output_path, exist_ok=True)
@@ -81,40 +118,29 @@ def download_raw_samples(output_dir: str, force: bool = False):
 
     for idx, (filename, raw_url) in enumerate(RAW_SAMPLES, 1):
         target_file = os.path.join(output_path, filename)
-        if not force and os.path.exists(target_file) and os.path.getsize(target_file) > 1024 * 1024:
-            file_size_mb = os.path.getsize(target_file) / (1024 * 1024)
-            print(f"[{idx}/{len(RAW_SAMPLES)}] Already present: {filename} ({file_size_mb:.1f} MB)")
-            total_existing += os.path.getsize(target_file)
-            continue
+        if not force and os.path.isfile(target_file):
+            existing_size = os.path.getsize(target_file)
+            if MIN_SAMPLE_BYTES <= existing_size <= MAX_SAMPLE_BYTES:
+                file_size_mb = existing_size / (1024 * 1024)
+                print(f"[{idx}/{len(RAW_SAMPLES)}] Already present: {filename} ({file_size_mb:.1f} MB)")
+                total_existing += existing_size
+                continue
 
         print(f"[{idx}/{len(RAW_SAMPLES)}] Downloading {filename}...")
-        parts = urllib.parse.urlsplit(raw_url)
-        encoded_path = urllib.parse.quote(parts.path)
-        url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, encoded_path, parts.query, parts.fragment))
-
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; LittleClipRawDownloader/1.0)"},
-        )
-
-        start_time = time.time()
+        start_time = time.monotonic()
         try:
-            with urllib.request.urlopen(req) as resp, open(target_file, "wb") as f:
-                data = resp.read()
-                f.write(data)
-                download_time = time.time() - start_time
-                mb = len(data) / (1024 * 1024)
-                speed = mb / download_time if download_time > 0 else 0
-                print(f"    -> Done: {mb:.1f} MB in {download_time:.1f}s ({speed:.1f} MB/s)")
-                total_downloaded += len(data)
-        except Exception as err:
+            size = download_sample(raw_url, target_file)
+        except (OSError, ValueError) as err:
             print(f"    ERROR downloading {filename}: {err}", file=sys.stderr)
-            if os.path.exists(target_file):
-                os.remove(target_file)
             sys.exit(1)
+        elapsed = time.monotonic() - start_time
+        mb = size / (1024 * 1024)
+        print(f"    -> Done: {mb:.1f} MB in {elapsed:.1f}s ({mb / elapsed:.1f} MB/s)")
+        total_downloaded += size
 
     all_mb = (total_downloaded + total_existing) / (1024 * 1024)
-    print(f"\nAll {len(RAW_SAMPLES)} RAW test files verified in {output_path} ({all_mb:.1f} MB total).")
+    print(f"{len(RAW_SAMPLES)} RAW sample files available in {output_path} ({all_mb:.1f} MB).")
+    print("Pass that directory as RAW_SAMPLES_DIR to the ignored camera RAW corpus test.")
 
 
 def main():

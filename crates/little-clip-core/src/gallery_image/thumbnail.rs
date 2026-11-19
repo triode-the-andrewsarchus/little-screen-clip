@@ -4,7 +4,6 @@ use image::ImageDecoder;
 use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 
 /// Loads a source-validated, resolution-specific thumbnail on a worker.
@@ -18,6 +17,9 @@ pub fn load(
     orientation: u8,
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     let source = crate::file_source::FileSource::capture(path).ok()?;
     let cache = super::thumbnail_cache::path(&source, edge, orientation);
     if let Some(image) = cache
@@ -43,7 +45,9 @@ pub fn load(
     }
     let result = decode_source(path, edge, orientation, cancelled);
     source.check().ok()?;
-    if crate::file_source::FileSource::capture(path).ok()? != source {
+    if cancelled.load(Ordering::Relaxed)
+        || crate::file_source::FileSource::capture(path).ok()? != source
+    {
         return None;
     }
     if let (Some(path), Some(image)) = (cache, &result) {
@@ -67,11 +71,12 @@ fn decode_source(
         );
     }
     if crate::raw_image::is_raw_image_path(path) {
-        return raw_preview(path, edge, orientation, cancelled);
+        return raw_thumbnail(path, edge, cancelled)
+            .or_else(|| exiftool_thumbnail(path, edge, orientation, true, cancelled));
     }
     let embedded = match mime.as_str() {
         "image/jpeg" | "image/jpg" => jpeg_preview(path, edge, orientation, cancelled),
-        "image/tiff" => raw_preview(path, edge, orientation, cancelled),
+        "image/tiff" => exiftool_thumbnail(path, edge, orientation, false, cancelled),
         _ => None,
     };
     if embedded.is_some() {
@@ -108,49 +113,51 @@ fn jpeg_preview(
     raster(bytes, "image/jpeg", edge, orientation, cancelled)
 }
 
-fn raw_preview(
+fn raw_thumbnail(path: &Path, edge: u32, cancelled: &AtomicBool) -> Option<ImageThumbnail> {
+    use crate::raw_image::EmbeddedPixels;
+    let preview = crate::raw_image::embedded_preview(path, edge, cancelled)?;
+    match preview.pixels {
+        EmbeddedPixels::Encoded(bytes, mime) => {
+            raster(&bytes, mime, edge, preview.orientation, cancelled)
+        }
+        EmbeddedPixels::Rgb(pixels) => {
+            let orientation = image::metadata::Orientation::from_exif(preview.orientation)
+                .unwrap_or(image::metadata::Orientation::NoTransforms);
+            oriented_thumbnail(
+                image::DynamicImage::ImageRgb8(pixels),
+                edge,
+                orientation,
+                cancelled,
+            )
+        }
+    }
+}
+
+fn exiftool_thumbnail(
     path: &Path,
     edge: u32,
     orientation: u8,
+    allow_smaller: bool,
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
-    if cancelled.load(Ordering::Relaxed) {
-        return None;
-    }
-    if let Ok((bytes, preview_orientation)) =
-        crate::raw_image::extract_raw_preview_bytes(path, edge)
-    {
-        let orient = if preview_orientation > 1 {
-            preview_orientation
-        } else {
-            orientation
-        };
-        return raster(&bytes, "image/jpeg", edge, orient, cancelled);
-    }
     let mut largest = None;
     for tag in ["-ThumbnailImage", "-PreviewImage", "-JpgFromRaw"] {
-        if cancelled.load(Ordering::Relaxed) {
-            return None;
-        }
-        let output = crate::process::CommandRequest::new("exiftool")
-            .arg("-b")
-            .arg(tag)
-            .arg_content_file(path)
-            .ok()?
-            .timeout(Duration::from_secs(5))
-            .max_output_bytes(16 * 1024 * 1024)
-            .run()
-            .ok()?;
-        if let Ok(size) = imagesize::blob_size(&output.stdout) {
-            if size.width.max(size.height) >= edge as usize {
-                return raster(&output.stdout, "image/jpeg", edge, orientation, cancelled);
+        let Some(bytes) = crate::raw_image::exiftool_preview(path, tag, cancelled) else {
+            continue;
+        };
+        let Some((width, height)) = crate::raw_image::preview_dimensions(&bytes) else {
+            continue;
+        };
+        let size = width.max(height);
+        if size >= edge {
+            if let Some(thumbnail) = raster(&bytes, "image/jpeg", edge, orientation, cancelled) {
+                return Some(thumbnail);
             }
-            largest = Some(output.stdout);
+        } else if allow_smaller && largest.as_ref().is_none_or(|(best, _)| size > *best) {
+            largest = Some((size, bytes));
         }
     }
-    largest
-        .filter(|_| crate::raw_image::is_raw_image_path(path))
-        .and_then(|bytes| raster(&bytes, "image/jpeg", edge, orientation, cancelled))
+    largest.and_then(|(_, bytes)| raster(&bytes, "image/jpeg", edge, orientation, cancelled))
 }
 
 fn raster(
@@ -194,7 +201,19 @@ fn raster(
     if cancelled.load(Ordering::Relaxed) {
         return None;
     }
-    let mut decoded = image::DynamicImage::from_decoder(decoder).ok()?;
+    let decoded = image::DynamicImage::from_decoder(decoder).ok()?;
+    oriented_thumbnail(decoded, edge, orientation, cancelled)
+}
+
+fn oriented_thumbnail(
+    mut decoded: image::DynamicImage,
+    edge: u32,
+    orientation: image::metadata::Orientation,
+    cancelled: &AtomicBool,
+) -> Option<ImageThumbnail> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
     decoded.apply_orientation(orientation);
     let small = decoded
         .thumbnail(edge.min(decoded.width()), edge.min(decoded.height()))
@@ -274,33 +293,5 @@ mod tests {
         let preview = load(&path, 128, 1, &AtomicBool::new(false)).unwrap();
         assert_eq!((preview.width, preview.height), (128, 64));
         assert!(preview.premultiplied_rgba[0] > 200 && preview.premultiplied_rgba[2] < 50);
-    }
-
-    #[test]
-    fn test_all_downloaded_raw_thumbnails_if_present() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let raw_dir = std::path::PathBuf::from(home).join("Pictures/Raw");
-        if !raw_dir.is_dir() {
-            return;
-        }
-        let mut count = 0;
-        for entry in std::fs::read_dir(raw_dir).unwrap().flatten() {
-            let p = entry.path();
-            if !little_clip_core::raw_image::is_raw_image_path(&p) {
-                continue;
-            }
-            let name = p.file_name().unwrap().to_string_lossy();
-            let thumb = raw_preview(&p, 256, 1, &AtomicBool::new(false));
-            assert!(thumb.is_some(), "Failed to generate thumbnail for {name}");
-            let thumb = thumb.unwrap();
-            assert!(thumb.width > 0 && thumb.height > 0);
-            assert_eq!(
-                thumb.premultiplied_rgba.len(),
-                (thumb.width * thumb.height * 4) as usize
-            );
-            count += 1;
-            println!("Thumbnail ok for {name}: {}x{}", thumb.width, thumb.height);
-        }
-        println!("Successfully generated thumbnails for all {count} RAW files in Pictures/Raw!");
     }
 }

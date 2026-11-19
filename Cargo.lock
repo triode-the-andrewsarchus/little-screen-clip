@@ -2396,7 +2396,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "serde_json",
- "zune-jpeg",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -3367,7 +3367,7 @@ dependencies = [
  "usvg 0.49.0",
  "write-fonts 0.55.0",
  "wuff",
- "zune-jpeg",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -3643,6 +3643,65 @@ name = "fixedbitset"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
+
+[[package]]
+name = "flashraw"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e681e196f6702c666b1e61eb9c7b7e44b29b0d4735c61465fae7c113f924b1a5"
+dependencies = [
+ "flashraw-camera-db",
+ "flashraw-codecs",
+ "flashraw-core",
+ "flashraw-formats",
+ "rayon",
+]
+
+[[package]]
+name = "flashraw-camera-db"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "453dc8151a8e8ca08720c95c439d8129b940bb6e7f95d57dcc884300906a0f68"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flashraw-codecs"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5b4620263e974353fe9aab34c31d9ca9c7723ce15939ec219200cd01c81218f"
+dependencies = [
+ "flashraw-core",
+ "rayon",
+ "zlib-rs",
+ "zune-inflate",
+ "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "flashraw-core"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0d5d8783f9164fc398faca7294fb1894143295da448a81a6670f6940102b70a"
+dependencies = [
+ "libc",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "flashraw-formats"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef788871f028f6643686b883e96fd5d7dce619b4cbbee7ac855ae05609aab06"
+dependencies = [
+ "flashraw-camera-db",
+ "flashraw-codecs",
+ "flashraw-core",
+ "rayon",
+]
 
 [[package]]
 name = "flatbuffers"
@@ -5213,8 +5272,8 @@ dependencies = [
  "rayon",
  "rgb",
  "tiff",
- "zune-core",
- "zune-jpeg",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -6175,6 +6234,7 @@ dependencies = [
  "excalidraw-document",
  "fearless_simd 1.2.0",
  "fearless_simd_macros",
+ "flashraw",
  "flate2",
  "gltf",
  "hayro-jpeg2000",
@@ -7977,7 +8037,7 @@ dependencies = [
  "tiff",
  "tiny-skia 0.12.0",
  "ttf-parser 0.25.1",
- "zune-jpeg",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -9506,7 +9566,7 @@ dependencies = [
  "svgtypes 0.16.2",
  "tiny-skia 0.12.0",
  "usvg 0.47.0",
- "zune-jpeg",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -11350,7 +11410,7 @@ dependencies = [
  "half",
  "quick-error",
  "weezl 0.1.12",
- "zune-jpeg",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -14000,6 +14060,12 @@ dependencies = [
 
 [[package]]
 name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-core"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
@@ -14015,11 +14081,20 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
+version = "0.4.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
+dependencies = [
+ "zune-core 0.4.12",
+]
+
+[[package]]
+name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
- "zune-core",
+ "zune-core 0.5.3",
 ]
 
 [[package]]

@@ -407,6 +407,11 @@ pub fn read_file_snapshot_with_source(
 ) -> std::io::Result<(Vec<u8>, FileSource)> {
     let mut file = open_regular_file(path, true)?;
     let source = FileSource::capture_file(&file).map_err(std::io::Error::other)?;
+    if file.metadata()?.len() > limit as u64 {
+        return Err(std::io::Error::other(
+            "Preview source exceeds its read limit",
+        ));
+    }
     let mut bytes = Vec::new();
     std::io::Read::by_ref(&mut file)
         .take((limit as u64).saturating_add(1))

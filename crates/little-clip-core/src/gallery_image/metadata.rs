@@ -176,6 +176,9 @@ fn raw_metadata(path: &Path, cancel: &std::sync::atomic::AtomicBool) -> Result<M
         .max_output_bytes(16 * 1024)
         .run_cancellable(cancel)
         .map_err(|e| e.to_string())?;
+    if !output.status.success() || output.stdout_truncated {
+        return Err("RAW metadata unavailable".into());
+    }
     let values: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
     let value = values.first().ok_or("RAW metadata unavailable")?;

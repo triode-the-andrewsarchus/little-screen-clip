@@ -283,8 +283,17 @@ impl DecodedImageData {
     /// `max_bytes` are rejected before decoding; raster decoding retains the
     /// image library's default allocation limits.
     pub fn from_path_bounded(path: &Path, max_bytes: usize) -> Result<Self, String> {
-        let bytes = crate::file_source::read_file_bytes(path, max_bytes, true, true)
-            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
+        use little_clip_core::raw_image;
+        let bytes = if raw_image::is_raw_image_path(path) {
+            crate::file_source::read_file_snapshot_with_source(
+                path,
+                max_bytes.min(raw_image::DEVELOP_MAX_BYTES),
+            )
+            .map(|(bytes, _)| bytes)
+        } else {
+            crate::file_source::read_file_bytes(path, max_bytes, true, true)
+        }
+        .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
         Self::from_bytes(
             bytes,
             little_clip_core::item::guess_image_mime(path),
@@ -293,15 +302,23 @@ impl DecodedImageData {
     }
 
     pub fn from_bytes(bytes: Vec<u8>, mime: String, path: Option<PathBuf>) -> Result<Self, String> {
+        use little_clip_core::raw_image;
+        // A clipboard item can contain a JPEG preview and still refer to a RAW path.
+        if raw_image::is_raw_image_bytes(&bytes)
+            || (path.as_deref().is_some_and(raw_image::is_raw_image_path)
+                && matches!(
+                    image::guess_format(&bytes),
+                    Err(_) | Ok(image::ImageFormat::Tiff)
+                ))
+        {
+            return Self::from_raw_bytes(bytes);
+        }
         let svg = little_clip_core::svg_image::document(&bytes);
         let is_svg = svg.is_ok()
             || mime.contains("svg")
             || path.as_ref().is_some_and(|path| {
                 little_clip_core::item::guess_image_mime(path) == "image/svg+xml"
             });
-        let is_raw = little_clip_core::raw_image::is_raw_image_bytes(&bytes)
-            || (image::guess_format(&bytes).is_err()
-                && path.as_deref().is_some_and(little_clip_core::raw_image::is_raw_image_path));
         let rgba = if is_svg {
             let source = svg.as_deref().map_err(|error| error.to_string())?;
             little_clip_core::svg_image::render_rgba(
@@ -309,8 +326,6 @@ impl DecodedImageData {
                 None,
                 &std::sync::atomic::AtomicBool::new(false),
             )?
-        } else if is_raw {
-            little_clip_core::raw_image::decode_raw_image_from_bytes(&bytes)?
         } else {
             use image::ImageDecoder;
             let mut decoder = little_clip_core::item::image_reader(&bytes, Some(&mime))
@@ -334,25 +349,7 @@ impl DecodedImageData {
         };
 
         drop(svg);
-        let mut metadata = extract_image_metadata(&bytes);
-        if is_raw
-            && !metadata.has_any_metadata()
-            && let Some(details) = little_clip_core::raw_image::read_raw_details_from_bytes(&bytes)
-        {
-            metadata.make = details.make;
-            metadata.model = details.model;
-            metadata.lens_model = details.lens_model;
-            metadata.date_time = details.date_time;
-            metadata.iso = details.iso;
-            metadata.f_number = details.f_number;
-            metadata.exposure_time = details.exposure_time;
-            metadata.focal_length = details.focal_length;
-            metadata.software = details.software;
-            metadata.gps_latitude = details.gps_latitude;
-            metadata.gps_longitude = details.gps_longitude;
-            metadata.gps_altitude = details.gps_altitude;
-            metadata.has_exif = true;
-        }
+        let metadata = extract_image_metadata(&bytes);
         let layer_document = layers::Document::from_bytes(&bytes, &rgba)?;
         Ok(Self {
             mime,
@@ -360,6 +357,46 @@ impl DecodedImageData {
             original_rgba: Arc::new(rgba),
             is_svg,
             metadata: metadata.has_any_metadata().then_some(metadata),
+            layer_document,
+        })
+    }
+
+    fn from_raw_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        let decoded = little_clip_core::raw_image::develop(&bytes)?;
+        let raw = decoded.metadata;
+        let present = |text: String| (!text.trim().is_empty()).then(|| text.trim().to_owned());
+        let metadata = ImageMetadataSummary {
+            make: present(raw.make),
+            model: present(raw.model),
+            lens_model: raw.lens.model.and_then(present),
+            date_time: raw.capture_time.and_then(present),
+            iso: raw.exposure.iso,
+            f_number: raw.exposure.f_number,
+            exposure_time: raw
+                .exposure
+                .exposure_time
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .map(|s| {
+                    if s <= 0.5 {
+                        format!("1/{:.0} s", s.recip())
+                    } else {
+                        format!("{s:.2} s")
+                    }
+                }),
+            focal_length: raw.exposure.focal_length,
+            software: raw.software.and_then(present),
+            gps_latitude: raw.gps.as_ref().and_then(|gps| gps.latitude),
+            gps_longitude: raw.gps.as_ref().and_then(|gps| gps.longitude),
+            gps_altitude: raw.gps.as_ref().and_then(|gps| gps.altitude),
+            has_exif: false,
+        };
+        let layer_document = layers::Document::from_bytes(&bytes, &decoded.pixels)?;
+        Ok(Self {
+            mime: "image/x-camera-raw".into(),
+            encoded_bytes: Arc::new(bytes),
+            original_rgba: Arc::new(decoded.pixels),
+            is_svg: false,
+            metadata: Some(metadata),
             layer_document,
         })
     }
