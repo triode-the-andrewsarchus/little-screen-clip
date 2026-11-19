@@ -60,6 +60,7 @@ pub(super) fn parse_mypaint(bytes: &[u8], fallback_name: &str) -> Result<BrushLi
                 scatter,
                 hardness,
                 flow: opaque,
+                ..Default::default()
             },
             detail,
         }],

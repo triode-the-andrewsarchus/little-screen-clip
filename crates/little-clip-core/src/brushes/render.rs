@@ -1,9 +1,8 @@
-use super::{BrushPreset, BrushTipKind, ParametricShape};
+use super::{BrushPreset, BrushTipKind, ParametricShape, PressureCurve};
 use crate::ImageThumbnail;
 use std::f32::consts::PI;
 
-/// Renders a cohesive S-curve pressure-tapered stroke (with optional left-side tip stamp)
-/// using `fg_rgb` ink on a transparent background.
+/// Draws a sample stroke and optional isolated tip in ink on a transparent background.
 pub fn render_brush_preview(
     preset: &BrushPreset,
     width: u32,
@@ -16,64 +15,34 @@ pub fn render_brush_preview(
     let mut coverage = vec![0.0_f32; w * h];
 
     let stroke_x0 = if include_tip_stamp && w >= h * 2 {
-        let stamp_size = ((h as f32) * 0.72).max(8.0);
-        let cx = h as f32 * 0.5;
-        let cy = h as f32 * 0.5;
+        let center = h as f32 * 0.5;
         stamp_tip(
             &mut coverage,
-            w,
-            h,
+            (w, h),
             &preset.tip,
-            cx,
-            cy,
-            stamp_size * 0.5,
-            0.0,
-            1.0,
+            Dab {
+                x: center,
+                y: center,
+                radius: h as f32 * 0.34,
+                angle: preset.params.angle_deg,
+                opacity: 1.0,
+                hardness: None,
+                aspect: 1.0,
+            },
         );
-        (h as f32) + 4.0
+        h as f32 + 4.0
     } else {
-        (w as f32) * 0.08
+        w as f32 * 0.08
     };
-    let stroke_x1 = (w as f32) * 0.92;
-    let stroke_w = (stroke_x1 - stroke_x0).max(8.0);
-
-    let max_radius = ((h as f32) * 0.28).max(2.5);
-    let min_radius = (max_radius * 0.20).max(1.0);
-    let spacing = preset.params.spacing.clamp(0.06, 0.85);
-    let flow = (preset.params.opacity * preset.params.flow).clamp(0.25, 1.0);
-    let scatter_amp = preset.params.scatter.clamp(0.0, 1.5) * max_radius * 0.45;
-    let seed = fnv1a(preset.name.as_bytes());
-
-    let steps = ((stroke_w / (max_radius * spacing).max(1.2)).ceil() as usize).clamp(16, 260);
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let pressure = (t * PI).sin().max(0.0).powf(0.65);
-        let radius = min_radius + (max_radius - min_radius) * pressure;
-        let x = stroke_x0 + stroke_w * t;
-        let y = (h as f32) * 0.5 - (h as f32) * 0.22 * (t * 2.0 * PI).sin();
-
-        let (jx, jy) = if scatter_amp > 0.01 {
-            let h1 = mix_hash(seed ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
-            let h2 = mix_hash(h1 ^ 0xbf58_476d_1ce4_e5b9);
-            let rx = ((h1 & 0xffff) as f32 / 32767.5) - 1.0;
-            let ry = ((h2 & 0xffff) as f32 / 32767.5) - 1.0;
-            (rx * scatter_amp, ry * scatter_amp)
-        } else {
-            (0.0, 0.0)
-        };
-
-        stamp_tip(
-            &mut coverage,
-            w,
-            h,
-            &preset.tip,
-            x + jx,
-            y + jy,
-            radius,
-            preset.params.angle_deg,
-            flow,
-        );
-    }
+    let radius = preview_radius(preset.params.size_px, h as f32);
+    let inset = (radius + 1.0).max(3.0);
+    let path = StrokePath {
+        x0: stroke_x0 + inset,
+        x1: (w as f32 - inset).max(stroke_x0 + inset),
+        y: h as f32 * 0.5,
+        amplitude: (h as f32 * 0.21).min(h as f32 * 0.5 - radius - 1.0),
+    };
+    draw_stroke(&mut coverage, (w, h), preset, path, radius);
 
     let mut premultiplied_rgba = Vec::with_capacity(w * h * 4);
     for cov in coverage {
@@ -92,38 +61,155 @@ pub fn render_brush_preview(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-fn stamp_tip(
-    coverage: &mut [f32],
-    w: usize,
-    h: usize,
-    tip: &BrushTipKind,
-    cx: f32,
-    cy: f32,
+// Fit large brushes in the cell and keep small brushes legible.
+fn preview_radius(size_px: f32, height: f32) -> f32 {
+    let fraction = (size_px.max(1.0) / 128.0).sqrt().clamp(0.06, 1.0);
+    (height * 0.28 * fraction).max(1.0)
+}
+
+struct StrokePath {
+    x0: f32,
+    x1: f32,
+    y: f32,
+    amplitude: f32,
+}
+
+impl StrokePath {
+    fn point(&self, t: f32) -> (f32, f32) {
+        (
+            self.x0 + (self.x1 - self.x0) * t,
+            self.y - self.amplitude * (t * 2.0 * PI).sin(),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Dab {
+    x: f32,
+    y: f32,
     radius: f32,
-    angle_deg: f32,
-    flow: f32,
+    angle: f32,
+    opacity: f32,
+    hardness: Option<f32>,
+    aspect: f32,
+}
+
+fn draw_stroke(
+    coverage: &mut [f32],
+    dimensions: (usize, usize),
+    preset: &BrushPreset,
+    path: StrokePath,
+    radius: f32,
 ) {
-    let bound = radius.ceil() as i32 + 1;
-    let x0 = (cx.floor() as i32 - bound).max(0) as usize;
-    let x1 = (cx.ceil() as i32 + bound).min(w as i32 - 1) as usize;
-    let y0 = (cy.floor() as i32 - bound).max(0) as usize;
-    let y1 = (cy.ceil() as i32 + bound).min(h as i32 - 1) as usize;
-    if x0 > x1 || y0 > y1 {
+    const PATH_SEGMENTS: usize = 64;
+    const MAX_DABS: usize = 320;
+    let mut distances = [0.0_f32; PATH_SEGMENTS + 1];
+    let mut previous = path.point(0.0);
+    for i in 1..=PATH_SEGMENTS {
+        let point = path.point(i as f32 / PATH_SEGMENTS as f32);
+        distances[i] = distances[i - 1] + (point.0 - previous.0).hypot(point.1 - previous.1);
+        previous = point;
+    }
+    let length = distances[PATH_SEGMENTS];
+    let step_floor = (length / (MAX_DABS - 1) as f32).max(0.8);
+    let seed = fnv1a(preset.name.as_bytes());
+    let mut distance = 0.0;
+    for index in 0..MAX_DABS {
+        if distance > length {
+            break;
+        }
+        let end = distances
+            .partition_point(|&d| d <= distance)
+            .clamp(1, PATH_SEGMENTS);
+        let fraction = (distance - distances[end - 1])
+            / (distances[end] - distances[end - 1]).max(f32::EPSILON);
+        let t = (end as f32 - 1.0 + fraction) / PATH_SEGMENTS as f32;
+        let sample = StrokeSample {
+            t,
+            direction: (-path.amplitude * 2.0 * PI * (t * 2.0 * PI).cos()).atan2(path.x1 - path.x0),
+            seed: mix_hash(seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)),
+            start_seed: seed,
+            position: path.point(t),
+        };
+        let dab = sample_dab(preset, radius, sample);
+        stamp_tip(coverage, dimensions, &preset.tip, dab);
+        distance += (dab.radius * 2.0 * preset.params.spacing.clamp(0.01, 5.0)).max(step_floor);
+    }
+}
+
+struct StrokeSample {
+    t: f32,
+    direction: f32,
+    seed: u64,
+    start_seed: u64,
+    position: (f32, f32),
+}
+
+fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
+    let params = &preset.params;
+    let dynamics = &params.dynamics;
+    let pressure = (sample.t * PI).sin().max(0.0).powf(0.65);
+    let response = |curve: &Option<PressureCurve>, fallback| {
+        curve.as_ref().map_or(fallback, |curve| curve.at(pressure))
+    };
+    let random = |channel| signed_random(sample.seed, channel);
+    let taper = dynamics.taper(sample.t);
+    let size = response(&dynamics.size, 1.0)
+        * (1.0 + random(1) * dynamics.size_jitter)
+        * (1.0 - taper * dynamics.taper_size);
+    let opacity = params.opacity
+        * response(&dynamics.opacity, 1.0)
+        * (1.0 - (random(2) + 1.0) * 0.5 * dynamics.opacity_jitter)
+        * (1.0 - taper * dynamics.taper_opacity);
+    let flow = params.flow
+        * response(&dynamics.flow, 1.0)
+        * (1.0 - (random(3) + 1.0) * 0.5 * dynamics.flow_jitter);
+    let angle = params.angle_deg
+        + response(&dynamics.angle, 0.0)
+        + sample.direction.to_degrees() * dynamics.follow_direction
+        + random(4) * dynamics.angle_jitter_deg
+        + signed_random(sample.start_seed, 7) * 180.0 * f32::from(dynamics.random_start_angle);
+    let (sin, cos) = sample.direction.sin_cos();
+    let scatter = params.scatter.clamp(0.0, 4.0) * radius;
+    let across = random(5) * scatter;
+    let along = random(6) * scatter * f32::from(dynamics.scatter_along_stroke);
+
+    Dab {
+        x: sample.position.0 + along * cos - across * sin,
+        y: sample.position.1 + along * sin + across * cos,
+        radius: (radius * size.clamp(0.0, 2.0)).max(0.4),
+        angle,
+        opacity: (opacity * flow).clamp(0.0, 1.0),
+        hardness: dynamics.hardness.as_ref().map(|curve| curve.at(pressure)),
+        aspect: response(&dynamics.aspect, 1.0),
+    }
+}
+
+fn stamp_tip(coverage: &mut [f32], (w, h): (usize, usize), tip: &BrushTipKind, dab: Dab) {
+    if dab.opacity <= 0.0 {
         return;
     }
+    let (rx, ry) = match tip {
+        BrushTipKind::AlphaMask { width, height, .. } => {
+            let scale = dab.radius / (*width).max(*height).max(1) as f32;
+            (scale * *width as f32, scale * *height as f32)
+        }
+        BrushTipKind::Parametric { .. } => (dab.radius, dab.radius),
+    };
+    let (sin, cos) = dab.angle.to_radians().sin_cos();
+    let extent_x = rx * cos.abs() + ry * sin.abs();
+    let extent_y = rx * sin.abs() + ry * cos.abs();
+    let x0 = ((dab.x - extent_x).floor() as i32).clamp(0, w as i32) as usize;
+    let x1 = ((dab.x + extent_x).ceil() as i32).clamp(0, w as i32) as usize;
+    let y0 = ((dab.y - extent_y).floor() as i32).clamp(0, h as i32) as usize;
+    let y1 = ((dab.y + extent_y).ceil() as i32).clamp(0, h as i32) as usize;
 
-    let rad = angle_deg.to_radians();
-    let (sin_a, cos_a) = rad.sin_cos();
-
-    for py in y0..=y1 {
-        let dy = py as f32 + 0.5 - cy;
-        let row_off = py * w;
-        for px in x0..=x1 {
-            let dx = px as f32 + 0.5 - cx;
-            let lx = (dx * cos_a + dy * sin_a) / radius;
-            let ly = (-dx * sin_a + dy * cos_a) / radius;
-
+    for py in y0..y1 {
+        let dy = py as f32 + 0.5 - dab.y;
+        for px in x0..x1 {
+            let dx = px as f32 + 0.5 - dab.x;
+            let lx = (dx * cos + dy * sin) / rx.max(0.5);
+            let ly = (-dx * sin + dy * cos) / ry.max(0.5);
             let sample = match tip {
                 BrushTipKind::AlphaMask {
                     width,
@@ -136,14 +222,17 @@ fn stamp_tip(
                     aspect_ratio,
                     spikes,
                     ..
-                } => sample_parametric(lx, ly, *shape, *hardness, *aspect_ratio, *spikes),
+                } => sample_parametric(
+                    lx,
+                    ly,
+                    *shape,
+                    dab.hardness.unwrap_or(*hardness),
+                    (aspect_ratio * dab.aspect).max(1.0),
+                    *spikes,
+                ),
             };
-
-            if sample > 0.001 {
-                let dst = &mut coverage[row_off + px];
-                let src = sample * flow;
-                *dst = 1.0 - (1.0 - *dst) * (1.0 - src);
-            }
+            let dst = &mut coverage[py * w + px];
+            *dst += (1.0 - *dst) * sample * dab.opacity;
         }
     }
 }
@@ -216,8 +305,77 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
+fn signed_random(seed: u64, channel: u64) -> f32 {
+    let mixed = mix_hash(seed ^ channel.wrapping_mul(0xd6e8_feb8_6659_fd93));
+    (mixed & 0xffff) as f32 / 32767.5 - 1.0
+}
+
 fn mix_hash(mut x: u64) -> u64 {
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     x ^ (x >> 31)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotated_bitmaps_keep_their_proportions() {
+        let tip = BrushTipKind::AlphaMask {
+            width: 8,
+            height: 2,
+            alpha: vec![255; 16],
+        };
+        let mut coverage = vec![0.0; 32 * 32];
+        stamp_tip(
+            &mut coverage,
+            (32, 32),
+            &tip,
+            Dab {
+                x: 16.0,
+                y: 16.0,
+                radius: 8.0,
+                angle: 90.0,
+                opacity: 1.0,
+                hardness: None,
+                aspect: 1.0,
+            },
+        );
+        assert_eq!(coverage[22 * 32 + 16], 1.0);
+        assert_eq!(coverage[16 * 32 + 22], 0.0);
+    }
+
+    #[test]
+    fn taper_and_pressure_only_apply_when_the_preset_enables_them() {
+        let mut preset = BrushPreset {
+            name: "Test".into(),
+            tip: BrushTipKind::Parametric {
+                shape: ParametricShape::Circle,
+                hardness: 1.0,
+                aspect_ratio: 1.0,
+                angle_deg: 0.0,
+                spikes: 2,
+            },
+            params: Default::default(),
+            detail: String::new(),
+        };
+        let sample = |t| StrokeSample {
+            t,
+            direction: 0.0,
+            seed: 1,
+            start_seed: 2,
+            position: (0.0, 0.0),
+        };
+        assert_eq!(sample_dab(&preset, 10.0, sample(0.0)).radius, 10.0);
+        preset.params.dynamics.size = Some(PressureCurve::linear(0.3, 1.0));
+        preset.params.dynamics.taper_start = 0.25;
+        preset.params.dynamics.taper_opacity = 1.0;
+        let start = sample_dab(&preset, 10.0, sample(0.0));
+        let middle = sample_dab(&preset, 10.0, sample(0.5));
+        assert_eq!(start.radius, 3.0);
+        assert_eq!(start.opacity, 0.0);
+        assert_eq!(middle.radius, 10.0);
+        assert_eq!(middle.opacity, 1.0);
+    }
 }

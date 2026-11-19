@@ -5,12 +5,14 @@
 
 mod affinity;
 mod csp;
+mod dynamics;
 mod gimp;
 mod krita;
 mod mask;
 mod mypaint;
 pub mod render;
 
+pub use dynamics::{BrushDynamics, PressureCurve};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -110,6 +112,7 @@ pub struct BrushStrokeParams {
     pub scatter: f32,
     pub hardness: f32,
     pub flow: f32,
+    pub dynamics: BrushDynamics,
 }
 
 impl Default for BrushStrokeParams {
@@ -122,6 +125,7 @@ impl Default for BrushStrokeParams {
             scatter: 0.0,
             hardness: 0.85,
             flow: 1.0,
+            dynamics: BrushDynamics::default(),
         }
     }
 }
