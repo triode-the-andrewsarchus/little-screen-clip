@@ -513,15 +513,20 @@ fn brush_file_preview_prepares_and_renders_cohesive_card() {
     let path = directory.path().join("charcoal_soft.vbr");
     std::fs::write(
         &path,
-        "GIMP-VBR\n1.0\nCharcoal Soft\n0.25\n28.0\n0.65\n1.4\n15.0\n4\nCircle\n",
+        "GIMP-VBR\n1.0\nCharcoal Soft\n0.25\n28.0\n0.65\n1.4\n15.0\n",
     )
     .unwrap();
     let mut item = ClipItem::from_text("placeholder");
     item.payload = ClipPayload::Text(path.to_string_lossy().into_owned());
     item.title = "charcoal_soft.vbr".into();
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let preview = renderer.file_preview(&item).expect("prepared brush card");
+    assert!(matches!(
+        preview.as_ref(),
+        crate::file_preview::Preview::Brush(library) if library.brushes[0].name == "Charcoal Soft"
+    ));
     let mut state = SlotManager::default();
     state.push_left(item);
-    let renderer = ScreenRenderer::fallback(AppConfig::default());
     let (pixmap, _) = renderer.render_pixmap_with_previews(&state).unwrap();
     assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
 }

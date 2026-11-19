@@ -373,6 +373,33 @@ mod tests {
     }
 
     #[test]
+    fn gimp_vbr_1_0_reads_all_fields_without_a_shape_line() {
+        let file = b"GIMP-VBR\n1.0\nSoft Round\n30\n28\n0.65\n1.4\n15\n";
+        let lib = load_brush_bytes(
+            BrushFormat::GimpVbr,
+            file,
+            "fallback",
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let brush = &lib.brushes[0];
+        assert_eq!(brush.params.spacing, 0.30);
+        assert_eq!(brush.params.size_px, 56.0);
+        assert_eq!(brush.params.hardness, 0.65);
+        assert_eq!(brush.params.angle_deg, 15.0);
+        assert!(matches!(
+            brush.tip,
+            BrushTipKind::Parametric {
+                shape: ParametricShape::Circle,
+                aspect_ratio: 1.4,
+                spikes: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn parses_gimp_gbr_gih_and_vbr_and_renders_cohesive_strokes() {
         let cancel = AtomicBool::new(false);
         let gbr = make_gbr("Soft Round", 8, 8, 20, 255);

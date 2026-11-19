@@ -176,62 +176,48 @@ pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrar
 
 pub(super) fn parse_vbr_preset(bytes: &[u8], fallback_name: &str) -> Result<BrushPreset, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in .vbr brush")?;
-    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-    let magic = lines.next().ok_or("Empty .vbr file")?;
-    if !magic.starts_with("GIMP-VBR") {
+    let mut lines = text.lines().map(str::trim);
+    if !lines
+        .next()
+        .is_some_and(|line| line.starts_with("GIMP-VBR"))
+    {
         return Err("Invalid .vbr magic header".into());
     }
-    let version = lines.next().unwrap_or("1.0");
+    let has_shape = match lines.next() {
+        Some(version) if version.starts_with("1.0") => false,
+        Some(version) if version.starts_with("1.5") => true,
+        _ => return Err("Unsupported .vbr version".into()),
+    };
     let name = lines
         .next()
-        .filter(|s| !s.is_empty())
+        .filter(|name| !name.is_empty())
         .map(bounded_label)
         .unwrap_or(fallback_name)
         .to_owned();
-    let shape = match lines
-        .next()
-        .unwrap_or("circle")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "square" => ParametricShape::Square,
-        "diamond" => ParametricShape::Diamond,
-        _ => ParametricShape::Circle,
+    let shape = if has_shape {
+        match lines.next() {
+            Some("circle") => ParametricShape::Circle,
+            Some("square") => ParametricShape::Square,
+            Some("diamond") => ParametricShape::Diamond,
+            _ => return Err("Invalid .vbr brush shape".into()),
+        }
+    } else {
+        ParametricShape::Circle
     };
-    let spacing = lines
-        .next()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(10.0)
-        .clamp(1.0, 500.0)
-        / 100.0;
-    let radius = lines
-        .next()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(10.0)
-        .clamp(0.5, 2000.0);
-    let spikes = if version.starts_with("1.5") {
+    let spacing = vbr_number(lines.next(), "spacing")?.clamp(1.0, 500.0) / 100.0;
+    let radius = vbr_number(lines.next(), "radius")?.clamp(0.5, 2000.0);
+    let spikes = if has_shape {
         lines
             .next()
-            .and_then(|s| s.parse::<u8>().ok())
-            .unwrap_or(2)
+            .and_then(|value| value.parse::<u8>().ok())
+            .ok_or("Invalid .vbr spike count")?
             .clamp(2, 20)
     } else {
         2
     };
-    let hardness = lines
-        .next()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(0.5)
-        .clamp(0.0, 1.0);
-    let aspect_ratio = lines
-        .next()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(1.0)
-        .clamp(1.0, 20.0);
-    let angle_deg = lines
-        .next()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(0.0);
+    let hardness = vbr_number(lines.next(), "hardness")?.clamp(0.0, 1.0);
+    let aspect_ratio = vbr_number(lines.next(), "aspect ratio")?.clamp(1.0, 20.0);
+    let angle_deg = vbr_number(lines.next(), "angle")?;
 
     let detail = format!("Ø {:.0}px · hardness {:.2}", radius * 2.0, hardness);
     Ok(BrushPreset {
@@ -252,4 +238,11 @@ pub(super) fn parse_vbr_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
         },
         detail,
     })
+}
+
+fn vbr_number(value: Option<&str>, name: &str) -> Result<f32, String> {
+    value
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| format!("Invalid .vbr brush {name}"))
 }
