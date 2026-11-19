@@ -20,7 +20,6 @@ pub(in crate::file_manager) struct StrokeRequest {
     pub width: u32,
     pub height: u32,
     pub fg_rgb: [u8; 3],
-    pub include_tip_stamp: bool,
 }
 
 impl StrokeRequest {
@@ -32,7 +31,7 @@ impl StrokeRequest {
             self.width,
             self.height,
             self.fg_rgb,
-            self.include_tip_stamp,
+            true,
         ));
         data
     }
@@ -188,10 +187,9 @@ impl Previews {
         for (ordinal, cell) in cells {
             let index = ordinal - 1;
             let preset = &library.brushes[index];
-            let stroke_h = (cell.height() - 18.0).max(16.0);
-            let stroke_w = (cell.width() - 10.0).max(24.0);
-            let req_w = (stroke_w * dpi).ceil().clamp(32.0, 512.0) as u32;
-            let req_h = (stroke_h * dpi).ceil().clamp(16.0, 192.0) as u32;
+            let preview_rect = cell_preview_rect(cell);
+            let req_w = (preview_rect.width() * dpi).ceil().clamp(32.0, 512.0) as u32;
+            let req_h = (preview_rect.height() * dpi).ceil().clamp(16.0, 192.0) as u32;
 
             let record = self
                 .strokes
@@ -211,26 +209,23 @@ impl Previews {
                         width: req_w,
                         height: req_h,
                         fg_rgb,
-                        include_tip_stamp: false,
                     })
                     .checked(&entry.path, &self.context),
                 );
             }
 
-            let stroke_rect =
-                Rect::from_min_size(cell.min + vec2(4.0, 2.0), vec2(stroke_w, stroke_h));
             let ready = self.cache.get(id);
             if let Some(texture) = ready.and_then(|ready| ready.texture.as_ref()) {
                 ui.painter().image(
                     texture.id(),
-                    stroke_rect,
+                    preview_rect,
                     Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
             }
 
             let label_rect = Rect::from_min_max(
-                pos2(cell.left() + 4.0, stroke_rect.bottom() + 1.0),
+                pos2(cell.left() + 4.0, cell.bottom() - 15.0),
                 pos2(cell.right() - 6.0, cell.bottom()),
             );
             let mut name_job = egui::text::LayoutJob::simple(
@@ -277,7 +272,6 @@ impl Previews {
                 width: edge * 3,
                 height: edge,
                 fg_rgb,
-                include_tip_stamp: true,
             })
             .checked(&entry.path, &self.context),
         );
@@ -293,5 +287,63 @@ impl Previews {
             ui.strong(&preset.name);
             ui.weak(&preset.detail);
         });
+    }
+}
+
+fn cell_preview_rect(cell: Rect) -> Rect {
+    let area = Rect::from_min_size(
+        cell.min + vec2(4.0, 2.0),
+        vec2(
+            (cell.width() - 10.0).max(1.0),
+            (cell.height() - 18.0).max(1.0),
+        ),
+    );
+    // Keep space for both the isolated tip and the stroke, including narrow cells.
+    let height = area.height().min(area.width() / 2.5);
+    Rect::from_center_size(area.center(), vec2(area.width(), height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::brushes::{
+        BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape, render::render_brush_preview,
+    };
+
+    #[test]
+    fn wide_and_narrow_cells_show_the_tip_and_stroke() {
+        let preset = BrushPreset {
+            name: "Circle".into(),
+            tip: BrushTipKind::Parametric {
+                shape: ParametricShape::Circle,
+                hardness: 0.8,
+                aspect_ratio: 1.0,
+                angle_deg: 0.0,
+                spikes: 2,
+            },
+            params: BrushStrokeParams::default(),
+            detail: String::new(),
+        };
+        for width in [90.0, 260.0] {
+            let cell = Rect::from_min_size(pos2(10.0, 24.0), vec2(width, 94.0));
+            let preview = cell_preview_rect(cell);
+            assert!(cell.contains_rect(preview));
+            let image = render_brush_preview(
+                &preset,
+                preview.width().ceil() as u32,
+                preview.height().ceil() as u32,
+                [240; 3],
+                true,
+            );
+            let alpha =
+                |x: u32, y: u32| image.premultiplied_rgba[((y * image.width + x) * 4 + 3) as usize];
+            let middle = image.height / 2;
+            assert!(alpha(image.height / 2, middle) > 0, "tip stamp");
+            assert_eq!(alpha(image.height - 3, middle), 0, "gap after the stamp");
+            assert!(
+                (image.height..image.width).any(|x| alpha(x, middle) > 0),
+                "stroke"
+            );
+        }
     }
 }
