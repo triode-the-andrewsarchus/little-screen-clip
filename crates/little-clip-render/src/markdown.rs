@@ -3225,7 +3225,7 @@ Outside normal paragraph
         assert_eq!(columns.len(), 2, "backtick `<--->` should not split column");
 
         let card_lines = parse_markdown(
-            "{{< katex >}}\n\n# Visible Heading\n\n{{< details \"Info\" >}}\nBody\n{{< /details >}}",
+            "{{< katex >}}\n\n# Visible Heading\n\n{{< details \"Info\" >}}\nBody\n{{< /details >}}\n\n{{< /quote >}} trailing card words",
         );
         assert!(
             card_lines.iter().any(|line| matches!(
@@ -3234,5 +3234,20 @@ Outside normal paragraph
             )),
             "zero-body {{{{< katex >}}}} loader must not consume subsequent blocks: {card_lines:#?}"
         );
+        assert!(
+            card_lines.iter().any(|line| matches!(
+                line,
+                MarkdownLine::Paragraph { spans }
+                    if plain_text_from_spans(spans).contains("trailing card words")
+            )),
+            "closing shortcode followed by trailing text must not ignore the whole line: {card_lines:#?}"
+        );
+
+        let inline_html = parse_markdown_spans(
+            "One</br>Two <svg><text>svg-hidden</text></svg><iframe src=\"x\"/>visible",
+        );
+        assert!(inline_html.contains(&MarkdownSpan::HardBreak));
+        let inline_plain = plain_text_from_spans(&inline_html);
+        assert!(!inline_plain.contains("svg-hidden") && inline_plain.contains("visible"));
     }
 }
