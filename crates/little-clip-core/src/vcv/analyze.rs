@@ -198,18 +198,15 @@ impl PatchAnalysis {
 
 /// Analyzes a `PatchDocument` using the embedded `VcvCatalog`.
 pub fn analyze_patch(saved: PatchDocument) -> Result<PatchAnalysis, String> {
+    saved.validate_preview_limits()?;
     let catalog = VcvCatalog::embedded();
     let patch = bypass_wireless_links(&saved);
     let mut diagnostics = Vec::new();
-    let mut by_id: HashMap<i64, PatchModule> = HashMap::with_capacity(patch.modules.len());
-    for m in &patch.modules {
-        if by_id.insert(m.id, m.clone()).is_some() {
-            return Err(format!(
-                "Duplicate module id {} ({}/{})",
-                m.id, m.plugin, m.model
-            ));
-        }
-    }
+    let by_id: HashMap<i64, &PatchModule> = patch
+        .modules
+        .iter()
+        .map(|module| (module.id, module))
+        .collect();
 
     let base_of = expander_base_of(&patch.modules, catalog);
     let mut cabled_ids = HashSet::new();
@@ -362,8 +359,8 @@ pub fn analyze_patch(saved: PatchDocument) -> Result<PatchAnalysis, String> {
     let mut max_in_by_mod: HashMap<i64, usize> = HashMap::new();
     let mut max_out_by_mod: HashMap<i64, usize> = HashMap::new();
     for c in &saved.cables {
-        let out_n = usize::try_from(c.from.port_id + 1).unwrap_or(0);
-        let in_n = usize::try_from(c.to.port_id + 1).unwrap_or(0);
+        let out_n = usize::try_from(c.from.port_id).map_or(0, |port| port + 1);
+        let in_n = usize::try_from(c.to.port_id).map_or(0, |port| port + 1);
         let from_base = *base_of.get(&c.from.module_id).unwrap_or(&c.from.module_id);
         let to_base = *base_of.get(&c.to.module_id).unwrap_or(&c.to.module_id);
         max_out_by_mod
@@ -912,7 +909,7 @@ fn build_titles(modules: &[PatchModule], catalog: &VcvCatalog) -> HashMap<i64, S
 
 fn type_cables(
     patch: &PatchDocument,
-    by_id: &HashMap<i64, PatchModule>,
+    by_id: &HashMap<i64, &PatchModule>,
     base_of: &HashMap<i64, i64>,
     titles: &HashMap<i64, String>,
     role_by_id: &HashMap<i64, Role>,

@@ -23,9 +23,10 @@ pub use layout::{
     build_diagram_layout, build_dynamic_hover_layout, build_strip_layout,
 };
 pub use panels::{
-    ResolvedPanel, ScreenshotBatchResult, clear_downloaded_panel_cache,
-    count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
-    generate_all_local_rack_screenshots, local_rack_available, resolve_panel,
+    PanelAssets, ScreenshotBatchResult, clear_downloaded_panel_cache,
+    count_missing_local_screenshot_plugins, download_viewer_panels,
+    ensure_local_screenshots_for_patch, generate_all_local_rack_screenshots, load_viewer_panels,
+    local_rack_available,
 };
 pub use rack::{
     PlacedRackModule, RACK_HP_WIDTH, RACK_ROW_GAP, RACK_ROW_HEIGHT, RackRailLayout,
@@ -40,9 +41,13 @@ pub use render::{
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// High-level summary metadata extracted from a `.vcv` patch.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PatchSummary {
     pub title: String,
     pub total_modules: usize,
@@ -52,13 +57,20 @@ pub struct PatchSummary {
     pub monitor_count: usize,
     pub loop_count: usize,
     pub plugins: Vec<String>,
-    pub strip_dark: StripLineup,
-    pub strip_light: StripLineup,
+    pub ranked_strip: StripLineup,
     pub full_strip: Option<StripLineup>,
-    pub rack_dark: RackRailLayout,
-    pub rack_light: RackRailLayout,
-    pub strip: DiagramLayout,
+    pub rack: RackRailLayout,
     pub analysis: PatchAnalysis,
+    assets: PanelAssets,
+    signal_flow: OnceLock<DiagramLayout>,
+}
+
+impl PatchSummary {
+    /// Builds the signal-flow overview on its first explicit request.
+    pub fn signal_flow(&self) -> &DiagramLayout {
+        self.signal_flow
+            .get_or_init(|| build_strip_layout(&self.analysis, &self.title))
+    }
 }
 
 fn path_title(path: &Path) -> &str {
@@ -67,34 +79,57 @@ fn path_title(path: &Path) -> &str {
         .unwrap_or("VCV Patch")
 }
 
-fn inspect_document(title: &str, doc: PatchDocument) -> Result<PatchSummary, String> {
-    let total_modules = doc.modules.len();
-    let cable_count = doc.cables.len();
-    let analysis = analyze_patch(doc)?;
-    Ok(summarize(title, total_modules, cable_count, analysis))
-}
-
-/// Reads and analyzes a `.vcv` or `.vcvss` patch from bytes and prepares its overview strip layout.
+/// Reads and analyzes a patch from bytes for a local-only preview.
 pub fn inspect_bytes(title: &str, bytes: &[u8]) -> Result<PatchSummary, String> {
-    inspect_document(title, read_patch_bytes(bytes)?)
+    prepare_preview(title, read_patch_bytes(bytes)?, &AtomicBool::new(false))
 }
 
-/// Reads and analyzes raw `.vcv` or `.vcvss` bytes associated with `path`.
+/// Reads and analyzes raw patch bytes associated with a path.
 pub fn inspect_path_bytes(path: &Path, bytes: &[u8]) -> Result<PatchSummary, String> {
-    inspect_document(path_title(path), read_patch_bytes_for_path(path, bytes)?)
+    inspect_path_bytes_cancellable(path, bytes, &AtomicBool::new(false))
 }
 
-/// Reads and analyzes a `.vcv` or `.vcvss` patch from disk and prepares its overview strip layout.
+/// Prepares a cancellable local-only preview from an already admitted source.
+pub fn inspect_path_bytes_cancellable(
+    path: &Path,
+    bytes: &[u8],
+    cancel: &AtomicBool,
+) -> Result<PatchSummary, String> {
+    prepare_preview(
+        path_title(path),
+        read_patch_bytes_for_path(path, bytes)?,
+        cancel,
+    )
+}
+
+/// Reads and analyzes a patch from a guarded disk snapshot.
 pub fn inspect_path(path: &Path) -> Result<PatchSummary, String> {
-    inspect_document(path_title(path), read_patch_path(path)?)
+    prepare_preview(
+        path_title(path),
+        read_patch_path(path)?,
+        &AtomicBool::new(false),
+    )
 }
 
-fn summarize(
+fn prepare_preview(
     title: &str,
-    total_modules: usize,
-    cable_count: usize,
-    analysis: PatchAnalysis,
-) -> PatchSummary {
+    document: PatchDocument,
+    cancel: &AtomicBool,
+) -> Result<PatchSummary, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
+    let analysis = analyze_patch(document)?;
+    let assets = panels::load_panel_thumbnails(&analysis.document.panel_keys(), cancel);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
+    Ok(summarize(title, analysis, assets))
+}
+
+fn summarize(title: &str, analysis: PatchAnalysis, assets: PanelAssets) -> PatchSummary {
+    let total_modules = analysis.document.modules.len();
+    let cable_count = analysis.document.cables.len();
     let active_modules = analysis.shown_module_count();
     let voice_count = analysis.voices.len();
     let monitor_count = analysis.monitor_count();
@@ -105,13 +140,6 @@ fn summarize(
         plugin_set.insert(m.plugin.clone());
     }
     let plugins: Vec<String> = plugin_set.into_iter().collect();
-    let strip_dark = build_ranked_strip(&analysis, true);
-    let strip_light = build_ranked_strip(&analysis, false);
-    let full_strip = build_full_single_row_strip(&analysis, true);
-    let rack_dark = build_rack_rail_layout(&analysis, true);
-    let rack_light = build_rack_rail_layout(&analysis, false);
-    let strip = build_strip_layout(&analysis, title);
-
     PatchSummary {
         title: title.to_string(),
         total_modules,
@@ -121,13 +149,12 @@ fn summarize(
         monitor_count,
         loop_count,
         plugins,
-        strip_dark,
-        strip_light,
-        full_strip,
-        rack_dark,
-        rack_light,
-        strip,
+        ranked_strip: build_ranked_strip(&analysis, &assets),
+        full_strip: build_full_single_row_strip(&analysis, &assets),
+        rack: build_rack_rail_layout(&analysis, &assets),
         analysis,
+        assets,
+        signal_flow: OnceLock::new(),
     }
 }
 
@@ -137,12 +164,7 @@ pub fn render_strip_rgba(
     scale: f32,
     dark: bool,
 ) -> Result<RenderedDiagram, String> {
-    let lineup = if dark {
-        &summary.strip_dark
-    } else {
-        &summary.strip_light
-    };
-    render_ranked_strip_rgba(lineup, scale, dark)
+    render_ranked_strip_rgba(&summary.ranked_strip, &summary.assets, scale, dark)
 }
 
 /// Renders the full un-deduplicated single-row module strip in patch order, when applicable.
@@ -154,7 +176,7 @@ pub fn render_full_strip_rgba(
     summary
         .full_strip
         .as_ref()
-        .map(|lineup| render_ranked_strip_rgba(lineup, scale, dark))
+        .map(|lineup| render_ranked_strip_rgba(lineup, &summary.assets, scale, dark))
 }
 
 /// Renders the physical Rack rail layout into RGBA pixels.
@@ -163,12 +185,7 @@ pub fn render_rack_rgba(
     scale: f32,
     dark: bool,
 ) -> Result<RenderedDiagram, String> {
-    let rack = if dark {
-        &summary.rack_dark
-    } else {
-        &summary.rack_light
-    };
-    render_rack_rails_rgba(rack, scale, dark)
+    render_rack_rails_rgba(&summary.rack, &summary.assets, scale, dark)
 }
 
 /// Builds and renders a dynamically unfolded diagram fitting within `(max_width_px, max_height_px)`.
@@ -185,7 +202,7 @@ pub fn render_dynamic_hover_rgba(
         f64::from(max_width_px),
         f64::from(max_height_px),
     );
-    let rendered = render_layout_rgba(&layout, scale, dark)?;
+    let rendered = render_layout_rgba(&layout, &summary.assets, scale, dark)?;
     Ok((layout, rendered))
 }
 
@@ -311,7 +328,7 @@ mod tests {
         assert_eq!(summary.analysis.document.row_count(), 0);
         assert_eq!(
             summary
-                .rack_dark
+                .rack
                 .modules
                 .iter()
                 .map(|m| m.id)
@@ -327,38 +344,41 @@ mod tests {
         let flat = inspect_path_bytes(Path::new("compat.vcvss"), &sample_patch_json())
             .expect("inspect .vcvss extension");
         assert_eq!(flat.analysis.document.row_count(), 0);
-
-        if let Ok(home) = std::env::var("HOME") {
-            let demo = Path::new(&home)
-                .join(".local/share/Rack2/plugins-lin-x64/Stoermelder-P1/presets/Strip/Demo.vcvss");
-            if demo.is_file() {
-                let demo_summary = inspect_path(&demo).expect("inspect local Demo.vcvss");
-                assert_eq!(demo_summary.total_modules, 1);
-                assert_eq!(demo_summary.cable_count, 0);
-                assert_eq!(demo_summary.analysis.document.row_count(), 0);
-            }
-        }
     }
 
     #[test]
     fn analyzes_voices_monitors_and_badge_watchers() {
         let summary = inspect_bytes("Test Synth", &sample_patch_json()).expect("analyze sample");
+        assert!(summary.signal_flow.get().is_none());
         assert_eq!(summary.voice_count, 2);
         assert_eq!(summary.monitor_count, 1);
-        assert!(!summary.strip.nodes.is_empty());
+        assert!(!summary.signal_flow().nodes.is_empty());
+        assert!(std::ptr::eq(summary.signal_flow(), summary.signal_flow()));
 
         // Scopes and displays default to MonitorView::Badge: no Scope box in diagram,
         // and the watched node carries the watcher badge.
         assert!(
-            summary.strip.nodes.iter().all(|n| n.band != Band::Monitor),
+            summary
+                .signal_flow()
+                .nodes
+                .iter()
+                .all(|n| n.band != Band::Monitor),
             "monitor band should not create separate boxes in Badge mode"
         );
         assert!(
-            summary.strip.nodes.iter().any(|n| !n.watchers.is_empty()),
+            summary
+                .signal_flow()
+                .nodes
+                .iter()
+                .any(|n| !n.watchers.is_empty()),
             "watched module/voice should carry a Scope badge"
         );
         assert!(
-            summary.strip.nodes.iter().all(|n| !n.panels.is_empty()),
+            summary
+                .signal_flow()
+                .nodes
+                .iter()
+                .all(|n| !n.panels.is_empty()),
             "every node should include miniature module panel specs"
         );
     }
@@ -375,7 +395,7 @@ mod tests {
             tall.nodes.len(),
             small.nodes.len()
         );
-        assert!(tall.nodes.len() > summary.strip.nodes.len());
+        assert!(tall.nodes.len() > summary.signal_flow().nodes.len());
     }
 
     #[test]
@@ -398,94 +418,88 @@ mod tests {
     }
 
     #[test]
-    fn validates_downloaded_modular_patch_tools_fixtures_if_present() {
-        let Ok(home) = std::env::var("HOME") else {
-            return;
-        };
-        let dir = Path::new(&home).join("Pictures/vcv");
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-        let mut count = 0usize;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("vcv"))
-            {
-                let summary = inspect_path(&path)
-                    .unwrap_or_else(|e| panic!("failed to analyze {}: {e}", path.display()));
-                assert!(summary.active_modules > 0, "empty {}", path.display());
-                let rendered = render_strip_rgba(&summary, 1.0, true)
-                    .unwrap_or_else(|e| panic!("failed to render {}: {e}", path.display()));
-                assert!(rendered.width > 0 && rendered.height > 0);
-                count += 1;
-            }
-        }
-        eprintln!(
-            "Validated {count} real .vcv fixture patches from {}",
-            dir.display()
+    fn panel_art_is_size_specific_and_shared_in_svg() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path();
+        let plugin = cache.join("CustomPlugin");
+        std::fs::create_dir_all(&plugin).unwrap();
+
+        let color = [40, 80, 120, 255];
+        image::RgbaImage::from_pixel(360, 1520, image::Rgba(color))
+            .save(plugin.join("MyVCO.png"))
+            .unwrap();
+        let modules = [("CustomPlugin".into(), "MyVCO".into())];
+        let cancel = AtomicBool::new(false);
+        let viewer = panels::load_panels_with_dirs(&modules, true, &[], Some(cache), &cancel);
+        assert_eq!(
+            viewer
+                .viewer_image("CustomPlugin", "MyVCO")
+                .unwrap()
+                .dimensions(),
+            (360, 1520)
         );
+        assert_eq!(viewer.thumbnails().count(), 0);
+
+        let thumbnails = panels::load_panels_with_dirs(&modules, false, &[], Some(cache), &cancel);
+        assert!(thumbnails.viewer_image("CustomPlugin", "MyVCO").is_none());
+        let (_, uri) = thumbnails.thumbnails().next().expect("local thumbnail");
+        let uri_png = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            uri.strip_prefix("data:image/png;base64,").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(image::load_from_memory(&uri_png).unwrap().height(), 320);
+        assert!(
+            (thumbnails.aspect("CustomPlugin", "MyVCO").unwrap() - (360.0 / 1520.0)).abs() < 0.005
+        );
+
+        let document = archive::parse_patch_value(&serde_json::json!({
+            "modules": [
+                {"id": 1, "plugin": "CustomPlugin", "model": "MyVCO", "pos":[0, 0]},
+                {"id": 2, "plugin": "CustomPlugin", "model": "MyVCO", "pos":[6, 0]}
+            ]
+        }))
+        .unwrap();
+        let analysis = analyze_patch(document).unwrap();
+        let rack = build_rack_rail_layout(&analysis, &thumbnails);
+        let svg = render_rack_rails_svg(&rack, &thumbnails, true);
+        assert_eq!(svg.matches("data:image/png;base64,").count(), 1);
+        let rendered = render_rack_rails_rgba(&rack, &thumbnails, 1.0, true).unwrap();
+        for module in &rack.modules {
+            let x = (module.x + module.width / 2.0) as usize;
+            let y = (module.y + module.height / 2.0) as usize;
+            let pixel = (y * rendered.width as usize + x) * 4;
+            assert_eq!(rendered.rgba[pixel..pixel + 4], color);
+        }
     }
 
     #[test]
-    fn library_panel_cache_preserves_high_res_and_renders_strip_or_fallback() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("cache");
-        let cache_plugin = cache.join("CustomPlugin");
-        std::fs::create_dir_all(&cache_plugin).unwrap();
-
-        // Build a synthetic 360x1520 lossless PNG (matching VCV Library 4x WebP height).
-        let img = image::RgbaImage::from_pixel(360, 1520, image::Rgba([40, 80, 120, 255]));
-        let mut png_bytes = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        )
+    fn sparse_rack_uses_one_screw_pattern_across_a_wide_span() {
+        let document = archive::parse_patch_value(&serde_json::json!({
+            "modules": [
+                {"id": 1, "plugin": "Example", "model": "Panel", "pos":[-16_000, 0]},
+                {"id": 2, "plugin": "Example", "model": "Panel", "pos":[16_000, 0]}
+            ]
+        }))
         .unwrap();
-        std::fs::write(cache_plugin.join("MyVCO.png"), &png_bytes).unwrap();
-
-        let resolved = panels::resolve_panel_with_dirs("CustomPlugin", "MyVCO", &[], &cache, false)
-            .expect("cached high-res library panel should resolve offline");
-        assert_eq!(
-            resolved.rgba.dimensions(),
-            (360, 1520),
-            "viewer panel texture must retain full 1520px vertical resolution"
+        let summary = summarize(
+            "Sparse rack",
+            analyze_patch(document).unwrap(),
+            PanelAssets::default(),
         );
-        assert!((resolved.aspect - (360.0 / 1520.0)).abs() < 0.005);
-        assert!(resolved.data_uri.starts_with("data:image/png;base64,"));
-
-        // Verify SVG data_uri thumbnail stays compact (320px height) for strip/hover embedding.
-        let uri_b64 = resolved
-            .data_uri
-            .strip_prefix("data:image/png;base64,")
-            .unwrap();
-        let uri_png =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, uri_b64).unwrap();
-        let uri_img = image::load_from_memory(&uri_png).unwrap();
-        assert_eq!(uri_img.height(), 320);
-
-        // Unsafe slugs and uncached offline modules must return None cleanly.
-        assert!(panels::resolve_panel_with_dirs("../etc", "passwd", &[], &cache, false).is_none());
-        assert!(
-            panels::resolve_panel_with_dirs("MissingPlugin", "Missing", &[], &cache, false)
-                .is_none()
-        );
-        assert!(panels::resolve_panel("", "VCO").is_none());
-
-        // Strip and rail SVGs render cleanly (embedding cached images or stylized fallbacks).
-        let summary = inspect_bytes("Library + Fallback", &sample_patch_json()).expect("analyze");
-        let strip_svg = render_ranked_strip_svg(&summary.strip_dark, true);
-        let rack_svg = render_rack_rails_svg(&summary.rack_dark, true);
-        assert!(strip_svg.contains("<svg") && strip_svg.contains("</svg>"));
-        assert!(rack_svg.contains("<svg") && rack_svg.contains("</svg>"));
+        let svg = render_rack_rails_svg(&summary.rack, &summary.assets, true);
+        assert_eq!(svg.matches("<pattern ").count(), 1);
+        assert!(svg.len() < 16_000);
+        let rendered = render_rack_rgba(&summary, 0.002, true).unwrap();
+        assert!(rendered.width < 1024);
+        assert_eq!(rendered.height, 1);
     }
 
     #[test]
     fn ranked_strip_includes_all_unique_modules_prioritized_left_to_right() {
         let summary = inspect_bytes("Ranked Test", &sample_patch_json()).expect("analyze");
         let models: Vec<&str> = summary
-            .strip_dark
+            .ranked_strip
             .modules
             .iter()
             .map(|m| m.model.as_str())
@@ -498,14 +512,14 @@ mod tests {
 
         // Duplicate VCO and VCF are deduplicated with x2 count badges.
         let vco = summary
-            .strip_dark
+            .ranked_strip
             .modules
             .iter()
             .find(|m| m.model == "VCO")
             .expect("VCO present");
         assert_eq!(vco.count, 2);
         let vcf = summary
-            .strip_dark
+            .ranked_strip
             .modules
             .iter()
             .find(|m| m.model == "VCF")
@@ -547,7 +561,7 @@ mod tests {
         )
         .unwrap();
         let extra_models: Vec<&str> = extra
-            .strip_dark
+            .ranked_strip
             .modules
             .iter()
             .map(|m| m.model.as_str())
@@ -558,60 +572,48 @@ mod tests {
         );
 
         // Rack rail layout preserves saved multi-row coordinates (rows 0 and 1, all 11 modules).
-        assert_eq!(summary.rack_dark.modules.len(), 11);
-        assert_eq!(summary.rack_dark.rows.len(), 2);
-        let row0_y = summary.rack_dark.rows[0].1;
-        let row1_y = summary.rack_dark.rows[1].1;
+        assert_eq!(summary.rack.modules.len(), 11);
+        assert_eq!(summary.rack.rows.len(), 2);
+        let row0_y = summary.rack.rows[0].1;
+        let row1_y = summary.rack.rows[1].1;
         assert!(row1_y > row0_y + 300.0);
     }
 
     #[test]
-    fn library_panel_clamps_extreme_heights_while_keeping_standard_1520px() {
-        let tall = image::RgbaImage::from_pixel(300, 2000, image::Rgba([20, 40, 60, 255]));
-        let mut png_bytes = Vec::new();
-        tall.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        )
-        .unwrap();
-
-        let panel = panels::encode_raster_bytes_as_panel(&png_bytes).expect("encode tall raster");
-        assert_eq!(panel.rgba.dimensions(), (228, 1520));
-    }
-
-    #[test]
-    fn local_rack_screenshot_takes_priority_over_library_cache() {
+    fn local_art_takes_priority_and_respects_decode_limits() {
         let tmp = tempfile::tempdir().unwrap();
         let shots = tmp.path().join("screenshots");
         let cache = tmp.path().join("cache");
         std::fs::create_dir_all(shots.join("Valley")).unwrap();
         std::fs::create_dir_all(cache.join("Valley")).unwrap();
 
-        let encode_png = |w: u32, h: u32, rgba: [u8; 4]| {
-            let img = image::RgbaImage::from_pixel(w, h, image::Rgba(rgba));
-            let mut out = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-                .unwrap();
-            out
-        };
+        image::RgbaImage::from_pixel(300, 2000, image::Rgba([10, 200, 30, 255]))
+            .save(shots.join("Valley/Plateau.png"))
+            .unwrap();
+        let fallback = image::RgbaImage::from_pixel(180, 380, image::Rgba([220, 20, 20, 255]));
+        fallback.save(cache.join("Valley/Plateau.png")).unwrap();
+        image::RgbaImage::new(1, 4097)
+            .save(shots.join("Valley/TooTall.png"))
+            .unwrap();
 
-        std::fs::write(
-            shots.join("Valley/Plateau.png"),
-            encode_png(360, 1520, [10, 200, 30, 255]),
-        )
-        .unwrap();
-        // Even with a valid cached library fallback, the local Rack screenshot must win.
-        std::fs::write(
-            cache.join("Valley/Plateau.png"),
-            encode_png(180, 380, [220, 20, 20, 255]),
-        )
-        .unwrap();
-
-        let resolved =
-            panels::resolve_panel_with_dirs("Valley", "Plateau", &[shots], &cache, false)
-                .expect("resolve panel");
-        assert_eq!(resolved.rgba.dimensions(), (360, 1520));
-        assert_eq!(resolved.rgba.get_pixel(0, 0).0, [10, 200, 30, 255]);
+        let panels = panels::load_panels_with_dirs(
+            &[
+                ("Valley".into(), "Plateau".into()),
+                ("Valley".into(), "TooTall".into()),
+                ("..".into(), "Plateau".into()),
+            ],
+            true,
+            &[shots],
+            Some(&cache),
+            &AtomicBool::new(false),
+        );
+        let resolved = panels
+            .viewer_image("Valley", "Plateau")
+            .expect("local screenshot");
+        assert_eq!(resolved.dimensions(), (228, 1520));
+        assert_eq!(resolved.get_pixel(0, 0).0, [10, 200, 30, 255]);
+        assert!(panels.viewer_image("Valley", "TooTall").is_none());
+        assert!(panels.viewer_image("..", "Plateau").is_none());
     }
 
     #[test]
@@ -722,7 +724,7 @@ mod tests {
         let models: Vec<&str> = full.modules.iter().map(|m| m.model.as_str()).collect();
         assert_eq!(models, ["VCF", "VCO", "Scope", "VCO"]);
         assert!(full.modules.iter().all(|m| m.count == 1));
-        assert!(full.width > single.strip_dark.width);
+        assert!(full.width > single.ranked_strip.width);
 
         // .vcvss strip preserves [leftModules.rev(), rightModules] order with duplicates.
         let strip_json = serde_json::to_vec(&serde_json::json!({

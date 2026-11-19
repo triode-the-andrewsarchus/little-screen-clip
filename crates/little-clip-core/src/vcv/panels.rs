@@ -1,12 +1,8 @@
 //! VCV Rack module panel resolution from local Rack screenshots and VCV Library fallback.
 //!
-//! Priority order per `(plugin, model)`:
-//! 1. Local Rack screenshots (`<Rack user folder>/screenshots/<plugin>/<model>.png`),
-//!    preserving up to 1520px height (`Rack -t 4`).
-//! 2. Local Rack screenshot generation via `Rack -s <sys> -u <staging> -t 4` in an
-//!    isolated temporary user directory (when requested for missing installed plugins).
-//! 3. Downloaded VCV Library CDN screenshots (`/screenshots/400/...`, fallback `/200/...`)
-//!    cached under `~/.local/share/little-screen-clip/vcv_panels`.
+//! Passive previews prefer local Rack screenshots and fall back to previously
+//! downloaded VCV Library artwork. Explicit viewer actions download missing panels
+//! or capture installed modules using `Rack -t 4` in a temporary user directory.
 
 use super::catalog::VcvCatalog;
 use crate::process::{CommandError, CommandRequest};
@@ -15,10 +11,10 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 const URL_SEGMENT_ENCODE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.');
@@ -31,12 +27,71 @@ const PANEL_SVG_URI_HEIGHT: u32 = 320;
 const RACK_SCREENSHOT_ZOOM: &str = "4";
 const LOCAL_SCREENSHOT_BATCH_SIZE: usize = 12;
 
-/// Resolved real panel asset for a `(plugin, model)` tuple.
-#[derive(Clone, Debug)]
-pub struct ResolvedPanel {
-    pub data_uri: String,
-    pub aspect: f64,
-    pub rgba: Arc<image::RgbaImage>,
+const THUMBNAIL_BUDGET: usize = 4 * 1024 * 1024;
+const VIEWER_BUDGET: usize = 64 * 1024 * 1024;
+
+enum PanelImage {
+    Thumbnail(String),
+    Viewer(image::RgbaImage),
+}
+
+#[derive(Debug)]
+struct PanelAsset {
+    aspect: f64,
+    index: usize,
+    image: PanelImage,
+}
+
+/// Local panel artwork owned by one preview.
+///
+/// Thumbnails and viewer images have separate byte budgets and lifetimes.
+#[derive(Debug, Default)]
+pub struct PanelAssets {
+    entries: HashMap<String, HashMap<String, PanelAsset>>,
+}
+
+impl PanelAssets {
+    pub(super) fn aspect(&self, plugin: &str, model: &str) -> Option<f64> {
+        Some(self.entries.get(plugin)?.get(model)?.aspect)
+    }
+
+    pub(super) fn thumbnail(&self, plugin: &str, model: &str) -> Option<(usize, f64)> {
+        let asset = self.entries.get(plugin)?.get(model)?;
+        matches!(asset.image, PanelImage::Thumbnail(_)).then_some((asset.index, asset.aspect))
+    }
+
+    pub(super) fn thumbnails(&self) -> impl Iterator<Item = (usize, &str)> {
+        self.entries
+            .values()
+            .flat_map(HashMap::values)
+            .filter_map(|asset| match &asset.image {
+                PanelImage::Thumbnail(uri) => Some((asset.index, uri.as_str())),
+                PanelImage::Viewer(_) => None,
+            })
+    }
+
+    /// Returns the bitmap for a module in the interactive viewer.
+    pub fn viewer_image(&self, plugin: &str, model: &str) -> Option<&image::RgbaImage> {
+        match &self.entries.get(plugin)?.get(model)?.image {
+            PanelImage::Thumbnail(_) => None,
+            PanelImage::Viewer(image) => Some(image),
+        }
+    }
+}
+
+impl std::fmt::Debug for PanelImage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Thumbnail(uri) => formatter
+                .debug_tuple("Thumbnail")
+                .field(&uri.len())
+                .finish(),
+            Self::Viewer(image) => formatter
+                .debug_tuple("Viewer")
+                .field(&image.dimensions())
+                .finish(),
+        }
+    }
 }
 
 /// Summary of a local `Rack -t` screenshot generation run.
@@ -67,15 +122,10 @@ impl RackEnv {
     }
 }
 
-#[derive(Default)]
-struct PanelMemoryCache {
-    entries: HashMap<(String, String), Option<ResolvedPanel>>,
-    missing_library: HashSet<String>,
-    attempted_local_plugins: HashSet<String>,
-}
-
-static PANEL_CACHE: LazyLock<Mutex<PanelMemoryCache>> =
-    LazyLock::new(|| Mutex::new(PanelMemoryCache::default()));
+// Rack can fail to capture hidden or unlicensed modules. Keep a bounded
+// session record so the same missing plugin does not continually prompt a retry.
+static ATTEMPTED_LOCAL_PLUGINS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 static RACK_SCREENSHOT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Returns `true` if a local VCV Rack installation capable of `-t` screenshotting is present.
@@ -92,59 +142,104 @@ pub fn count_missing_local_screenshot_plugins(modules: &[(String, String)]) -> u
     collect_missing_plugins_for_modules(&env, modules, true).len()
 }
 
-/// Resolves a module panel: local Rack screenshots first, then VCV Library cache/CDN.
-pub fn resolve_panel(plugin: &str, model: &str) -> Option<ResolvedPanel> {
-    if !is_safe_slug(plugin) || !is_safe_slug(model) {
-        return None;
-    }
-    let key = (plugin.to_string(), model.to_string());
-    {
-        let guard = PANEL_CACHE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(cached) = guard.entries.get(&key) {
-            return cached.clone();
-        }
-    }
-
-    let env = discover_rack_env();
-    let cache_dir = default_library_cache_dir()?;
-    let allow_network = !cfg!(test);
-    let panel = resolve_panel_with_dirs(
-        plugin,
-        model,
-        &env.screenshot_dirs,
-        &cache_dir,
-        allow_network,
-    );
-
-    let mut guard = PANEL_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.entries.insert(key, panel.clone());
-    panel
+/// Reads local artwork at interactive viewer resolution.
+pub fn load_viewer_panels(modules: &[(String, String)], cancel: &AtomicBool) -> PanelAssets {
+    load_panels(modules, true, cancel)
 }
 
-pub(crate) fn resolve_panel_with_dirs(
-    plugin: &str,
-    model: &str,
+pub(super) fn load_panel_thumbnails(
+    modules: &[(String, String)],
+    cancel: &AtomicBool,
+) -> PanelAssets {
+    load_panels(modules, false, cancel)
+}
+
+fn load_panels(modules: &[(String, String)], viewer: bool, cancel: &AtomicBool) -> PanelAssets {
+    if modules.is_empty() || cancel.load(Ordering::Relaxed) {
+        return PanelAssets::default();
+    }
+    let env = discover_rack_env();
+    let cache_dir = default_library_cache_dir();
+    load_panels_with_dirs(
+        modules,
+        viewer,
+        &env.screenshot_dirs,
+        cache_dir.as_deref(),
+        cancel,
+    )
+}
+
+pub(super) fn load_panels_with_dirs(
+    modules: &[(String, String)],
+    viewer: bool,
     screenshot_dirs: &[PathBuf],
-    cache_dir: &Path,
-    allow_network: bool,
-) -> Option<ResolvedPanel> {
-    if !is_safe_slug(plugin) || !is_safe_slug(model) {
-        return None;
-    }
+    cache_dir: Option<&Path>,
+    cancel: &AtomicBool,
+) -> PanelAssets {
+    collect_panels(modules, viewer, cancel, |plugin, model| {
+        read_panel(plugin, model, screenshot_dirs, cache_dir)
+    })
+}
 
-    if let Some(bytes) = find_local_screenshot_bytes(plugin, model, screenshot_dirs)
-        && let Some(panel) = encode_raster_bytes_as_panel(&bytes)
-    {
-        return Some(panel);
+fn collect_panels(
+    modules: &[(String, String)],
+    viewer: bool,
+    cancel: &AtomicBool,
+    mut read: impl FnMut(&str, &str) -> Option<image::DynamicImage>,
+) -> PanelAssets {
+    let mut assets = PanelAssets::default();
+    let mut seen = HashSet::new();
+    let mut remaining = if viewer {
+        VIEWER_BUDGET
+    } else {
+        THUMBNAIL_BUDGET
+    };
+    let bytes_per_pixel = if viewer { 4 } else { 6 };
+    let pixel_budget = (remaining / bytes_per_pixel / modules.len().max(1)).max(1);
+    for (index, (plugin, model)) in modules.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) || remaining == 0 {
+            break;
+        }
+        if !seen.insert((plugin, model)) {
+            continue;
+        }
+        let Some(image) = read(plugin, model) else {
+            continue;
+        };
+        let aspect = f64::from(image.width()) / f64::from(image.height());
+        let image = resize_panel(image, viewer, pixel_budget);
+        let panel = if viewer {
+            PanelImage::Viewer(image.into_rgba8())
+        } else {
+            let mut png = Cursor::new(Vec::new());
+            if image
+                .into_rgba8()
+                .write_to(&mut png, image::ImageFormat::Png)
+                .is_err()
+            {
+                continue;
+            }
+            let base64 = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+            PanelImage::Thumbnail(format!("data:image/png;base64,{base64}"))
+        };
+        let bytes = match &panel {
+            PanelImage::Thumbnail(uri) => uri.capacity(),
+            PanelImage::Viewer(image) => image.as_raw().capacity(),
+        };
+        let Some(budget) = remaining.checked_sub(bytes) else {
+            continue;
+        };
+        remaining = budget;
+        assets.entries.entry(plugin.clone()).or_default().insert(
+            model.clone(),
+            PanelAsset {
+                aspect,
+                index,
+                image: panel,
+            },
+        );
     }
-
-    let catalog_key = format!("{plugin}/{model}");
-    load_or_fetch_library_panel(cache_dir, plugin, model, &catalog_key, allow_network)
-        .and_then(|bytes| encode_raster_bytes_as_panel(&bytes))
+    assets
 }
 
 /// Generates local `Rack -t 4` screenshots for installed plugins used in `modules`
@@ -243,22 +338,15 @@ pub fn generate_all_local_rack_screenshots(
     out
 }
 
-/// Removes the downloaded VCV Library fallback screenshot cache and clears memory cache.
+/// Removes downloaded VCV Library artwork from disk.
 pub fn clear_downloaded_panel_cache() -> Result<(), String> {
     let Some(cache_dir) = default_library_cache_dir() else {
         return Ok(());
     };
-    if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir)
-            .map_err(|e| format!("Cannot remove VCV panel cache: {e}"))?;
+    match std::fs::remove_dir_all(cache_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result.map_err(|error| format!("Cannot remove VCV panel cache: {error}")),
     }
-    let mut guard = PANEL_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.entries.clear();
-    guard.missing_library.clear();
-    guard.attempted_local_plugins.clear();
-    Ok(())
 }
 
 pub(crate) fn default_library_cache_dir() -> Option<PathBuf> {
@@ -302,7 +390,8 @@ pub(crate) fn discover_rack_env_in(
     let mut ordered_user_dirs = Vec::new();
     for udir in &candidate_user_dirs {
         let log_path = udir.join("log.txt");
-        if let Ok(log) = std::fs::read_to_string(&log_path) {
+        if let Ok(bytes) = crate::file_source::read_file_bytes(&log_path, 128 * 1024, false, true) {
+            let log = String::from_utf8_lossy(&bytes);
             for line in log.lines().take(60) {
                 if let Some(idx) = line.find("User directory: ") {
                     let parsed = PathBuf::from(line[idx + "User directory: ".len()..].trim());
@@ -399,29 +488,28 @@ fn push_unique_dir(list: &mut Vec<PathBuf>, dir: PathBuf) {
     }
 }
 
-fn find_local_screenshot_bytes(
+fn read_panel(
     plugin: &str,
     model: &str,
     screenshot_dirs: &[PathBuf],
-) -> Option<Vec<u8>> {
-    for dir in screenshot_dirs {
-        let plugin_dir = dir.join(plugin);
-        if !plugin_dir.is_dir() {
-            continue;
-        }
-        for ext in ["png", "webp", "jpg"] {
-            let path = plugin_dir.join(format!("{model}.{ext}"));
-            if path.is_file()
-                && let Ok(meta) = std::fs::metadata(&path)
-                && meta.len() > 0
-                && meta.len() <= MAX_PANEL_IMAGE_BYTES as u64
-                && let Ok(bytes) = std::fs::read(&path)
-            {
-                return Some(bytes);
-            }
-        }
+    cache_dir: Option<&Path>,
+) -> Option<image::DynamicImage> {
+    if !is_safe_slug(plugin) || !is_safe_slug(model) {
+        return None;
     }
-    None
+    screenshot_dirs
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(cache_dir)
+        .find_map(|dir| {
+            ["png", "webp", "jpg"].iter().find_map(|extension| {
+                let path = dir.join(plugin).join(format!("{model}.{extension}"));
+                let bytes =
+                    crate::file_source::read_file_bytes(&path, MAX_PANEL_IMAGE_BYTES, true, true)
+                        .ok()?;
+                decode_panel(&bytes, None)
+            })
+        })
 }
 
 fn has_local_screenshot(plugin: &str, model: &str, screenshot_dirs: &[PathBuf]) -> bool {
@@ -446,10 +534,9 @@ fn collect_missing_plugins_for_modules(
     respect_attempted: bool,
 ) -> Vec<(String, Option<PathBuf>)> {
     let attempted = if respect_attempted {
-        PANEL_CACHE
+        ATTEMPTED_LOCAL_PLUGINS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .attempted_local_plugins
             .clone()
     } else {
         HashSet::new()
@@ -504,10 +591,8 @@ pub(crate) fn plugin_needs_screenshots(
     };
 
     if let Some(mpath) = manifest_path
-        && let Ok(meta) = std::fs::metadata(&mpath)
-        && meta.len() > 0
-        && meta.len() <= MAX_MANIFEST_BYTES
-        && let Ok(bytes) = std::fs::read(&mpath)
+        && let Ok(bytes) =
+            crate::file_source::read_file_bytes(&mpath, MAX_MANIFEST_BYTES as usize, true, true)
         && let Ok(manifest) = serde_json::from_slice::<ManifestLite>(&bytes)
         && !manifest.modules.is_empty()
     {
@@ -749,7 +834,6 @@ pub(crate) fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path
         return 0;
     };
     let mut copied = 0usize;
-    let mut invalidated = Vec::new();
 
     for plugin_entry in plugin_entries.flatten() {
         let src_plugin_dir = plugin_entry.path();
@@ -791,33 +875,27 @@ pub(crate) fn copy_generated_screenshots(staging_shots: &Path, dest_shots: &Path
             if std::fs::create_dir_all(&dst_plugin_dir).is_err() {
                 continue;
             }
-            let tmp_target = dst_plugin_dir.join(format!("{file_name}.tmp"));
-            if std::fs::copy(&src_file, &tmp_target).is_ok()
-                && std::fs::rename(&tmp_target, &target).is_ok()
+            let Ok(mut staged) = tempfile::NamedTempFile::new_in(&dst_plugin_dir) else {
+                continue;
+            };
+            let Ok(source) = crate::file_source::open_regular_file(&src_file, false) else {
+                continue;
+            };
+            let mut source = std::io::Read::take(source, MAX_PANEL_IMAGE_BYTES as u64 + 1);
+            if std::io::copy(&mut source, &mut staged)
+                .is_ok_and(|size| size > 0 && size <= MAX_PANEL_IMAGE_BYTES as u64)
+                && staged.persist_noclobber(&target).is_ok()
             {
-                if let Some(model_slug) = target.file_stem().and_then(|s| s.to_str()) {
-                    invalidated.push((plugin_slug.clone(), model_slug.to_string()));
-                }
                 copied += 1;
-            } else {
-                let _ = std::fs::remove_file(&tmp_target);
             }
-        }
-    }
-
-    if !invalidated.is_empty() {
-        let mut guard = PANEL_CACHE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for key in invalidated {
-            guard.entries.remove(&key);
         }
     }
     copied
 }
 
 pub(crate) fn write_staging_settings_json(src: &Path, dst: &Path) -> Result<(), String> {
-    let bytes = std::fs::read(src).map_err(|e| format!("read settings: {e}"))?;
+    let bytes = crate::file_source::read_file_bytes(src, MAX_MANIFEST_BYTES as usize, true, true)
+        .map_err(|e| format!("read settings: {e}"))?;
     let mut doc: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse settings: {e}"))?;
     if let Some(obj) = doc.as_object_mut() {
@@ -883,142 +961,147 @@ fn default_plugins_subdir_name() -> &'static str {
 }
 
 fn mark_attempted_local_plugin(plugin: &str) {
-    let mut guard = PANEL_CACHE
+    let mut attempted = ATTEMPTED_LOCAL_PLUGINS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.attempted_local_plugins.insert(plugin.to_string());
+    if attempted.len() < 1024 {
+        attempted.insert(plugin.to_string());
+    }
 }
 
-fn load_or_fetch_library_panel(
-    cache_dir: &Path,
+/// Loads viewer artwork and downloads missing panels after an explicit user request.
+///
+/// The count reports files installed, including partial progress on cancellation.
+/// The second result contains a cache error if downloaded artwork could not be saved.
+pub fn download_viewer_panels(
+    modules: &[(String, String)],
+    cancel: &AtomicBool,
+) -> (PanelAssets, Result<usize, String>) {
+    let cache_dir = default_library_cache_dir();
+    let env = discover_rack_env();
+    let mut result = cache_dir
+        .as_ref()
+        .map(|_| 0)
+        .ok_or("Panel cache directory is unavailable".into());
+    let panels = collect_panels(modules, true, cancel, |plugin, model| {
+        read_panel(plugin, model, &env.screenshot_dirs, cache_dir.as_deref()).or_else(|| {
+            let directory = cache_dir.as_ref()?.join(plugin);
+            let downloaded = result.as_mut().ok()?;
+            if !is_safe_slug(plugin)
+                || !is_safe_slug(model)
+                || !VcvCatalog::embedded().is_listed_in_library(plugin)
+            {
+                return None;
+            }
+            let (bytes, image) = download_panel(plugin, model, cancel)?;
+            match save_download(&directory, model, &bytes) {
+                Ok(()) => *downloaded += 1,
+                Err(error) => result = Err(format!(
+                    "Could not cache {plugin}/{model} after downloading {downloaded} panels: {error}"
+                )),
+            }
+            Some(image)
+        })
+    });
+    (panels, result)
+}
+
+fn save_download(directory: &Path, model: &str, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+    staged.write_all(bytes)?;
+    staged.persist(directory.join(format!("{model}.webp")))?;
+    Ok(())
+}
+
+fn download_panel(
     plugin: &str,
     model: &str,
-    catalog_key: &str,
-    allow_network: bool,
-) -> Option<Vec<u8>> {
-    let plugin_dir = cache_dir.join(plugin);
-    let mut cached_low_res: Option<Vec<u8>> = None;
-    for ext in ["webp", "png", "jpg"] {
-        let p = plugin_dir.join(format!("{model}.{ext}"));
-        if p.is_file()
-            && let Ok(meta) = std::fs::metadata(&p)
-            && meta.len() <= MAX_PANEL_IMAGE_BYTES as u64
-            && let Ok(bytes) = std::fs::read(&p)
-        {
-            if let Ok(reader) = image::ImageReader::new(Cursor::new(&bytes)).with_guessed_format()
-                && let Ok((_, h)) = reader.into_dimensions()
-                && h >= 280
-            {
-                return Some(bytes);
-            }
-            cached_low_res = Some(bytes);
+    cancel: &AtomicBool,
+) -> Option<(Vec<u8>, image::DynamicImage)> {
+    let plugin = utf8_percent_encode(plugin, URL_SEGMENT_ENCODE);
+    let model = utf8_percent_encode(model, URL_SEGMENT_ENCODE);
+    for size in [400, 200] {
+        if cancel.load(Ordering::Relaxed) {
             break;
         }
-    }
-
-    if !allow_network || !VcvCatalog::embedded().is_listed_in_library(plugin) {
-        return cached_low_res;
-    }
-    {
-        let guard = PANEL_CACHE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if guard.missing_library.contains(catalog_key) {
-            return cached_low_res;
-        }
-    }
-
-    let enc_plugin = utf8_percent_encode(plugin, URL_SEGMENT_ENCODE);
-    let enc_model = utf8_percent_encode(model, URL_SEGMENT_ENCODE);
-    for size in [400, 200] {
-        let url =
-            format!("https://library.vcvrack.com/screenshots/{size}/{enc_plugin}/{enc_model}.webp");
+        let url = format!("https://library.vcvrack.com/screenshots/{size}/{plugin}/{model}.webp");
         let output = CommandRequest::new("curl")
-            .arg("-fsSL")
-            .arg("--max-time")
-            .arg("4")
-            .arg("--connect-timeout")
-            .arg("2")
-            .arg(&url)
+            .args([
+                "-q",
+                "-fsSL",
+                "--proto",
+                "=https",
+                "--max-time",
+                "4",
+                "--connect-timeout",
+                "2",
+            ])
+            .arg(url)
+            .own_process_group()
+            .die_with_parent()
             .timeout(Duration::from_secs(5))
             .max_output_bytes(MAX_PANEL_IMAGE_BYTES)
-            .run();
-        let Ok(output) = output else {
-            continue;
-        };
-        if !output.status.success() || output.stdout.is_empty() {
-            continue;
+            .run_cancellable(cancel);
+        if let Ok(output) = output
+            && output.status.success()
+            && let Some(image) = decode_panel(&output.stdout, Some(image::ImageFormat::WebP))
+        {
+            return Some((output.stdout, image));
         }
-        if image::load_from_memory(&output.stdout).is_err() {
-            continue;
-        }
-        if std::fs::create_dir_all(&plugin_dir).is_ok() {
-            let target = plugin_dir.join(format!("{model}.webp"));
-            let tmp = plugin_dir.join(format!("{model}.webp.tmp"));
-            if std::fs::write(&tmp, &output.stdout).is_ok() {
-                let _ = std::fs::rename(&tmp, &target);
-            }
-        }
-        return Some(output.stdout);
     }
-
-    if cached_low_res.is_none() {
-        mark_missing_library(catalog_key);
-    }
-    cached_low_res
+    None
 }
 
-fn mark_missing_library(catalog_key: &str) {
-    let mut guard = PANEL_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.missing_library.insert(catalog_key.to_string());
-}
-
-pub(crate) fn encode_raster_bytes_as_panel(bytes: &[u8]) -> Option<ResolvedPanel> {
-    let img = image::load_from_memory(bytes).ok()?;
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
+fn decode_panel(bytes: &[u8], format: Option<image::ImageFormat>) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let detected = reader.format()?;
+    if !matches!(
+        detected,
+        image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP
+    ) || format.is_some_and(|expected| expected != detected)
+    {
         return None;
     }
-    let aspect = f64::from(w) / f64::from(h);
+    let mut limits = crate::item::raster_preview_limits();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(32 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().ok()
+}
 
-    let full_rgba = if h > PANEL_MAX_VIEWER_HEIGHT || w > PANEL_MAX_VIEWER_WIDTH {
-        let scale = (f64::from(PANEL_MAX_VIEWER_HEIGHT) / f64::from(h))
-            .min(f64::from(PANEL_MAX_VIEWER_WIDTH) / f64::from(w));
-        let target_w = (f64::from(w) * scale)
-            .round()
-            .clamp(8.0, f64::from(PANEL_MAX_VIEWER_WIDTH)) as u32;
-        let target_h = (f64::from(h) * scale)
-            .round()
-            .clamp(16.0, f64::from(PANEL_MAX_VIEWER_HEIGHT)) as u32;
-        img.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
-            .to_rgba8()
+fn resize_panel(
+    image: image::DynamicImage,
+    viewer: bool,
+    pixel_budget: usize,
+) -> image::DynamicImage {
+    let (max_w, max_h) = if viewer {
+        (PANEL_MAX_VIEWER_WIDTH, PANEL_MAX_VIEWER_HEIGHT)
     } else {
-        img.to_rgba8()
+        (640, PANEL_SVG_URI_HEIGHT)
     };
-    let rgba = Arc::new(full_rgba);
-
-    let uri_img = if h > PANEL_SVG_URI_HEIGHT {
-        let target_w = ((aspect * f64::from(PANEL_SVG_URI_HEIGHT)).round() as u32).clamp(8, 1024);
-        img.resize_exact(
-            target_w,
-            PANEL_SVG_URI_HEIGHT,
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
-        img
-    };
-    let mut buf = Cursor::new(Vec::new());
-    uri_img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
-    Some(ResolvedPanel {
-        data_uri: format!("data:image/png;base64,{b64}"),
-        aspect,
-        rgba,
-    })
+    let (width, height) = (f64::from(image.width()), f64::from(image.height()));
+    let scale = (f64::from(max_w) / width)
+        .min(f64::from(max_h) / height)
+        .min((pixel_budget as f64 / (width * height)).sqrt());
+    if scale >= 1.0 {
+        return image;
+    }
+    image.resize_exact(
+        (width * scale).floor().clamp(1.0, pixel_budget as f64) as u32,
+        (height * scale).floor().clamp(1.0, pixel_budget as f64) as u32,
+        image::imageops::FilterType::Lanczos3,
+    )
 }
 
 fn is_safe_slug(s: &str) -> bool {
-    !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains("..") && !s.contains('\0')
+    !s.is_empty()
+        && s.len() <= 256
+        && s != "."
+        && !s.contains("..")
+        && s.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }

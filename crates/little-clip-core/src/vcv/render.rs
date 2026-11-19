@@ -5,7 +5,7 @@ use super::catalog::{ModuleFunction, Role};
 use super::layout::{
     ARROW_LENGTH, DiagramEdge, DiagramLayout, DiagramNode, ModulePanelSpec, PORT_TAB_HEIGHT,
 };
-use super::panels::{ResolvedPanel, resolve_panel};
+use super::panels::PanelAssets;
 use super::rack::{RACK_HP_WIDTH, RACK_ROW_HEIGHT, RackRailLayout, StripLineup};
 use resvg::usvg::{TreeParsing, TreeTextToPath, TreeWriting};
 use std::fmt::Write as _;
@@ -116,39 +116,46 @@ impl DiagramTheme {
 /// Renders a diagram layout into a tightly bounded RGBA buffer at the requested scale.
 pub fn render_layout_rgba(
     layout: &DiagramLayout,
+    assets: &PanelAssets,
     scale: f32,
     dark: bool,
 ) -> Result<RenderedDiagram, String> {
-    let svg = render_layout_svg(layout, dark);
+    let svg = render_layout_svg(layout, assets, dark);
     rasterize_svg_rgba(&svg, scale)
 }
 
 /// Renders a diagram layout into text-outlined SVG paths for retained `femtovg` drawing.
-pub fn render_layout_outlined_svg(layout: &DiagramLayout, dark: bool) -> Result<String, String> {
-    let svg = render_layout_svg(layout, dark);
+pub fn render_layout_outlined_svg(
+    layout: &DiagramLayout,
+    assets: &PanelAssets,
+    dark: bool,
+) -> Result<String, String> {
+    let svg = render_layout_svg(layout, assets, dark);
     outline_svg(&svg)
 }
 
 /// Renders the ranked module lineup strip (no boxes or cables) into RGBA pixels.
 pub fn render_ranked_strip_rgba(
     lineup: &StripLineup,
+    assets: &PanelAssets,
     scale: f32,
     dark: bool,
 ) -> Result<RenderedDiagram, String> {
-    let svg = render_ranked_strip_svg(lineup, dark);
+    let svg = render_ranked_strip_svg(lineup, assets, dark);
     rasterize_svg_rgba(&svg, scale)
 }
 
 /// Renders the ranked module lineup strip into standalone SVG markup.
-pub fn render_ranked_strip_svg(lineup: &StripLineup, dark: bool) -> String {
+pub fn render_ranked_strip_svg(lineup: &StripLineup, assets: &PanelAssets, dark: bool) -> String {
     let w = lineup.width.max(16.0);
     let h = lineup.height.max(16.0);
     let rail = if dark { "#262930" } else { "#8d94a0" };
     let mut svg = String::with_capacity(4096);
     let _ = writeln!(
         svg,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w:.1}" height="{h:.1}" viewBox="0 0 {w:.1} {h:.1}" font-family="Arimo, sans-serif">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w:.1}" height="{h:.1}" viewBox="0 0 {w:.1} {h:.1}" font-family="Arimo, sans-serif">"#
     );
+    append_panel_defs(&mut svg, assets);
     let _ = writeln!(
         svg,
         r#"<rect x="0" y="0" width="{w:.1}" height="4.5" fill="{rail}"/>"#
@@ -160,7 +167,7 @@ pub fn render_ranked_strip_svg(lineup: &StripLineup, dark: bool) -> String {
     );
 
     for m in &lineup.modules {
-        let resolved = resolve_panel(&m.plugin, &m.model);
+        let resolved = assets.thumbnail(&m.plugin, &m.model);
         let spec = ModulePanelSpec {
             plugin: m.plugin.clone(),
             model: m.model.clone(),
@@ -174,15 +181,7 @@ pub fn render_ranked_strip_svg(lineup: &StripLineup, dark: bool) -> String {
             output_count: 2,
             count: m.count,
         };
-        append_single_panel_svg(
-            &mut svg,
-            &spec,
-            resolved.as_ref(),
-            m.x,
-            m.y,
-            m.width,
-            m.height,
-        );
+        append_single_panel_svg(&mut svg, &spec, resolved, m.x, m.y, m.width, m.height);
         if m.count > 1 {
             let badge = format!("×{}", m.count);
             let bw = (badge.chars().count() as f64 * 11.0 + 10.0).max(26.0);
@@ -209,15 +208,16 @@ pub fn render_ranked_strip_svg(lineup: &StripLineup, dark: bool) -> String {
 /// Renders the physical VCV Rack rail layout into RGBA pixels.
 pub fn render_rack_rails_rgba(
     rack: &RackRailLayout,
+    assets: &PanelAssets,
     scale: f32,
     dark: bool,
 ) -> Result<RenderedDiagram, String> {
-    let svg = render_rack_rails_svg(rack, dark);
+    let svg = render_rack_rails_svg(rack, assets, dark);
     rasterize_svg_rgba(&svg, scale)
 }
 
 /// Renders all patch modules on brushed Eurorack rails at their actual patch positions.
-pub fn render_rack_rails_svg(rack: &RackRailLayout, dark: bool) -> String {
+pub fn render_rack_rails_svg(rack: &RackRailLayout, assets: &PanelAssets, dark: bool) -> String {
     let w = rack.width.max(64.0);
     let h = rack.height.max(64.0);
     let case_bg = if dark { "#111216" } else { "#1f2228" };
@@ -228,8 +228,9 @@ pub fn render_rack_rails_svg(rack: &RackRailLayout, dark: bool) -> String {
     let mut svg = String::with_capacity(8192);
     let _ = writeln!(
         svg,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w:.1}" height="{h:.1}" viewBox="0 0 {w:.1} {h:.1}" font-family="Arimo, sans-serif">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w:.1}" height="{h:.1}" viewBox="0 0 {w:.1} {h:.1}" font-family="Arimo, sans-serif">"#
     );
+    append_panel_defs(&mut svg, assets);
     let _ = writeln!(
         svg,
         r#"<rect x="0" y="0" width="{w:.1}" height="{h:.1}" rx="6" fill="{case_bg}"/>"#
@@ -237,39 +238,28 @@ pub fn render_rack_rails_svg(rack: &RackRailLayout, dark: bool) -> String {
 
     let rail_x = 12.0;
     let rail_w = (w - 24.0).max(20.0);
+    let screw_pitch = RACK_HP_WIDTH * 2.0;
+    let _ = writeln!(
+        svg,
+        r##"<defs><pattern id="rack-screws" width="{screw_pitch}" height="15" patternUnits="userSpaceOnUse"><circle cx="7.5" cy="7.5" r="2.1" fill="#181a1f"/></pattern></defs>"##
+    );
     for &(_, ry) in &rack.rows {
         let _ = writeln!(
             svg,
             r#"<rect x="{rail_x:.1}" y="{ry:.1}" width="{rail_w:.1}" height="{RACK_ROW_HEIGHT:.1}" fill="{recess_bg}"/>"#
         );
-        // Top & bottom aluminum rails with subtle mounting screw tracks
-        let _ = writeln!(
-            svg,
-            r#"<rect x="{rail_x:.1}" y="{ry:.1}" width="{rail_w:.1}" height="15" fill="{rail_fill}" stroke="{rail_edge}" stroke-width="0.8"/>"#
-        );
-        let bot_y = ry + RACK_ROW_HEIGHT - 15.0;
-        let _ = writeln!(
-            svg,
-            r#"<rect x="{rail_x:.1}" y="{bot_y:.1}" width="{rail_w:.1}" height="15" fill="{rail_fill}" stroke="{rail_edge}" stroke-width="0.8"/>"#
-        );
-        let mut sx = rail_x + RACK_HP_WIDTH * 0.5;
-        while sx < rail_x + rail_w - 6.0 {
+        for y in [ry, ry + RACK_ROW_HEIGHT - 15.0] {
             let _ = writeln!(
                 svg,
-                r##"<circle cx="{sx:.1}" cy="{:.1}" r="2.1" fill="#181a1f"/>"##,
-                ry + 7.5
+                r##"<rect x="{rail_x:.1}" y="{y:.1}" width="{rail_w:.1}" height="15" fill="{rail_fill}" stroke="{rail_edge}" stroke-width="0.8"/>
+<rect width="{:.1}" height="15" fill="url(#rack-screws)" transform="translate({rail_x:.1} {y:.1})"/>"##,
+                rail_w - 6.0
             );
-            let _ = writeln!(
-                svg,
-                r##"<circle cx="{sx:.1}" cy="{:.1}" r="2.1" fill="#181a1f"/>"##,
-                bot_y + 7.5
-            );
-            sx += RACK_HP_WIDTH * 2.0;
         }
     }
 
     for m in &rack.modules {
-        let resolved = resolve_panel(&m.plugin, &m.model);
+        let resolved = assets.thumbnail(&m.plugin, &m.model);
         let spec = ModulePanelSpec {
             plugin: m.plugin.clone(),
             model: m.model.clone(),
@@ -283,15 +273,7 @@ pub fn render_rack_rails_svg(rack: &RackRailLayout, dark: bool) -> String {
             output_count: 2,
             count: 1,
         };
-        append_single_panel_svg(
-            &mut svg,
-            &spec,
-            resolved.as_ref(),
-            m.x,
-            m.y,
-            m.width,
-            m.height,
-        );
+        append_single_panel_svg(&mut svg, &spec, resolved, m.x, m.y, m.width, m.height);
     }
 
     svg.push_str("</svg>");
@@ -310,7 +292,7 @@ fn outline_svg(svg: &str) -> Result<String, String> {
 }
 
 /// Renders a `DiagramLayout` into standalone vector SVG markup.
-pub fn render_layout_svg(layout: &DiagramLayout, dark: bool) -> String {
+pub fn render_layout_svg(layout: &DiagramLayout, assets: &PanelAssets, dark: bool) -> String {
     let theme = DiagramTheme::for_mode(dark);
     let legend_h = if layout.is_strip { 0.0 } else { 24.0 };
     let total_h = (layout.height + legend_h).max(16.0);
@@ -319,8 +301,9 @@ pub fn render_layout_svg(layout: &DiagramLayout, dark: bool) -> String {
     let mut svg = String::with_capacity(8192);
     let _ = writeln!(
         svg,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w:.1}" height="{total_h:.1}" viewBox="0 0 {total_w:.1} {total_h:.1}" font-family="Arimo, sans-serif">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{total_w:.1}" height="{total_h:.1}" viewBox="0 0 {total_w:.1} {total_h:.1}" font-family="Arimo, sans-serif">"#
     );
+    append_panel_defs(&mut svg, assets);
 
     if !layout.is_strip {
         let _ = writeln!(
@@ -369,7 +352,7 @@ pub fn render_layout_svg(layout: &DiagramLayout, dark: bool) -> String {
 
     // Nodes (boxes + miniature Eurorack panels + port tabs + eye watcher badge)
     for node in &layout.nodes {
-        append_node_svg(&mut svg, node, theme, layout.is_strip);
+        append_node_svg(&mut svg, node, theme, layout.is_strip, assets);
     }
 
     // Cable intent labels (hover diagram only, where spacing allows)
@@ -478,7 +461,13 @@ fn append_edge_svg(svg: &mut String, edge: &DiagramEdge, theme: DiagramTheme, is
     }
 }
 
-fn append_node_svg(svg: &mut String, node: &DiagramNode, theme: DiagramTheme, is_strip: bool) {
+fn append_node_svg(
+    svg: &mut String,
+    node: &DiagramNode,
+    theme: DiagramTheme,
+    is_strip: bool,
+    assets: &PanelAssets,
+) {
     let role_color = theme.role_color(node.role);
 
     // Folded stack shadow underneath the main box
@@ -560,7 +549,7 @@ fn append_node_svg(svg: &mut String, node: &DiagramNode, theme: DiagramTheme, is
         tray_top,
         tray_h,
         max_tray_w,
-        theme.dark,
+        assets,
     );
 
     // Title & subtitle beside the panel preview tray
@@ -613,16 +602,16 @@ fn append_panel_tray_svg(
     y: f64,
     height: f64,
     max_width: f64,
-    _dark: bool,
+    assets: &PanelAssets,
 ) -> f64 {
     if panels.is_empty() {
         return 0.0;
     }
     let max_count = if panels.len() > 1 { 3 } else { 1 };
-    let shown: Vec<(&ModulePanelSpec, Option<ResolvedPanel>)> = panels
+    let shown: Vec<_> = panels
         .iter()
         .take(max_count)
-        .map(|p| (p, resolve_panel(&p.plugin, &p.model)))
+        .map(|p| (p, assets.thumbnail(&p.plugin, &p.model)))
         .collect();
     let gap = 3.0;
     let total_gap = gap * (shown.len().saturating_sub(1)) as f64;
@@ -630,8 +619,8 @@ fn append_panel_tray_svg(
     let raw_widths: Vec<f64> = shown
         .iter()
         .map(|(panel, resolved)| {
-            if let Some(real) = resolved {
-                (height * real.aspect).clamp(11.0, max_width.min(48.0))
+            if let Some((_, aspect)) = resolved {
+                (height * aspect).clamp(11.0, max_width.min(48.0))
             } else if shown.len() == 1 {
                 ((height * 0.56) * (panel.hp_estimate as f64 / 10.0).clamp(0.75, 1.35))
                     .clamp(16.0, max_width.min(28.0))
@@ -647,7 +636,7 @@ fn append_panel_tray_svg(
     let mut cur_x = x;
     for ((panel, resolved), rw) in shown.iter().zip(raw_widths) {
         let w = rw * shrink;
-        append_single_panel_svg(svg, panel, resolved.as_ref(), cur_x, y, w, height);
+        append_single_panel_svg(svg, panel, *resolved, cur_x, y, w, height);
         cur_x += w + gap;
     }
     if panels.len() > max_count {
@@ -775,22 +764,36 @@ fn plugin_panel_palette(plugin: &str) -> PanelPalette {
     }
 }
 
+fn append_panel_defs(svg: &mut String, assets: &PanelAssets) {
+    svg.push_str("<defs>");
+    for (index, uri) in assets.thumbnails() {
+        let _ = writeln!(
+            svg,
+            r#"<image id="vcv-panel-{index}" width="1" height="1" xlink:href="{uri}" preserveAspectRatio="none"/>"#
+        );
+    }
+    svg.push_str("</defs>");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_single_panel_svg(
     svg: &mut String,
     panel: &ModulePanelSpec,
-    resolved: Option<&ResolvedPanel>,
+    resolved: Option<(usize, f64)>,
     x: f64,
     y: f64,
     w: f64,
     h: f64,
 ) {
     let pal = plugin_panel_palette(&panel.plugin);
-    if let Some(real) = resolved {
+    if let Some((index, aspect)) = resolved {
+        let image_w = (h * aspect).min(w);
+        let image_h = image_w / aspect;
+        let image_x = x + (w - image_w) * 0.5;
+        let image_y = y + (h - image_h) * 0.5;
         let _ = writeln!(
             svg,
-            r#"<image x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" href="{}" preserveAspectRatio="xMidYMid meet"/>"#,
-            real.data_uri
+            r##"<use xlink:href="#vcv-panel-{index}" transform="translate({image_x:.2} {image_y:.2}) scale({image_w:.3} {image_h:.3})"/>"##
         );
         let _ = writeln!(
             svg,
@@ -1222,6 +1225,9 @@ fn escape_xml(s: &str) -> String {
 }
 
 fn rasterize_svg_rgba(svg: &str, scale: f32) -> Result<RenderedDiagram, String> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("Invalid VCV render scale".into());
+    }
     let options = resvg::usvg::Options {
         font_family: "Arimo".into(),
         ..Default::default()
@@ -1229,7 +1235,7 @@ fn rasterize_svg_rgba(svg: &str, scale: f32) -> Result<RenderedDiagram, String> 
     let mut tree = resvg::usvg::Tree::from_str(svg, &options)
         .map_err(|e| format!("VCV diagram SVG parse failed: {e}"))?;
     tree.convert_text(diagram_fonts());
-    let scale = scale.clamp(0.25, 4.0);
+    let scale = scale.min(4.0);
     let fit_scale = scale
         .min(4096.0 / tree.size.width().max(1.0))
         .min(4096.0 / tree.size.height().max(1.0));

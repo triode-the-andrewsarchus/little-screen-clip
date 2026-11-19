@@ -1,347 +1,152 @@
 //! VCV Rack / Cardinal (`.vcv`) preview strip (importance-ranked unique modules) and
 //! full Rack rail pan/zoom preview (modules placed at actual saved coordinates on rails).
 
-use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
+use super::{
+    filesystem::Entry,
+    media::PreviewData,
+    shelf::preview::{HoverRaster, Previews, Ready, Source},
+};
 use crate::{icons::Icon, shell::StudioShell, ui_appearance::WorkbenchColors};
 use egui::{Color32, Pos2, Rect, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use little_clip_core::{
-    ImageThumbnail,
+    BackgroundJobs, ImageThumbnail,
+    jobs::task::Task,
     palette::AppPalette,
     vcv::{
-        MAX_PATCH_BYTES, PatchSummary, RACK_HP_WIDTH, RACK_ROW_HEIGHT, RenderedDiagram,
-        ScreenshotBatchResult, StripLineup, build_rack_rail_layout, clear_downloaded_panel_cache,
-        count_missing_local_screenshot_plugins, ensure_local_screenshots_for_patch,
-        generate_all_local_rack_screenshots, inspect_path_bytes, local_rack_available,
-        render_full_strip_rgba, render_rack_rails_rgba, render_strip_rgba, resolve_panel,
+        MAX_PATCH_BYTES, PanelAssets, PatchAnalysis, PatchDocument, PatchSummary, RACK_HP_WIDTH,
+        RACK_ROW_HEIGHT, RackRailLayout, ScreenshotBatchResult, StripLineup, analyze_patch,
+        build_rack_rail_layout, clear_downloaded_panel_cache,
+        count_missing_local_screenshot_plugins, download_viewer_panels,
+        ensure_local_screenshots_for_patch, generate_all_local_rack_screenshots,
+        inspect_path_bytes_cancellable, load_viewer_panels, local_rack_available, read_patch_path,
+        render_full_strip_rgba, render_rack_rgba, render_strip_rgba,
     },
 };
 use std::{
     collections::{BTreeSet, HashMap},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
+    time::Duration,
 };
 
 const MAX_VCV_BYTES: usize = MAX_PATCH_BYTES as usize;
 const VIEWER_MIN_ZOOM: f32 = 0.15;
 const VIEWER_MAX_ZOOM: f32 = 3.0;
 const STRIP_RASTER_SCALE: f32 = 2.0;
-const MAX_FULL_STRIP_WIDTH: f64 = 4096.0;
-const MAX_HOVER_CACHE: usize = 8;
-
-fn thumbnail_from_diagram(rendered: RenderedDiagram) -> ImageThumbnail {
-    ImageThumbnail {
-        width: rendered.width,
-        height: rendered.height,
-        premultiplied_rgba: rendered.rgba,
-    }
-}
+pub(super) static PREVIEW_JOBS: LazyLock<BackgroundJobs> =
+    LazyLock::new(|| BackgroundJobs::new(2, 8));
+static PANEL_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
 
 pub(in crate::file_manager) struct Document {
     pub summary: Arc<PatchSummary>,
-    strip_dark: ImageThumbnail,
-    strip_light: Mutex<Option<ImageThumbnail>>,
-    full_strip_dark: Mutex<Option<ImageThumbnail>>,
-    full_strip_light: Mutex<Option<ImageThumbnail>>,
 }
 
-impl Document {
-    fn cached_variant(
-        &self,
-        slot: &Mutex<Option<ImageThumbnail>>,
-        render: impl FnOnce() -> Result<RenderedDiagram, String>,
-    ) -> ImageThumbnail {
-        let mut guard = slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = guard.as_ref() {
-            return existing.clone();
-        }
-        let thumb = render()
-            .map(thumbnail_from_diagram)
-            .unwrap_or_else(|_| self.strip_dark.clone());
-        *guard = Some(thumb.clone());
-        thumb
-    }
-
-    fn light_strip(&self) -> ImageThumbnail {
-        self.cached_variant(&self.strip_light, || {
-            render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false)
-        })
-    }
-
-    fn strip_thumbnail(&self, dark: bool, full: bool) -> std::borrow::Cow<'_, ImageThumbnail> {
-        match (dark, full) {
-            (true, false) => std::borrow::Cow::Borrowed(&self.strip_dark),
-            (false, false) => std::borrow::Cow::Owned(self.light_strip()),
-            (true, true) => {
-                std::borrow::Cow::Owned(self.cached_variant(&self.full_strip_dark, || {
-                    render_full_strip_rgba(&self.summary, STRIP_RASTER_SCALE, true).unwrap_or_else(
-                        || render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, true),
-                    )
-                }))
-            }
-            (false, true) => {
-                std::borrow::Cow::Owned(self.cached_variant(&self.full_strip_light, || {
-                    render_full_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false).unwrap_or_else(
-                        || render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, false),
-                    )
-                }))
-            }
-        }
-    }
+#[derive(Clone, Copy)]
+enum Artwork {
+    RankedStrip,
+    FullStrip,
+    Rack(f32),
 }
 
-type HoverKey = (uuid::Uuid, bool, u32, u32);
-
-struct HoverCacheEntry {
-    key: HoverKey,
-    path: PathBuf,
-    texture: TextureHandle,
-    popup_size: egui::Vec2,
-}
-
-struct HoverJob {
-    generation: u64,
-    key: HoverKey,
-    path: PathBuf,
-    popup_size: egui::Vec2,
+#[derive(Clone)]
+pub(super) struct RasterRequest {
     summary: Arc<PatchSummary>,
-    render_scale: f32,
+    artwork: Artwork,
     dark: bool,
-    ctx: egui::Context,
-    cancel: Arc<AtomicBool>,
 }
 
-struct HoverResult {
-    generation: u64,
-    key: HoverKey,
-    path: PathBuf,
-    popup_size: egui::Vec2,
-    rendered: RenderedDiagram,
-}
-
-#[derive(Default)]
-struct HoverSlot {
-    pending: Option<HoverJob>,
-    shutdown: bool,
-}
-
-struct HoverWorker {
-    slot: Arc<(Mutex<HoverSlot>, Condvar)>,
-    rx: mpsc::Receiver<HoverResult>,
-    handle: Option<std::thread::JoinHandle<()>>,
-}
-
-impl HoverWorker {
-    fn new() -> Self {
-        let slot = Arc::new((Mutex::new(HoverSlot::default()), Condvar::new()));
-        let (tx, rx) = mpsc::sync_channel::<HoverResult>(4);
-        let worker_slot = Arc::clone(&slot);
-        let handle = std::thread::Builder::new()
-            .name("vcv-hover-preview".into())
-            .spawn(move || {
-                loop {
-                    let job = {
-                        let (lock, cv) = &*worker_slot;
-                        let mut guard = lock
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        while guard.pending.is_none() && !guard.shutdown {
-                            guard = cv
-                                .wait(guard)
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        }
-                        if guard.shutdown {
-                            return;
-                        }
-                        guard.pending.take()
-                    };
-                    let Some(job) = job else {
-                        continue;
-                    };
-                    if job.cancel.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let rack = if job.dark {
-                        &job.summary.rack_dark
-                    } else {
-                        &job.summary.rack_light
-                    };
-                    let Ok(rendered) = render_rack_rails_rgba(rack, job.render_scale, job.dark)
-                    else {
-                        continue;
-                    };
-                    if job.cancel.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let _ = tx.send(HoverResult {
-                        generation: job.generation,
-                        key: job.key,
-                        path: job.path,
-                        popup_size: job.popup_size,
-                        rendered,
-                    });
-                    job.ctx.request_repaint();
-                }
-            })
-            .ok();
-        Self { slot, rx, handle }
-    }
-
-    fn enqueue(&self, job: HoverJob) {
-        let (lock, cv) = &*self.slot;
-        let mut guard = lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(old) = guard.pending.take() {
-            old.cancel.store(true, Ordering::Relaxed);
+impl RasterRequest {
+    pub(super) fn load(self, token: &AtomicBool) -> PreviewData {
+        let mut data = PreviewData::new(
+            self.summary.title.clone(),
+            "VCV Rack preview unavailable".into(),
+            Icon::Midi,
+        );
+        if token.load(Ordering::Relaxed) {
+            return data;
         }
-        guard.pending = Some(job);
-        cv.notify_one();
-    }
-}
-
-impl Drop for HoverWorker {
-    fn drop(&mut self) {
-        {
-            let (lock, cv) = &*self.slot;
-            let mut guard = lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.shutdown = true;
-            if let Some(old) = guard.pending.take() {
-                old.cancel.store(true, Ordering::Relaxed);
+        let rendered = match self.artwork {
+            Artwork::RankedStrip => render_strip_rgba(&self.summary, STRIP_RASTER_SCALE, self.dark),
+            Artwork::FullStrip => {
+                render_full_strip_rgba(&self.summary, STRIP_RASTER_SCALE, self.dark)
+                    .unwrap_or_else(|| Err("Patch has no single-row strip".into()))
             }
-            cv.notify_all();
+            Artwork::Rack(scale) => render_rack_rgba(&self.summary, scale, self.dark),
+        };
+        match rendered {
+            Ok(raster) => {
+                data.image = Some(ImageThumbnail {
+                    width: raster.width,
+                    height: raster.height,
+                    premultiplied_rgba: raster.rgba,
+                })
+            }
+            Err(error) => data.detail = error,
         }
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        data
     }
 }
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Hover {
-    generation: u64,
-    entries: Vec<HoverCacheEntry>,
-    in_flight: Option<(HoverKey, Arc<AtomicBool>)>,
-    worker: Option<HoverWorker>,
-    strip_textures: HashMap<(uuid::Uuid, bool, bool), (PathBuf, TextureHandle)>,
+    rack: HoverRaster,
+    strips: Previews,
+    strip_ids: HashMap<(uuid::Uuid, bool, bool), uuid::Uuid>,
 }
 
 impl Hover {
     pub fn clear(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
-        self.entries.clear();
-        if let Some((_, cancel)) = self.in_flight.take() {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        self.strip_textures.clear();
+        *self = Self::default();
     }
 
-    pub fn retain(&mut self, visible: &BTreeSet<PathBuf>) {
-        self.entries.retain(|entry| visible.contains(&entry.path));
-        self.strip_textures
-            .retain(|_, (path, _)| visible.contains(path));
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.rack.poll(ctx);
+        self.strips.poll(ctx);
     }
 
-    fn poll(&mut self, ctx: &egui::Context) {
-        let Some(worker) = &self.worker else {
-            return;
-        };
-        while let Ok(res) = worker.rx.try_recv() {
-            if res.generation != self.generation {
-                continue;
-            }
-            if self
-                .in_flight
-                .as_ref()
-                .is_some_and(|(key, _)| *key == res.key)
-            {
-                self.in_flight = None;
-            }
-            let (id, dark, w_bucket, h_bucket) = res.key;
-            let texture = ctx.load_texture(
-                format!("vcv_hover_{id}_{dark}_{w_bucket}_{h_bucket}"),
-                egui::ColorImage::from_rgba_premultiplied(
-                    [res.rendered.width as usize, res.rendered.height as usize],
-                    &res.rendered.rgba,
-                ),
-                TextureOptions::LINEAR,
-            );
-            self.entries.retain(|entry| entry.key != res.key);
-            if self.entries.len() >= MAX_HOVER_CACHE {
-                self.entries.remove(0);
-            }
-            self.entries.push(HoverCacheEntry {
-                key: res.key,
-                path: res.path,
-                texture,
-                popup_size: res.popup_size,
-            });
-        }
+    pub fn retain(&mut self, visible: &BTreeSet<uuid::Uuid>) {
+        self.rack.retain(|id| visible.contains(&id));
+        self.strip_ids.retain(|(id, _, _), _| visible.contains(id));
+        self.strips
+            .retain(&self.strip_ids.values().copied().collect());
     }
 
-    fn cached_entry(&mut self, key: HoverKey) -> Option<(egui::TextureId, egui::Vec2)> {
-        let idx = self.entries.iter().position(|entry| entry.key == key)?;
-        if idx + 1 < self.entries.len() {
-            let entry = self.entries.remove(idx);
-            self.entries.push(entry);
-        }
-        let latest = self.entries.last()?;
-        Some((latest.texture.id(), latest.popup_size))
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn strip_texture(
         &mut self,
-        ctx: &egui::Context,
         identity: uuid::Uuid,
-        entry_path: &Path,
         doc: &Document,
         dark: bool,
-        use_full: bool,
-        ready: Option<&Ready>,
-    ) -> Option<TextureHandle> {
-        if dark
-            && !use_full
-            && let Some(tex) = ready.and_then(|r| r.texture.as_ref())
-        {
-            return Some(tex.clone());
+        full: bool,
+    ) -> Option<egui::TextureId> {
+        let id = *self
+            .strip_ids
+            .entry((identity, dark, full))
+            .or_insert_with(uuid::Uuid::new_v4);
+        if self.strips.needs(id) {
+            self.strips.request(
+                id,
+                Source::VcvRaster(RasterRequest {
+                    summary: Arc::clone(&doc.summary),
+                    artwork: if full {
+                        Artwork::FullStrip
+                    } else {
+                        Artwork::RankedStrip
+                    },
+                    dark,
+                }),
+            );
         }
-        if let Some((_, tex)) = self.strip_textures.get(&(identity, dark, use_full)) {
-            return Some(tex.clone());
-        }
-        let thumb = doc.strip_thumbnail(dark, use_full);
-        let handle = ctx.load_texture(
-            format!("vcv_strip_{identity}_{dark}_{use_full}"),
-            egui::ColorImage::from_rgba_premultiplied(
-                [thumb.width as usize, thumb.height as usize],
-                &thumb.premultiplied_rgba,
-            ),
-            TextureOptions::LINEAR,
-        );
-        self.strip_textures.insert(
-            (identity, dark, use_full),
-            (entry_path.to_path_buf(), handle.clone()),
-        );
-        Some(handle)
+        self.strips.get(id)?.texture.as_ref().map(TextureHandle::id)
     }
 
-    pub fn show(
-        &mut self,
-        ui: &Ui,
-        entry_path: &Path,
-        body: Rect,
-        identity: uuid::Uuid,
-        doc: &Document,
-        dark: bool,
-    ) {
-        self.poll(ui.ctx());
+    fn show(&mut self, ui: &Ui, body: Rect, identity: uuid::Uuid, doc: &Document, dark: bool) {
+        if super::ui::popup_open(ui.ctx()) {
+            return;
+        }
         let screen = ui.ctx().screen_rect().shrink(8.0);
         let space_below = (screen.bottom() - body.bottom() - 8.0).max(0.0);
         let space_above = (body.top() - 8.0 - screen.top()).max(0.0);
@@ -350,57 +155,35 @@ impl Hover {
             space_below
         } else {
             space_above
-        }
-        .clamp(160.0, screen.height().max(160.0));
-        let avail_w = (screen.width() - 16.0).clamp(320.0, 1440.0);
-
-        let w_bucket = (avail_w / 32.0).round() as u32 * 32;
-        let h_bucket = (avail_h / 24.0).round() as u32 * 24;
-        let key: HoverKey = (identity, dark, w_bucket, h_bucket);
-
-        let rack = if dark {
-            &doc.summary.rack_dark
-        } else {
-            &doc.summary.rack_light
         };
-        let natural = vec2(rack.width as f32, rack.height as f32);
-        let fit = (avail_w / natural.x.max(1.0))
-            .min(avail_h / natural.y.max(1.0))
-            .min(1.0);
-        let popup_size = natural * fit;
-
-        let cached = self.cached_entry(key);
-        if cached.is_none()
-            && !self
-                .in_flight
-                .as_ref()
-                .is_some_and(|(active_key, _)| *active_key == key)
-        {
-            if let Some((_, old_cancel)) = self.in_flight.take() {
-                old_cancel.store(true, Ordering::Relaxed);
-            }
-            let cancel = Arc::new(AtomicBool::new(false));
-            self.in_flight = Some((key, Arc::clone(&cancel)));
-            let dpr = ui.ctx().pixels_per_point().clamp(1.0, 2.0);
-            let render_scale = (fit * dpr).clamp(0.25, 2.0);
-            let worker = self.worker.get_or_insert_with(HoverWorker::new);
-            worker.enqueue(HoverJob {
-                generation: self.generation,
-                key,
-                path: entry_path.to_path_buf(),
-                popup_size,
-                summary: Arc::clone(&doc.summary),
-                render_scale,
-                dark,
-                ctx: ui.ctx().clone(),
-                cancel,
-            });
-        }
-
-        if super::ui::popup_open(ui.ctx()) {
+        let avail_w = (screen.width() - 16.0).min(1440.0);
+        if avail_h < 24.0 || avail_w < 24.0 {
             return;
         }
-        let shown_size = cached.map_or(popup_size, |(_, size)| size);
+        let w_bucket = (avail_w / 32.0).floor().max(1.0) as u32;
+        let h_bucket = (avail_h / 24.0).floor().max(1.0) as usize;
+        let dpr_bucket = (ui.ctx().pixels_per_point().clamp(1.0, 2.0) * 4.0).round() as u32;
+        let rack = &doc.summary.rack;
+        let natural = vec2(rack.width as f32, rack.height as f32);
+        let fit = (avail_w / natural.x).min(avail_h / natural.y).min(1.0);
+        let shown_size = natural * fit;
+        let render_fit = (w_bucket as f32 * 32.0 / natural.x)
+            .min(h_bucket as f32 * 24.0 / natural.y)
+            .min(1.0);
+        let ready = self.rack.request(
+            identity,
+            h_bucket * 2 + usize::from(dark),
+            w_bucket * 16 + dpr_bucket,
+            Source::VcvRaster(RasterRequest {
+                summary: Arc::clone(&doc.summary),
+                artwork: Artwork::Rack(render_fit * dpr_bucket as f32 / 4.0),
+                dark,
+            }),
+        );
+        if ready.is_none() {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+
         let left = body.left().clamp(
             screen.left(),
             (screen.right() - shown_size.x).max(screen.left()),
@@ -428,9 +211,9 @@ impl Hover {
                     Color32::from_rgb(130, 136, 148)
                 };
                 ui.painter().rect_filled(rect.expand(2.0), 6.0, bg);
-                if let Some((tid, _)) = cached {
+                if let Some(texture) = ready.and_then(|ready| ready.texture.as_ref()) {
                     ui.painter().image(
-                        tid,
+                        texture.id(),
                         rect,
                         Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
                         Color32::WHITE,
@@ -439,7 +222,9 @@ impl Hover {
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Rendering rack preview…",
+                        ready.map_or("Rendering rack preview…", |ready| {
+                            ready.data.detail.as_str()
+                        }),
                         egui::FontId::proportional(13.0),
                         Color32::from_rgb(180, 186, 198),
                     );
@@ -467,91 +252,45 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
         data.detail = "Cancelled".into();
         return data;
     }
-    let summary = match inspect_path_bytes(path, &bytes) {
-        Ok(s) => s,
-        Err(err) => {
-            data.detail = err;
+    let summary = match inspect_path_bytes_cancellable(path, &bytes, token) {
+        Ok(summary) => Arc::new(summary),
+        Err(error) => {
+            data.detail = error;
             return data;
         }
     };
-    if token.load(Ordering::Relaxed) {
-        data.detail = "Cancelled".into();
-        return data;
+    let mut data = RasterRequest {
+        summary: Arc::clone(&summary),
+        artwork: Artwork::RankedStrip,
+        dark: true,
     }
-
-    let dark_render = match render_strip_rgba(&summary, STRIP_RASTER_SCALE, true) {
-        Ok(r) => r,
-        Err(err) => {
-            data.detail = err;
-            return data;
-        }
-    };
-    let strip_dark = thumbnail_from_diagram(dark_render);
-    let full_strip_dark = if summary
-        .full_strip
-        .as_ref()
-        .is_some_and(|full| full.width <= MAX_FULL_STRIP_WIDTH)
-    {
-        if token.load(Ordering::Relaxed) {
-            data.detail = "Cancelled".into();
-            return data;
-        }
-        render_full_strip_rgba(&summary, STRIP_RASTER_SCALE, true)
-            .and_then(Result::ok)
-            .map(thumbnail_from_diagram)
-    } else {
-        None
-    };
-
-    data.detail = format_summary_detail(&summary);
-    data.image = Some(strip_dark.clone());
-    data.vcv = Some(Arc::new(Document {
-        summary: Arc::new(summary),
-        strip_dark,
-        strip_light: Mutex::new(None),
-        full_strip_dark: Mutex::new(full_strip_dark),
-        full_strip_light: Mutex::new(None),
-    }));
+    .load(token);
+    data.title = super::display_path(path);
+    if data.image.is_some() {
+        data.detail = format_summary_detail(&summary.analysis.document);
+    }
+    data.vcv = Some(Arc::new(Document { summary }));
     data
 }
 
-fn format_summary_detail(summary: &PatchSummary) -> String {
-    let mod_word = if summary.total_modules == 1 {
-        "module"
-    } else {
-        "modules"
-    };
-    let cable_word = if summary.cable_count == 1 {
-        "cable"
-    } else {
-        "cables"
-    };
-    let rows = summary.analysis.document.row_count();
+fn format_summary_detail(document: &PatchDocument) -> String {
+    let modules = document.modules.len();
+    let cables = document.cables.len();
+    let mod_word = if modules == 1 { "module" } else { "modules" };
+    let cable_word = if cables == 1 { "cable" } else { "cables" };
+    let rows = document.row_count();
     let row_word = if rows == 1 { "row" } else { "rows" };
-    format!(
-        "{} {mod_word} · {} {cable_word} · {rows} {row_word}",
-        summary.total_modules, summary.cable_count
-    )
+    format!("{modules} {mod_word} · {cables} {cable_word} · {rows} {row_word}")
 }
 
-fn strip_for_preview(
-    summary: &PatchSummary,
-    body_size: egui::Vec2,
-    dark: bool,
-) -> (&StripLineup, bool) {
+fn strip_for_preview(summary: &PatchSummary, body_size: egui::Vec2) -> (&StripLineup, bool) {
     if let Some(full) = summary.full_strip.as_ref() {
-        let natural = vec2(full.width as f32, full.height as f32);
-        let scale = (body_size.y / natural.y.max(1.0)).min(1.0);
-        if natural.x * scale <= body_size.x {
+        let scale = (f64::from(body_size.y) / full.height).min(1.0);
+        if full.width * scale <= f64::from(body_size.x) {
             return (full, true);
         }
     }
-    let ranked = if dark {
-        &summary.strip_dark
-    } else {
-        &summary.strip_light
-    };
-    (ranked, false)
+    (&summary.ranked_strip, false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -564,7 +303,7 @@ pub(in crate::file_manager) fn show_list(
     ready: Option<&Ready>,
     hover: &mut Hover,
     colors: WorkbenchColors,
-) -> Option<usize> {
+) {
     let detail = columns.metadata_fields().is_empty().then(|| {
         ready
             .map_or("VCV Rack patch", |r| r.data.detail.as_str())
@@ -579,6 +318,9 @@ pub(in crate::file_manager) fn show_list(
         colors,
     );
     let body = Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0));
+    if !body.is_positive() {
+        return;
+    }
     let Some(doc) = ready.and_then(|r| r.data.vcv.as_ref()) else {
         ui.painter()
             .with_clip_rect(body.intersect(ui.clip_rect()))
@@ -589,43 +331,64 @@ pub(in crate::file_manager) fn show_list(
                 egui::FontId::proportional(12.5),
                 colors.text_secondary,
             );
-        return None;
+        return;
     };
 
     let dark = ui.visuals().dark_mode;
-    let (lineup, use_full) = strip_for_preview(&doc.summary, body.size(), dark);
-    let natural = vec2(lineup.width as f32, lineup.height as f32);
-    let scale = (body.height() / natural.y.max(1.0)).min(1.0);
-    let scaled = natural * scale;
-    let visible_w = scaled.x.min(body.width());
-    let uv_w = (visible_w / scaled.x.max(1.0)).clamp(0.0, 1.0);
-    let pan_u = if uv_w < 1.0
-        && super::ui::preview_hovered(ui, body)
-        && let Some(pos) = ui.ctx().pointer_hover_pos()
-    {
-        let frac = ((pos.x - body.left()) / body.width().max(1.0)).clamp(0.0, 1.0);
-        frac * (1.0 - uv_w)
+    let (lineup, full) = strip_for_preview(&doc.summary, body.size());
+    let ranked = ready
+        .and_then(|ready| ready.texture.as_ref())
+        .map(TextureHandle::id);
+    let selected = if dark && !full {
+        ranked.map(|texture| (texture, lineup))
     } else {
-        0.0
+        hover
+            .strip_texture(identity, doc, dark, full)
+            .map(|texture| (texture, lineup))
+            .or_else(|| ranked.map(|texture| (texture, &doc.summary.ranked_strip)))
     };
-    let top = body.top() + (body.height() - scaled.y).max(0.0) * 0.5;
-    let clip_rect = body.intersect(ui.clip_rect());
-
-    if let Some(tex) =
-        hover.strip_texture(ui.ctx(), identity, &entry.path, doc, dark, use_full, ready)
-    {
-        let draw_rect = Rect::from_min_size(pos2(body.left(), top), vec2(visible_w, scaled.y));
-        let uv = Rect::from_min_max(pos2(pan_u, 0.0), pos2((pan_u + uv_w).min(1.0), 1.0));
+    if hover.strips.has_pending() {
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
+    }
+    let hovered = super::ui::preview_hovered(ui, body);
+    if let Some((texture, layout)) = selected {
+        let natural = vec2(layout.width as f32, layout.height as f32);
+        let scaled = natural * (body.height() / natural.y).min(1.0);
+        let visible_w = scaled.x.min(body.width());
+        let uv_w = (visible_w / scaled.x).clamp(0.0, 1.0);
+        let pan_u = if uv_w < 1.0
+            && hovered
+            && let Some(pos) = ui.ctx().pointer_hover_pos()
+        {
+            ((pos.x - body.left()) / body.width()).clamp(0.0, 1.0) * (1.0 - uv_w)
+        } else {
+            0.0
+        };
+        let top = body.top() + (body.height() - scaled.y).max(0.0) * 0.5;
         ui.painter()
-            .with_clip_rect(clip_rect)
-            .image(tex.id(), draw_rect, uv, Color32::WHITE);
+            .with_clip_rect(body.intersect(ui.clip_rect()))
+            .image(
+                texture,
+                Rect::from_min_size(pos2(body.left(), top), vec2(visible_w, scaled.y)),
+                Rect::from_min_max(pos2(pan_u, 0.0), pos2((pan_u + uv_w).min(1.0), 1.0)),
+                Color32::WHITE,
+            );
+    } else {
+        ui.painter()
+            .with_clip_rect(body.intersect(ui.clip_rect()))
+            .text(
+                body.left_center() + vec2(4.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                ready.map_or("VCV Rack preview unavailable", |ready| {
+                    ready.data.detail.as_str()
+                }),
+                egui::FontId::proportional(12.5),
+                colors.text_secondary,
+            );
     }
-
-    if super::ui::preview_hovered(ui, body) {
-        hover.show(ui, &entry.path, body, identity, doc, dark);
+    if hovered {
+        hover.show(ui, body, identity, doc, dark);
     }
-
-    None
 }
 
 fn texture_from_rgba(ctx: &egui::Context, name: &str, rgba: &image::RgbaImage) -> TextureHandle {
@@ -634,323 +397,277 @@ fn texture_from_rgba(ctx: &egui::Context, name: &str, rgba: &image::RgbaImage) -
     ctx.load_texture(name, img, TextureOptions::LINEAR)
 }
 
-enum ScreenshotJobMsg {
-    Progress {
-        done: usize,
-        total: usize,
-        rendered_modules: usize,
-    },
-    Finished(ScreenshotBatchResult),
+#[derive(Clone, Copy)]
+enum PanelAction {
+    Download,
+    Clear,
+    CapturePatch,
+    CaptureAll,
 }
 
-struct ScreenshotJob {
-    rx: mpsc::Receiver<ScreenshotJobMsg>,
-    cancel: Arc<AtomicBool>,
-    done: usize,
-    total: usize,
-    rendered_modules: usize,
-    is_full_library: bool,
-}
-
-/// Interactive VCV Rack rail pan/zoom viewer for opening `.vcv` files cleanly.
-pub(in crate::file_manager) struct Viewer {
-    summary: PatchSummary,
-    zoom: f32,
-    pan: egui::Vec2,
-    fitted_once: bool,
-    unique_modules: Vec<(String, String)>,
-    panel_rasters: HashMap<(String, String), Option<Arc<image::RgbaImage>>>,
-    panel_textures: HashMap<(String, String), Option<TextureHandle>>,
-    visible_buf: Vec<(usize, (String, String), Rect)>,
-    has_local_rack: bool,
-    missing_local_plugins: usize,
-    screenshot_job: Option<ScreenshotJob>,
-    screenshot_status: Option<String>,
-}
-
-impl Drop for Viewer {
-    fn drop(&mut self) {
-        if let Some(job) = self.screenshot_job.take() {
-            job.cancel.store(true, Ordering::Relaxed);
+impl PanelAction {
+    fn busy_label(self) -> &'static str {
+        match self {
+            Self::Download => "Downloading panel artwork",
+            Self::Clear => "Clearing downloaded artwork",
+            Self::CapturePatch | Self::CaptureAll => "Capturing local Rack screenshots",
         }
     }
+}
+
+struct PanelJob {
+    action: PanelAction,
+    task: Task<(ViewerArtwork, String)>,
+    progress: mpsc::Receiver<(usize, usize)>,
+    counts: Option<(usize, usize)>,
+}
+
+struct ViewerArtwork {
+    rack: RackRailLayout,
+    panels: PanelAssets,
+    missing_local_plugins: usize,
+}
+
+impl ViewerArtwork {
+    fn new(analysis: &PatchAnalysis, modules: &[(String, String)], panels: PanelAssets) -> Self {
+        Self {
+            rack: build_rack_rail_layout(analysis, &panels),
+            panels,
+            missing_local_plugins: count_missing_local_screenshot_plugins(modules),
+        }
+    }
+}
+
+/// Interactive VCV Rack rail pan/zoom viewer.
+pub(in crate::file_manager) struct Viewer {
+    title: String,
+    analysis: Arc<PatchAnalysis>,
+    modules: Arc<[(String, String)]>,
+    artwork: ViewerArtwork,
+    zoom: f32,
+    min_zoom: f32,
+    pan: egui::Vec2,
+    fitted_once: bool,
+    panel_textures: HashMap<(String, String), TextureHandle>,
+    has_local_rack: bool,
+    panel_job: Option<PanelJob>,
+    panel_status: Option<String>,
 }
 
 impl Viewer {
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let bytes = crate::file_source::read_file_snapshot(path, MAX_VCV_BYTES)?;
-        let summary = inspect_path_bytes(path, &bytes)?;
-        let mut unique_modules = Vec::new();
-        let mut seen = BTreeSet::new();
-        for m in &summary.rack_dark.modules {
-            let key = (m.plugin.clone(), m.model.clone());
-            if seen.insert(key.clone()) {
-                unique_modules.push(key);
-            }
+    pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
+        let document = read_patch_path(path)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
         }
-        let has_local_rack = local_rack_available();
-        let mut viewer = Self {
-            summary,
+        let analysis = Arc::new(analyze_patch(document)?);
+        let modules: Arc<[(String, String)]> = analysis.document.panel_keys().into();
+        let panels = load_viewer_panels(&modules, cancel);
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
+        }
+        Ok(Self {
+            title: path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("VCV Patch")
+                .into(),
+            artwork: ViewerArtwork::new(&analysis, &modules, panels),
+            analysis,
+            modules,
             zoom: 0.65,
+            min_zoom: VIEWER_MIN_ZOOM,
             pan: egui::Vec2::ZERO,
             fitted_once: false,
-            unique_modules,
-            panel_rasters: HashMap::new(),
             panel_textures: HashMap::new(),
-            visible_buf: Vec::new(),
-            has_local_rack,
-            missing_local_plugins: 0,
-            screenshot_job: None,
-            screenshot_status: None,
-        };
-        viewer.reload_panels();
-        Ok(viewer)
+            has_local_rack: local_rack_available(),
+            panel_job: None,
+            panel_status: None,
+        })
     }
 
-    fn reload_panels(&mut self) {
-        self.panel_rasters.clear();
-        self.panel_textures.clear();
-        self.summary.rack_dark = build_rack_rail_layout(&self.summary.analysis, true);
-        self.summary.rack_light = build_rack_rail_layout(&self.summary.analysis, false);
-        self.missing_local_plugins = if self.has_local_rack {
-            count_missing_local_screenshot_plugins(&self.unique_modules)
-        } else {
-            0
-        };
+    pub fn panel_job_pending(&self) -> bool {
+        self.panel_job.is_some()
+    }
 
-        for (plugin, model) in &self.unique_modules {
-            let rgba = resolve_panel(plugin, model).map(|panel| Arc::clone(&panel.rgba));
-            self.panel_rasters
-                .insert((plugin.clone(), model.clone()), rgba);
+    pub fn cancel_panel_job(&self) {
+        if let Some(job) = &self.panel_job
+            && !matches!(job.action, PanelAction::Clear)
+        {
+            job.task.token.store(true, Ordering::Relaxed);
         }
     }
 
-    fn start_patch_screenshot_job(&mut self, ctx: &egui::Context) {
-        if self.screenshot_job.is_some() {
-            return;
-        }
-        let modules = self.unique_modules.clone();
-        let (tx, rx) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
-        let worker_ctx = ctx.clone();
-        self.screenshot_job = Some(ScreenshotJob {
-            rx,
-            cancel,
-            done: 0,
-            total: count_missing_local_screenshot_plugins(&modules),
-            rendered_modules: 0,
-            is_full_library: false,
-        });
-        let _ = std::thread::Builder::new()
-            .name("vcv-local-screenshots".into())
-            .spawn(move || {
-                let res = ensure_local_screenshots_for_patch(&modules, &worker_cancel);
-                let _ = tx.send(ScreenshotJobMsg::Finished(res));
-                worker_ctx.request_repaint();
-            });
-    }
-
-    fn start_all_plugins_screenshot_job(&mut self, ctx: &egui::Context) {
-        if self.screenshot_job.is_some() {
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = Arc::clone(&cancel);
-        let worker_ctx = ctx.clone();
-        self.screenshot_job = Some(ScreenshotJob {
-            rx,
-            cancel,
-            done: 0,
-            total: 0,
-            rendered_modules: 0,
-            is_full_library: true,
-        });
-        let _ = std::thread::Builder::new()
-            .name("vcv-all-screenshots".into())
-            .spawn(move || {
-                let progress_tx = tx.clone();
-                let progress_ctx = worker_ctx.clone();
-                let res = generate_all_local_rack_screenshots(
-                    &worker_cancel,
-                    |done, total, rendered_modules| {
-                        let _ = progress_tx.send(ScreenshotJobMsg::Progress {
-                            done,
-                            total,
-                            rendered_modules,
-                        });
-                        progress_ctx.request_repaint();
-                    },
-                );
-                let _ = tx.send(ScreenshotJobMsg::Finished(res));
-                worker_ctx.request_repaint();
-            });
-    }
-
-    fn poll_screenshot_job(&mut self) {
-        let mut finished: Option<ScreenshotBatchResult> = None;
-        let mut should_reload = false;
-        if let Some(job) = self.screenshot_job.as_mut() {
-            while let Ok(msg) = job.rx.try_recv() {
-                match msg {
-                    ScreenshotJobMsg::Progress {
-                        done,
-                        total,
-                        rendered_modules,
-                    } => {
-                        if rendered_modules > job.rendered_modules {
-                            should_reload = true;
-                        }
-                        job.done = done;
-                        job.total = total;
-                        job.rendered_modules = rendered_modules;
+    fn start_panel_job(&mut self, action: PanelAction) {
+        let modules = Arc::clone(&self.modules);
+        let analysis = Arc::clone(&self.analysis);
+        let (send, progress) = mpsc::sync_channel(1);
+        let task = Task::start_unbounded(&PANEL_JOBS, move |cancel| {
+            let (panels, status) = match action {
+                PanelAction::Download => {
+                    let (mut panels, result) = download_viewer_panels(&modules, cancel);
+                    let cancelled = cancel.load(Ordering::Relaxed);
+                    if cancelled {
+                        panels = load_viewer_panels(&modules, &AtomicBool::new(false));
                     }
-                    ScreenshotJobMsg::Finished(res) => {
-                        if res.rendered_modules > 0 {
-                            should_reload = true;
+                    let status = match result {
+                        Err(error) => error,
+                        Ok(count) if cancelled => {
+                            format!("Download cancelled ({count} panels cached)")
                         }
-                        finished = Some(res);
-                        break;
-                    }
+                        Ok(0) => "No additional artwork available".into(),
+                        Ok(count) => format!("Downloaded {count} panels"),
+                    };
+                    (panels, status)
+                }
+                PanelAction::Clear => {
+                    let status = clear_downloaded_panel_cache()
+                        .map_or_else(|error| error, |()| "Downloaded artwork cleared".into());
+                    (
+                        load_viewer_panels(&modules, &AtomicBool::new(false)),
+                        status,
+                    )
+                }
+                PanelAction::CapturePatch | PanelAction::CaptureAll => {
+                    let result = if matches!(action, PanelAction::CapturePatch) {
+                        ensure_local_screenshots_for_patch(&modules, cancel)
+                    } else {
+                        generate_all_local_rack_screenshots(cancel, |done, total, _| {
+                            let _ = send.try_send((done, total));
+                        })
+                    };
+                    let status = capture_status(result);
+                    (
+                        load_viewer_panels(&modules, &AtomicBool::new(false)),
+                        status,
+                    )
+                }
+            };
+            (ViewerArtwork::new(&analysis, &modules, panels), status)
+        });
+        self.panel_job = Some(PanelJob {
+            action,
+            task,
+            progress,
+            counts: None,
+        });
+    }
+
+    fn poll_panel_job(&mut self, ctx: &egui::Context) {
+        let Some(job) = self.panel_job.as_mut() else {
+            return;
+        };
+        if let Ok(counts) = job.progress.try_recv() {
+            job.counts = Some(counts);
+        }
+        let Some(result) = job.task.poll() else {
+            ctx.request_repaint_after(Duration::from_millis(40));
+            return;
+        };
+        self.panel_job = None;
+        self.panel_status = Some(match result {
+            Ok((artwork, status)) => {
+                self.artwork = artwork;
+                self.panel_textures.clear();
+                status
+            }
+            Err(error) => error.to_string(),
+        });
+    }
+
+    fn panel_controls(&mut self, ui: &mut Ui) {
+        if let Some(job) = &self.panel_job {
+            if job.task.token.load(Ordering::Relaxed) {
+                ui.label("Cancelling panel job…");
+            } else {
+                let label = job.action.busy_label();
+                if let Some((done, total)) = job.counts {
+                    ui.label(format!("{label} ({done}/{total})…"));
+                } else {
+                    ui.label(format!("{label}…"));
+                }
+                if !matches!(job.action, PanelAction::Clear) && ui.button("Cancel").clicked() {
+                    self.cancel_panel_job();
                 }
             }
+            return;
         }
-        if let Some(res) = finished {
-            let was_full = self
-                .screenshot_job
-                .as_ref()
-                .is_some_and(|j| j.is_full_library);
-            self.screenshot_job = None;
-            self.screenshot_status = Some(if res.cancelled {
-                format!("Cancelled ({} panels captured)", res.rendered_modules)
-            } else if res.rendered_modules > 0 {
-                format!(
-                    "Captured {} local panels ({} plugins)",
-                    res.rendered_modules, res.rendered_plugins
-                )
-            } else if was_full {
-                format!(
-                    "Local screenshots up to date ({} plugins checked)",
-                    res.skipped_plugins
-                )
-            } else if !res.failed_plugins.is_empty() {
-                format!("Rack could not render {}", res.failed_plugins.join(", "))
-            } else {
-                "Using local Rack screenshots".to_string()
-            });
+        ui.menu_button("Panel Artwork", |ui| {
+            let actions = [
+                (
+                    true,
+                    "Download Missing Panels".into(),
+                    PanelAction::Download,
+                ),
+                (true, "Clear Downloaded Cache".into(), PanelAction::Clear),
+                (
+                    self.has_local_rack && self.artwork.missing_local_plugins > 0,
+                    format!(
+                        "Generate Patch Screenshots ({})",
+                        self.artwork.missing_local_plugins
+                    ),
+                    PanelAction::CapturePatch,
+                ),
+                (
+                    self.has_local_rack,
+                    "Generate All Local Screenshots".into(),
+                    PanelAction::CaptureAll,
+                ),
+            ];
+            for (available, label, action) in actions {
+                if !available {
+                    continue;
+                }
+                let button = ui.button(label);
+                let button = if matches!(action, PanelAction::Download) {
+                    button.on_hover_text("Requests missing module images from the VCV Library")
+                } else {
+                    button
+                };
+                if button.clicked() {
+                    self.start_panel_job(action);
+                    ui.ctx().request_repaint();
+                    ui.close_menu();
+                }
+            }
+        });
+        if let Some(status) = &self.panel_status {
+            ui.small(status);
         }
-        if should_reload {
-            self.reload_panels();
-        }
-    }
-
-    fn ensure_texture(
-        &mut self,
-        ctx: &egui::Context,
-        key: &(String, String),
-    ) -> Option<egui::TextureId> {
-        if let Some(cached) = self.panel_textures.get(key) {
-            return cached.as_ref().map(|t| t.id());
-        }
-        let tex = self
-            .panel_rasters
-            .get(key)
-            .and_then(|opt| opt.as_ref())
-            .map(|rgba| texture_from_rgba(ctx, &format!("vcv_mod_{}_{}", key.0, key.1), rgba));
-        let id = tex.as_ref().map(|t| t.id());
-        self.panel_textures.insert(key.clone(), tex);
-        id
     }
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette) {
-        let dark = ui.visuals().dark_mode;
-        self.poll_screenshot_job();
-
+        self.poll_panel_job(ui.ctx());
         StudioShell::new("VCV Rack", Icon::Midi, palette, close).render_header(ui, |ui| {
             ui.label(format!(
                 "{} · {}",
-                self.summary.title,
-                format_summary_detail(&self.summary)
+                self.title,
+                format_summary_detail(&self.analysis.document)
             ));
             ui.separator();
             if ui.button("−").clicked() {
-                self.zoom = (self.zoom * 0.8).clamp(VIEWER_MIN_ZOOM, VIEWER_MAX_ZOOM);
+                self.zoom = (self.zoom * 0.8).clamp(self.min_zoom, VIEWER_MAX_ZOOM);
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
             if ui.button("+").clicked() {
-                self.zoom = (self.zoom * 1.25).clamp(VIEWER_MIN_ZOOM, VIEWER_MAX_ZOOM);
+                self.zoom = (self.zoom * 1.25).clamp(self.min_zoom, VIEWER_MAX_ZOOM);
             }
             if ui.button("Fit Rack").clicked() {
                 self.fitted_once = false;
             }
-            if ui.button("Clear Downloaded Cache").clicked() {
-                let _ = clear_downloaded_panel_cache();
-                self.screenshot_status = None;
-                self.reload_panels();
-            }
-            if self.has_local_rack {
-                ui.separator();
-                if let Some(job) = &self.screenshot_job {
-                    let msg = if job.total > 0 {
-                        format!(
-                            "Capturing {} ({}/{})…",
-                            if job.is_full_library {
-                                "all plugins"
-                            } else {
-                                "patch plugins"
-                            },
-                            job.done,
-                            job.total
-                        )
-                    } else {
-                        "Capturing local Rack screenshots…".to_string()
-                    };
-                    ui.label(msg);
-                    if ui.button("Cancel Capture").clicked() {
-                        job.cancel.store(true, Ordering::Relaxed);
-                    }
-                } else {
-                    if self.missing_local_plugins > 0
-                        && ui
-                            .button(format!(
-                                "Generate Patch Screenshots ({})",
-                                self.missing_local_plugins
-                            ))
-                            .on_hover_text(
-                                "Opens VCV Rack briefly to render local PNGs for missing patch plugins",
-                            )
-                            .clicked()
-                    {
-                        self.start_patch_screenshot_job(ui.ctx());
-                    }
-                    if ui
-                        .button("Generate All Local Screenshots")
-                        .on_hover_text(
-                            "Runs VCV Rack -t 4 in batches to capture all installed plugins without screenshots",
-                        )
-                        .clicked()
-                    {
-                        self.start_all_plugins_screenshot_job(ui.ctx());
-                    }
-                    if let Some(status) = &self.screenshot_status {
-                        ui.small(status);
-                    }
-                }
-            }
+            self.panel_controls(ui);
         });
+        self.show_rack(ui);
+    }
 
-        let rack = if dark {
-            &self.summary.rack_dark
-        } else {
-            &self.summary.rack_light
-        };
-
+    fn show_rack(&mut self, ui: &mut Ui) {
+        let rack = &self.artwork.rack;
         let viewport = ui.available_rect_before_wrap();
         if !self.fitted_once && viewport.width() > 32.0 && viewport.height() > 32.0 {
             let fit_w = (viewport.width() - 24.0) / rack.width.max(1.0) as f32;
             let fit_h = (viewport.height() - 24.0) / rack.height.max(1.0) as f32;
-            self.zoom = fit_w.min(fit_h).clamp(VIEWER_MIN_ZOOM, 1.5);
+            self.zoom = fit_w.min(fit_h).clamp(0.0001, 1.5);
+            self.min_zoom = self.zoom.min(VIEWER_MIN_ZOOM);
             let drawn = vec2(rack.width as f32, rack.height as f32) * self.zoom;
             self.pan = (viewport.size() - drawn) * 0.5;
             self.fitted_once = true;
@@ -965,7 +682,7 @@ impl Viewer {
             if scroll.abs() > 0.5 {
                 let factor = (1.0 + scroll * 0.002).clamp(0.5, 2.0);
                 let old_zoom = self.zoom;
-                let new_zoom = (old_zoom * factor).clamp(VIEWER_MIN_ZOOM, VIEWER_MAX_ZOOM);
+                let new_zoom = (old_zoom * factor).clamp(self.min_zoom, VIEWER_MAX_ZOOM);
                 if let Some(pointer) = ui.ctx().pointer_hover_pos() {
                     let rel = pointer - viewport.min - self.pan;
                     self.pan -= rel * (new_zoom / old_zoom - 1.0);
@@ -985,95 +702,53 @@ impl Viewer {
         );
         painter.rect_filled(case_rect, 6.0 * self.zoom, Color32::from_rgb(20, 22, 27));
 
-        let rail_x = 12.0 * self.zoom;
-        let rail_w = ((rack.width - 24.0) as f32 * self.zoom).max(16.0);
-        let row_h = RACK_ROW_HEIGHT as f32 * self.zoom;
-        let rail_h = (15.0 * self.zoom).max(2.0);
-        for &(_, ry) in &rack.rows {
-            let row_rect = Rect::from_min_size(
-                origin + vec2(rail_x, ry as f32 * self.zoom),
-                vec2(rail_w, row_h),
-            );
-            painter.rect_filled(row_rect, 0.0, Color32::from_rgb(24, 26, 32));
-            let top_rail = Rect::from_min_size(row_rect.min, vec2(rail_w, rail_h));
-            let bot_rail = Rect::from_min_size(
-                pos2(row_rect.left(), row_rect.bottom() - rail_h),
-                vec2(rail_w, rail_h),
-            );
-            painter.rect_filled(top_rail, 0.0, Color32::from_rgb(56, 60, 70));
-            painter.rect_filled(bot_rail, 0.0, Color32::from_rgb(56, 60, 70));
-
-            let hp_step = (RACK_HP_WIDTH as f32 * 2.0 * self.zoom).max(8.0);
-            let mut sx = row_rect.left() + hp_step * 0.5;
-            while sx < row_rect.right() - 4.0 {
-                painter.circle_filled(
-                    pos2(sx, top_rail.center().y),
-                    (2.0 * self.zoom).clamp(0.8, 3.0),
-                    Color32::from_rgb(24, 26, 31),
-                );
-                painter.circle_filled(
-                    pos2(sx, bot_rail.center().y),
-                    (2.0 * self.zoom).clamp(0.8, 3.0),
-                    Color32::from_rgb(24, 26, 31),
-                );
-                sx += hp_step;
-            }
-        }
-
+        paint_visible_rails(&painter, rack, origin, self.zoom, clip);
         let hover_pos = response
             .hovered()
             .then(|| ui.ctx().pointer_hover_pos())
             .flatten();
-        self.visible_buf.clear();
-
-        for (idx, m) in rack.modules.iter().enumerate() {
-            let mod_rect = Rect::from_min_size(
-                origin + vec2(m.x as f32, m.y as f32) * self.zoom,
-                vec2(m.width as f32, m.height as f32) * self.zoom,
+        let mut hovered = None;
+        for module in &rack.modules {
+            let rect = Rect::from_min_size(
+                origin + vec2(module.x as f32, module.y as f32) * self.zoom,
+                vec2(module.width as f32, module.height as f32) * self.zoom,
             );
-            if !mod_rect.intersects(viewport) {
+            if !rect.intersects(clip) {
                 continue;
             }
-            self.visible_buf
-                .push((idx, (m.plugin.clone(), m.model.clone()), mod_rect));
-        }
-
-        for i in 0..self.visible_buf.len() {
-            let (idx, ref key, mod_rect) = self.visible_buf[i];
-            let key_owned = key.clone();
-            let tid = self.ensure_texture(ui.ctx(), &key_owned);
-            let rack = if dark {
-                &self.summary.rack_dark
-            } else {
-                &self.summary.rack_light
-            };
-            paint_texture_or_placeholder(&painter, &rack.modules[idx], mod_rect, self.zoom, tid);
-        }
-
-        let rack = if dark {
-            &self.summary.rack_dark
-        } else {
-            &self.summary.rack_light
-        };
-        let mut hovered_idx = None;
-        for &(idx, _, mod_rect) in &self.visible_buf {
+            let texture = self
+                .artwork
+                .panels
+                .viewer_image(&module.plugin, &module.model)
+                .map(|rgba| {
+                    self.panel_textures
+                        .entry((module.plugin.clone(), module.model.clone()))
+                        .or_insert_with(|| {
+                            texture_from_rgba(
+                                ui.ctx(),
+                                &format!("vcv_mod_{}_{}", module.plugin, module.model),
+                                rgba,
+                            )
+                        })
+                        .id()
+                });
+            paint_texture_or_placeholder(&painter, module, rect, self.zoom, texture);
             painter.rect_stroke(
-                mod_rect,
+                rect,
                 0.0,
                 egui::Stroke::new(1.0_f32, Color32::from_rgb(12, 13, 16)),
             );
-            if hover_pos.is_some_and(|p| mod_rect.contains(p)) {
-                painter.rect_stroke(
-                    mod_rect,
-                    1.0,
-                    egui::Stroke::new(2.0_f32, Color32::from_rgb(255, 212, 82)),
-                );
-                hovered_idx = Some(idx);
+            if hover_pos.is_some_and(|position| rect.contains(position)) {
+                hovered = Some((module, rect));
             }
         }
 
-        if let Some(idx) = hovered_idx {
-            let m = &rack.modules[idx];
+        if let Some((m, rect)) = hovered {
+            painter.rect_stroke(
+                rect,
+                1.0,
+                egui::Stroke::new(2.0_f32, Color32::from_rgb(255, 212, 82)),
+            );
             egui::show_tooltip_at_pointer(
                 ui.ctx(),
                 egui::Id::new(("vcv_viewer_module_tip", m.id)),
@@ -1091,6 +766,68 @@ impl Viewer {
                     ));
                 },
             );
+        }
+    }
+}
+
+fn capture_status(result: ScreenshotBatchResult) -> String {
+    let count = result.rendered_modules;
+    if result.cancelled {
+        return format!("Capture cancelled ({count} panels captured)");
+    }
+    if !result.failed_plugins.is_empty() {
+        return format!(
+            "Captured {count} panels. Rack could not render {}",
+            result.failed_plugins.join(", ")
+        );
+    }
+    if count == 0 {
+        "No additional Rack screenshots captured".into()
+    } else {
+        format!(
+            "Captured {count} local panels ({} plugins)",
+            result.rendered_plugins
+        )
+    }
+}
+
+fn paint_visible_rails(
+    painter: &egui::Painter,
+    rack: &RackRailLayout,
+    origin: Pos2,
+    zoom: f32,
+    clip: Rect,
+) {
+    let rail_w = (rack.width as f32 - 24.0) * zoom;
+    let row_h = RACK_ROW_HEIGHT as f32 * zoom;
+    let rail_h = (15.0 * zoom).max(2.0).min(row_h / 3.0);
+    let pitch = (RACK_HP_WIDTH as f32 * 2.0 * zoom).max(8.0);
+    let radius = (2.0 * zoom).clamp(0.8, 3.0);
+    for &(_, row_y) in &rack.rows {
+        let row = Rect::from_min_size(
+            origin + vec2(12.0 * zoom, row_y as f32 * zoom),
+            vec2(rail_w, row_h),
+        );
+        if !row.intersects(clip) {
+            continue;
+        }
+        painter.rect_filled(row, 0.0, Color32::from_rgb(24, 26, 32));
+        for y in [row.top(), row.bottom() - rail_h] {
+            let rail = Rect::from_min_size(pos2(row.left(), y), vec2(rail_w, rail_h));
+            if !rail.intersects(clip) {
+                continue;
+            }
+            painter.rect_filled(rail, 0.0, Color32::from_rgb(56, 60, 70));
+            let origin = rail.left() + pitch * 0.5;
+            let first = ((clip.left() - radius - origin) / pitch).ceil().max(0.0) as i32;
+            let last = ((clip.right() + radius).min(rail.right() - 4.0) - origin) / pitch;
+            for slot in first..=last.floor() as i32 {
+                painter.circle_filled(
+                    pos2(origin + pitch * slot as f32, rail.center().y),
+                    radius,
+                    Color32::from_rgb(24, 26, 31),
+                );
+            }
         }
     }
 }
@@ -1147,82 +884,66 @@ mod tests {
         serde_json::to_vec(&json).unwrap()
     }
 
+    fn wait_for<T>(mut poll: impl FnMut() -> Option<T>) -> T {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(value) = poll() {
+                return value;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "VCV preview job did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
-    fn loads_ranked_strip_rack_rails_and_hover_without_panics() {
+    fn loads_ranked_strip_and_viewer_and_renders_hover_on_worker() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("demo.vcv");
         std::fs::write(&path, sample_vcv_bytes()).unwrap();
-
-        let data = load(&path, &AtomicBool::new(false));
+        let token = AtomicBool::new(false);
+        let data = load(&path, &token);
         let doc = data.vcv.as_ref().expect("vcv document");
-        assert!(data.detail.contains("module"));
-        assert!(data.detail.contains("row"));
-        assert!(doc.strip_dark.width > 0);
-        let light = doc.light_strip();
-        assert!(light.width > 0);
+        assert_eq!(data.detail, "6 modules · 5 cables · 1 row");
+        assert!(data.image.as_ref().unwrap().width > 0);
 
         let ctx = egui::Context::default();
         let mut hover = Hover::default();
         let row_id = uuid::Uuid::new_v4();
-        let rect = Rect::from_min_size(pos2(10.0, 40.0), vec2(760.0, 66.0));
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                hover.show(ui, &path, rect, row_id, doc, true);
+        let body = Rect::from_min_size(pos2(10.0, 40.0), vec2(760.0, 66.0));
+        wait_for(|| {
+            hover.poll(&ctx);
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| hover.show(ui, body, row_id, doc, true));
             });
+            output
+                .shapes
+                .iter()
+                .any(|shape| {
+                    matches!(
+                        &shape.shape,
+                        egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default()
+                    )
+                })
+                .then_some(())
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while hover.entries.is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    hover.show(ui, &path, rect, row_id, doc, true);
-                });
-            });
-        }
-        assert!(
-            !hover.entries.is_empty(),
-            "background hover worker must populate LRU texture cache"
-        );
 
-        let mut viewer = Viewer::load(&path).expect("viewer load");
-        assert_eq!(viewer.summary.rack_dark.modules.len(), 6);
-        let palette = AppPalette::default();
+        let mut viewer = Viewer::load(&path, &token).expect("viewer load");
+        assert_eq!(viewer.artwork.rack.modules.len(), 6);
         let mut close = false;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                viewer.ui(ui, &mut close, &palette);
+                viewer.ui(ui, &mut close, &AppPalette::default());
             });
         });
         assert!(!close);
         assert!(viewer.fitted_once);
         assert!(viewer.zoom <= VIEWER_MAX_ZOOM);
-
-        // Verify clicking zoom `+` caps at VIEWER_MAX_ZOOM (300%).
-        viewer.zoom = 2.8;
-        for _ in 0..4 {
-            viewer.zoom = (viewer.zoom * 1.25).clamp(VIEWER_MIN_ZOOM, VIEWER_MAX_ZOOM);
-        }
-        assert!((viewer.zoom - 3.0).abs() < 1e-4);
-
-        if let Ok(home) = std::env::var("HOME") {
-            let dir = Path::new(&home).join("Pictures/vcv");
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let fpath = entry.path();
-                    if fpath.extension().is_some_and(|e| {
-                        e.eq_ignore_ascii_case("vcv") || e.eq_ignore_ascii_case("vcvss")
-                    }) {
-                        let data = load(&fpath, &AtomicBool::new(false));
-                        assert!(
-                            data.vcv.is_some(),
-                            "failed load for {}: {}",
-                            fpath.display(),
-                            data.detail
-                        );
-                    }
-                }
-            }
-        }
+        token.store(true, Ordering::Relaxed);
+        assert!(Viewer::load(&path, &token).is_err());
     }
 
     #[test]
@@ -1249,100 +970,68 @@ mod tests {
         let data = load(&path, &AtomicBool::new(false));
         let doc = data.vcv.as_ref().expect("vcvss document");
         assert_eq!(data.detail, "3 modules · 2 cables · 0 rows");
-        assert!(doc.strip_dark.width > 0);
+        assert!(doc.summary.ranked_strip.width > 0.0);
 
-        let viewer = Viewer::load(&path).expect("viewer load vcvss");
-        assert_eq!(viewer.summary.rack_dark.modules.len(), 3);
-        assert_eq!(viewer.summary.analysis.document.row_count(), 0);
-
-        if let Ok(home) = std::env::var("HOME") {
-            let demo = Path::new(&home)
-                .join(".local/share/Rack2/plugins-lin-x64/Stoermelder-P1/presets/Strip/Demo.vcvss");
-            if demo.is_file() {
-                let demo_data = load(&demo, &AtomicBool::new(false));
-                assert!(
-                    demo_data.vcv.is_some(),
-                    "Demo.vcvss load: {}",
-                    demo_data.detail
-                );
-                assert_eq!(demo_data.detail, "1 module · 0 cables · 0 rows");
-            }
-        }
+        let viewer = Viewer::load(&path, &AtomicBool::new(false)).expect("viewer load vcvss");
+        assert_eq!(viewer.artwork.rack.modules.len(), 3);
+        assert_eq!(viewer.analysis.document.row_count(), 0);
     }
 
     #[test]
-    fn viewer_uses_single_texture_cache_and_hover_retains_visible() {
+    fn hover_retires_on_exit_and_reports_terminal_render_errors() {
         let dir = tempfile::tempdir().unwrap();
-        let path_a = dir.path().join("big.vcv");
-        let path_b = dir.path().join("other.vcv");
-        let big_json = serde_json::json!({
-            "version": "2.6.0",
-            "modules": [
-                { "id": 1, "plugin": "Fundamental", "model": "VCO", "pos": [0, 0] },
-                { "id": 2, "plugin": "Fundamental", "model": "VCF", "pos": [10, 0] },
-                { "id": 3, "plugin": "Fundamental", "model": "VCA-1", "pos": [18, 0] },
-                { "id": 4, "plugin": "Fundamental", "model": "ADSR", "pos": [24, 0] },
-                { "id": 5, "plugin": "Fundamental", "model": "LFO", "pos": [32, 0] },
-                { "id": 6, "plugin": "Fundamental", "model": "Mixer", "pos": [42, 0] },
-                { "id": 7, "plugin": "Fundamental", "model": "Scope", "pos": [50, 0] },
-                { "id": 8, "plugin": "Fundamental", "model": "VCMixer", "pos": [62, 0] }
-            ],
-            "cables": []
-        });
-        std::fs::write(&path_a, serde_json::to_vec(&big_json).unwrap()).unwrap();
-        std::fs::write(&path_b, sample_vcv_bytes()).unwrap();
-
-        let data_a = load(&path_a, &AtomicBool::new(false));
-        let doc_a = data_a.vcv.as_ref().unwrap();
-        let data_b = load(&path_b, &AtomicBool::new(false));
-        let doc_b = data_b.vcv.as_ref().unwrap();
-
+        let path = dir.path().join("demo.vcv");
+        std::fs::write(&path, sample_vcv_bytes()).unwrap();
+        let data = load(&path, &AtomicBool::new(false));
+        let doc = data.vcv.unwrap();
         let ctx = egui::Context::default();
         let mut hover = Hover::default();
-        let id_a = uuid::Uuid::new_v4();
-        let id_b = uuid::Uuid::new_v4();
-        let rect = Rect::from_min_size(pos2(10.0, 40.0), vec2(760.0, 66.0));
-        let mut tick = |p: &Path, id: uuid::Uuid, d: &Document| {
-            let start = hover.entries.len();
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    hover.show(ui, p, rect, id, d, true);
-                });
-            });
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while hover.entries.len() == start && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        hover.show(ui, p, rect, id, d, true);
-                    });
-                });
-            }
+        let row = uuid::Uuid::new_v4();
+        let request = || {
+            Source::VcvRaster(RasterRequest {
+                summary: Arc::clone(&doc.summary),
+                artwork: Artwork::Rack(f32::NAN),
+                dark: true,
+            })
         };
-        tick(&path_a, id_a, doc_a);
-        tick(&path_b, id_b, doc_b);
-        assert_eq!(hover.entries.len(), 2);
-
-        let visible: BTreeSet<PathBuf> = [path_a.clone()].into_iter().collect();
+        let error = wait_for(|| {
+            hover.poll(&ctx);
+            hover.rack.request(row, 0, 0, request()).map(|ready| {
+                assert!(ready.texture.is_none());
+                ready.data.detail.clone()
+            })
+        });
+        assert!(error.contains("scale"));
+        let visible = BTreeSet::from([row]);
         hover.retain(&visible);
-        assert_eq!(hover.entries.len(), 1);
-        assert_eq!(hover.entries[0].path, path_a);
-        hover.clear();
-        assert!(hover.entries.is_empty());
+        hover.retain(&visible);
+        assert!(hover.rack.request(row, 0, 0, request()).is_none());
+    }
 
-        let mut viewer = Viewer::load(&path_a).unwrap();
-        let palette = AppPalette::default();
-        let mut close = false;
-        viewer.fitted_once = true;
-        viewer.zoom = 1.4;
-        viewer.pan = egui::vec2(20.0, 20.0);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    #[test]
+    fn wide_rack_paints_only_screws_in_the_viewport() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sparse.vcv");
+        std::fs::write(&path, br#"{"modules":[{"id":1,"plugin":"Test","model":"Panel","pos":[-16000,0]},{"id":2,"plugin":"Test","model":"Panel","pos":[16000,0]}]}"#).unwrap();
+        let viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
+        let clip = Rect::from_min_size(Pos2::ZERO, vec2(700.0, 400.0));
+        let output = egui::Context::default().run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                viewer.ui(ui, &mut close, &palette);
+                paint_visible_rails(
+                    &ui.painter().with_clip_rect(clip),
+                    &viewer.artwork.rack,
+                    pos2(-200_000.0, 0.0),
+                    1.0,
+                    clip,
+                );
             });
         });
-        assert_eq!(viewer.panel_rasters.len(), 8);
-        assert_eq!(viewer.panel_textures.len(), 8);
+        let screws = output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Circle(_)))
+            .count();
+        assert!((40..60).contains(&screws), "{screws} screw shapes");
     }
 
     #[test]
@@ -1383,8 +1072,7 @@ mod tests {
         let multi_doc = multi_data.vcv.as_ref().expect("multi document");
 
         // When 1 row fits horizontally, full patch order (including duplicate VCOs) is chosen.
-        let (wide_lineup, wide_full) =
-            strip_for_preview(&single_doc.summary, vec2(2000.0, 66.0), true);
+        let (wide_lineup, wide_full) = strip_for_preview(&single_doc.summary, vec2(2000.0, 66.0));
         assert!(wide_full);
         assert_eq!(
             wide_lineup
@@ -1396,27 +1084,29 @@ mod tests {
         );
 
         // When too narrow, it falls back to the deduplicated ranked lineup.
-        let (narrow_lineup, narrow_full) =
-            strip_for_preview(&single_doc.summary, vec2(80.0, 66.0), true);
+        let (narrow_lineup, narrow_full) = strip_for_preview(&single_doc.summary, vec2(80.0, 66.0));
         assert!(!narrow_full);
         assert_eq!(narrow_lineup.modules.len(), 3);
 
         // Multi-row patches always stay on the deduplicated ranked lineup regardless of width.
-        let (_multi_lineup, multi_full) =
-            strip_for_preview(&multi_doc.summary, vec2(4000.0, 66.0), true);
+        let (_multi_lineup, multi_full) = strip_for_preview(&multi_doc.summary, vec2(4000.0, 66.0));
         assert!(!multi_full);
 
         // Ranked and full strip variants maintain distinct texture entries.
         let ctx = egui::Context::default();
         let mut hover = Hover::default();
         let id = uuid::Uuid::new_v4();
-        let full_tex = hover
-            .strip_texture(&ctx, id, &single_path, single_doc, true, true, None)
-            .expect("full strip texture");
-        let ranked_tex = hover
-            .strip_texture(&ctx, id, &single_path, single_doc, true, false, None)
-            .expect("ranked strip texture");
-        assert_ne!(full_tex.id(), ranked_tex.id());
-        assert_eq!(hover.strip_textures.len(), 2);
+        let full_tex = wait_for(|| {
+            hover.poll(&ctx);
+            hover.strip_texture(id, single_doc, true, true)
+        });
+        let ranked_tex = wait_for(|| {
+            hover.poll(&ctx);
+            hover.strip_texture(id, single_doc, true, false)
+        });
+        assert_ne!(full_tex, ranked_tex);
+        assert_eq!(hover.strip_ids.len(), 2);
+        hover.retain(&BTreeSet::new());
+        assert!(hover.strip_ids.is_empty());
     }
 }

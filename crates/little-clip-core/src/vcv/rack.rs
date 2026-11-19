@@ -2,7 +2,7 @@
 
 use super::analyze::{Band, PatchAnalysis};
 use super::catalog::{ModuleFunction, Role, VcvCatalog};
-use super::panels::resolve_panel;
+use super::panels::PanelAssets;
 use std::collections::HashMap;
 
 pub const RACK_HP_WIDTH: f64 = 15.0;
@@ -144,12 +144,12 @@ fn collect_strip_entries(analysis: &PatchAnalysis) -> Vec<StripEntry> {
         .collect()
 }
 
-fn pack_strip_lineup(entries: Vec<StripEntry>) -> StripLineup {
+fn pack_strip_lineup(entries: Vec<StripEntry>, assets: &PanelAssets) -> StripLineup {
     let mut x = STRIP_MARGIN_X;
     let mut modules = Vec::with_capacity(entries.len());
     for item in entries {
-        let aspect = resolve_panel(&item.plugin, &item.model)
-            .map(|p| p.aspect)
+        let aspect = assets
+            .aspect(&item.plugin, &item.model)
             .unwrap_or_else(|| (f64::from(item.hp_est) * RACK_HP_WIDTH) / RACK_ROW_HEIGHT);
         let width = (STRIP_PANEL_H * aspect).round().clamp(18.0, 220.0);
         let hp = ((aspect * RACK_ROW_HEIGHT) / RACK_HP_WIDTH)
@@ -187,7 +187,10 @@ fn pack_strip_lineup(entries: Vec<StripEntry>) -> StripLineup {
 
 /// Builds the full left-to-right ordered strip (preserving duplicates) when every
 /// module resides on a single Eurorack row.
-pub fn build_full_single_row_strip(analysis: &PatchAnalysis, _dark: bool) -> Option<StripLineup> {
+pub fn build_full_single_row_strip(
+    analysis: &PatchAnalysis,
+    assets: &PanelAssets,
+) -> Option<StripLineup> {
     let first_row = analysis.document.modules.first()?.row;
     if !analysis
         .document
@@ -197,11 +200,11 @@ pub fn build_full_single_row_strip(analysis: &PatchAnalysis, _dark: bool) -> Opt
     {
         return None;
     }
-    Some(pack_strip_lineup(collect_strip_entries(analysis)))
+    Some(pack_strip_lineup(collect_strip_entries(analysis), assets))
 }
 
 /// Builds the compact deduplicated strip ordered by musical importance.
-pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup {
+pub fn build_ranked_strip(analysis: &PatchAnalysis, assets: &PanelAssets) -> StripLineup {
     let mut grouped: HashMap<(String, String), StripEntry> = HashMap::new();
     for item in collect_strip_entries(analysis) {
         let key = (item.plugin.clone(), item.model.clone());
@@ -225,7 +228,7 @@ pub fn build_ranked_strip(analysis: &PatchAnalysis, _dark: bool) -> StripLineup 
             item.first_pos,
         )
     });
-    pack_strip_lineup(list)
+    pack_strip_lineup(list, assets)
 }
 
 fn importance_tier(
@@ -277,7 +280,7 @@ fn importance_tier(
 }
 
 /// Places all patch modules onto Eurorack rails at their actual saved `[column_hp, row]` positions.
-pub fn build_rack_rail_layout(analysis: &PatchAnalysis, _dark: bool) -> RackRailLayout {
+pub fn build_rack_rail_layout(analysis: &PatchAnalysis, assets: &PanelAssets) -> RackRailLayout {
     const MARGIN: f64 = 16.0;
     let catalog = VcvCatalog::embedded();
 
@@ -333,8 +336,9 @@ pub fn build_rack_rail_layout(analysis: &PatchAnalysis, _dark: bool) -> RackRail
 
             let port_total = info.map_or(4, |i| i.inputs.len() + i.outputs.len());
             let hp_fallback = ((port_total.max(3) + 2).min(24) as i32).max(4);
-            let hp = resolve_panel(&m.plugin, &m.model)
-                .map(|p| ((p.aspect * RACK_ROW_HEIGHT) / RACK_HP_WIDTH).round() as i32)
+            let hp = assets
+                .aspect(&m.plugin, &m.model)
+                .map(|aspect| ((aspect * RACK_ROW_HEIGHT) / RACK_HP_WIDTH).round() as i32)
                 .unwrap_or(hp_fallback)
                 .clamp(2, 64);
 

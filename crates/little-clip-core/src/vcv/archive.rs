@@ -1,13 +1,18 @@
 //! Reader for VCV Rack / Cardinal `.vcv` patch files (zstd tar bundles and raw JSON).
 
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 pub const MAX_PATCH_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MODULES: usize = 1024;
+const MAX_CABLES: usize = 8192;
+const MAX_COORDINATE: i32 = 16_384;
 
 /// A port reference on a module inside a patch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -33,7 +38,7 @@ pub struct PatchModule {
     pub labels: Vec<String>,
     pub learned_notes: Vec<i32>,
     pub learned_ccs: Vec<i32>,
-    pub raw_data: Option<Value>,
+    pub raw_data: Option<Arc<Value>>,
 }
 
 impl PatchModule {
@@ -62,6 +67,38 @@ pub struct PatchDocument {
 }
 
 impl PatchDocument {
+    /// Returns the distinct artwork keys used by the patch.
+    pub fn panel_keys(&self) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .map(|module| (&module.plugin, &module.model))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|(plugin, model)| (plugin.clone(), model.clone()))
+            .collect()
+    }
+
+    pub(super) fn validate_preview_limits(&self) -> Result<(), String> {
+        check_graph_size(self.modules.len(), self.cables.len())?;
+        let limits = -MAX_COORDINATE..=MAX_COORDINATE;
+        let mut ids = BTreeSet::new();
+        for module in &self.modules {
+            if !limits.contains(&module.column) || !limits.contains(&module.row) {
+                return Err(format!(
+                    "Module {} position exceeds the preview limits",
+                    module.id
+                ));
+            }
+            if !ids.insert(module.id) {
+                return Err(format!(
+                    "Duplicate module id {} ({}/{})",
+                    module.id, module.plugin, module.model
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Returns the number of distinct Eurorack rows occupied by modules in this patch,
     /// or `0` for stoermelder STRIP selection files (`.vcvss`).
     pub fn row_count(&self) -> usize {
@@ -87,13 +124,13 @@ pub fn read_patch_bytes(bytes: &[u8]) -> Result<PatchDocument, String> {
     if bytes.is_empty() {
         return Err("Patch file is empty".to_string());
     }
-    let json_bytes = if bytes.len() >= 4 && bytes[..4] == ZSTD_MAGIC {
-        extract_patch_json_from_zst_tar(bytes)?
+    if bytes.len() as u64 > MAX_PATCH_BYTES {
+        return Err("Patch file exceeds 64 MiB limit".into());
+    }
+    let json_bytes = if bytes.starts_with(&ZSTD_MAGIC) {
+        Cow::Owned(extract_patch_json_from_zst_tar(bytes)?)
     } else {
-        if bytes.len() as u64 > MAX_PATCH_BYTES {
-            return Err("Patch JSON exceeds size limit".to_string());
-        }
-        bytes.to_vec()
+        Cow::Borrowed(bytes)
     };
     let text = strip_utf8_bom(&json_bytes);
     let root: Value =
@@ -112,27 +149,16 @@ pub fn read_patch_bytes_for_path(path: &Path, bytes: &[u8]) -> Result<PatchDocum
 
 /// Reads and parses a `.vcv` or `.vcvss` patch file from disk with a size guard.
 pub fn read_patch_path(path: &Path) -> Result<PatchDocument, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open patch: {e}"))?;
-    let meta = file
-        .metadata()
-        .map_err(|e| format!("Cannot stat patch: {e}"))?;
-    if meta.len() > MAX_PATCH_BYTES {
-        return Err("Patch file exceeds 64 MiB limit".to_string());
-    }
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.by_ref()
-        .take(MAX_PATCH_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("Cannot read patch: {e}"))?;
-    if bytes.len() as u64 > MAX_PATCH_BYTES {
-        return Err("Patch file exceeds 64 MiB limit".to_string());
-    }
+    let bytes = crate::file_source::read_file_snapshot(path, MAX_PATCH_BYTES as usize)?;
     read_patch_bytes_for_path(path, &bytes)
 }
 
 fn extract_patch_json_from_zst_tar(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let decoder = zstd::stream::Decoder::new(bytes)
+    let mut decoder = zstd::stream::Decoder::new(bytes)
         .map_err(|e| format!("Cannot initialize zstd decoder: {e}"))?;
+    decoder
+        .window_log_max(MAX_DECOMPRESSED_BYTES.ilog2())
+        .map_err(|e| format!("Cannot limit zstd window: {e}"))?;
     let limited = decoder.take(MAX_DECOMPRESSED_BYTES + 1);
     let mut archive = tar::Archive::new(limited);
     let entries = archive
@@ -146,7 +172,9 @@ fn extract_patch_json_from_zst_tar(bytes: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|e| format!("Invalid tar entry path: {e}"))?;
         let path_str = path.to_string_lossy();
         let normalized = path_str.trim_start_matches("./");
-        if normalized == "patch.json" || normalized.ends_with("/patch.json") {
+        if (normalized == "patch.json" || normalized.ends_with("/patch.json"))
+            && entry.header().entry_type().is_file()
+        {
             let size = entry.size();
             if size > MAX_DECOMPRESSED_BYTES {
                 return Err("patch.json in archive exceeds 64 MiB limit".to_string());
@@ -159,6 +187,9 @@ fn extract_patch_json_from_zst_tar(bytes: &[u8]) -> Result<Vec<u8>, String> {
                 .map_err(|e| format!("Cannot read patch.json from .vcv archive: {e}"))?;
             if out.len() as u64 > MAX_DECOMPRESSED_BYTES {
                 return Err("patch.json in archive exceeds 64 MiB limit".to_string());
+            }
+            if out.len() as u64 != size {
+                return Err("Incomplete patch.json in archive".into());
             }
             return Ok(out);
         }
@@ -198,11 +229,13 @@ fn parse_patch_module(
     let plugin = m
         .get("plugin")
         .and_then(json_str)
+        .filter(|slug| !slug.is_empty() && slug.len() <= 256)
         .ok_or_else(|| format!("Module {id} is missing plugin"))?
         .to_string();
     let model = m
         .get("model")
         .and_then(json_str)
+        .filter(|slug| !slug.is_empty() && slug.len() <= 256)
         .ok_or_else(|| format!("Module {id} is missing model"))?
         .to_string();
     let mod_version = m.get("version").and_then(json_str).map(str::to_string);
@@ -215,15 +248,14 @@ fn parse_patch_module(
     };
     let params = parse_params(m.get("params"));
 
-    let data = m.get("data").cloned();
+    let data = m.get("data");
     let linked_source_id = data
-        .as_ref()
         .and_then(Value::as_object)
         .and_then(|d| d.get("srcId"))
         .and_then(json_i64);
-    let labels = parse_labels(data.as_ref());
-    let learned_notes = parse_learned_ints(data.as_ref(), "notes");
-    let learned_ccs = parse_learned_ints(data.as_ref(), "ccs");
+    let labels = parse_labels(data);
+    let learned_notes = parse_learned_ints(data, "notes");
+    let learned_ccs = parse_learned_ints(data, "ccs");
 
     Ok(PatchModule {
         id,
@@ -240,7 +272,7 @@ fn parse_patch_module(
         labels,
         learned_notes,
         learned_ccs,
-        raw_data: data,
+        raw_data: data.cloned().map(Arc::new),
     })
 }
 
@@ -255,8 +287,13 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
         .unwrap_or("")
         .to_string();
 
+    let raw_cables = obj
+        .get("cables")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
     let (mut modules, is_strip) =
         if let Some(raw_modules) = obj.get("modules").and_then(Value::as_array) {
+            check_graph_size(raw_modules.len(), raw_cables.len())?;
             let mut modules = Vec::with_capacity(raw_modules.len());
             for (idx, item) in raw_modules.iter().enumerate() {
                 modules.push(parse_patch_module(idx, item, None)?);
@@ -265,6 +302,10 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
         } else if obj.contains_key("rightModules") || obj.contains_key("leftModules") {
             let left_modules = parse_optional_array(obj, "leftModules")?;
             let right_modules = parse_optional_array(obj, "rightModules")?;
+            check_graph_size(
+                left_modules.len().saturating_add(right_modules.len()),
+                raw_cables.len(),
+            )?;
             let mut modules = Vec::with_capacity(left_modules.len() + right_modules.len());
             // stoermelder STRIP stores leftModules right-to-left and rightModules left-to-right;
             // emit left-to-right across row 0 so layout order matches physical Rack placement.
@@ -274,8 +315,7 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
                 .chain(right_modules.iter())
                 .enumerate()
             {
-                let col = i32::try_from(slot).unwrap_or(i32::MAX);
-                modules.push(parse_patch_module(slot, item, Some((col, 0)))?);
+                modules.push(parse_patch_module(slot, item, Some((slot as i32, 0)))?);
             }
             (modules, true)
         } else {
@@ -285,47 +325,41 @@ pub fn parse_patch_value(root: &Value) -> Result<PatchDocument, String> {
     // Preserve rack visual order (top-to-bottom row, then left-to-right column).
     modules.sort_by_key(|m| (m.row, m.column, m.id));
 
-    let mut cables = Vec::new();
-    if let Some(raw_cables) = obj.get("cables").and_then(Value::as_array) {
-        for (idx, item) in raw_cables.iter().enumerate() {
-            let Some(c) = item.as_object() else {
-                continue;
-            };
-            let id = c.get("id").and_then(json_i64).unwrap_or(idx as i64);
-            let Some(output_module_id) = c.get("outputModuleId").and_then(json_i64) else {
-                continue;
-            };
-            let Some(output_id) = c.get("outputId").and_then(json_i32) else {
-                continue;
-            };
-            let Some(input_module_id) = c.get("inputModuleId").and_then(json_i64) else {
-                continue;
-            };
-            let Some(input_id) = c.get("inputId").and_then(json_i32) else {
-                continue;
-            };
-            let color = c.get("color").and_then(json_str).map(str::to_string);
-            cables.push(PatchCable {
-                id,
-                from: PortRef {
-                    module_id: output_module_id,
-                    port_id: output_id,
-                },
-                to: PortRef {
-                    module_id: input_module_id,
-                    port_id: input_id,
-                },
-                color,
-            });
-        }
-    }
-
     Ok(PatchDocument {
         version,
         modules,
-        cables,
+        cables: raw_cables
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cable)| parse_patch_cable(index, cable))
+            .collect(),
         is_strip,
     })
+}
+
+fn parse_patch_cable(index: usize, value: &Value) -> Option<PatchCable> {
+    let cable = value.as_object()?;
+    Some(PatchCable {
+        id: cable.get("id").and_then(json_i64).unwrap_or(index as i64),
+        from: PortRef {
+            module_id: cable.get("outputModuleId").and_then(json_i64)?,
+            port_id: cable.get("outputId").and_then(json_i32)?,
+        },
+        to: PortRef {
+            module_id: cable.get("inputModuleId").and_then(json_i64)?,
+            port_id: cable.get("inputId").and_then(json_i32)?,
+        },
+        color: cable.get("color").and_then(json_str).map(str::to_string),
+    })
+}
+
+fn check_graph_size(modules: usize, cables: usize) -> Result<(), String> {
+    if modules > MAX_MODULES || cables > MAX_CABLES {
+        return Err(format!(
+            "Patch exceeds preview limits of {MAX_MODULES} modules and {MAX_CABLES} cables"
+        ));
+    }
+    Ok(())
 }
 
 fn parse_position(obj: &serde_json::Map<String, Value>, id: i64) -> Result<(i32, i32), String> {
@@ -344,7 +378,12 @@ fn parse_position(obj: &serde_json::Map<String, Value>, id: i64) -> Result<(i32,
     let Some(y) = arr[1].as_f64().filter(|v| v.is_finite()) else {
         return Err(format!("Module {id} has invalid pos.y"));
     };
-    Ok((x.round() as i32, y.round() as i32))
+    let limit = f64::from(MAX_COORDINATE);
+    let (x, y) = (x.round(), y.round());
+    if x.abs() > limit || y.abs() > limit {
+        return Err(format!("Module {id} position exceeds the preview limits"));
+    }
+    Ok((x as i32, y as i32))
 }
 
 fn parse_params(params: Option<&Value>) -> BTreeMap<i32, f64> {
@@ -409,4 +448,34 @@ fn json_i64(v: &Value) -> Option<i64> {
 
 fn json_i32(v: &Value) -> Option<i32> {
     json_i64(v).and_then(|n| i32::try_from(n).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_positions_and_graph_size_before_layout() {
+        let module = |position: i64| serde_json::json!({"id": 1, "plugin": "Core", "model": "MIDIToCVInterface", "pos": [position, 0]});
+        for position in [i64::from(i32::MAX), i64::from(i32::MIN)] {
+            let result = parse_patch_value(&serde_json::json!({"modules": [module(position)]}));
+            assert!(result.unwrap_err().contains("position exceeds"));
+        }
+        let position = i64::from(MAX_COORDINATE);
+        let document =
+            parse_patch_value(&serde_json::json!({"modules": [module(position)]})).unwrap();
+        assert_eq!(document.modules[0].column, MAX_COORDINATE);
+        let modules = vec![Value::Null; MAX_MODULES + 1];
+        let cables = vec![Value::Null; MAX_CABLES + 1];
+        assert!(
+            parse_patch_value(&serde_json::json!({"modules": modules}))
+                .unwrap_err()
+                .contains("preview limits")
+        );
+        assert!(
+            parse_patch_value(&serde_json::json!({"modules": [], "cables": cables}))
+                .unwrap_err()
+                .contains("preview limits")
+        );
+    }
 }

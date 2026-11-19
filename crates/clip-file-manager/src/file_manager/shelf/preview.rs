@@ -61,6 +61,7 @@ pub(in crate::file_manager) enum Source {
     Geography(PathBuf),
     Toolpath(PathBuf),
     VcvPatch(PathBuf),
+    VcvRaster(super::super::vcv_strip::RasterRequest),
     Multisample(PathBuf),
     Mail(PathBuf),
     Subtitle(PathBuf),
@@ -133,6 +134,9 @@ impl Source {
             Self::Music(..) | Self::Dadaspec { .. } => {
                 (music_preview_jobs(), music_preview_workers(), 30)
             }
+            Self::VcvPatch(_) | Self::VcvRaster(_) => {
+                (&super::super::vcv_strip::PREVIEW_JOBS, 2, 20)
+            }
             Self::Gallery { .. }
             | Self::Handwritten(_)
             | Self::PdfPage { .. }
@@ -149,7 +153,6 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
-            | Self::VcvPatch(_)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -269,6 +272,7 @@ impl Source {
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
+            Source::VcvRaster(request) => request.load(token),
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),

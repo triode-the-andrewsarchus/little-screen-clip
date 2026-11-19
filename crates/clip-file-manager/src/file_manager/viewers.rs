@@ -508,6 +508,12 @@ impl Viewers {
         if let Some(ViewerSession::Image(state)) = &mut self.session {
             state.poll_cached_jobs();
         }
+        if let Some(ViewerSession::VcvPatch(state)) = &self.session
+            && state.panel_job_pending()
+        {
+            state.cancel_panel_job();
+            return false;
+        }
         if self.rename.busy() || self.collection_pending() || self.writes_pending() {
             self.error = Some("Wait for file save, export or copy to finish.".into());
             return false;
@@ -704,9 +710,8 @@ fn load(
         Kind::Document(Format::Multisample) => super::multisample::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::Multisample(Box::new(viewer))),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
-        Kind::Document(Format::VcvPatch) => {
-            super::vcv_strip::Viewer::load(path).map(|viewer| Loaded::VcvPatch(Box::new(viewer)))
-        }
+        Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
+            .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
         Kind::Document(Format::Geography) => {
             super::geography::Viewer::load(path).map(Loaded::Geography)
         }

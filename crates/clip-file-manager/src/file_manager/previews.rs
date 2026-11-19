@@ -130,6 +130,9 @@ impl EntryPreviews {
             }
             *version = entry.revision;
             self.system_refresh.remove(id);
+            if entry.is_vcv_patch() {
+                *id = uuid::Uuid::new_v4();
+            }
         }
         // A failed first collection has no Document, but still needs bounded
         // visible retries. Classification owns scheduling, not successful data.
@@ -148,6 +151,7 @@ impl EntryPreviews {
         self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
         self.image_hover.poll(ctx);
+        self.vcv_hover.poll(ctx);
         self.markdown_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
@@ -231,13 +235,13 @@ impl EntryPreviews {
         self.multisample.retain(visible);
         self.pdf_pages.retain(visible);
         self.image_hover.retain(visible);
-        self.vcv_hover.retain(visible);
         self.scenes.retain(visible);
         self.identities.retain(|path, _| visible.contains(path));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
+        self.vcv_hover.retain(&ids);
         self.materials.retain(&ids);
         self.markdown_hover.retain(&ids);
         self.system_refresh.retain(|id, _| ids.contains(id));
@@ -1282,6 +1286,33 @@ mod tests {
             previews.system_refresh.is_empty(),
             "hidden rows must not restart work"
         );
+    }
+
+    #[test]
+    fn vcv_preview_identity_changes_when_a_patch_is_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("patch.vcv");
+        std::fs::write(&path, br#"{"modules":[]}"#).unwrap();
+        let mut previews = EntryPreviews::default();
+        let original = single_entry(directory.path());
+        let original_id = previews.identity(&original);
+        assert_eq!(previews.identity(&original), original_id);
+        let ctx = egui::Context::default();
+        wait_for_preview(|| {
+            previews.poll(&ctx);
+            previews
+                .listing(&original)
+                .is_some_and(|ready| ready.data.vcv.is_some())
+        });
+        assert!(previews.cache.get(original_id).is_some());
+
+        let staged = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        std::fs::write(staged.path(), br#"{"modules":[],"cables":[]}"#).unwrap();
+        staged.persist(&path).unwrap();
+        let replacement = single_entry(directory.path());
+        assert_ne!(replacement.revision, original.revision);
+        assert_ne!(previews.identity(&replacement), original_id);
+        assert!(previews.cache.get(original_id).is_none());
     }
 
     #[test]

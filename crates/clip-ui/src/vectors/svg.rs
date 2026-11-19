@@ -40,6 +40,18 @@ pub struct Changes {
     pub replacements: HashMap<String, Replacement>,
 }
 
+impl Changes {
+    fn is_empty(&self) -> bool {
+        self.transforms.is_empty() && self.translations.is_empty() && self.replacements.is_empty()
+    }
+
+    fn static_layer_bounds(&self, group: &usvg::Group) -> Option<usvg::Rect> {
+        // An edit can move or replace a descendant outside its canonical ancestor.
+        self.is_empty()
+            .then(|| group.layer_bounding_box().to_rect())
+    }
+}
+
 /// Worker-prepared local geometry placed within the original group's clipping.
 #[derive(Clone)]
 pub struct Replacement {
@@ -491,13 +503,13 @@ impl Cached {
             && scene
                 .foldable_opacity
                 .contains(&(group as *const usvg::Group as usize))
-            && (single_leaf || (motion.transforms.is_empty() && motion.translations.is_empty()));
+            && (single_leaf || motion.is_empty());
         // Skip isolation-only groups when opacity == 1.0 because validate_group
         // already rejects all non-Normal blend modes.
         let layer = has_opacity && !can_fold;
         let child_alpha = if layer {
-            if !has_replacement {
-                tighten_layer_scissor(canvas, group.layer_bounding_box().to_rect(), 2.0);
+            if let Some(bounds) = motion.static_layer_bounds(group) {
+                tighten_layer_scissor(canvas, bounds, 2.0);
             }
             1.0
         } else if can_fold {
@@ -580,8 +592,8 @@ impl Cached {
             };
             canvas.save();
             canvas.translate(shadow.dx(), shadow.dy());
-            if !motion.replacements.contains_key(group.id()) {
-                tighten_layer_scissor(canvas, group.layer_bounding_box().to_rect(), 2.0);
+            if let Some(bounds) = motion.static_layer_bounds(group) {
+                tighten_layer_scissor(canvas, bounds, 2.0);
             }
             let captured = canvas.begin_layer(&vg::LayerEffects::new().with_filters(&[matrix]));
             let result = if captured {
@@ -932,5 +944,30 @@ mod tests {
         .unwrap();
         let disjoint_scene = Scene::new(disjoint, HashMap::new()).unwrap();
         assert_eq!(disjoint_scene.foldable_opacity.len(), 1);
+    }
+
+    #[test]
+    fn moving_descendants_disable_canonical_layer_bounds() {
+        let tree = usvg::Tree::from_str(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="20"><g opacity="0.5"><g id="child"><rect width="8" height="8"/></g></g></svg>"#,
+            &usvg::Options::default(),
+        )
+        .unwrap();
+        let usvg::Node::Group(ancestor) = &tree.root().children()[0] else {
+            panic!("expected opacity layer");
+        };
+        let mut changes = Changes::default();
+        assert!(changes.static_layer_bounds(ancestor).is_some());
+        changes.translations.insert("child".into(), [30.0, 0.0]);
+        assert!(changes.static_layer_bounds(ancestor).is_none());
+        changes.translations.clear();
+        changes.replacements.insert(
+            "child".into(),
+            Replacement {
+                scene: Scene::new(tree.clone(), HashMap::new()).unwrap(),
+                offset: [30.0, 0.0],
+            },
+        );
+        assert!(changes.static_layer_bounds(ancestor).is_none());
     }
 }

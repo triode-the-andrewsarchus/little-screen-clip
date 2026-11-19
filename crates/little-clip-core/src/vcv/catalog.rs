@@ -627,12 +627,14 @@ pub fn role_from_tags(tags: &[String]) -> Option<Role> {
 }
 
 fn strip_plugin_prefix<'a>(model: &'a str, plugin: &str) -> &'a str {
-    let trimmed =
-        if model.len() >= plugin.len() && model[..plugin.len()].eq_ignore_ascii_case(plugin) {
-            &model[plugin.len()..]
-        } else {
-            model
-        };
+    let trimmed = if model
+        .get(..plugin.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(plugin))
+    {
+        &model[plugin.len()..]
+    } else {
+        model
+    };
     trimmed.trim_matches(|c: char| c == '-' || c == '_' || c == ' ')
 }
 
