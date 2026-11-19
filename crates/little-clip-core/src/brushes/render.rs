@@ -209,6 +209,17 @@ fn draw_stroke(
     path: StrokePath,
     radius: f32,
 ) {
+    visit_dabs(preset, path, radius, |tip, dab, _| {
+        stamp_tip(coverage, dimensions, tip, dab);
+    });
+}
+
+fn visit_dabs(
+    preset: &BrushPreset,
+    path: StrokePath,
+    radius: f32,
+    mut visit: impl FnMut(&BrushTipKind, Dab, f32),
+) {
     const PATH_SEGMENTS: usize = 64;
     const MAX_DABS: usize = 320;
     let mut distances = [0.0_f32; PATH_SEGMENTS + 1];
@@ -245,13 +256,14 @@ fn draw_stroke(
             position,
         };
         let dab = sample_dab(preset, radius, sample);
+        let pressure = pen_pressure(t);
         let tip = dynamics
             .tip_sequence
             .as_ref()
             .map_or(&preset.tip, |sequence| {
-                sequence.tip_for_dab(index, pen_pressure(t), sample.direction, sample.seed)
+                sequence.tip_for_dab(index, pressure, sample.direction, sample.seed)
             });
-        stamp_tip(coverage, dimensions, tip, dab);
+        visit(tip, dab, pressure);
         let count = (f32::from(count)
             * (1.0 - (signed_random(sample.seed, 8) + 1.0) * 0.5 * dynamics.count_jitter))
             .round() as u8;
@@ -260,12 +272,7 @@ fn draw_stroke(
                 seed: mix_hash(sample.seed ^ u64::from(copy)),
                 ..sample
             };
-            stamp_tip(
-                coverage,
-                dimensions,
-                tip,
-                sample_dab(preset, radius, sample),
-            );
+            visit(tip, sample_dab(preset, radius, sample), pressure);
         }
         distance += dab_gap(preset, dab, radius, sample.direction).max(step_floor);
     }
@@ -374,10 +381,23 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
     }
 }
 
-fn stamp_tip(coverage: &mut [f32], (w, h): (usize, usize), tip: &BrushTipKind, dab: Dab) {
+fn stamp_tip(coverage: &mut [f32], dimensions: (usize, usize), tip: &BrushTipKind, dab: Dab) {
     if dab.opacity <= 0.0 || dab.flow <= 0.0 {
         return;
     }
+    visit_tip_pixels(dimensions, tip, dab, |x, y, sample| {
+        let dst = &mut coverage[y * dimensions.0 + x];
+        // Repeated dabs build up toward the current opacity at the flow rate.
+        *dst += (dab.opacity - *dst).max(0.0) * sample * dab.flow;
+    });
+}
+
+fn visit_tip_pixels(
+    (w, h): (usize, usize),
+    tip: &BrushTipKind,
+    dab: Dab,
+    mut visit: impl FnMut(usize, usize, f32),
+) {
     let (rx, ry) = match tip {
         BrushTipKind::AlphaMask { width, height, .. } => {
             let scale = dab.radius / (*width).max(*height).max(1) as f32;
@@ -420,9 +440,7 @@ fn stamp_tip(coverage: &mut [f32], (w, h): (usize, usize), tip: &BrushTipKind, d
                     *spikes,
                 ),
             };
-            let dst = &mut coverage[py * w + px];
-            // Repeated dabs build up toward the current opacity at the flow rate.
-            *dst += (dab.opacity - *dst).max(0.0) * sample * dab.flow;
+            visit(px, py, sample);
         }
     }
 }
