@@ -1,5 +1,6 @@
 use super::{
     BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
+    bounded_label,
 };
 use hokusai_core::BrushSetting;
 
@@ -35,6 +36,7 @@ pub(super) fn parse_mypaint(bytes: &[u8], fallback_name: &str) -> Result<BrushLi
         .parent_brush_name
         .as_deref()
         .filter(|s| !s.trim().is_empty())
+        .map(bounded_label)
         .unwrap_or(fallback_name)
         .to_owned();
     let detail = format!("Ø {:.1}px · hardness {:.2}", radius * 2.0, hardness);

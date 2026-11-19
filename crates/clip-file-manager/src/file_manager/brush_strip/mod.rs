@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};
 use egui::{Align2, FontId, Rect, Ui, pos2, vec2};
-use little_clip_core::brushes::{BrushLibrary, BrushPreset};
+use little_clip_core::brushes::BrushLibrary;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -15,7 +15,8 @@ use std::{
 
 #[derive(Clone)]
 pub(in crate::file_manager) struct StrokeRequest {
-    pub preset: Arc<BrushPreset>,
+    pub library: Arc<BrushLibrary>,
+    pub index: usize,
     pub width: u32,
     pub height: u32,
     pub fg_rgb: [u8; 3],
@@ -24,13 +25,10 @@ pub(in crate::file_manager) struct StrokeRequest {
 
 impl StrokeRequest {
     pub fn render(&self) -> PreviewData {
-        let mut data = PreviewData::new(
-            self.preset.name.clone(),
-            self.preset.detail.clone(),
-            Icon::Brush,
-        );
+        let preset = &self.library.brushes[self.index];
+        let mut data = PreviewData::new(preset.name.clone(), preset.detail.clone(), Icon::Brush);
         data.image = Some(little_clip_core::brushes::render::render_brush_preview(
-            &self.preset,
+            preset,
             self.width,
             self.height,
             self.fg_rgb,
@@ -179,7 +177,7 @@ impl Previews {
 
         for (ordinal, cell) in cells {
             let index = ordinal - 1;
-            let preset = Arc::new(library.brushes[index].clone());
+            let preset = &library.brushes[index];
             let stroke_h = (cell.height() - 18.0).max(16.0);
             let stroke_w = (cell.width() - 10.0).max(24.0);
             let req_w = (stroke_w * dpi).ceil().clamp(32.0, 512.0) as u32;
@@ -198,7 +196,8 @@ impl Previews {
                 self.cache.request(
                     id,
                     Source::BrushStroke(StrokeRequest {
-                        preset: preset.clone(),
+                        library: library.clone(),
+                        index,
                         width: req_w,
                         height: req_h,
                         fg_rgb,
@@ -239,7 +238,7 @@ impl Previews {
 
             if super::ui::preview_hovered(ui, cell) {
                 let fallback = ready.and_then(|ready| ready.texture.clone());
-                self.show_hover(ui, entry, source, index, &preset, fg_rgb, fallback.as_ref());
+                self.show_hover(ui, entry, source, index, library, fg_rgb, fallback.as_ref());
             }
         }
     }
@@ -251,7 +250,7 @@ impl Previews {
         entry: &Entry,
         source: uuid::Uuid,
         index: usize,
-        preset: &Arc<BrushPreset>,
+        library: &Arc<BrushLibrary>,
         fg_rgb: [u8; 3],
         fallback: Option<&egui::TextureHandle>,
     ) {
@@ -263,7 +262,8 @@ impl Previews {
             index,
             edge,
             Source::BrushStroke(StrokeRequest {
-                preset: preset.clone(),
+                library: library.clone(),
+                index,
                 width: edge * 3,
                 height: edge,
                 fg_rgb,
@@ -271,6 +271,7 @@ impl Previews {
             })
             .checked(&entry.path, &self.context),
         );
+        let preset = &library.brushes[index];
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
         egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("brush-strip-hover"), |ui| {
             ui.set_max_width((ui.ctx().screen_rect().width() - 40.0).clamp(32.0, 440.0));

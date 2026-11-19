@@ -222,7 +222,7 @@ impl Source {
                 super::super::music::preview::load(&path, spectrum, token)
             }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
-            Source::Brush(path) => super::super::brush_strip::load(&path, token),
+            Source::Brush(path) => super::super::brush_strip::load(&path, 64, token),
             Source::BrushStroke(request) => request.render(),
             Source::Material(request) => request.load(token),
             Source::Handwritten(path) => {
@@ -891,7 +891,6 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         data.icon = Icon::Brush;
         data.detail = loaded.detail;
         data.image = loaded.image;
-        data.brush = loaded.brush;
     } else if little_clip_core::item::is_image_path(path) {
         data.icon = Icon::Image;
         data.image = crate::file_source::read_file_bytes(path, 8 * 1024 * 1024, true, false)

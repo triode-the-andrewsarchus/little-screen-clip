@@ -1,12 +1,13 @@
 use super::{
-    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape, gimp,
+    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
+    bounded_label, gimp, mask,
 };
 use base64::Engine as _;
 use std::io::{Cursor, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-const MAX_ZIP_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ZIP_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BUNDLE_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 
 pub(super) fn parse_kpp(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
     let preset = parse_kpp_preset(bytes, fallback_name)?;
@@ -25,9 +26,10 @@ pub(super) fn parse_kpp_preset(bytes: &[u8], fallback_name: &str) -> Result<Brus
     let name = root
         .attribute("name")
         .filter(|s| !s.trim().is_empty())
+        .map(bounded_label)
         .unwrap_or(fallback_name)
         .to_owned();
-    let paintop = root.attribute("paintopid").unwrap_or("paintbrush");
+    let paintop = bounded_label(root.attribute("paintopid").unwrap_or("paintbrush"));
 
     let mut params = BrushStrokeParams::default();
     let mut brush_def_xml = None;
@@ -96,33 +98,10 @@ fn parse_brush_definition(
             let raw = base64::engine::general_purpose::STANDARD
                 .decode(b64.trim())
                 .ok()?;
-            if raw.starts_with(PNG_MAGIC) {
-                let img =
-                    image::load_from_memory_with_format(&raw, image::ImageFormat::Png).ok()?;
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                if w > 0 && h > 0 {
-                    let has_alpha = rgba.pixels().any(|p| p[3] < 250);
-                    let alpha = rgba
-                        .pixels()
-                        .map(|p| {
-                            if has_alpha {
-                                p[3]
-                            } else {
-                                ((u32::from(p[0]) * 77
-                                    + u32::from(p[1]) * 150
-                                    + u32::from(p[2]) * 29)
-                                    >> 8) as u8
-                            }
-                        })
-                        .collect();
-                    params.size_px = w.max(h) as f32;
-                    return Some(BrushTipKind::AlphaMask {
-                        width: w,
-                        height: h,
-                        alpha,
-                    });
-                }
+            if raw.starts_with(mask::PNG_MAGIC) {
+                let (tip, width, height) = mask::png(&raw, mask::OpaqueCoverage::Light)?;
+                params.size_px = width.max(height) as f32;
+                return Some(tip);
             } else if let Ok((preset, _)) = gimp::parse_gbr_at(&raw, "Krita") {
                 params.size_px = preset.params.size_px;
                 return Some(preset.tip);
@@ -173,7 +152,7 @@ fn parse_brush_definition(
 }
 
 fn extract_png_preset_xml(bytes: &[u8]) -> Option<String> {
-    if !bytes.starts_with(PNG_MAGIC) {
+    if !bytes.starts_with(mask::PNG_MAGIC) {
         return None;
     }
     let mut pos = 8usize;
@@ -253,52 +232,43 @@ pub(super) fn parse_bundle(
         .map_err(|error| format!("Invalid Krita .bundle archive: {error}"))?;
     let mut brushes = Vec::new();
     let mut total_count = 0usize;
+    let mut remaining_decode_bytes = MAX_BUNDLE_DECODE_BYTES;
 
     for i in 0..archive.len() {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let Ok(mut entry) = archive.by_index(i) else {
+        let Ok(entry) = archive.by_index_raw(i) else {
             continue;
         };
-        if entry.is_dir() || entry.size() > MAX_ZIP_ENTRY_BYTES as u64 {
+        let (name, size) = (entry.name().to_owned(), entry.size());
+        if entry.is_dir() || size > MAX_ZIP_ENTRY_BYTES {
             continue;
         }
-        let name = entry.name().to_owned();
-        let lower = name.to_ascii_lowercase();
-        let is_kpp = lower.ends_with(".kpp");
-        let is_gbr = lower.ends_with(".gbr");
-        let is_vbr = lower.ends_with(".vbr");
-        if !is_kpp && !is_gbr && !is_vbr {
+        drop(entry);
+        let path = std::path::Path::new(&name);
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(extension.as_str(), "kpp" | "gbr" | "vbr") {
             continue;
         }
         total_count += 1;
-        if brushes.len() >= max_brushes {
+        if brushes.len() >= max_brushes || size > remaining_decode_bytes {
             continue;
         }
-        let mut buf = Vec::with_capacity(entry.size().min(MAX_ZIP_ENTRY_BYTES as u64) as usize);
-        if entry
-            .by_ref()
-            .take(MAX_ZIP_ENTRY_BYTES as u64)
-            .read_to_end(&mut buf)
-            .is_err()
+        remaining_decode_bytes -= size;
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let mut buf = Vec::with_capacity(size as usize);
+        if entry.take(size + 1).read_to_end(&mut buf).is_ok()
+            && buf.len() as u64 == size
+            && let Ok(preset) = bundle_preset(&buf, path, &extension)
         {
-            continue;
-        }
-        let stem = std::path::Path::new(&name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Brush");
-        if is_kpp {
-            if let Ok(preset) = parse_kpp_preset(&buf, stem) {
-                brushes.push(preset);
-            }
-        } else if is_gbr {
-            if let Ok((preset, _)) = gimp::parse_gbr_at(&buf, stem) {
-                brushes.push(preset);
-            }
-        } else if is_vbr && let Ok(lib) = gimp::parse_vbr(&buf, stem) {
-            brushes.extend(lib.brushes);
+            brushes.push(preset);
         }
     }
 
@@ -311,4 +281,22 @@ pub(super) fn parse_bundle(
         brushes,
         total_count,
     })
+}
+
+fn bundle_preset(
+    bytes: &[u8],
+    path: &std::path::Path,
+    extension: &str,
+) -> Result<BrushPreset, String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(bounded_label)
+        .unwrap_or("Brush");
+    match extension {
+        "kpp" => parse_kpp_preset(bytes, stem),
+        "gbr" => gimp::parse_gbr_at(bytes, stem).map(|(preset, _)| preset),
+        "vbr" => gimp::parse_vbr_preset(bytes, stem),
+        _ => Err("Unsupported Krita bundle member".into()),
+    }
 }

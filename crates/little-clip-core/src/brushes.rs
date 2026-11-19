@@ -7,6 +7,7 @@ mod affinity;
 mod csp;
 mod gimp;
 mod krita;
+mod mask;
 mod mypaint;
 pub mod render;
 
@@ -14,6 +15,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_BRUSH_FILE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_BRUSH_LABEL_BYTES: usize = 512;
+
+fn bounded_label(label: &str) -> &str {
+    &label[..label.floor_char_boundary(MAX_BRUSH_LABEL_BYTES)]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrushFormat {
@@ -146,7 +152,6 @@ pub fn load_brush_library(
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }
-    let max_brushes = max_brushes.clamp(1, 256);
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BRUSH_FILE_BYTES)
         .map_err(|error| format!("Cannot read brush file: {error}"))?;
     if cancelled.load(Ordering::Relaxed) {
@@ -173,6 +178,7 @@ pub fn load_brush_bytes(
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }
+    let max_brushes = max_brushes.clamp(1, 256);
     match format {
         BrushFormat::Abr | BrushFormat::ProcreateBrush | BrushFormat::ProcreateBrushset => {
             load_via_brushkit(format, bytes, fallback_name, max_brushes, cancelled)
@@ -184,7 +190,7 @@ pub fn load_brush_bytes(
         BrushFormat::GimpVbr => gimp::parse_vbr(bytes, fallback_name),
         BrushFormat::MyPaint => mypaint::parse_mypaint(bytes, fallback_name),
         BrushFormat::AffinityBrushes => {
-            affinity::parse_afbrushes(bytes, fallback_name, max_brushes)
+            affinity::parse_afbrushes(bytes, fallback_name, max_brushes, cancelled)
         }
         BrushFormat::ClipStudioSut => csp::parse_sut(bytes, fallback_name, cancelled),
     }
@@ -203,7 +209,9 @@ fn load_via_brushkit(
         BrushFormat::ProcreateBrushset => brushkit::preview::Format::Brushset,
         _ => return Err("Unsupported brushkit format".into()),
     };
-    let opts = brushkit::preview::PreviewOptions { max_cell: 192 };
+    let opts = brushkit::preview::PreviewOptions {
+        max_cell: mask::PREVIEW_EDGE,
+    };
     let set = brushkit::preview::preview(
         bytes,
         bk_format,
@@ -220,9 +228,10 @@ fn load_via_brushkit(
                 set.set_name
                     .clone()
                     .filter(|s| !s.trim().is_empty())
+                    .map(|s| bounded_label(&s).to_owned())
                     .unwrap_or_else(|| format!("{fallback_name} #{}", entry.index + 1))
             } else {
-                entry.name
+                bounded_label(&entry.name).to_owned()
             };
             let detail = entry.source_dimensions.map_or_else(
                 || format!("{}×{} tip", bitmap.width, bitmap.height),
@@ -297,6 +306,26 @@ mod tests {
         out.extend_from_slice(&0_u32.to_be_bytes());
         out.extend_from_slice(&png[iend_start..]);
         out
+    }
+
+    #[test]
+    fn large_brush_tips_keep_a_bounded_preview_and_original_dimensions() {
+        let gbr = make_gbr("Wide", 512, 256, 20, 255);
+        let lib = load_brush_bytes(
+            BrushFormat::GimpGbr,
+            &gbr,
+            "fallback",
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let brush = &lib.brushes[0];
+        assert!(matches!(
+            &brush.tip,
+            BrushTipKind::AlphaMask { width: 192, height: 96, alpha }
+                if alpha.len() == 192 * 96
+        ));
+        assert!(brush.detail.starts_with("512×256"));
     }
 
     #[test]

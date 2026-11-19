@@ -1,5 +1,6 @@
 use super::{
-    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
+    BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, MAX_BRUSH_LABEL_BYTES,
+    ParametricShape, bounded_label, mask,
 };
 
 const MAX_GIMP_DIM: u32 = 4096;
@@ -46,7 +47,7 @@ pub(super) fn parse_gbr_at(
     };
     let spacing = (spacing_raw.clamp(1, 500) as f32) / 100.0;
 
-    let name_bytes = &bytes[28..header_size];
+    let name_bytes = &bytes[28..header_size.min(28 + MAX_BRUSH_LABEL_BYTES)];
     let name_end = name_bytes
         .iter()
         .position(|&b| b == 0)
@@ -91,6 +92,7 @@ pub(super) fn parse_gbr_at(
             .collect()
     };
 
+    let tip = mask::raster(width, height, alpha).ok_or("Invalid .gbr mask")?;
     let detail = format!(
         "{width}×{height} · {}% spacing",
         (spacing * 100.0).round() as u32
@@ -98,11 +100,7 @@ pub(super) fn parse_gbr_at(
     Ok((
         BrushPreset {
             name,
-            tip: BrushTipKind::AlphaMask {
-                width,
-                height,
-                alpha,
-            },
+            tip,
             params: BrushStrokeParams {
                 size_px: width.max(height) as f32,
                 spacing,
@@ -129,7 +127,7 @@ pub(super) fn parse_gih(
         .map(|pos| first_nl + 1 + pos)
         .ok_or("Invalid .gih parameter line")?;
 
-    let base_name = String::from_utf8_lossy(&bytes[..first_nl])
+    let base_name = String::from_utf8_lossy(&bytes[..first_nl.min(MAX_BRUSH_LABEL_BYTES)])
         .trim()
         .to_owned();
     let header_line = String::from_utf8_lossy(&bytes[first_nl + 1..second_nl]);
@@ -169,6 +167,14 @@ pub(super) fn parse_gih(
 }
 
 pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
+    Ok(BrushLibrary {
+        format: BrushFormat::GimpVbr,
+        brushes: vec![parse_vbr_preset(bytes, fallback_name)?],
+        total_count: 1,
+    })
+}
+
+pub(super) fn parse_vbr_preset(bytes: &[u8], fallback_name: &str) -> Result<BrushPreset, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in .vbr brush")?;
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let magic = lines.next().ok_or("Empty .vbr file")?;
@@ -179,6 +185,7 @@ pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrar
     let name = lines
         .next()
         .filter(|s| !s.is_empty())
+        .map(bounded_label)
         .unwrap_or(fallback_name)
         .to_owned();
     let shape = match lines
@@ -227,26 +234,22 @@ pub(super) fn parse_vbr(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrar
         .unwrap_or(0.0);
 
     let detail = format!("Ø {:.0}px · hardness {:.2}", radius * 2.0, hardness);
-    Ok(BrushLibrary {
-        format: BrushFormat::GimpVbr,
-        brushes: vec![BrushPreset {
-            name,
-            tip: BrushTipKind::Parametric {
-                shape,
-                hardness,
-                aspect_ratio,
-                angle_deg,
-                spikes,
-            },
-            params: BrushStrokeParams {
-                size_px: radius * 2.0,
-                spacing,
-                angle_deg,
-                hardness,
-                ..Default::default()
-            },
-            detail,
-        }],
-        total_count: 1,
+    Ok(BrushPreset {
+        name,
+        tip: BrushTipKind::Parametric {
+            shape,
+            hardness,
+            aspect_ratio,
+            angle_deg,
+            spikes,
+        },
+        params: BrushStrokeParams {
+            size_px: radius * 2.0,
+            spacing,
+            angle_deg,
+            hardness,
+            ..Default::default()
+        },
+        detail,
     })
 }

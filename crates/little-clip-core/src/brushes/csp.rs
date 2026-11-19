@@ -1,12 +1,10 @@
 use super::{
     BrushFormat, BrushLibrary, BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
+    bounded_label, mask,
 };
 use crate::sqlite_snapshot;
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-const PNG_IEND: &[u8; 8] = b"IEND\xaeB`\x82";
 
 pub(super) fn parse_sut(
     bytes: &[u8],
@@ -26,16 +24,17 @@ pub(super) fn parse_sut(
     }
     sqlite_snapshot::authorize_reads(&conn);
 
-    let name = if has_node {
-        conn.query_row(
+    let name =
+        if has_node {
+            conn.query_row(
             "SELECT NodeName FROM main.Node WHERE NodeName IS NOT NULL AND NodeName != '' LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0).map(|name| bounded_label(&name).to_owned()),
         )
         .unwrap_or_else(|_| fallback_name.to_owned())
-    } else {
-        fallback_name.to_owned()
-    };
+        } else {
+            fallback_name.to_owned()
+        };
 
     let params = if has_variant {
         variant_params(&conn)
@@ -121,46 +120,13 @@ fn extract_material_tip(conn: &Connection, cancelled: &AtomicBool) -> Option<Bru
     while !cancelled.load(Ordering::Relaxed)
         && let Ok(Some(row)) = rows.next()
     {
-        let Ok(blob) = row.get::<_, Vec<u8>>(0) else {
+        let Ok(rusqlite::types::ValueRef::Blob(blob)) = row.get_ref(0) else {
             continue;
         };
-        let Some(start) = blob.windows(PNG_MAGIC.len()).position(|w| w == PNG_MAGIC) else {
-            continue;
-        };
-        let Some(rel_end) = blob[start..]
-            .windows(PNG_IEND.len())
-            .position(|w| w == PNG_IEND)
-        else {
-            continue;
-        };
-        let end = start + rel_end + PNG_IEND.len();
-        if let Ok(img) =
-            image::load_from_memory_with_format(&blob[start..end], image::ImageFormat::Png)
+        if let Some((png, _)) = mask::embedded_png(blob)
+            && let Some((tip, _, _)) = mask::png(png, mask::OpaqueCoverage::Dark)
         {
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            if w > 0 && h > 0 && w <= 2048 && h <= 2048 {
-                let has_alpha = rgba.pixels().any(|p| p[3] < 250);
-                let alpha = rgba
-                    .pixels()
-                    .map(|p| {
-                        if has_alpha {
-                            p[3]
-                        } else {
-                            let lum = (u32::from(p[0]) * 77
-                                + u32::from(p[1]) * 150
-                                + u32::from(p[2]) * 29)
-                                >> 8;
-                            255_u8.saturating_sub(lum as u8)
-                        }
-                    })
-                    .collect();
-                return Some(BrushTipKind::AlphaMask {
-                    width: w,
-                    height: h,
-                    alpha,
-                });
-            }
+            return Some(tip);
         }
     }
     None
