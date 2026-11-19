@@ -20,36 +20,16 @@ pub(super) fn parse_gbr_at(
     bytes: &[u8],
     fallback_name: &str,
 ) -> Result<(BrushPreset, usize), String> {
-    if bytes.len() < 28 {
-        return Err("Truncated GIMP .gbr header".into());
-    }
-    let header_size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-    let version = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    let width = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-    let height = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-    let bpp = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
-
-    if header_size < 28 || header_size > bytes.len() {
-        return Err("Invalid .gbr header size".into());
-    }
-    if width == 0 || height == 0 || width > MAX_GIMP_DIM || height > MAX_GIMP_DIM {
-        return Err("Invalid .gbr brush dimensions".into());
-    }
-    if bpp != 1 && bpp != 4 {
-        return Err(format!("Unsupported .gbr bytes-per-pixel: {bpp}"));
-    }
-    if version >= 2 && &bytes[20..24] != b"GIMP" {
-        return Err("Invalid .gbr magic".into());
-    }
-
-    let spacing_raw = if version >= 2 {
-        u32::from_be_bytes([bytes[24], bytes[25], bytes[26], bytes[27]])
-    } else {
-        25
-    };
-    let spacing = (spacing_raw.clamp(1, 500) as f32) / 100.0;
-
-    let name_bytes = &bytes[28..header_size.min(28 + MAX_BRUSH_LABEL_BYTES)];
+    let header = BitmapHeader::read(bytes)?;
+    let BitmapHeader {
+        width,
+        height,
+        name_offset,
+        data_offset,
+        bpp,
+        spacing,
+    } = header;
+    let name_bytes = &bytes[name_offset..data_offset.min(name_offset + MAX_BRUSH_LABEL_BYTES)];
     let name_end = name_bytes
         .iter()
         .position(|&b| b == 0)
@@ -66,23 +46,29 @@ pub(super) fn parse_gbr_at(
     let pixel_count = (width as usize)
         .checked_mul(height as usize)
         .ok_or("Overflow")?;
-    let payload_len = pixel_count.checked_mul(bpp as usize).ok_or("Overflow")?;
-    let end = header_size.checked_add(payload_len).ok_or("Overflow")?;
-    if end > bytes.len() {
-        return Err("Truncated .gbr pixel payload".into());
-    }
-
-    let payload = &bytes[header_size..end];
-    let alpha = if bpp == 1 {
-        payload.to_vec()
-    } else {
-        // In RGBA GBR files RGB carries color and alpha carries tip coverage.
-        payload
+    let payload_len = pixel_count.checked_mul(bpp).ok_or("Overflow")?;
+    let end = data_offset.checked_add(payload_len).ok_or("Overflow")?;
+    let payload = bytes
+        .get(data_offset..end)
+        .ok_or("Truncated .gbr pixel payload")?;
+    let alpha = match bpp {
+        1 => payload.to_vec(),
+        2 => payload
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pixel| {
+                // CinePaint stores only the most significant half of an f32.
+                let value = f32::from_bits(u32::from(u16::from_be_bytes(pixel)) << 16);
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
+            })
+            .collect(),
+        _ => payload
             .as_chunks::<4>()
             .0
             .iter()
             .map(|pixel| pixel[3])
-            .collect()
+            .collect(),
     };
 
     let tip = mask::raster(width, height, alpha).ok_or("Invalid .gbr mask")?;
@@ -103,6 +89,58 @@ pub(super) fn parse_gbr_at(
         },
         end,
     ))
+}
+
+struct BitmapHeader {
+    width: u32,
+    height: u32,
+    name_offset: usize,
+    data_offset: usize,
+    bpp: usize,
+    spacing: f32,
+}
+
+impl BitmapHeader {
+    fn read(bytes: &[u8]) -> Result<Self, String> {
+        let fixed = bytes
+            .first_chunk::<20>()
+            .ok_or("Truncated GIMP .gbr header")?;
+        let words = fixed.as_chunks::<4>().0;
+        let [data_offset, version, width, height, depth] =
+            std::array::from_fn(|index| u32::from_be_bytes(words[index]));
+        let (name_offset, spacing) = match version {
+            1 => (20, 25),
+            2 | 3 if bytes.get(20..24) == Some(b"GIMP") => {
+                let spacing = bytes
+                    .get(24..28)
+                    .and_then(|raw| raw.try_into().ok())
+                    .map(u32::from_be_bytes)
+                    .ok_or("Truncated GIMP .gbr spacing")?;
+                (28, spacing)
+            }
+            _ => return Err("Unsupported GIMP .gbr version or magic".into()),
+        };
+        let data_offset = data_offset as usize;
+        let bpp = match (version, depth) {
+            (1 | 2, 1 | 4) => depth as usize,
+            (3, 18) => 2,
+            _ => return Err(format!("Unsupported .gbr depth: {depth}")),
+        };
+        if !(name_offset..=bytes.len()).contains(&data_offset) {
+            return Err("Invalid .gbr header size".into());
+        }
+        if !(1..=MAX_GIMP_DIM).contains(&width) || !(1..=MAX_GIMP_DIM).contains(&height) {
+            return Err("Invalid .gbr brush dimensions".into());
+        }
+        Ok(Self {
+            width,
+            height,
+            name_offset,
+            data_offset,
+            bpp,
+            spacing: spacing.clamp(1, 500) as f32 / 100.0,
+        })
+    }
 }
 
 pub(super) fn parse_gih(
@@ -317,6 +355,30 @@ fn vbr_number(value: Option<&str>, name: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod generated_tests {
     use super::*;
+
+    #[test]
+    fn bitmap_tips_accept_original_and_cinepaint_headers() {
+        let legacy: Vec<u8> = [22_u32, 1, 2, 1, 1]
+            .into_iter()
+            .flat_map(u32::to_be_bytes)
+            .chain([b'A', 0, 127, 255])
+            .collect();
+        let (tip, bytes) = parse_gbr_at(&legacy, "fallback").unwrap();
+        assert_eq!(tip.name, "A");
+        assert_eq!(tip.params.spacing, 0.25);
+        assert_eq!(bytes, legacy.len());
+        assert!(matches!(tip.tip, BrushTipKind::AlphaMask { alpha, .. } if *alpha == [127, 255]));
+
+        let float: Vec<u8> = [28_u32, 3, 2, 1, 18, u32::from_be_bytes(*b"GIMP"), 60]
+            .into_iter()
+            .flat_map(u32::to_be_bytes)
+            .chain([0x3f, 0, 0x3f, 0x80])
+            .collect();
+        let (tip, bytes) = parse_gbr_at(&float, "fallback").unwrap();
+        assert_eq!(tip.params.spacing, 0.6);
+        assert_eq!(bytes, float.len());
+        assert!(matches!(tip.tip, BrushTipKind::AlphaMask { alpha, .. } if *alpha == [128, 255]));
+    }
 
     #[test]
     fn vbr_hardness_is_a_radial_falloff_and_spikes_repeat_the_tip_profile() {
