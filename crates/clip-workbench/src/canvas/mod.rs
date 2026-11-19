@@ -183,7 +183,7 @@ impl NodeCanvasState {
             self.status_message = Some((error, true));
             return None;
         }
-        match serde_yaml::to_string(&self.graph) {
+        match self.graph.to_yaml() {
             Ok(yaml) => {
                 self.status_message = Some(("Running pipeline…".to_owned(), false));
                 Some(CanvasAction::RunPipeline { yaml })

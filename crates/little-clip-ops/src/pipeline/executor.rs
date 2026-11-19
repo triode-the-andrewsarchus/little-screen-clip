@@ -1399,12 +1399,12 @@ mod tests {
     #[test]
     fn test_recipe_yaml_roundtrip() {
         let recipe = make_pad_and_caption_recipe();
-        let yaml = serde_yaml::to_string(&recipe).expect("Serialization failed");
+        let yaml = serde_saphyr::to_string(&recipe).expect("Serialization failed");
         assert!(yaml.contains("Pad and Caption"));
         assert!(yaml.contains("ImagePadFrame"));
 
         let deserialized: crate::pipeline::types::Recipe =
-            serde_yaml::from_str(&yaml).expect("Deserialization failed");
+            serde_saphyr::from_str(&yaml).expect("Deserialization failed");
         assert_eq!(deserialized.name, recipe.name);
         assert_eq!(deserialized.graph.nodes.len(), 5);
         assert_eq!(deserialized.graph.connections.len(), 4);

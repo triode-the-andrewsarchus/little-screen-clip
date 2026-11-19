@@ -1200,28 +1200,41 @@ fn save_settings_to_file(
     settings: &[(&str, &str, toml::Value)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path = find_config_file_path();
-    let mut current = if path.exists() {
+    let text = if path.exists() {
         std::fs::read_to_string(&path)?
     } else {
         String::new()
     };
+    let mut document = text.parse::<toml_edit::DocumentMut>()?;
     for (table, setting, value) in settings {
-        current = update_setting_in_text(&current, table, setting, value.clone())?;
+        update_setting(&mut document, table, setting, value)?;
     }
+    let current = document.to_string();
     // Validate combined edits before replacing the active configuration.
     let _: toml::Value = toml::from_str(&current)?;
     std::fs::write(&path, current)?;
     Ok(())
 }
 
-/// Update a setting while retaining comments and unrelated TOML formatting.
+#[cfg(test)]
 fn update_setting_in_text(
     text: &str,
     table: &str,
     setting: &str,
     value: impl Into<toml::Value>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let mut document: toml_edit::DocumentMut = text.parse()?;
+    let mut document = text.parse::<toml_edit::DocumentMut>()?;
+    update_setting(&mut document, table, setting, &value.into())?;
+    Ok(document.to_string())
+}
+
+/// Update a setting while retaining comments and unrelated TOML formatting.
+fn update_setting(
+    document: &mut toml_edit::DocumentMut,
+    table: &str,
+    setting: &str,
+    value: &toml::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut current = document.as_item_mut();
     for part in table.split('.') {
         if current.is_none() {
@@ -1241,12 +1254,12 @@ fn update_setting_in_text(
             .get_mut(part)
             .ok_or("Cannot edit configuration table")?;
     }
-    let parsed: toml_edit::Value = value.into().to_string().parse()?;
+    let parsed = value.serialize(toml_edit::ser::ValueSerializer::new())?;
     let parent = current
         .as_table_like_mut()
         .ok_or("Configuration destination is not a table")?;
     parent.insert(setting, toml_edit::Item::Value(parsed));
-    Ok(document.to_string())
+    Ok(())
 }
 
 /// Computes the default user configuration file path according to XDG base directory specifications.

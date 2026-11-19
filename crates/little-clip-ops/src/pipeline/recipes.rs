@@ -79,7 +79,7 @@ pub fn load_recipes_in_dir(dir: &Path) -> Vec<Recipe> {
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
                 && let Ok(content) = fs::read_to_string(&path)
             {
-                match serde_yaml::from_str::<Recipe>(&content) {
+                match Recipe::from_yaml(&content) {
                     Ok(recipe) => recipes.push(recipe),
                     Err(e) => warn!("Failed to parse recipe {}: {}", path.display(), e),
                 }
@@ -128,7 +128,7 @@ pub fn save_recipe_in_dir(recipe: &Recipe, dir: &Path) -> Result<PathBuf, std::i
 
     while path.exists() {
         if let Ok(content) = fs::read_to_string(&path)
-            && let Ok(existing) = serde_yaml::from_str::<Recipe>(&content)
+            && let Ok(existing) = Recipe::from_yaml(&content)
             && existing.name == recipe.name
         {
             break;
@@ -137,7 +137,7 @@ pub fn save_recipe_in_dir(recipe: &Recipe, dir: &Path) -> Result<PathBuf, std::i
         counter += 1;
     }
 
-    let yaml = serde_yaml::to_string(recipe)
+    let yaml = serde_saphyr::to_string(recipe)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     fs::write(&path, yaml)?;
     info!("Saved recipe {} to {}", recipe.name, path.display());
@@ -178,7 +178,7 @@ fn init_default_recipes(dir: &Path) -> Result<(), std::io::Error> {
             .collect();
         let path = dir.join(format!("{}.yaml", safe_name.to_lowercase()));
         if !path.exists() {
-            let yaml = serde_yaml::to_string(&r)
+            let yaml = serde_saphyr::to_string(&r)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
             fs::write(path, yaml)?;
         }

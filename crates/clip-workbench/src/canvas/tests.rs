@@ -51,7 +51,7 @@ fn run_pipeline_emits_graph_for_single_daemon_execution() {
     let Some(CanvasAction::RunPipeline { yaml }) = action else {
         panic!("run action must send the graph to its single execution owner");
     };
-    let sent_graph: NodeGraph = serde_yaml::from_str(&yaml).unwrap();
+    let sent_graph = NodeGraph::from_yaml(&yaml).unwrap();
     assert_eq!(sent_graph.nodes.len(), 2);
     assert!(
         canvas.node_previews.is_empty(),
@@ -201,7 +201,7 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
             .any(|recipe| { recipe.name == canvas.selected_recipe_name && recipe.graph == graph })
     );
     let serialized = std::fs::read_to_string(saved_path).unwrap();
-    let saved: Recipe = serde_yaml::from_str(&serialized).unwrap();
+    let saved = Recipe::from_yaml(&serialized).unwrap();
     assert_eq!(saved.name, "Private Save As Regression");
     assert_eq!(saved.graph, graph);
 }

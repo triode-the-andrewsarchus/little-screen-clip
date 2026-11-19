@@ -32,10 +32,10 @@ pub(super) fn inspect(source: &str) -> Result<Option<Header>, String> {
         _ => return Ok(None),
     };
     let mut end = first.len();
-    let mut closed = false;
+    let mut closing_bytes = 0;
     for line in lines {
         if line.trim_end_matches(['\r', '\n']) == marker {
-            closed = true;
+            closing_bytes = line.len();
             break;
         }
         end += line.len();
@@ -43,7 +43,7 @@ pub(super) fn inspect(source: &str) -> Result<Option<Header>, String> {
             return Ok(None);
         }
     }
-    if !closed {
+    if closing_bytes == 0 {
         return Ok(None);
     }
     let raw = &source[first.len()..end];
@@ -53,11 +53,10 @@ pub(super) fn inspect(source: &str) -> Result<Option<Header>, String> {
             0,
         )
     } else {
-        // Deserialize through YAML's value visitor first: JSON's generic map
-        // visitor overwrites duplicate keys instead of rejecting ambiguity.
-        let yaml: serde_yaml::Value =
-            serde_yaml::from_str(raw).map_err(|_| "Invalid YAML front matter")?;
-        serde_json::to_value(yaml).map_err(|_| "Unsupported YAML front matter")?
+        little_clip_core::markdown_metadata::parse(&source[..end + closing_bytes])
+            .ok_or("Invalid YAML front matter")?
+            .value
+            .map_err(|_| "Invalid YAML front matter")?
     };
     if !value.is_object() {
         return Ok(None);

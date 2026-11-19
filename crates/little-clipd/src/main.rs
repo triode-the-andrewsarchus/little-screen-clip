@@ -886,7 +886,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }
 
             Ok(IpcRequest::ExecuteGraphYaml { yaml }) => {
-                match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
+                match little_clip_ops::NodeGraph::from_yaml(&yaml) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
                         let started = std::time::Instant::now();
@@ -2458,7 +2458,7 @@ echo . >> "$CLIPD_TEST_CLIPBOARD/reads"
             ..Default::default()
         };
         let request = IpcRequest::ExecuteGraphYaml {
-            yaml: serde_yaml::to_string(&graph).unwrap(),
+            yaml: graph.to_yaml().unwrap(),
         };
         let (client, server) = UnixStream::pair().unwrap();
         let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));

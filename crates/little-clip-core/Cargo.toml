@@ -26,7 +26,7 @@ merman-core = { version = "=0.10.0", default-features = false, features = ["diag
 merman-model = { version = "=0.10.0", default-features = false, features = ["diagram-flowchart"] }
 oneyaml = "=1.2.0"
 excalidraw-document = "=0.2.0"
-serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
+serde-saphyr = { workspace = true, features = ["deserialize"] }
 thiserror.workspace = true
 uuid.workspace = true
 url.workspace = true
@@ -38,7 +38,7 @@ flashraw.workspace = true
 tiff = "0.11"
 percent-encoding.workspace = true
 toml.workspace = true
-toml_edit = "0.22"
+toml_edit = { version = "0.25", features = ["serde"] }
 symphonia.workspace = true
 hound = "3.5.1"
 rustchord = "0.6.0"

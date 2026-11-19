@@ -474,7 +474,7 @@ fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
             app.view = WorkbenchView::NodeMachine;
             app.canvas_state.catalog_open = catalog_open;
             app.canvas_state.save_dialog_open = !catalog_open;
-            let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+            let graph_before = serde_json::to_string(&app.canvas_state.graph).unwrap();
 
             press_shortcut(&mut app, shortcut);
 
@@ -482,7 +482,7 @@ fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
             assert_eq!(app.canvas_state.catalog_open, catalog_open);
             assert_eq!(app.canvas_state.save_dialog_open, !catalog_open);
             assert_eq!(
-                serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+                serde_json::to_string(&app.canvas_state.graph).unwrap(),
                 graph_before,
                 "{shortcut:?} must not mutate the graph while an overlay is open"
             );
@@ -499,7 +499,7 @@ fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
                 assert!(!app.canvas_state.catalog_open);
                 assert!(!app.canvas_state.save_dialog_open);
                 assert_eq!(
-                    serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+                    serde_json::to_string(&app.canvas_state.graph).unwrap(),
                     graph_before,
                     "{resume_key:?} after dismissal must preserve graph state"
                 );
@@ -512,7 +512,7 @@ fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
 fn palette_f1_opens_node_machine_through_global_shortcuts() {
     let mut app = test_workbench_app(None, VecDeque::new());
     assert_eq!(app.view, WorkbenchView::Palette);
-    let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+    let graph_before = serde_json::to_string(&app.canvas_state.graph).unwrap();
 
     let _ = clip_ui::test_support::run_frame(
         &egui::Context::default(),
@@ -525,7 +525,7 @@ fn palette_f1_opens_node_machine_through_global_shortcuts() {
 
     assert_eq!(app.view, WorkbenchView::NodeMachine);
     assert_eq!(
-        serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+        serde_json::to_string(&app.canvas_state.graph).unwrap(),
         graph_before
     );
 }
@@ -577,7 +577,7 @@ fn palette_f4_and_f6_switch_workbench_and_display_palettes_together() {
 fn palette_f3_opens_auto_actions_through_global_shortcuts() {
     let mut app = test_workbench_app(None, VecDeque::new());
     assert_eq!(app.view, WorkbenchView::Palette);
-    let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+    let graph_before = serde_json::to_string(&app.canvas_state.graph).unwrap();
 
     let _ = clip_ui::test_support::run_frame(
         &egui::Context::default(),
@@ -590,7 +590,7 @@ fn palette_f3_opens_auto_actions_through_global_shortcuts() {
 
     assert_eq!(app.view, WorkbenchView::AutoActions);
     assert_eq!(
-        serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+        serde_json::to_string(&app.canvas_state.graph).unwrap(),
         graph_before
     );
 }
@@ -605,8 +605,8 @@ fn node_canvas_state_persists_across_palette_and_auto_actions_routes() {
     app.canvas_state
         .undo_stack
         .push(app.canvas_state.graph.clone());
-    let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
-    let undo_before = serde_yaml::to_string(&app.canvas_state.undo_stack).unwrap();
+    let graph_before = serde_json::to_string(&app.canvas_state.graph).unwrap();
+    let undo_before = serde_json::to_string(&app.canvas_state.undo_stack).unwrap();
     let selected_node = app.canvas_state.selected_node;
     let recipe_name = app.canvas_state.selected_recipe_name.clone();
 
@@ -634,13 +634,13 @@ fn node_canvas_state_persists_across_palette_and_auto_actions_routes() {
 
         assert_eq!(app.view, expected_view);
         assert_eq!(
-            serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+            serde_json::to_string(&app.canvas_state.graph).unwrap(),
             graph_before
         );
         assert_eq!(app.canvas_state.selected_node, selected_node);
         assert_eq!(app.canvas_state.selected_recipe_name, recipe_name);
         assert_eq!(
-            serde_yaml::to_string(&app.canvas_state.undo_stack).unwrap(),
+            serde_json::to_string(&app.canvas_state.undo_stack).unwrap(),
             undo_before
         );
     }
@@ -694,13 +694,13 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
         input_text: "input".to_owned(),
         first_frame: true,
     });
-    let prompt_graph = serde_yaml::to_string(&prompt_app.canvas_state.graph).unwrap();
+    let prompt_graph = serde_json::to_string(&prompt_app.canvas_state.graph).unwrap();
     assert!(frame_with_key(&mut prompt_app, egui::Key::F2));
     assert!(frame_with_key(&mut prompt_app, egui::Key::Delete));
     assert_eq!(prompt_app.view, WorkbenchView::NodeMachine);
     assert!(prompt_app.in_app_prompt.is_some());
     assert_eq!(
-        serde_yaml::to_string(&prompt_app.canvas_state.graph).unwrap(),
+        serde_json::to_string(&prompt_app.canvas_state.graph).unwrap(),
         prompt_graph
     );
     assert!(frame_with_key(&mut prompt_app, egui::Key::Escape));
@@ -722,13 +722,13 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
         .nodes
         .first()
         .map(|node| node.id);
-    let viewer_graph = serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap();
+    let viewer_graph = serde_json::to_string(&viewer_app.canvas_state.graph).unwrap();
     assert!(frame_with_key(&mut viewer_app, egui::Key::F2));
     assert!(frame_with_key(&mut viewer_app, egui::Key::Delete));
     assert_eq!(viewer_app.view, WorkbenchView::NodeMachine);
     assert!(viewer_app.viewer.is_some());
     assert_eq!(
-        serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap(),
+        serde_json::to_string(&viewer_app.canvas_state.graph).unwrap(),
         viewer_graph
     );
     assert!(frame_with_key(&mut viewer_app, egui::Key::Escape));
@@ -737,7 +737,7 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
     assert!(!frame_with_key(&mut viewer_app, egui::Key::F2));
     assert_eq!(viewer_app.view, WorkbenchView::Palette);
     assert_eq!(
-        serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap(),
+        serde_json::to_string(&viewer_app.canvas_state.graph).unwrap(),
         viewer_graph
     );
 }

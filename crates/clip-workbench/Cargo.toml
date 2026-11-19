@@ -22,7 +22,6 @@ egui.workspace = true
 egui_extras.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = { workspace = true }
 uuid = { workspace = true }
 tracing.workspace = true
 rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "symphonia-mkv", "symphonia-aiff"] }

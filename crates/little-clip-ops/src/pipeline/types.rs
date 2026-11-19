@@ -339,6 +339,18 @@ impl Default for NodeGraph {
     }
 }
 
+impl NodeGraph {
+    /// Reads the YAML representation used by the desktop pipeline IPC.
+    pub fn from_yaml(yaml: &str) -> Result<Self, serde_saphyr::DeserializeError> {
+        serde_saphyr::from_str(yaml)
+    }
+
+    /// Encodes the graph for the desktop pipeline IPC.
+    pub fn to_yaml(&self) -> Result<String, serde_saphyr::SerializeError> {
+        serde_saphyr::to_string(self)
+    }
+}
+
 /// A named, reusable automation pipeline preset with input criteria and graph topology.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Recipe {
@@ -357,6 +369,11 @@ pub struct Recipe {
 }
 
 impl Recipe {
+    /// Reads a saved YAML recipe.
+    pub fn from_yaml(yaml: &str) -> Result<Self, serde_saphyr::DeserializeError> {
+        serde_saphyr::from_str(yaml)
+    }
+
     /// Returns `true` if this recipe can be executed on the currently selected clipboard items.
     pub fn is_applicable(&self, items: &[&ClipItem]) -> bool {
         match self.input_type {
@@ -400,6 +417,19 @@ fn is_audio_like(item: &ClipItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loads_legacy_yaml_with_tagged_slot_nodes() {
+        let graph = NodeGraph::from_yaml(
+            "nodes:\n  - id: 00000000-0000-0000-0000-000000000001\n    kind: !SlotSource LeftHand\n    title: Input\n    pos: [0.0, 0.0]\n",
+        )
+        .unwrap();
+        assert_eq!(graph.nodes[0].kind, NodeKind::SlotSource(SlotId::LeftHand));
+        assert_eq!(
+            NodeGraph::from_yaml(&graph.to_yaml().unwrap()).unwrap(),
+            graph
+        );
+    }
 
     #[test]
     fn one_image_file_reference_remains_a_reference_until_a_content_node_consumes_it() {
