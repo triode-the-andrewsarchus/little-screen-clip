@@ -800,12 +800,39 @@ fn is_link_line(l: &str) -> bool {
     l.contains("](") && l.contains('[') && l.contains(')')
 }
 
+fn is_quote_line(l: &str) -> bool {
+    l == ">" || l.starts_with("> ")
+}
+
+fn is_table_pipe_line(l: &str) -> bool {
+    (l.contains('|') && l.trim_matches('|').contains('|'))
+        || (l.starts_with('|') && l.ends_with('|') && l.len() >= 2)
+}
+
+fn is_table_separator_line(l: &str) -> bool {
+    if !l.contains('|') || !l.contains('-') {
+        return false;
+    }
+    let cells: Vec<&str> = l.trim_matches('|').split('|').collect();
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let trimmed = cell.trim();
+            let dashes = trimmed.trim_start_matches(':').trim_end_matches(':');
+            !dashes.is_empty()
+                && dashes.bytes().all(|b| b == b'-')
+                && (dashes.len() >= 2 || cells.len() >= 2)
+        })
+}
+
 #[derive(Default)]
 struct MarkdownSignalCounter {
     fence_count: usize,
     heading_count: usize,
     list_count: usize,
     link_count: usize,
+    quote_count: usize,
+    table_pipe_count: usize,
+    table_sep_count: usize,
 }
 
 impl MarkdownSignalCounter {
@@ -813,8 +840,15 @@ impl MarkdownSignalCounter {
         if self.fence_count >= 2 {
             return true;
         }
+        if self.table_sep_count >= 1 && self.table_pipe_count >= 2 {
+            return true;
+        }
         if self.heading_count >= 1
-            && (self.list_count >= 1 || self.link_count >= 1 || self.fence_count >= 1)
+            && (self.list_count >= 1
+                || self.link_count >= 1
+                || self.fence_count >= 1
+                || self.quote_count >= 1
+                || self.table_sep_count >= 1)
         {
             return true;
         }
@@ -826,6 +860,13 @@ impl MarkdownSignalCounter {
             self.heading_count += 1;
         } else if is_list_line(line) {
             self.list_count += 1;
+        } else if is_quote_line(line) {
+            self.quote_count += 1;
+        } else if is_table_separator_line(line) {
+            self.table_sep_count += 1;
+            self.table_pipe_count += 1;
+        } else if is_table_pipe_line(line) {
+            self.table_pipe_count += 1;
         } else if is_link_line(line) {
             self.link_count += 1;
         }
@@ -1240,5 +1281,14 @@ mod tests {
         assert_eq!(syntect_fallback("bazel"), "py");
         assert_eq!(syntect_fallback("kt"), "java");
         assert_eq!(syntect_fallback("zig"), "c");
+    }
+
+    #[test]
+    fn detect_markdown_recognizes_tables_and_quotes() {
+        assert!(detect_markdown_text(
+            "| Name | Score |\n| :--- | ---: |\n| Alice | 10 |"
+        ));
+        assert!(detect_markdown_text("# Summary\n\n> Quoted paragraph"));
+        assert!(!detect_markdown_text("a | b\nc | d"));
     }
 }

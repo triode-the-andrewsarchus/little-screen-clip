@@ -62,32 +62,135 @@ impl ScreenRenderer {
                 break;
             }
             let (text, style, color) = match span {
-                MarkdownSpan::Text(text) => (text, FontStyle::Regular, default_color),
+                MarkdownSpan::Text(text) => (text.as_str(), FontStyle::Regular, default_color),
                 MarkdownSpan::Bold(text) => (
-                    text,
+                    text.as_str(),
                     FontStyle::Bold,
                     self.color_from_hex(&self.palette.colors.text_primary),
                 ),
                 MarkdownSpan::Italic(text) => (
-                    text,
+                    text.as_str(),
                     FontStyle::Italic,
                     self.color_from_hex_alpha(&self.palette.colors.text_muted, 240),
                 ),
                 MarkdownSpan::BoldItalic(text) => (
-                    text,
+                    text.as_str(),
                     FontStyle::BoldItalic,
                     self.color_from_hex(&self.palette.colors.text_primary),
                 ),
+                MarkdownSpan::Strikethrough(text) => (
+                    text.as_str(),
+                    FontStyle::Regular,
+                    self.color_from_hex_alpha(&self.palette.colors.text_muted, 200),
+                ),
                 MarkdownSpan::Code(text) => (
-                    text,
+                    text.as_str(),
                     FontStyle::Mono,
                     self.color_from_hex(&self.palette.undo_border),
                 ),
+                MarkdownSpan::HighlightedCode { language, code } => {
+                    if !language.is_empty()
+                        && let Some(theme) = THEME_SET.themes.get("base16-eighties.dark")
+                    {
+                        let syntax = find_syntax(language);
+                        let mut highlighter = HighlightLines::new(syntax, theme);
+                        for line in code.split_inclusive('\n') {
+                            for (style, token_str) in highlighter
+                                .highlight_line(line, &SYNTAX_SET)
+                                .unwrap_or_default()
+                            {
+                                let hex = self.palette.map_syntax_color_hex(
+                                    style.foreground.r,
+                                    style.foreground.g,
+                                    style.foreground.b,
+                                );
+                                let fg = self.color_from_hex(hex);
+                                let run = MarkdownRun::text(
+                                    self,
+                                    Cow::Owned(token_str.to_owned()),
+                                    size,
+                                    FontStyle::Mono,
+                                    fg,
+                                );
+                                occupied += run.width;
+                                runs.push(run);
+                            }
+                        }
+                        continue;
+                    }
+                    (
+                        code.as_str(),
+                        FontStyle::Mono,
+                        self.color_from_hex(&self.palette.undo_border),
+                    )
+                }
+                MarkdownSpan::Styled { text, url, css } => {
+                    let style = if css.monospace {
+                        FontStyle::Mono
+                    } else if css.bold && css.italic {
+                        FontStyle::BoldItalic
+                    } else if css.bold {
+                        FontStyle::Bold
+                    } else if css.italic {
+                        FontStyle::Italic
+                    } else {
+                        FontStyle::Regular
+                    };
+                    let color = if url.is_some() {
+                        self.color_from_hex(&self.palette.url_color)
+                    } else if css.bold {
+                        self.color_from_hex(&self.palette.colors.text_primary)
+                    } else {
+                        default_color
+                    };
+                    (text.as_str(), style, color)
+                }
                 MarkdownSpan::Link { label, .. } => (
-                    label,
+                    label.as_str(),
                     FontStyle::Regular,
                     self.color_from_hex(&self.palette.url_color),
                 ),
+                MarkdownSpan::Image { alt, .. } | MarkdownSpan::StyledImage { alt, .. } => {
+                    let label = if alt.is_empty() {
+                        "[image]".to_owned()
+                    } else {
+                        format!("[image: {alt}]")
+                    };
+                    let run = MarkdownRun::text(
+                        self,
+                        label.into(),
+                        size,
+                        FontStyle::Italic,
+                        self.color_from_hex(&self.palette.colors.text_muted),
+                    );
+                    occupied += run.width;
+                    runs.push(run);
+                    continue;
+                }
+                MarkdownSpan::Spoiler { .. } => {
+                    let run = MarkdownRun::text(
+                        self,
+                        "[spoiler]".into(),
+                        size,
+                        FontStyle::Italic,
+                        self.color_from_hex(&self.palette.colors.text_muted),
+                    );
+                    occupied += run.width;
+                    runs.push(run);
+                    continue;
+                }
+                MarkdownSpan::HardBreak => {
+                    let run = MarkdownRun::text(
+                        self,
+                        " ".into(),
+                        size,
+                        FontStyle::Regular,
+                        default_color,
+                    );
+                    occupied += run.width;
+                    runs.push(run);
+                    continue;
+                }
                 MarkdownSpan::Math {
                     source, display, ..
                 } => {
@@ -142,7 +245,7 @@ impl ScreenRenderer {
                     continue;
                 }
             };
-            let run = MarkdownRun::text(self, text.as_str().into(), size, style, color);
+            let run = MarkdownRun::text(self, text.into(), size, style, color);
             occupied += run.width;
             runs.push(run);
         }
@@ -361,6 +464,82 @@ impl ScreenRenderer {
                             Some(("• ", border_color)),
                         )
                         .max(if is_hero { 24.0 } else { 20.0 });
+                }
+                MarkdownLine::Task {
+                    indent,
+                    checked,
+                    spans,
+                } => {
+                    let indent_px = (*indent as f32 * 4.0).min(16.0);
+                    let size = if is_hero { 18.0 } else { 15.0 };
+                    let marker = if *checked { "[x] " } else { "[ ] " };
+                    y += self
+                        .draw_markdown_spans(
+                            pixmap,
+                            spans,
+                            content_x + indent_px,
+                            y,
+                            size,
+                            body_color,
+                            clip_right,
+                            max_y - y,
+                            Some((marker, border_color)),
+                        )
+                        .max(if is_hero { 24.0 } else { 20.0 });
+                }
+                MarkdownLine::Table(table) => {
+                    let cols = table
+                        .headers
+                        .len()
+                        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0))
+                        .clamp(1, if is_hero { 4 } else { 3 });
+                    let col_w = (max_content_w / cols as f32).max(20.0);
+                    let row_h = if is_hero { 24.0 } else { 20.0 };
+                    let font_size = if is_hero { 14.0 } else { 12.0 };
+                    let panel_bg = self.color_from_hex(&self.palette.colors.surface_panel);
+                    let recessed_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
+                    let canvas_bg = self.color_from_hex(&self.palette.colors.canvas);
+                    let all_rows = std::iter::once((true, &table.headers))
+                        .chain(table.rows.iter().map(|r| (false, r)));
+                    for (r_idx, (is_header, row)) in all_rows.enumerate() {
+                        if y + row_h > max_y {
+                            break;
+                        }
+                        let row_bg = if is_header {
+                            panel_bg
+                        } else if r_idx % 2 == 1 {
+                            recessed_bg
+                        } else {
+                            canvas_bg
+                        };
+                        if let Some(rect) = Rect::from_xywh(content_x, y, max_content_w, row_h) {
+                            let mut paint = Paint::default();
+                            paint.set_color(row_bg);
+                            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+                        }
+                        let row_fg = self.contrast_color(
+                            row_bg,
+                            Some(if is_header { border_color } else { body_color }),
+                        );
+                        for (c_idx, cell) in row.iter().take(cols).enumerate() {
+                            let cx = content_x + c_idx as f32 * col_w + 4.0;
+                            let c_clip =
+                                (content_x + (c_idx + 1) as f32 * col_w - 4.0).min(clip_right);
+                            self.draw_markdown_spans(
+                                pixmap,
+                                cell,
+                                cx,
+                                y + (row_h - font_size) * 0.5 - 1.0,
+                                font_size,
+                                row_fg,
+                                c_clip,
+                                row_h,
+                                None,
+                            );
+                        }
+                        y += row_h;
+                    }
+                    y += 4.0;
                 }
                 MarkdownLine::Numbered { number, spans } => {
                     let size = if is_hero { 18.0 } else { 15.0 };

@@ -1,6 +1,6 @@
 //! Worker-prepared source-position excerpts using the shared native Markdown view.
-use super::{MarkdownBlock, Previews, prepare_blocks, render_blocks};
-use little_clip_render::markdown::{LocatedLine, MarkdownLine, parse_located};
+use super::{MarkdownBlock, Previews};
+use little_clip_render::markdown::{LocatedBlock, MarkdownDocBlock, parse_located_blocks};
 use std::{
     ops::Range,
     sync::{
@@ -15,8 +15,9 @@ pub struct MarkdownExcerptData {
     /// Inclusive one-based original line numbers covered by this excerpt.
     pub source_lines: std::ops::RangeInclusive<usize>,
 }
+
 impl MarkdownExcerptData {
-    /// Prepares an excerpt on a worker, keeping complete native diagram fences.
+    /// Prepares an excerpt on a worker, keeping complete native diagram fences and tables.
     ///
     /// # Errors
     ///
@@ -26,7 +27,7 @@ impl MarkdownExcerptData {
         if source.len() > 2 * 1024 * 1024 || cancel.load(Ordering::Relaxed) {
             return Err("Markdown excerpt input exceeds the budget or was cancelled".into());
         }
-        let mut located = parse_located(source);
+        let mut located = parse_located_blocks(source);
         if cancel.load(Ordering::Relaxed) {
             return Err("Markdown excerpt cancelled".into());
         }
@@ -45,6 +46,7 @@ impl MarkdownExcerptData {
         let index = located
             .iter()
             .rposition(|item| item.source.contains(&offset))
+            .or_else(|| nearest_block_index(&located, offset))
             .unwrap_or(0);
         let selected = selection(&located, index)?;
         let bytes = located[selected.start].source.start..located[selected.end - 1].source.end;
@@ -55,7 +57,7 @@ impl MarkdownExcerptData {
             .count()
             + 1;
         let last = source[..bytes.end].lines().count().max(first);
-        let blocks = prepare_blocks(located.drain(selected).map(|item| item.line));
+        let blocks = located.drain(selected).map(|item| item.block).collect();
         Ok(Arc::new(Self {
             blocks,
             source_lines: first..=last,
@@ -63,67 +65,148 @@ impl MarkdownExcerptData {
     }
 }
 
+fn nearest_block_index(located: &[LocatedBlock], offset: usize) -> Option<usize> {
+    if located.is_empty() {
+        return None;
+    }
+    let next = located.iter().position(|item| item.source.start >= offset);
+    let prev = located.iter().rposition(|item| item.source.end <= offset);
+    match (prev, next) {
+        (Some(p), Some(n)) => {
+            let dist_prev = offset.saturating_sub(located[p].source.end);
+            let dist_next = located[n].source.start.saturating_sub(offset);
+            Some(if dist_next <= dist_prev { n } else { p })
+        }
+        (None, Some(n)) => Some(n),
+        (Some(p), None) => Some(p),
+        (None, None) => Some(0),
+    }
+}
+
 // Keep a nearby heading, without putting a large preceding image, equation,
-// code block or front-matter table ahead of the position the person selected.
-fn context_start(lines: &[LocatedLine], index: usize) -> usize {
-    let mut start = index;
-    while start > 0 && lines[start - 1].source == lines[index].source {
-        start -= 1;
-    }
-    if start > 0 && matches!(lines[start - 1].line, MarkdownLine::Heading { .. }) {
-        start - 1
-    } else if start > 1
-        && matches!(lines[start - 1].line, MarkdownLine::Empty)
-        && matches!(lines[start - 2].line, MarkdownLine::Heading { .. })
-    {
-        start - 2
+// code block, table or front-matter table ahead of the position the person selected.
+fn context_start(blocks: &[LocatedBlock], index: usize) -> usize {
+    if index > 0 && matches!(blocks[index - 1].block, MarkdownDocBlock::Heading { .. }) {
+        index - 1
     } else {
-        start
+        index
     }
 }
 
-fn selection(lines: &[LocatedLine], index: usize) -> Result<Range<usize>, String> {
-    let mut selected = context_start(lines, index)..(index + 9).min(lines.len());
-    let mut open = None;
-    for (position, item) in lines.iter().enumerate() {
-        if !matches!(item.line, MarkdownLine::CodeFence { .. }) {
-            continue;
-        }
-        if let Some(start) = open.take() {
-            let fence = start..position + 1;
-            if fence.contains(&index) {
-                return Ok(fence);
-            }
-            if fence.contains(&selected.start) {
-                selected.start = fence.end;
-            }
-            if selected.end > start && selected.end < fence.end {
-                selected.end = start;
-            }
-        } else {
-            open = Some(position);
+fn selection(blocks: &[LocatedBlock], index: usize) -> Result<Range<usize>, String> {
+    if blocks[index].incomplete_fence {
+        return Err("Incomplete Markdown fence; showing source".into());
+    }
+    if matches!(blocks[index].block, MarkdownDocBlock::IncompleteMath { .. }) {
+        return Err("Incomplete equation; showing source".into());
+    }
+    if matches!(
+        &blocks[index].block,
+        MarkdownDocBlock::Code { language, .. }
+            if little_clip_core::diagram::Format::from_language(language).is_some()
+    ) || matches!(&blocks[index].block, MarkdownDocBlock::Table(_))
+    {
+        return Ok(index..index + 1);
+    }
+
+    let start = context_start(blocks, index);
+    let mut end = (index + 5).min(blocks.len());
+    for (offset, item) in blocks[start..end].iter().enumerate() {
+        if item.incomplete_fence || matches!(item.block, MarkdownDocBlock::IncompleteMath { .. }) {
+            end = (start + offset).max(start + 1);
+            break;
         }
     }
-    if let Some(start) = open {
-        if index >= start {
-            return Err("Incomplete Markdown fence; showing source".into());
-        }
-        selected.end = selected.end.min(start);
-    }
-    Ok(selected)
+    Ok(start..end)
 }
 
-fn validate(lines: &[LocatedLine], bytes: usize) -> Result<(), String> {
-    let format = match &lines[0].line {
-        MarkdownLine::CodeFence { language } => {
+fn count_block_spans(block: &MarkdownDocBlock) -> Result<usize, String> {
+    Ok(match block {
+        MarkdownDocBlock::Heading { spans, .. } | MarkdownDocBlock::Paragraph { spans } => {
+            spans.len()
+        }
+        MarkdownDocBlock::Details {
+            summary, blocks, ..
+        } => {
+            let mut total = summary.len();
+            for inner in blocks {
+                total += count_block_spans(inner)?;
+            }
+            total
+        }
+        MarkdownDocBlock::StyledContainer { blocks, .. }
+        | MarkdownDocBlock::Quote { blocks, .. }
+        | MarkdownDocBlock::Footnote { blocks, .. } => {
+            let mut total = 0usize;
+            for inner in blocks {
+                total += count_block_spans(inner)?;
+            }
+            total
+        }
+        MarkdownDocBlock::PullQuote { source, blocks, .. } => {
+            let mut total = source.len();
+            for inner in blocks {
+                total += count_block_spans(inner)?;
+            }
+            total
+        }
+        MarkdownDocBlock::Tabs { tabs } => {
+            let mut total = 0usize;
+            for tab in tabs {
+                for inner in &tab.blocks {
+                    total += count_block_spans(inner)?;
+                }
+            }
+            total
+        }
+        MarkdownDocBlock::Columns { columns, .. } => {
+            let mut total = 0usize;
+            for col in columns {
+                for inner in col {
+                    total += count_block_spans(inner)?;
+                }
+            }
+            total
+        }
+        MarkdownDocBlock::List { items, .. } => {
+            let mut total = 0usize;
+            for item in items {
+                for inner in &item.blocks {
+                    total += count_block_spans(inner)?;
+                }
+            }
+            total
+        }
+        MarkdownDocBlock::Table(table) => {
+            let header_spans: usize = table.headers.iter().map(Vec::len).sum();
+            let row_spans: usize = table
+                .rows
+                .iter()
+                .flat_map(|row| row.iter())
+                .map(Vec::len)
+                .sum();
+            header_spans + row_spans
+        }
+        MarkdownDocBlock::IncompleteMath { .. } => {
+            return Err("Incomplete equation; showing source".into());
+        }
+        MarkdownDocBlock::FrontMatter(_)
+        | MarkdownDocBlock::Code { .. }
+        | MarkdownDocBlock::Rule => 0,
+    })
+}
+
+fn validate(blocks: &[LocatedBlock], bytes: usize) -> Result<(), String> {
+    let format = match &blocks[0].block {
+        MarkdownDocBlock::Code { language, .. } => {
             little_clip_core::diagram::Format::from_language(language)
         }
         _ => None,
     };
-    let metadata_bytes = lines
+    let metadata_bytes = blocks
         .iter()
         .filter_map(|item| {
-            matches!(item.line, MarkdownLine::FrontMatter(_))
+            matches!(item.block, MarkdownDocBlock::FrontMatter(_))
                 .then_some(item.source.len().min(64 * 1024))
         })
         .sum::<usize>();
@@ -132,39 +215,52 @@ fn validate(lines: &[LocatedLine], bytes: usize) -> Result<(), String> {
         Some(_) => 256 * 1024,
         None => 32 * 1024 + metadata_bytes,
     };
-    let mut spans = 0;
-    for item in lines {
-        spans += match &item.line {
-            MarkdownLine::Heading { spans, .. }
-            | MarkdownLine::Bullet { spans, .. }
-            | MarkdownLine::Numbered { spans, .. }
-            | MarkdownLine::Quote { spans }
-            | MarkdownLine::Paragraph { spans } => spans.len(),
-            MarkdownLine::IncompleteMath { .. } => {
-                return Err("Incomplete equation; showing source".into());
-            }
-            _ => 0,
-        };
+    let mut spans = 0usize;
+    for item in blocks {
+        if item.incomplete_fence {
+            return Err("Incomplete Markdown fence; showing source".into());
+        }
+        spans += count_block_spans(&item.block)?;
     }
-    if bytes > budget || spans > 128 {
+    if bytes > budget || spans > 256 {
         return Err("Rendered Markdown excerpt exceeds the preview budget".into());
     }
     Ok(())
 }
 
-/// Per-hover native rendering state; dropping it retires diagram/math jobs.
+/// Per-hover native rendering state; dropping it retires diagram/math/image jobs.
 pub struct MarkdownExcerptView {
     data: Arc<MarkdownExcerptData>,
     previews: Previews,
+    images: super::images::ImageCache,
+    links: super::LinkCache,
+    pending_navigation: Option<std::path::PathBuf>,
 }
+
 impl MarkdownExcerptView {
     /// Creates a view over worker-prepared immutable blocks.
     pub fn new(data: Arc<MarkdownExcerptData>) -> Self {
         Self {
             data,
             previews: Previews::new(),
+            images: Default::default(),
+            links: Default::default(),
+            pending_navigation: None,
         }
     }
+
+    /// Binds the Markdown file's path so local/Hugo images and internal links resolve.
+    pub fn with_base_path(mut self, path: std::path::PathBuf) -> Self {
+        self.images.set_base_path(Some(&path));
+        self.links.set_base_path(Some(&path));
+        self
+    }
+
+    /// Consumes a clicked internal document link target requested from this excerpt.
+    pub fn take_pending_navigation(&mut self) -> Option<std::path::PathBuf> {
+        self.pending_navigation.take()
+    }
+
     /// Renders inside a bounded hover area without source parsing or file I/O.
     pub fn show(
         &mut self,
@@ -185,7 +281,17 @@ impl MarkdownExcerptView {
             .min_scrolled_height(0.0)
             .max_height(height.clamp(1.0, 640.0))
             .show(ui, |ui| {
-                render_blocks(ui, &self.data.blocks, palette, Some(&mut self.previews))
+                super::render_blocks_with_media(
+                    ui,
+                    &self.data.blocks,
+                    palette,
+                    super::DocMedia {
+                        previews: Some(&mut self.previews),
+                        images: Some(&mut self.images),
+                        links: Some(&mut self.links),
+                        navigate_to: Some(&mut self.pending_navigation),
+                    },
+                )
             });
     }
 }
@@ -193,6 +299,7 @@ impl MarkdownExcerptView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_render::markdown::MarkdownSpan;
     static LIVE: AtomicBool = AtomicBool::new(false);
 
     #[test]
@@ -203,23 +310,33 @@ mod tests {
         );
         let data = MarkdownExcerptData::prepare(&source, 403, &LIVE).unwrap();
         assert!(*data.source_lines.start() > 390);
-        assert!(data.blocks.iter().any(|block| matches!(block, MarkdownBlock::Line(MarkdownLine::Heading {text,..}) if text == "Destination")));
-        assert!(!data.blocks.iter().any(|block| matches!(block, MarkdownBlock::Line(MarkdownLine::Heading {text,..}) if text == "Beginning")));
+        assert!(data.blocks.iter().any(
+            |block| matches!(block, MarkdownBlock::Heading { text, .. } if text == "Destination")
+        ));
+        assert!(!data.blocks.iter().any(
+            |block| matches!(block, MarkdownBlock::Heading { text, .. } if text == "Beginning")
+        ));
     }
 
     #[test]
-    fn hovering_inside_a_diagram_or_equation_keeps_its_complete_native_content() {
-        let source =
-            "# Before\n\n```mermaid\nflowchart LR\n A --> B\n B --> C\n```\n\n$$\nx^2 +\ny^2\n$$\n";
+    fn hovering_inside_a_diagram_table_or_equation_keeps_its_complete_native_content() {
+        let source = "# Before\n\n```mermaid\nflowchart LR\n A --> B\n B --> C\n```\n\n$$\nx^2 +\ny^2\n$$\n\n| Col A | Col B |\n| --- | --- |\n| one | two |\n";
         for line in [3, 4, 5, 6, 7] {
             let data = MarkdownExcerptData::prepare(source, line, &LIVE).unwrap();
             assert_eq!(data.source_lines, 3..=7);
             assert!(
-                matches!(&data.blocks[0], MarkdownBlock::Code {language,text} if language == "mermaid" && text.contains("B --> C"))
+                matches!(&data.blocks[0], MarkdownBlock::Code { language, text } if language == "mermaid" && text.contains("B --> C"))
             );
         }
         let data = MarkdownExcerptData::prepare(source, 10, &LIVE).unwrap();
-        assert!(data.blocks.iter().any(|block| matches!(block, MarkdownBlock::Line(MarkdownLine::Paragraph {spans}) if spans.iter().any(|span| matches!(span, little_clip_render::markdown::MarkdownSpan::Math {source, display:true,..} if source.contains("y^2"))))));
+        assert!(data.blocks.iter().any(|block| matches!(
+            block,
+            MarkdownBlock::Paragraph { spans }
+                if spans.iter().any(|span| matches!(span, MarkdownSpan::Math { source, display: true, .. } if source.contains("y^2")))
+        )));
+
+        let table_data = MarkdownExcerptData::prepare(source, 15, &LIVE).unwrap();
+        assert!(matches!(&table_data.blocks[0], MarkdownBlock::Table(_)));
     }
 
     #[test]
@@ -230,6 +347,7 @@ mod tests {
         assert!(MarkdownExcerptData::prepare(&"x".repeat(32 * 1024 + 1), 1, &LIVE).is_err());
         assert!(MarkdownExcerptData::prepare("# Heading", 1, &AtomicBool::new(true)).is_err());
     }
+
     #[test]
     fn body_hover_does_not_put_a_frontmatter_table_ahead_of_the_selected_heading() {
         let source = format!(
@@ -240,8 +358,49 @@ mod tests {
         );
         let data = MarkdownExcerptData::prepare(&source, 33, &LIVE).unwrap();
         assert_eq!(*data.source_lines.start(), 33);
+        assert!(matches!(&data.blocks[0], MarkdownBlock::Heading { text, .. } if text == "Body"));
+    }
+
+    #[test]
+    fn blank_lines_suppressed_html_and_unboxed_containers_hover_nearby_instead_of_jumping_to_start()
+    {
+        let fillers = "Filler paragraph line.\n\n".repeat(40);
+        let style_lines = ".rule { color: red; }\n".repeat(25);
+        let source = format!(
+            "# Document Start\n\nIntro lines.\n\n{fillers}\
+             <div class=\"models\">\n\n\
+             | Col A | Col B |\n| --- | --- |\n| one | two |\n\n\
+             </div>\n\n\
+             <style>\n{style_lines}</style>\n\n\
+             # Nearby Section\n\nTarget body text.\n"
+        );
+        let table_line = source
+            .lines()
+            .position(|l| l.contains("| one | two |"))
+            .unwrap()
+            + 1;
+        let style_mid_line = source
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains(".rule {"))
+            .nth(15)
+            .unwrap()
+            .0
+            + 1;
+
+        let table_hover = MarkdownExcerptData::prepare(&source, table_line, &LIVE).unwrap();
         assert!(
-            matches!(&data.blocks[0], MarkdownBlock::Line(MarkdownLine::Heading {text,..}) if text == "Body")
+            *table_hover.source_lines.start() >= table_line.saturating_sub(3),
+            "unboxed <div> table hover should stay at table line {table_line}, got {:?}",
+            table_hover.source_lines
+        );
+        assert!(matches!(&table_hover.blocks[0], MarkdownBlock::Table(_)));
+
+        let style_hover = MarkdownExcerptData::prepare(&source, style_mid_line, &LIVE).unwrap();
+        assert!(
+            *style_hover.source_lines.start() > 50,
+            "hover inside suppressed <style> block at line {style_mid_line} must not jump back to line 1, got {:?}",
+            style_hover.source_lines
         );
     }
 }

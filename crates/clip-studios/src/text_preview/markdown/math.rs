@@ -1,80 +1,16 @@
-//! Baseline-aware mixed prose/equation rows, using the shared preview owner.
-use super::{PreviewKey, Previews};
+//! Baseline-aware mixed prose, image, and equation rows.
+use super::{DocMedia, LinkTarget, PreviewKey, images::ImageStatus};
 use crate::text_preview::*;
-use little_clip_render::markdown::{MarkdownLine, MarkdownSpan};
+use little_clip_render::markdown::{ImagePresentation, MarkdownSpan};
 
-pub(super) fn show_line(
-    ui: &mut egui::Ui,
-    line: &MarkdownLine,
-    palette: &AppPalette,
-    block: usize,
-    previews: &mut Previews,
-) -> bool {
-    let (spans, size, color, prefix) = match line {
-        MarkdownLine::Heading { level, spans, .. } => (
-            spans,
-            match level {
-                1 => HEADING_FONT_SIZE,
-                2 => SUBHEADING_FONT_SIZE,
-                _ => BODY_FONT_SIZE,
-            },
-            hex_to_c32(&palette.colors.text_primary),
-            String::new(),
-        ),
-        MarkdownLine::Bullet { spans, .. } => (
-            spans,
-            BODY_FONT_SIZE,
-            hex_to_c32(&palette.colors.text_primary),
-            "• ".into(),
-        ),
-        MarkdownLine::Numbered { number, spans } => (
-            spans,
-            BODY_FONT_SIZE,
-            hex_to_c32(&palette.colors.text_primary),
-            format!("{number} "),
-        ),
-        MarkdownLine::Quote { spans } => (
-            spans,
-            BODY_FONT_SIZE,
-            hex_to_c32(&palette.colors.text_secondary),
-            String::new(),
-        ),
-        MarkdownLine::Paragraph { spans } => (
-            spans,
-            BODY_FONT_SIZE,
-            hex_to_c32(&palette.colors.text_primary),
-            String::new(),
-        ),
-        _ => return false,
-    };
-    if !spans
-        .iter()
-        .any(|span| matches!(span, MarkdownSpan::Math { .. }))
-    {
-        return false;
-    }
-    if matches!(line, MarkdownLine::Heading { .. }) {
-        ui.add_space(crate::ui_ext::SPACE_SM);
-    }
-    match line {
-        MarkdownLine::Quote { .. } => {
-            super::quote_frame(palette).show(ui, |ui| {
-                show_spans(ui, spans, size, color, &prefix, block, previews)
-            });
-        }
-        MarkdownLine::Bullet { indent, .. } if *indent > 0 => {
-            let padding = super::list_indent(ui, *indent);
-            ui.horizontal_top(|ui| {
-                ui.add_space(padding);
-                ui.vertical(|ui| show_spans(ui, spans, size, color, &prefix, block, previews));
-            });
-        }
-        _ => show_spans(ui, spans, size, color, &prefix, block, previews),
-    }
-    if matches!(line, MarkdownLine::Heading { .. }) {
-        ui.add_space(crate::ui_ext::SPACE_XS);
-    }
-    true
+pub(super) fn needs_inline_flow(spans: &[MarkdownSpan]) -> bool {
+    spans.iter().any(|span| match span {
+        MarkdownSpan::Math { .. }
+        | MarkdownSpan::Image { .. }
+        | MarkdownSpan::StyledImage { .. } => true,
+        MarkdownSpan::Spoiler { spans } => needs_inline_flow(spans),
+        _ => false,
+    })
 }
 
 enum Content {
@@ -85,26 +21,61 @@ enum Content {
         display: bool,
         fallback: Option<Arc<egui::Galley>>,
     },
+    Image {
+        texture: egui::TextureHandle,
+        rounding: egui::Rounding,
+        alt: String,
+    },
+    HardBreak,
 }
+
 struct Atom {
     content: Content,
     width: f32,
     ascent: f32,
     descent: f32,
-    url: Option<String>,
+    link: Option<LinkTarget>,
     display: bool,
 }
+
 impl Atom {
+    fn formatted(
+        ui: &egui::Ui,
+        text: String,
+        format: egui::TextFormat,
+        width: f32,
+        size: f32,
+        link: Option<LinkTarget>,
+    ) -> Self {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = width;
+        job.append(&text, 0.0, format);
+        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+        let ascent = galley
+            .rows
+            .first()
+            .and_then(|row| row.glyphs.first())
+            .map_or(size, |glyph| glyph.pos.y);
+        Self {
+            width: galley.size().x,
+            ascent,
+            descent: (galley.size().y - ascent).max(0.0),
+            content: Content::Text(galley),
+            link,
+            display: false,
+        }
+    }
+
     fn text(
         ui: &egui::Ui,
         text: egui::RichText,
         width: f32,
         size: f32,
-        url: Option<String>,
+        link: Option<LinkTarget>,
     ) -> Self {
         let galley = egui::WidgetText::from(text).into_galley(
             ui,
-            Some(egui::TextWrapMode::Wrap),
+            Some(true),
             width,
             FontId::proportional(size),
         );
@@ -118,79 +89,167 @@ impl Atom {
             ascent,
             descent: (galley.size().y - ascent).max(0.0),
             content: Content::Text(galley),
-            url,
+            link,
+            display: false,
+        }
+    }
+
+    fn hard_break(size: f32) -> Self {
+        Self {
+            content: Content::HardBreak,
+            width: 0.0,
+            ascent: size,
+            descent: size * 0.2,
+            link: None,
             display: false,
         }
     }
 }
 
-struct LineContext {
+fn atom_with_link(
+    ui: &egui::Ui,
+    text: String,
+    format: egui::TextFormat,
     width: f32,
     size: f32,
-    color: Color32,
-    block: usize,
+    link: Option<LinkTarget>,
+) -> Atom {
+    Atom::formatted(ui, text, format, width, size, link)
 }
 
-// A formula is one indivisible item. Text wraps with egui's own font shaping;
-// each resulting row shares its largest ascent and descent.
-fn show_spans(
-    ui: &mut egui::Ui,
-    spans: &[MarkdownSpan],
+struct LineContext<'a> {
+    width: f32,
     size: f32,
-    color: Color32,
-    prefix: &str,
-    block: usize,
-    previews: &mut Previews,
-) {
+    prose_color: Color32,
+    bold_color: Color32,
+    palette: &'a AppPalette,
+    block: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SpanRenderStyle<'a> {
+    pub size: f32,
+    pub prose_color: Color32,
+    pub bold_color: Color32,
+    pub palette: &'a AppPalette,
+    pub block: u64,
+}
+
+pub(super) fn measure_spans_size(
+    ui: &egui::Ui,
+    spans: &[MarkdownSpan],
+    width: f32,
+    style: SpanRenderStyle<'_>,
+    media: &mut DocMedia<'_>,
+) -> Vec2 {
     let line = LineContext {
-        width: ui.available_width().max(1.0),
-        size,
-        color,
-        block,
+        width: width.max(1.0),
+        size: style.size,
+        prose_color: style.prose_color,
+        bold_color: style.bold_color,
+        palette: style.palette,
+        block: style.block,
     };
-    let mut atoms = Vec::new();
-    if !prefix.is_empty() {
-        atoms.push(Atom::text(
-            ui,
-            egui::RichText::new(prefix).size(size).color(color).strong(),
-            line.width,
-            size,
-            None,
-        ));
-    }
-    for (span_index, span) in spans.iter().enumerate() {
-        atoms.extend(atoms_for_span(ui, span, span_index, &line, previews));
-    }
-    for (row_index, row) in wrap_atoms(atoms, line.width).into_iter().enumerate() {
-        let ascent = row.iter().map(|atom| atom.ascent).fold(size, f32::max);
+    let rows = wrap_atoms(collect_atoms(ui, spans, &line, media), line.width);
+    let mut max_w: f32 = 0.0;
+    let mut total_h: f32 = 0.0;
+    for row in rows {
+        let ascent = row
+            .iter()
+            .map(|atom| atom.ascent)
+            .fold(style.size, f32::max);
         let descent = row
             .iter()
             .map(|atom| atom.descent)
-            .fold(size * 0.2, f32::max);
+            .fold(style.size * 0.2, f32::max);
+        let occupied: f32 = row.iter().map(|atom| atom.width).sum();
+        max_w = max_w.max(occupied);
+        total_h += ascent + descent + 2.0;
+    }
+    Vec2::new(max_w.min(line.width), total_h.max(style.size))
+}
+
+// A formula or inline image is one indivisible item. Text wraps with egui's
+// font shaping; each resulting row shares its largest ascent and descent.
+pub(super) fn show_spans(
+    ui: &mut egui::Ui,
+    spans: &[MarkdownSpan],
+    style: SpanRenderStyle<'_>,
+    media: &mut DocMedia<'_>,
+    align: egui::Align,
+) {
+    let line = LineContext {
+        width: ui.available_width().max(1.0),
+        size: style.size,
+        prose_color: style.prose_color,
+        bold_color: style.bold_color,
+        palette: style.palette,
+        block: style.block,
+    };
+    let atoms = collect_atoms(ui, spans, &line, media);
+    for (row_index, row) in wrap_atoms(atoms, line.width).into_iter().enumerate() {
+        let ascent = row
+            .iter()
+            .map(|atom| atom.ascent)
+            .fold(style.size, f32::max);
+        let descent = row
+            .iter()
+            .map(|atom| atom.descent)
+            .fold(style.size * 0.2, f32::max);
         let occupied: f32 = row.iter().map(|atom| atom.width).sum();
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2(line.width, ascent + descent + 2.0),
             egui::Sense::hover(),
         );
         let mut x = rect.left();
-        if row.len() == 1 && row[0].display {
+        if (row.len() == 1 && row[0].display) || align == egui::Align::Center {
             x += ((line.width - occupied) / 2.0).max(0.0);
+        } else if align == egui::Align::RIGHT {
+            x += (line.width - occupied).max(0.0);
         }
         for (atom_index, atom) in row.into_iter().enumerate() {
+            if matches!(atom.content, Content::HardBreak) {
+                continue;
+            }
             let atom_rect = egui::Rect::from_min_size(
                 egui::pos2(x, rect.top() + ascent - atom.ascent),
                 egui::vec2(atom.width, atom.ascent + atom.descent),
             );
             let id = ui
-                .scope_id()
-                .with(("math-row", block, row_index, atom_index));
-            let response = paint_atom(ui, &atom, atom_rect, id, &line, previews);
-            if let Some(url) = atom.url {
+                .id()
+                .with(("math-row", style.block, row_index, atom_index));
+            let response = paint_atom(ui, &atom, atom_rect, id, &line, media);
+            if let Some(link) = atom.link {
+                if link.is_internal() {
+                    let y = match &atom.content {
+                        Content::Text(galley) => {
+                            let offset = (line.size * 0.15).clamp(1.5, 3.0);
+                            (atom_rect.top() + atom.ascent + offset)
+                                .min(atom_rect.bottom() - 0.5)
+                                .min(atom_rect.top() + galley.size().y - 0.5)
+                        }
+                        _ => (atom_rect.bottom() - 1.0).max(atom_rect.top()),
+                    };
+                    let stroke_w = if response.hovered() {
+                        1.5_f32
+                    } else {
+                        1.25_f32
+                    };
+                    super::paint_dashed_h_line(
+                        ui.painter(),
+                        atom_rect.left(),
+                        atom_rect.right(),
+                        y,
+                        Stroke::new(stroke_w, link.dash_color),
+                        4.0,
+                        2.5,
+                    );
+                }
                 if response.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                    super::activate_link_target(ui, &link, media.navigate_to.as_deref_mut());
                 }
                 response
-                    .on_hover_text(url)
+                    .on_hover_text(link.hover_label())
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
             }
             x += atom.width;
@@ -198,111 +257,458 @@ fn show_spans(
     }
 }
 
+fn collect_atoms(
+    ui: &egui::Ui,
+    spans: &[MarkdownSpan],
+    line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
+) -> Vec<Atom> {
+    let mut atoms = Vec::new();
+    for (span_index, span) in spans.iter().enumerate() {
+        atoms.extend(atoms_for_span(ui, span, span_index, line, media));
+    }
+    atoms
+}
+
 fn atoms_for_span(
     ui: &egui::Ui,
     span: &MarkdownSpan,
     span_index: usize,
-    line: &LineContext,
-    previews: &mut Previews,
+    line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
 ) -> Vec<Atom> {
-    let MarkdownSpan::Math {
-        source,
-        display,
-        url,
-    } = span
-    else {
-        return prose_atoms(ui, span, line);
+    match span {
+        MarkdownSpan::Math {
+            source,
+            display,
+            url,
+        } => {
+            let link_fg = super::link_color(line.palette);
+            let link = url.as_deref().map(|raw| media.resolve_target(raw, link_fg));
+            let Some(previews) = media.previews.as_deref_mut() else {
+                let text: String = source.chars().take(160).collect();
+                let mut rich = egui::RichText::new(text).monospace().size(line.size).color(
+                    if link.is_some() {
+                        link_fg
+                    } else {
+                        line.prose_color
+                    },
+                );
+                if link.as_ref().is_some_and(|l| !l.is_internal()) {
+                    rich = rich.underline();
+                }
+                return vec![Atom::text(ui, rich, line.width, line.size, link)];
+            };
+            let key = PreviewKey::Span {
+                block: line.block,
+                span: span_index,
+            };
+            let preview = previews.entry(key).or_default();
+            let mut atom = if let Some(layout) = preview
+                .math_layout()
+                .filter(|_| preview.math_error().is_none())
+            {
+                let scale = (line.width / (layout.width_em * line.size).max(1.0))
+                    .min(520.0 / (layout.height_em * line.size).max(1.0))
+                    .min(1.0);
+                Atom {
+                    content: Content::Equation {
+                        key,
+                        source: source.clone(),
+                        display: *display,
+                        fallback: None,
+                    },
+                    width: layout.width_em * line.size * scale,
+                    ascent: layout.baseline_em * line.size * scale,
+                    descent: (layout.height_em - layout.baseline_em) * line.size * scale,
+                    link,
+                    display: *display,
+                }
+            } else {
+                let text: String = source.chars().take(160).collect();
+                let (text, color) =
+                    preview
+                        .math_error()
+                        .map_or((text.clone(), line.prose_color), |error| {
+                            (
+                                format!("{text} — {}", error.chars().take(512).collect::<String>()),
+                                ui.visuals().error_fg_color,
+                            )
+                        });
+                Atom::text(
+                    ui,
+                    egui::RichText::new(text)
+                        .monospace()
+                        .size(line.size)
+                        .color(color),
+                    line.width,
+                    line.size,
+                    link,
+                )
+            };
+            if let Content::Text(galley) = &atom.content {
+                atom.content = Content::Equation {
+                    key,
+                    source: source.clone(),
+                    display: *display,
+                    fallback: Some(galley.clone()),
+                };
+                atom.display = *display;
+            }
+            vec![atom]
+        }
+        MarkdownSpan::Image { alt, url } => image_atoms(
+            ui,
+            alt,
+            url,
+            None,
+            ImagePresentation::default(),
+            line,
+            media,
+        ),
+        MarkdownSpan::StyledImage {
+            alt,
+            url,
+            href,
+            style,
+        } => image_atoms(ui, alt, url, href.as_deref(), *style, line, media),
+        _ => prose_atoms(ui, span, span_index, line, media),
+    }
+}
+
+fn image_atoms(
+    ui: &egui::Ui,
+    alt: &str,
+    url: &str,
+    href: Option<&str>,
+    style: ImagePresentation,
+    line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
+) -> Vec<Atom> {
+    let dash_color = super::link_color(line.palette);
+    let link_target = href
+        .map(|h| media.resolve_target(h, dash_color))
+        .or_else(|| {
+            is_web_url(url).then(|| LinkTarget {
+                raw_url: url.to_owned(),
+                internal_path: None,
+                dash_color,
+            })
+        });
+    if let Some(images) = media.images.as_deref_mut() {
+        match images.resolve(ui, url) {
+            ImageStatus::Ready {
+                texture,
+                pixel_size,
+            } => {
+                let size = super::compute_image_display_size(
+                    pixel_size,
+                    style,
+                    line.width,
+                    (line.width * 0.7).clamp(24.0, 260.0),
+                );
+                let rounding = super::image_rounding(style, size);
+                return vec![Atom {
+                    content: Content::Image {
+                        texture,
+                        rounding,
+                        alt: alt.to_owned(),
+                    },
+                    width: size.x,
+                    ascent: size.y,
+                    descent: 2.0,
+                    link: link_target,
+                    display: false,
+                }];
+            }
+            ImageStatus::Loading => {
+                let label = if alt.is_empty() {
+                    "[loading image]".to_owned()
+                } else {
+                    format!("[loading: {alt}]")
+                };
+                return vec![Atom::text(
+                    ui,
+                    egui::RichText::new(label)
+                        .italics()
+                        .size(line.size)
+                        .color(hex_to_c32(&line.palette.colors.text_muted)),
+                    line.width,
+                    line.size,
+                    link_target,
+                )];
+            }
+            ImageStatus::Unavailable => {}
+        }
+    }
+
+    let fallback_label = if alt.is_empty() {
+        "[image]".to_owned()
+    } else {
+        format!("[image: {alt}]")
     };
-    let key = PreviewKey::Span {
-        block: line.block,
-        span: span_index,
-    };
-    let preview = previews.entry(key).or_default();
-    let mut atom = if let Some(layout) = preview
-        .math_layout()
-        .filter(|_| preview.math_error().is_none())
-    {
-        let scale = (line.width / (layout.width_em * line.size).max(1.0))
-            .min(520.0 / (layout.height_em * line.size).max(1.0))
-            .min(1.0);
-        Atom {
-            content: Content::Equation {
-                key,
-                source: source.clone(),
-                display: *display,
-                fallback: None,
-            },
-            width: layout.width_em * line.size * scale,
-            ascent: layout.baseline_em * line.size * scale,
-            descent: (layout.height_em - layout.baseline_em) * line.size * scale,
-            url: url.clone(),
-            display: *display,
+    let mut rich = egui::RichText::new(fallback_label)
+        .italics()
+        .size(line.size);
+    if link_target.is_some() {
+        rich = rich.color(dash_color);
+        if link_target.as_ref().is_some_and(|l| !l.is_internal()) {
+            rich = rich.underline();
         }
     } else {
-        // Loading/error text is bounded independently of the owned source. Do not
-        // shape a whole large equation synchronously just to show its placeholder.
-        let text: String = source.chars().take(160).collect();
-        let (text, color) = preview
-            .math_error()
-            .map_or((text.clone(), line.color), |error| {
-                (
-                    format!("{text} — {}", error.chars().take(512).collect::<String>()),
-                    ui.visuals().error_fg_color,
-                )
+        rich = rich.color(hex_to_c32(&line.palette.colors.text_muted));
+    }
+    vec![Atom::text(ui, rich, line.width, line.size, link_target)]
+}
+
+fn is_web_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+fn prose_atoms(
+    ui: &egui::Ui,
+    span: &MarkdownSpan,
+    span_index: usize,
+    line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
+) -> Vec<Atom> {
+    if matches!(span, MarkdownSpan::HardBreak) {
+        return vec![Atom::hard_break(line.size)];
+    }
+
+    let (text, url, format) = match span {
+        MarkdownSpan::Text(text) => (
+            text.as_str(),
+            None,
+            egui::TextFormat {
+                font_id: FontId::proportional(line.size),
+                color: line.prose_color,
+                ..Default::default()
+            },
+        ),
+        MarkdownSpan::Bold(text) => (
+            text.as_str(),
+            None,
+            egui::TextFormat {
+                font_id: FontId::proportional(line.size),
+                color: line.bold_color,
+                ..Default::default()
+            },
+        ),
+        MarkdownSpan::Italic(text) => (
+            text.as_str(),
+            None,
+            egui::TextFormat {
+                font_id: FontId::proportional(line.size),
+                color: line.prose_color,
+                italics: true,
+                ..Default::default()
+            },
+        ),
+        MarkdownSpan::BoldItalic(text) => (
+            text.as_str(),
+            None,
+            egui::TextFormat {
+                font_id: FontId::proportional(line.size),
+                color: line.bold_color,
+                italics: true,
+                ..Default::default()
+            },
+        ),
+        MarkdownSpan::Strikethrough(text) => {
+            let muted = hex_to_c32(&line.palette.colors.text_muted);
+            (
+                text.as_str(),
+                None,
+                egui::TextFormat {
+                    font_id: FontId::proportional(line.size),
+                    color: muted,
+                    strikethrough: Stroke::new(1.0_f32, muted),
+                    ..Default::default()
+                },
+            )
+        }
+        MarkdownSpan::Code(text) => (
+            text.as_str(),
+            None,
+            egui::TextFormat {
+                font_id: FontId::monospace((line.size * 0.9).max(13.0)),
+                color: super::inline_code_fg(line.palette),
+                background: hex_to_c32(&line.palette.colors.surface_panel),
+                ..Default::default()
+            },
+        ),
+        MarkdownSpan::HighlightedCode { language, code } => {
+            let code_bg = hex_to_c32(&line.palette.colors.surface_panel);
+            let fallback_fg = super::inline_code_fg(line.palette);
+            let mono = FontId::monospace((line.size * 0.9).max(13.0));
+            let mut atoms = Vec::new();
+            for (token, fg) in
+                super::inline_highlighted_runs(code, language, code_bg, fallback_fg, line.palette)
+            {
+                let fmt = egui::TextFormat {
+                    font_id: mono.clone(),
+                    color: fg,
+                    background: code_bg,
+                    ..Default::default()
+                };
+                for word in token.split_inclusive(char::is_whitespace) {
+                    let atom = Atom::formatted(
+                        ui,
+                        word.to_owned(),
+                        fmt.clone(),
+                        line.width,
+                        line.size,
+                        None,
+                    );
+                    atoms.push(atom);
+                }
+            }
+            return atoms;
+        }
+        MarkdownSpan::Spoiler { spans: inner } => {
+            let mut atoms = Vec::new();
+            let open_id = egui::Id::new(("md_spoiler_open", line.block, span_index));
+            let hover_id = egui::Id::new(("md_spoiler_hover", line.block, span_index));
+            let revealed = ui.ctx().data(|d| {
+                d.get_temp::<bool>(open_id).unwrap_or(false)
+                    || d.get_temp::<bool>(hover_id).unwrap_or(false)
             });
-        Atom::text(
+            let mask = super::spoiler_mask_color(line.palette);
+            let label_text: String = inner
+                .iter()
+                .map(|s| match s {
+                    MarkdownSpan::Text(t)
+                    | MarkdownSpan::Bold(t)
+                    | MarkdownSpan::Italic(t)
+                    | MarkdownSpan::BoldItalic(t)
+                    | MarkdownSpan::Strikethrough(t)
+                    | MarkdownSpan::Code(t) => t.clone(),
+                    MarkdownSpan::HighlightedCode { code, .. } => code.clone(),
+                    MarkdownSpan::Styled { text, .. } => text.clone(),
+                    MarkdownSpan::Link { label, .. } => label.clone(),
+                    MarkdownSpan::Math { source, .. } => source.clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            let fmt = egui::TextFormat {
+                font_id: FontId::proportional(line.size),
+                color: if revealed { line.prose_color } else { mask },
+                background: if revealed {
+                    hex_to_c32(&line.palette.colors.surface_panel)
+                } else {
+                    mask
+                },
+                ..Default::default()
+            };
+            for word in label_text.split_inclusive(char::is_whitespace) {
+                atoms.push(Atom::formatted(
+                    ui,
+                    word.to_owned(),
+                    fmt.clone(),
+                    line.width,
+                    line.size,
+                    None,
+                ));
+            }
+            return atoms;
+        }
+        MarkdownSpan::Link { label, url } => {
+            let link_fg = super::link_color(line.palette);
+            let target = media.resolve_target(url, link_fg);
+            let underline = if target.is_internal() {
+                Stroke::NONE
+            } else {
+                Stroke::new(1.0_f32, link_fg)
+            };
+            (
+                label.as_str(),
+                Some(target),
+                egui::TextFormat {
+                    font_id: FontId::proportional(line.size),
+                    color: link_fg,
+                    underline,
+                    ..Default::default()
+                },
+            )
+        }
+        MarkdownSpan::Styled { text, url, css } => {
+            let mut fmt = super::build_inline_css_text_format(
+                *css,
+                url.is_some(),
+                line.size,
+                line.prose_color,
+                line.bold_color,
+                hex_to_c32(&line.palette.colors.canvas),
+                line.palette,
+            );
+            let link = url.as_deref().map(|raw| {
+                let target = media.resolve_target(raw, fmt.color);
+                if target.is_internal() {
+                    fmt.underline = Stroke::NONE;
+                }
+                target
+            });
+            (text.as_str(), link, fmt)
+        }
+        MarkdownSpan::Image { .. }
+        | MarkdownSpan::StyledImage { .. }
+        | MarkdownSpan::Math { .. }
+        | MarkdownSpan::HardBreak => return Vec::new(),
+    };
+
+    let mut atoms = Vec::new();
+    for word in text.split_inclusive(char::is_whitespace) {
+        let atom = atom_with_link(
             ui,
-            egui::RichText::new(text)
-                .monospace()
-                .size(line.size)
-                .color(color),
+            word.to_owned(),
+            format.clone(),
             line.width,
             line.size,
             url.clone(),
-        )
-    };
-    if let Content::Text(galley) = &atom.content {
-        atom.content = Content::Equation {
-            key,
-            source: source.clone(),
-            display: *display,
-            fallback: Some(galley.clone()),
-        };
-        atom.display = *display;
+        );
+        if atom.width <= line.width || word.chars().count() <= 1 {
+            atoms.push(atom);
+            continue;
+        }
+        // Break oversized whitespace-free tokens (CJK runs, long URLs) at char boundaries.
+        let mut chunk_start = 0usize;
+        for (idx, ch) in word.char_indices() {
+            let next_end = idx + ch.len_utf8();
+            let candidate = &word[chunk_start..next_end];
+            let measured = atom_with_link(
+                ui,
+                candidate.to_owned(),
+                format.clone(),
+                line.width,
+                line.size,
+                url.clone(),
+            );
+            if measured.width > line.width && idx > chunk_start {
+                atoms.push(atom_with_link(
+                    ui,
+                    word[chunk_start..idx].to_owned(),
+                    format.clone(),
+                    line.width,
+                    line.size,
+                    url.clone(),
+                ));
+                chunk_start = idx;
+            }
+        }
+        if chunk_start < word.len() {
+            atoms.push(atom_with_link(
+                ui,
+                word[chunk_start..].to_owned(),
+                format.clone(),
+                line.width,
+                line.size,
+                url.clone(),
+            ));
+        }
     }
-    vec![atom]
-}
-
-fn prose_atoms(ui: &egui::Ui, span: &MarkdownSpan, line: &LineContext) -> Vec<Atom> {
-    let (text, bold, italic, code, url) = match span {
-        MarkdownSpan::Text(text) => (text, false, false, false, None),
-        MarkdownSpan::Bold(text) => (text, true, false, false, None),
-        MarkdownSpan::Italic(text) => (text, false, true, false, None),
-        MarkdownSpan::BoldItalic(text) => (text, true, true, false, None),
-        MarkdownSpan::Code(text) => (text, false, false, true, None),
-        MarkdownSpan::Link { label, url } => (label, false, false, false, Some(url.clone())),
-        MarkdownSpan::Math { .. } => return Vec::new(),
-    };
-    text.split_inclusive(char::is_whitespace)
-        .map(|word| {
-            let mut rich = egui::RichText::new(word).size(line.size).color(line.color);
-            if bold {
-                rich = rich.strong();
-            }
-            if italic {
-                rich = rich.italics();
-            }
-            if code {
-                rich = rich
-                    .monospace()
-                    .background_color(ui.visuals().code_bg_color);
-            }
-            if url.is_some() {
-                rich = rich.underline();
-            }
-            Atom::text(ui, rich, line.width, line.size, url.clone())
-        })
-        .collect()
+    atoms
 }
 
 fn paint_atom(
@@ -310,13 +716,19 @@ fn paint_atom(
     atom: &Atom,
     rect: egui::Rect,
     id: egui::Id,
-    line: &LineContext,
-    previews: &mut Previews,
+    line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
 ) -> egui::Response {
     match &atom.content {
         Content::Text(galley) => {
-            ui.painter().galley(rect.min, galley.clone(), line.color);
-            ui.interact(rect, id, egui::Sense::click())
+            ui.painter()
+                .galley(rect.min, galley.clone(), line.prose_color);
+            let sense = if atom.link.is_some() {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            };
+            ui.interact(rect, id, sense)
         }
         Content::Equation {
             key,
@@ -324,22 +736,58 @@ fn paint_atom(
             display,
             fallback,
         } => {
-            let preview = previews.entry(*key).or_default();
-            // Geometry is known before admission, including wrapped paragraphs:
-            // only the actually visible equation may start/poll its worker.
-            if ui.is_rect_visible(rect) {
-                preview.prepare_math(ui, source, *display, line.color);
-            } else {
-                preview.suspend();
-            }
-            if let Some(galley) = fallback {
-                ui.painter().galley(rect.min, galley.clone(), line.color);
+            let resp = if let Some(previews) = media.previews.as_deref_mut() {
+                let preview = previews.entry(*key).or_default();
+                if ui.is_rect_visible(rect) {
+                    preview.prepare_math(ui, source, *display, line.prose_color);
+                } else {
+                    preview.suspend();
+                }
+                if let Some(galley) = fallback {
+                    ui.painter()
+                        .galley(rect.min, galley.clone(), line.prose_color);
+                    let r = ui.interact(rect, id, egui::Sense::hover());
+                    if atom.link.is_none() {
+                        r.clone()
+                            .on_hover_text(source.chars().take(2048).collect::<String>());
+                    }
+                    r
+                } else {
+                    preview.paint_math(ui, rect, source, id)
+                }
+            } else if let Some(galley) = fallback {
+                ui.painter()
+                    .galley(rect.min, galley.clone(), line.prose_color);
                 ui.interact(rect, id, egui::Sense::hover())
-                    .on_hover_text(source.chars().take(2048).collect::<String>())
             } else {
-                preview.paint_math(ui, rect, source, id)
+                ui.interact(rect, id, egui::Sense::hover())
+            };
+            if atom.link.is_some() {
+                ui.interact(rect, id.with("link"), egui::Sense::click())
+            } else {
+                resp
             }
         }
+        Content::Image {
+            texture,
+            rounding,
+            alt,
+        } => {
+            egui::Image::new(texture)
+                .rounding(*rounding)
+                .paint_at(ui, rect);
+            let sense = if atom.link.is_some() {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            };
+            let response = ui.interact(rect, id, sense);
+            if !alt.is_empty() && atom.link.is_none() {
+                response.clone().on_hover_text(alt);
+            }
+            response
+        }
+        Content::HardBreak => ui.interact(rect, id, egui::Sense::hover()),
     }
 }
 
@@ -348,6 +796,11 @@ fn wrap_atoms(atoms: Vec<Atom>, width: f32) -> Vec<Vec<Atom>> {
     let mut row = Vec::new();
     let mut occupied = 0.0;
     for atom in atoms {
+        if matches!(atom.content, Content::HardBreak) {
+            rows.push(std::mem::take(&mut row));
+            occupied = 0.0;
+            continue;
+        }
         if !row.is_empty() && (atom.display || occupied + atom.width > width) {
             rows.push(std::mem::take(&mut row));
             occupied = 0.0;
@@ -368,6 +821,7 @@ fn wrap_atoms(atoms: Vec<Atom>, width: f32) -> Vec<Vec<Atom>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Previews;
     use super::*;
 
     fn render_equation_document(
@@ -383,8 +837,7 @@ mod tests {
         let palette = AppPalette::default();
         let mut available = egui::Rect::NOTHING;
         let mut following_top = 0.0;
-        let output = clip_ui::test_support::run_frame(
-            &ctx,
+        let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -393,12 +846,10 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        available = ui.available_rect_before_wrap();
-                        super::super::render_blocks(ui, &blocks, &palette, Some(&mut previews));
-                        following_top = ui.label("Following paragraph").rect.top();
-                    })
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    available = ui.available_rect_before_wrap();
+                    super::super::render_blocks(ui, &blocks, &palette, Some(&mut previews));
+                    following_top = ui.label("Following paragraph").rect.top();
                 });
             },
         );
@@ -408,7 +859,7 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id() == texture_id => {
+                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
                     Some(rect.rect)
                 }
                 _ => None,

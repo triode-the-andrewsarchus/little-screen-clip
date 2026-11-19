@@ -14,10 +14,7 @@ fn markdown_source_prepares_shared_code_blocks_and_unicode_count() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        code,
-        [("rs", "let café = 42;\n\n"), ("txt", "unfinished\n")]
-    );
+    assert_eq!(code, [("rs", "let café = 42;\n\n"), ("txt", "unfinished")]);
 
     let first = TextPreviewState::from_data(Arc::clone(&data), None, &AppConfig::default());
     let second = TextPreviewState::from_data(Arc::clone(&data), None, &AppConfig::default());

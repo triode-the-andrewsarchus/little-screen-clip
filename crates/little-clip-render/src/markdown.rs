@@ -1,19 +1,124 @@
-//! Lightweight Markdown parsing for ambient screen previews.
+//! Lightweight Markdown parsing for ambient screen previews and desktop document views.
 //!
 //! Supports:
-//! - Headings (# H1, ## H2, ### H3)
-//! - Bulleted lists (- item, * item, + item)
-//! - Numbered lists (1. item, 2. item)
-//! - Quotes (> quote)
-//! - Horizontal rules (---, ***)
-//! - Code blocks (```)
-//! - Inline bold (**bold**, __bold__)
-//! - Inline italics (*italic*, _italic_)
-//! - Inline bold-italics (***bold italic***)
-//! - Inline code (`code`)
-//! - Links (\[label](url))
+//! - Headings (# H1 .. ###### H6 and Setext headings)
+//! - Bulleted, numbered, nested, and task lists (- [ ] / - [x])
+//! - Blockquotes and GFM alerts (> quote, > [!NOTE])
+//! - GitHub-Flavored Markdown tables (| col | col |)
+//! - Horizontal rules (---, ***, ___)
+//! - Fenced or indented code blocks
+//! - Best-effort inline HTML formatting, `<details>`, `<table>`, and styled containers
+//! - Inline bold, italics, bold-italics, strikethrough, code, links, images, and native math
 
-/// A styled inline segment within a Markdown line.
+mod html;
+mod hugo;
+
+/// Simple sRGBA color parsed from inline HTML/CSS attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RgbaColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+/// Block text/image alignment parsed from HTML or inline CSS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// Whitelisted visual inline CSS properties carried across styled HTML spans.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct InlineCss {
+    pub color: Option<RgbaColor>,
+    pub background: Option<RgbaColor>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub monospace: bool,
+    pub superscript: bool,
+    pub subscript: bool,
+    pub kbd: bool,
+    pub mark: bool,
+    pub small: bool,
+    pub muted: bool,
+}
+
+impl InlineCss {
+    pub(crate) fn merge(self, child: Self) -> Self {
+        Self {
+            color: child.color.or(self.color),
+            background: child.background.or(self.background),
+            bold: self.bold || child.bold,
+            italic: self.italic || child.italic,
+            underline: self.underline || child.underline,
+            strikethrough: self.strikethrough || child.strikethrough,
+            monospace: self.monospace || child.monospace,
+            superscript: self.superscript || child.superscript,
+            subscript: self.subscript || child.subscript,
+            kbd: self.kbd || child.kbd,
+            mark: self.mark || child.mark,
+            small: self.small || child.small,
+            muted: self.muted || child.muted,
+        }
+    }
+
+    pub(crate) fn is_plain_compatible(self) -> bool {
+        self.color.is_none()
+            && self.background.is_none()
+            && !self.underline
+            && !self.superscript
+            && !self.subscript
+            && !self.kbd
+            && !self.mark
+            && !self.small
+            && !self.muted
+    }
+}
+
+/// Best-effort block box style parsed from HTML `<div style="...">` / `align=`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BlockBoxStyle {
+    pub align: Option<TextAlign>,
+    pub text_color: Option<RgbaColor>,
+    pub background: Option<RgbaColor>,
+    pub border_color: Option<RgbaColor>,
+    pub border_width: f32,
+    pub border_radius: f32,
+    pub padding: [f32; 4],
+    pub margin_top: f32,
+    pub margin_bottom: f32,
+}
+
+impl BlockBoxStyle {
+    pub fn has_visual_box(&self) -> bool {
+        self.align.is_some()
+            || self.text_color.is_some()
+            || self.background.is_some()
+            || self.border_width > 0.0
+            || self.padding.iter().any(|p| *p > 0.0)
+            || self.margin_top > 0.0
+            || self.margin_bottom > 0.0
+    }
+}
+
+/// Optional size, cropping/radius, and alignment metadata on an HTML or linked image.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ImagePresentation {
+    pub width_px: Option<f32>,
+    pub height_px: Option<f32>,
+    pub width_fraction: Option<f32>,
+    pub zoom: Option<f32>,
+    pub border_radius: Option<f32>,
+    pub align: Option<TextAlign>,
+    pub float: Option<TextAlign>,
+}
+
+/// A styled inline segment within a Markdown line or block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownSpan {
     /// Plain unformatted text.
@@ -24,16 +129,152 @@ pub enum MarkdownSpan {
     Italic(String),
     /// Bold and italic text (`***text***`).
     BoldItalic(String),
+    /// Strikethrough text (`~~text~~`).
+    Strikethrough(String),
     /// Inline code span (`` `code` ``).
     Code(String),
+    /// Inline syntax-highlighted code span (such as Hugo `{{< hl >}}`).
+    HighlightedCode { language: String, code: String },
+    /// Inline HTML/CSS-styled text run (with optional enclosing link).
+    Styled {
+        text: String,
+        url: Option<String>,
+        css: InlineCss,
+    },
     /// Hyperlink with label and URL (`[label](url)`).
     Link { label: String, url: String },
+    /// Image reference (`![alt](url)`).
+    Image { alt: String, url: String },
+    /// Image reference with HTML/CSS sizing, radius, alignment, or outer link.
+    StyledImage {
+        alt: String,
+        url: String,
+        href: Option<String>,
+        style: ImagePresentation,
+    },
     /// Native equation; a link around it remains attached to the rendered image.
     Math {
         source: String,
         display: bool,
         url: Option<String>,
     },
+    /// Inline interactive spoiler run (revealed on hover or click).
+    Spoiler { spans: Vec<MarkdownSpan> },
+    /// Explicit hard line break inside a paragraph (`  \n` or `\\\n`).
+    HardBreak,
+}
+
+/// Column alignment in a GitHub-Flavored Markdown table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlignment {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+/// A parsed GitHub-Flavored Markdown table with header and body cells.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownTable {
+    pub alignments: Vec<TableAlignment>,
+    pub headers: Vec<Vec<MarkdownSpan>>,
+    pub rows: Vec<Vec<Vec<MarkdownSpan>>>,
+}
+
+/// Optional GitHub-Flavored Markdown alert category on a blockquote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+/// One item inside a bulleted, numbered, or task list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListItem {
+    pub task: Option<bool>,
+    pub blocks: Vec<MarkdownDocBlock>,
+}
+
+/// One labeled panel inside a tabbed block (such as Hugo `{{< tabs >}}`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownTab {
+    pub title: String,
+    pub blocks: Vec<MarkdownDocBlock>,
+}
+
+/// A structured CommonMark/GFM block for desktop document rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarkdownDocBlock {
+    /// Parsed document metadata, or an explicit framing/parse diagnostic.
+    FrontMatter(Box<little_clip_core::markdown_metadata::FrontMatter>),
+    /// Section heading (`1..=6`).
+    Heading {
+        level: usize,
+        text: String,
+        spans: Vec<MarkdownSpan>,
+    },
+    /// Reflowed paragraph of inline spans.
+    Paragraph { spans: Vec<MarkdownSpan> },
+    /// Unified blockquote (optionally tagged as a GFM alert) containing nested blocks.
+    Quote {
+        kind: Option<QuoteKind>,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    /// Attributed quote (`{{< quote >}}`) or centered display quote (`{{< bigquote >}}`).
+    PullQuote {
+        big: bool,
+        source: Vec<MarkdownSpan>,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    /// Switchable tabbed panel container (`{{< tabs >}}` / `{{< tab >}}`).
+    Tabs { tabs: Vec<MarkdownTab> },
+    /// Multi-column flex-like layout (`{{< columns >}}` / `columns2` / `columns3`).
+    Columns {
+        dividers: bool,
+        bottom_rule: bool,
+        columns: Vec<Vec<MarkdownDocBlock>>,
+    },
+    /// Ordered or unordered list containing nested list items.
+    List {
+        ordered: bool,
+        start: u64,
+        items: Vec<ListItem>,
+    },
+    /// Fenced or indented code block.
+    Code { language: String, text: String },
+    /// GitHub-Flavored Markdown table.
+    Table(Box<MarkdownTable>),
+    /// Footnote definition block.
+    Footnote {
+        label: String,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    /// Collapsible `<details>` / `<summary>` section containing nested blocks.
+    Details {
+        summary: Vec<MarkdownSpan>,
+        open: bool,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    /// Styled HTML container (`<div style="...">`, `<center>`, etc.) wrapping blocks.
+    StyledContainer {
+        style: BlockBoxStyle,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    /// Horizontal divider rule (`---`, `***`, `___`).
+    Rule,
+    /// An unfinished display equation; never render a misleading partial formula.
+    IncompleteMath { source: String },
+}
+
+/// A structured Markdown block paired with its UTF-8 byte range in the source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocatedBlock {
+    pub source: std::ops::Range<usize>,
+    pub block: MarkdownDocBlock,
+    pub incomplete_fence: bool,
 }
 
 /// A parsed line of Markdown content for ambient preview rendering.
@@ -41,7 +282,7 @@ pub enum MarkdownSpan {
 pub enum MarkdownLine {
     /// Parsed document metadata, or an explicit framing/parse diagnostic.
     FrontMatter(Box<little_clip_core::markdown_metadata::FrontMatter>),
-    /// Section heading with level 1..=3.
+    /// Section heading with level 1..=6.
     Heading {
         level: usize,
         text: String,
@@ -52,6 +293,12 @@ pub enum MarkdownLine {
         indent: usize,
         spans: Vec<MarkdownSpan>,
     },
+    /// Task list item (`- [ ]` or `- [x]`) with indentation level.
+    Task {
+        indent: usize,
+        checked: bool,
+        spans: Vec<MarkdownSpan>,
+    },
     /// Numbered list item with number prefix.
     Numbered {
         number: String,
@@ -59,6 +306,8 @@ pub enum MarkdownLine {
     },
     /// Blockquote line.
     Quote { spans: Vec<MarkdownSpan> },
+    /// GitHub-Flavored Markdown table.
+    Table(Box<MarkdownTable>),
     /// Horizontal divider rule (`---`, `***`, `___`).
     Rule,
     /// Code fence boundary with optional language tag.
@@ -187,20 +436,207 @@ fn parse_body(input: &str) -> Vec<MarkdownLine> {
     lines
 }
 
+fn gfm_options() -> pulldown_cmark::Options {
+    use pulldown_cmark::Options;
+    Options::ENABLE_TABLES
+        | Options::ENABLE_MATH
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_GFM
+}
+
+fn is_gfm_delimiter_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.contains('|') || !trimmed.contains('-') {
+        return false;
+    }
+    let cells: Vec<&str> = trimmed.trim_matches('|').split('|').collect();
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let cell = cell.trim();
+            let dashes = cell.trim_start_matches(':').trim_end_matches(':');
+            !dashes.is_empty() && dashes.bytes().all(|b| b == b'-')
+        })
+}
+
+fn is_gfm_table_start(header: &str, separator: &str) -> bool {
+    let header_trimmed = header.trim_start();
+    !header_trimmed.is_empty()
+        && header_trimmed.contains('|')
+        && !header_trimmed.starts_with(['#', '>', '`', '~', '$'])
+        && is_gfm_delimiter_row(separator)
+}
+
+fn is_table_continuation(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty()
+        && trimmed.contains('|')
+        && !trimmed.starts_with("```")
+        && !trimmed.starts_with("~~~")
+        && !trimmed.starts_with('#')
+        && !trimmed.starts_with('>')
+        && !trimmed.starts_with("$$")
+}
+
+fn parse_table_slice(slice: &str) -> Option<MarkdownTable> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let prepared = hugo::prepare_shortcodes(slice, 0);
+    let effective = prepared.as_ref().map_or(slice, |p| p.rewritten.as_str());
+    let mut iter = Parser::new_ext(effective, gfm_options()).peekable();
+    let alignments = match iter.next()? {
+        Event::Start(Tag::Table(alignments)) => alignments,
+        _ => return None,
+    };
+    Some(consume_table(&mut iter, alignments, prepared.as_ref()))
+}
+
+fn map_alignment(alignment: pulldown_cmark::Alignment) -> TableAlignment {
+    match alignment {
+        pulldown_cmark::Alignment::None => TableAlignment::None,
+        pulldown_cmark::Alignment::Left => TableAlignment::Left,
+        pulldown_cmark::Alignment::Center => TableAlignment::Center,
+        pulldown_cmark::Alignment::Right => TableAlignment::Right,
+    }
+}
+
+fn consume_table<'a>(
+    iter: &mut impl Iterator<Item = pulldown_cmark::Event<'a>>,
+    alignments: Vec<pulldown_cmark::Alignment>,
+    prepared: Option<&hugo::PreparedShortcodes>,
+) -> MarkdownTable {
+    use pulldown_cmark::{Event, Tag, TagEnd};
+    let mut headers = Vec::new();
+    let mut rows = Vec::new();
+    let mut current_row: Vec<Vec<MarkdownSpan>> = Vec::new();
+    let mut cell_builder: Option<SpanBuilder> = None;
+
+    for event in iter {
+        match event {
+            Event::End(TagEnd::Table) => break,
+            Event::Start(Tag::TableHead) => {
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableHead) => {
+                headers = std::mem::take(&mut current_row);
+            }
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableRow) => {
+                rows.push(std::mem::take(&mut current_row));
+            }
+            Event::Start(Tag::TableCell) => {
+                cell_builder = Some(SpanBuilder::default());
+            }
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(cell_builder.take().map_or_else(Vec::new, |b| b.finish()));
+            }
+            other => {
+                if let Some(builder) = &mut cell_builder {
+                    builder.push_event(other, prepared);
+                }
+            }
+        }
+    }
+
+    MarkdownTable {
+        alignments: alignments.into_iter().map(map_alignment).collect(),
+        headers,
+        rows,
+    }
+}
+
 fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Range<usize>)) {
     let original = input;
     let input = input.trim_start_matches('\u{feff}');
     let bom = original.len() - input.len();
+    let ranges: Vec<_> = logical_lines(input).collect();
     let mut fence: Option<(char, usize)> = None;
+    let mut hugo_code: Option<&'static str> = None;
+    let mut hugo_math: Option<(&'static str, String, usize)> = None;
     let mut display = None;
-    for range in logical_lines(input) {
+    let mut index = 0;
+    while index < ranges.len() {
+        let range = ranges[index].clone();
         let mut source_range = range.clone();
         let raw_line = input[range.clone()].trim_end_matches(['\r', '\n']);
+
+        if let Some(tag_name) = hugo_code {
+            let trimmed = raw_line.trim();
+            if hugo::is_closing_shortcode_line(trimmed, tag_name) {
+                hugo_code = None;
+                sink(
+                    MarkdownLine::CodeFence {
+                        language: String::new(),
+                    },
+                    source_range.start + bom..source_range.end + bom,
+                );
+            } else {
+                sink(
+                    MarkdownLine::CodeLine {
+                        line: raw_line.to_string(),
+                    },
+                    source_range.start + bom..source_range.end + bom,
+                );
+            }
+            index += 1;
+            continue;
+        }
+
+        if let Some((tag_name, mut buf, math_start)) = hugo_math.take() {
+            let trimmed = raw_line.trim();
+            if hugo::is_closing_shortcode_line(trimmed, tag_name) {
+                sink(
+                    MarkdownLine::Paragraph {
+                        spans: vec![MarkdownSpan::Math {
+                            source: buf.trim().to_owned(),
+                            display: true,
+                            url: None,
+                        }],
+                    },
+                    math_start + bom..range.end + bom,
+                );
+                index += 1;
+                continue;
+            }
+            if let Some(before) = hugo::strip_closing_on_same_line(raw_line, tag_name) {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(before);
+                sink(
+                    MarkdownLine::Paragraph {
+                        spans: vec![MarkdownSpan::Math {
+                            source: buf.trim().to_owned(),
+                            display: true,
+                            url: None,
+                        }],
+                    },
+                    math_start + bom..range.end + bom,
+                );
+                index += 1;
+                continue;
+            }
+            if !buf.is_empty() || !trimmed.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(raw_line);
+            }
+            hugo_math = Some((tag_name, buf, math_start));
+            index += 1;
+            continue;
+        }
+
         let tail;
         let raw_line = if fence.is_none() {
             match display_math_line(raw_line, range.start, &mut display) {
                 DisplayLine::Ordinary => raw_line,
-                DisplayLine::Pending => continue,
+                DisplayLine::Pending => {
+                    index += 1;
+                    continue;
+                }
                 DisplayLine::Complete {
                     source,
                     tail: after,
@@ -219,6 +655,7 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
                     );
                     tail = after;
                     if tail.trim().is_empty() {
+                        index += 1;
                         continue;
                     }
                     tail.as_str()
@@ -243,6 +680,7 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
                     line: raw_line.to_string(),
                 });
             }
+            index += 1;
             continue;
         }
         if let Some(marker @ ('`' | '~')) = trimmed.chars().next() {
@@ -253,13 +691,116 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
                 emit(MarkdownLine::CodeFence {
                     language: language.trim().to_string(),
                 });
+                index += 1;
                 continue;
             }
         }
 
+        if trimmed == "<--->" {
+            index += 1;
+            continue;
+        }
+
+        if let Some(hugo_start) = hugo::classify_block_line(trimmed) {
+            match hugo_start {
+                hugo::LineBlockStart::IgnoreLine => {}
+                hugo::LineBlockStart::Code {
+                    tag_name,
+                    language,
+                    inline_body: Some(body),
+                } => {
+                    let _ = tag_name;
+                    emit(MarkdownLine::CodeFence { language });
+                    emit(MarkdownLine::CodeLine { line: body });
+                    emit(MarkdownLine::CodeFence {
+                        language: String::new(),
+                    });
+                }
+                hugo::LineBlockStart::Code {
+                    tag_name,
+                    language,
+                    inline_body: None,
+                } => {
+                    hugo_code = Some(tag_name);
+                    emit(MarkdownLine::CodeFence { language });
+                }
+                hugo::LineBlockStart::Details {
+                    summary_spans,
+                    inline_body,
+                } => {
+                    emit(MarkdownLine::Paragraph {
+                        spans: summary_spans,
+                    });
+                    if let Some(body) = inline_body
+                        && !body.is_empty()
+                    {
+                        emit(MarkdownLine::Paragraph {
+                            spans: parse_markdown_spans(&body),
+                        });
+                    }
+                }
+                hugo::LineBlockStart::Math {
+                    inline_source: Some(source),
+                    display,
+                    ..
+                } => {
+                    emit(MarkdownLine::Paragraph {
+                        spans: vec![MarkdownSpan::Math {
+                            source,
+                            display,
+                            url: None,
+                        }],
+                    });
+                }
+                hugo::LineBlockStart::Math {
+                    tag_name,
+                    inline_source: None,
+                    ..
+                } => {
+                    let has_close = ranges[index + 1..].iter().any(|r| {
+                        let line_txt = &input[r.clone()];
+                        line_txt.contains("{{< /") || line_txt.contains("{{% /")
+                    });
+                    if has_close {
+                        hugo_math = Some((tag_name, String::new(), range.start));
+                    }
+                }
+            }
+            index += 1;
+            continue;
+        }
+
         if trimmed.is_empty() {
             emit(MarkdownLine::Empty);
+            index += 1;
             continue;
+        }
+
+        // GFM tables (header + delimiter row + optional body rows).
+        if source_range.start == range.start
+            && index + 1 < ranges.len()
+            && is_gfm_table_start(
+                raw_line,
+                input[ranges[index + 1].clone()].trim_end_matches(['\r', '\n']),
+            )
+        {
+            let mut end_idx = index + 2;
+            while end_idx < ranges.len()
+                && is_table_continuation(
+                    input[ranges[end_idx].clone()].trim_end_matches(['\r', '\n']),
+                )
+            {
+                end_idx += 1;
+            }
+            let table_slice = &input[range.start..ranges[end_idx - 1].end];
+            if let Some(table) = parse_table_slice(table_slice) {
+                sink(
+                    MarkdownLine::Table(Box::new(table)),
+                    range.start + bom..ranges[end_idx - 1].end + bom,
+                );
+                index = end_idx;
+                continue;
+            }
         }
 
         // Horizontal rules and headings share one framing path each; adding
@@ -269,16 +810,18 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
             && trimmed.bytes().all(|value| value == *marker)
         {
             emit(MarkdownLine::Rule);
+            index += 1;
             continue;
         }
         if let Some((marker, rest)) = trimmed_start.split_once(' ')
-            && matches!(marker, "#" | "##" | "###" | "####")
+            && matches!(marker, "#" | "##" | "###" | "####" | "#####" | "######")
         {
             emit(MarkdownLine::Heading {
-                level: marker.len().min(3),
+                level: marker.len(),
                 text: rest.trim().to_owned(),
                 spans: parse_markdown_spans(rest.trim()),
             });
+            index += 1;
             continue;
         }
 
@@ -286,18 +829,37 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
         if let Some(rest) = trimmed_start.strip_prefix("> ") {
             let spans = parse_markdown_spans(rest.trim());
             emit(MarkdownLine::Quote { spans });
+            index += 1;
             continue;
         }
 
-        // Bulleted lists
+        // Bulleted & task lists
         let indent = raw_line.len() - trimmed_start.len();
         if let Some(rest) = trimmed_start
             .strip_prefix("- ")
             .or_else(|| trimmed_start.strip_prefix("* "))
             .or_else(|| trimmed_start.strip_prefix("+ "))
         {
-            let spans = parse_markdown_spans(rest.trim());
-            emit(MarkdownLine::Bullet { indent, spans });
+            if let Some(task_rest) = rest.strip_prefix("[ ] ") {
+                emit(MarkdownLine::Task {
+                    indent,
+                    checked: false,
+                    spans: parse_markdown_spans(task_rest.trim()),
+                });
+            } else if let Some(task_rest) = rest
+                .strip_prefix("[x] ")
+                .or_else(|| rest.strip_prefix("[X] "))
+            {
+                emit(MarkdownLine::Task {
+                    indent,
+                    checked: true,
+                    spans: parse_markdown_spans(task_rest.trim()),
+                });
+            } else {
+                let spans = parse_markdown_spans(rest.trim());
+                emit(MarkdownLine::Bullet { indent, spans });
+            }
+            index += 1;
             continue;
         }
 
@@ -311,6 +873,7 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
                     number: format!("{}.", num_part),
                     spans,
                 });
+                index += 1;
                 continue;
             }
         }
@@ -318,6 +881,7 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
         // Normal paragraph
         let spans = parse_markdown_spans(trimmed);
         emit(MarkdownLine::Paragraph { spans });
+        index += 1;
     }
 
     if let Some((start, source)) = display {
@@ -326,6 +890,941 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
             start + bom..original.len(),
         );
     }
+}
+
+/// Parses Markdown into structured CommonMark/GFM blocks with reflowed paragraphs,
+/// nested lists, grouped blockquotes, and tables.
+pub fn parse_blocks(input: &str) -> Vec<MarkdownDocBlock> {
+    parse_located_blocks(input)
+        .into_iter()
+        .map(|item| item.block)
+        .collect()
+}
+
+/// Parses structured Markdown blocks while retaining each top-level block's UTF-8 byte range.
+pub fn parse_located_blocks(input: &str) -> Vec<LocatedBlock> {
+    let mut blocks = Vec::new();
+    let metadata = little_clip_core::markdown_metadata::parse(input);
+    let offset = metadata.as_ref().map_or(0, |value| value.body_start);
+    if let Some(metadata) = metadata {
+        let source = if metadata.body_start == 0 {
+            metadata.source.clone()
+        } else {
+            0..metadata.body_start
+        };
+        blocks.push(LocatedBlock {
+            source,
+            block: MarkdownDocBlock::FrontMatter(Box::new(metadata)),
+            incomplete_fence: false,
+        });
+    }
+    let original_body = &input[offset..];
+    let trimmed_body = original_body.trim_start_matches('\u{feff}');
+    let bom = original_body.len() - trimmed_body.len();
+    let base = offset + bom;
+    blocks.extend(parse_located_body_inner(trimmed_body, base, 0));
+    blocks
+}
+
+pub(super) fn parse_located_body_inner(
+    trimmed_body: &str,
+    base: usize,
+    depth: usize,
+) -> Vec<LocatedBlock> {
+    let mut blocks = Vec::new();
+    let prepared = hugo::prepare_shortcodes(trimmed_body, depth);
+    let effective_body = prepared
+        .as_ref()
+        .map_or(trimmed_body, |p| p.rewritten.as_str());
+    let mut container_stack: Vec<OpenFrame> = Vec::new();
+
+    let map_segment_range = |range: std::ops::Range<usize>| match &prepared {
+        Some(p) => {
+            let r = p.map_range(range);
+            r.start + base..r.end + base
+        }
+        None => range.start + base..range.end + base,
+    };
+
+    for segment in split_display_math_segments(effective_body) {
+        match segment {
+            BodySegment::DisplayMath { range, source } => {
+                let mapped = map_segment_range(range);
+                push_doc_block(
+                    &mut container_stack,
+                    &mut blocks,
+                    MarkdownDocBlock::Paragraph {
+                        spans: vec![MarkdownSpan::Math {
+                            source,
+                            display: true,
+                            url: None,
+                        }],
+                    },
+                    mapped,
+                    false,
+                );
+            }
+            BodySegment::IncompleteMath { range, source } => {
+                let mapped = map_segment_range(range);
+                push_doc_block(
+                    &mut container_stack,
+                    &mut blocks,
+                    MarkdownDocBlock::IncompleteMath { source },
+                    mapped,
+                    false,
+                );
+            }
+            BodySegment::Markdown {
+                range,
+                incomplete_fence_start,
+            } => {
+                parse_markdown_segment(
+                    &effective_body[range.clone()],
+                    range.start,
+                    base,
+                    incomplete_fence_start,
+                    prepared.as_ref(),
+                    &mut container_stack,
+                    &mut blocks,
+                );
+            }
+        }
+    }
+
+    while !container_stack.is_empty() {
+        if matches!(
+            container_stack.last(),
+            Some(OpenFrame::HtmlDetails { .. } | OpenFrame::HtmlContainer { .. })
+        ) {
+            close_top_html_container(&mut container_stack, &mut blocks, None);
+        } else {
+            container_stack.pop();
+        }
+    }
+
+    blocks
+}
+
+enum BodySegment {
+    Markdown {
+        range: std::ops::Range<usize>,
+        incomplete_fence_start: Option<usize>,
+    },
+    DisplayMath {
+        range: std::ops::Range<usize>,
+        source: String,
+    },
+    IncompleteMath {
+        range: std::ops::Range<usize>,
+        source: String,
+    },
+}
+
+fn split_display_math_segments(body: &str) -> Vec<BodySegment> {
+    let mut segments = Vec::new();
+    let mut fence: Option<(char, usize, usize)> = None;
+    let mut display: Option<(usize, String)> = None;
+    let mut md_start = 0usize;
+    let mut offset = 0usize;
+
+    for physical_line in body.split_inclusive('\n') {
+        let line_start = offset;
+        offset += physical_line.len();
+        let raw_line = physical_line.trim_end_matches(['\r', '\n']);
+
+        if let Some((marker, minimum, _)) = fence {
+            let trimmed = raw_line.trim();
+            let run = trimmed.chars().take_while(|value| *value == marker).count();
+            if run >= minimum && trimmed.chars().skip(run).all(char::is_whitespace) {
+                fence = None;
+            }
+            continue;
+        }
+
+        match display_math_line(raw_line, line_start, &mut display) {
+            DisplayLine::Pending => continue,
+            DisplayLine::Complete {
+                source,
+                tail,
+                start,
+            } => {
+                if md_start < start {
+                    segments.push(BodySegment::Markdown {
+                        range: md_start..start,
+                        incomplete_fence_start: None,
+                    });
+                }
+                let math_end = if tail.trim().is_empty() {
+                    offset
+                } else {
+                    line_start + (raw_line.len() - tail.len())
+                };
+                segments.push(BodySegment::DisplayMath {
+                    range: start..math_end,
+                    source: source.trim().to_owned(),
+                });
+                md_start = math_end;
+                if !tail.trim().is_empty() {
+                    let trimmed = tail.trim();
+                    if let Some(marker @ ('`' | '~')) = trimmed.chars().next() {
+                        let run = trimmed.chars().take_while(|v| *v == marker).count();
+                        let language = &trimmed[run..];
+                        if run >= 3 && (marker != '`' || !language.contains('`')) {
+                            fence = Some((marker, run, md_start));
+                        }
+                    }
+                }
+                continue;
+            }
+            DisplayLine::Ordinary => {}
+        }
+
+        let trimmed_start = raw_line.trim_start();
+        let leading = raw_line.len() - trimmed_start.len();
+        let trimmed = trimmed_start.trim_end();
+        if leading < 4
+            && let Some(marker @ ('`' | '~')) = trimmed.chars().next()
+        {
+            let run = trimmed.chars().take_while(|value| *value == marker).count();
+            let language = &trimmed[run..];
+            if run >= 3 && (marker != '`' || !language.contains('`')) {
+                fence = Some((marker, run, line_start));
+            }
+        }
+    }
+
+    if let Some((start, source)) = display {
+        if md_start < start {
+            segments.push(BodySegment::Markdown {
+                range: md_start..start,
+                incomplete_fence_start: None,
+            });
+        }
+        segments.push(BodySegment::IncompleteMath {
+            range: start..body.len(),
+            source,
+        });
+    } else if md_start < body.len() {
+        segments.push(BodySegment::Markdown {
+            range: md_start..body.len(),
+            incomplete_fence_start: fence.map(|(_, _, start)| start),
+        });
+    }
+
+    segments
+}
+
+fn map_quote_kind(kind: pulldown_cmark::BlockQuoteKind) -> QuoteKind {
+    use pulldown_cmark::BlockQuoteKind;
+    match kind {
+        BlockQuoteKind::Note => QuoteKind::Note,
+        BlockQuoteKind::Tip => QuoteKind::Tip,
+        BlockQuoteKind::Important => QuoteKind::Important,
+        BlockQuoteKind::Warning => QuoteKind::Warning,
+        BlockQuoteKind::Caution => QuoteKind::Caution,
+    }
+}
+
+fn plain_text_from_spans(spans: &[MarkdownSpan]) -> String {
+    let mut out = String::new();
+    for span in spans {
+        match span {
+            MarkdownSpan::Text(s)
+            | MarkdownSpan::Bold(s)
+            | MarkdownSpan::Italic(s)
+            | MarkdownSpan::BoldItalic(s)
+            | MarkdownSpan::Strikethrough(s)
+            | MarkdownSpan::Code(s) => out.push_str(s),
+            MarkdownSpan::HighlightedCode { code, .. } => out.push_str(code),
+            MarkdownSpan::Styled { text, .. } => out.push_str(text),
+            MarkdownSpan::Link { label, .. } => out.push_str(label),
+            MarkdownSpan::Image { alt, .. } | MarkdownSpan::StyledImage { alt, .. } => {
+                out.push_str(alt)
+            }
+            MarkdownSpan::Math { source, .. } => out.push_str(source),
+            MarkdownSpan::Spoiler { spans } => out.push_str(&plain_text_from_spans(spans)),
+            MarkdownSpan::HardBreak => out.push(' '),
+        }
+    }
+    out
+}
+
+enum OpenFrame {
+    Heading {
+        level: usize,
+        spans: SpanBuilder,
+    },
+    Paragraph {
+        spans: SpanBuilder,
+    },
+    Quote {
+        kind: Option<QuoteKind>,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    List {
+        ordered: bool,
+        start: u64,
+        items: Vec<ListItem>,
+    },
+    Item {
+        task: Option<bool>,
+        blocks: Vec<MarkdownDocBlock>,
+        inline: Option<SpanBuilder>,
+    },
+    Code {
+        language: String,
+        text: String,
+    },
+    Footnote {
+        label: String,
+        blocks: Vec<MarkdownDocBlock>,
+    },
+    HtmlDetails {
+        summary: Vec<MarkdownSpan>,
+        open: bool,
+        blocks: Vec<MarkdownDocBlock>,
+        source: std::ops::Range<usize>,
+    },
+    HtmlContainer {
+        tag: String,
+        style: BlockBoxStyle,
+        hidden: bool,
+        blocks: Vec<LocatedBlock>,
+        source: std::ops::Range<usize>,
+    },
+    Html {
+        text: String,
+    },
+}
+
+fn flush_item_inline(frame: &mut OpenFrame, prepared: Option<&hugo::PreparedShortcodes>) {
+    if let OpenFrame::Item { blocks, inline, .. } = frame
+        && let Some(builder) = inline.take()
+    {
+        let spans = builder.finish();
+        if !spans.is_empty() {
+            for (block, _) in hugo::split_paragraph_or_blocks(spans, prepared) {
+                blocks.push(block);
+            }
+        }
+    }
+}
+
+fn push_doc_block(
+    stack: &mut [OpenFrame],
+    top: &mut Vec<LocatedBlock>,
+    block: MarkdownDocBlock,
+    source: std::ops::Range<usize>,
+    incomplete_fence: bool,
+) {
+    if let Some(parent) = stack.last_mut() {
+        flush_item_inline(parent, None);
+        match parent {
+            OpenFrame::Quote { blocks, .. }
+            | OpenFrame::Item { blocks, .. }
+            | OpenFrame::Footnote { blocks, .. } => blocks.push(block),
+            OpenFrame::HtmlDetails {
+                blocks,
+                source: parent_src,
+                ..
+            } => {
+                parent_src.end = parent_src.end.max(source.end);
+                blocks.push(block);
+            }
+            OpenFrame::HtmlContainer {
+                blocks,
+                source: parent_src,
+                ..
+            } => {
+                parent_src.end = parent_src.end.max(source.end);
+                blocks.push(LocatedBlock {
+                    source,
+                    block,
+                    incomplete_fence,
+                });
+            }
+            _ => {}
+        }
+    } else {
+        top.push(LocatedBlock {
+            source,
+            block,
+            incomplete_fence,
+        });
+    }
+}
+
+fn is_at_block_root(stack: &[OpenFrame]) -> bool {
+    stack.iter().all(|f| {
+        matches!(
+            f,
+            OpenFrame::HtmlDetails { .. } | OpenFrame::HtmlContainer { .. }
+        )
+    })
+}
+
+fn parse_markdown_segment(
+    segment: &str,
+    segment_rew_start: usize,
+    base: usize,
+    incomplete_fence_rew_start: Option<usize>,
+    prepared: Option<&hugo::PreparedShortcodes>,
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+) {
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+    let mut iter = Parser::new_ext(segment, gfm_options()).into_offset_iter();
+    let mut top_range: Option<std::ops::Range<usize>> = None;
+    let map_src = |rel: std::ops::Range<usize>| {
+        let rew = (segment_rew_start + rel.start)..(segment_rew_start + rel.end);
+        let orig = prepared.map_or(rew.clone(), |p| p.map_range(rew));
+        (orig.start + base)..(orig.end + base)
+    };
+    let incomplete_fence_orig =
+        incomplete_fence_rew_start.map(|s| prepared.map_or(s, |p| p.map_offset(s)) + base);
+
+    while let Some((event, range)) = iter.next() {
+        if is_at_block_root(stack) {
+            top_range = Some(map_src(range.clone()));
+        }
+        match event {
+            Event::Start(Tag::Table(alignments)) => {
+                let mut table_events = std::iter::from_fn(|| iter.next().map(|(ev, _)| ev));
+                let table = consume_table(&mut table_events, alignments, prepared);
+                let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::Table(Box::new(table)),
+                    src,
+                    false,
+                );
+            }
+            Event::Start(Tag::Heading { level, .. }) => {
+                stack.push(OpenFrame::Heading {
+                    level: level as usize,
+                    spans: SpanBuilder::default(),
+                });
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some(OpenFrame::Heading { level, spans }) = stack.pop() {
+                    let spans = spans.finish();
+                    let text = plain_text_from_spans(&spans);
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    push_doc_block(
+                        stack,
+                        out,
+                        MarkdownDocBlock::Heading { level, text, spans },
+                        src,
+                        false,
+                    );
+                }
+            }
+            Event::Start(Tag::Paragraph) => {
+                if let Some(parent) = stack.last_mut() {
+                    flush_item_inline(parent, prepared);
+                }
+                stack.push(OpenFrame::Paragraph {
+                    spans: SpanBuilder::default(),
+                });
+            }
+            Event::End(TagEnd::Paragraph) => {
+                if let Some(OpenFrame::Paragraph { spans }) = stack.pop() {
+                    let spans = spans.finish();
+                    if !spans.is_empty() {
+                        let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                        for (block, incomplete) in hugo::split_paragraph_or_blocks(spans, prepared)
+                        {
+                            push_doc_block(stack, out, block, src.clone(), incomplete);
+                        }
+                    }
+                }
+            }
+            Event::Start(Tag::BlockQuote(kind)) => {
+                if let Some(parent) = stack.last_mut() {
+                    flush_item_inline(parent, prepared);
+                }
+                stack.push(OpenFrame::Quote {
+                    kind: kind.map(map_quote_kind),
+                    blocks: Vec::new(),
+                });
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                if let Some(OpenFrame::Quote { kind, blocks }) = stack.pop() {
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    push_doc_block(
+                        stack,
+                        out,
+                        MarkdownDocBlock::Quote { kind, blocks },
+                        src,
+                        false,
+                    );
+                }
+            }
+            Event::Start(Tag::List(start)) => {
+                if let Some(parent) = stack.last_mut() {
+                    flush_item_inline(parent, prepared);
+                }
+                stack.push(OpenFrame::List {
+                    ordered: start.is_some(),
+                    start: start.unwrap_or(1),
+                    items: Vec::new(),
+                });
+            }
+            Event::End(TagEnd::List(_)) => {
+                if let Some(OpenFrame::List {
+                    ordered,
+                    start,
+                    items,
+                }) = stack.pop()
+                {
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    push_doc_block(
+                        stack,
+                        out,
+                        MarkdownDocBlock::List {
+                            ordered,
+                            start,
+                            items,
+                        },
+                        src,
+                        false,
+                    );
+                }
+            }
+            Event::Start(Tag::Item) => {
+                stack.push(OpenFrame::Item {
+                    task: None,
+                    blocks: Vec::new(),
+                    inline: None,
+                });
+            }
+            Event::End(TagEnd::Item) => {
+                if let Some(mut frame) = stack.pop() {
+                    flush_item_inline(&mut frame, prepared);
+                    if let OpenFrame::Item { task, blocks, .. } = frame
+                        && let Some(OpenFrame::List { items, .. }) = stack.last_mut()
+                    {
+                        items.push(ListItem { task, blocks });
+                    }
+                }
+            }
+            Event::TaskListMarker(checked) => {
+                if let Some(OpenFrame::Item { task, .. }) = stack.last_mut() {
+                    *task = Some(checked);
+                }
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                if let Some(parent) = stack.last_mut() {
+                    flush_item_inline(parent, prepared);
+                }
+                let language = match kind {
+                    CodeBlockKind::Fenced(info) => {
+                        info.split_whitespace().next().unwrap_or("").to_owned()
+                    }
+                    CodeBlockKind::Indented => String::new(),
+                };
+                stack.push(OpenFrame::Code {
+                    language,
+                    text: String::new(),
+                });
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(OpenFrame::Code { language, text }) = stack.pop() {
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    if language.is_empty()
+                        && let Some(rep) = prepared.and_then(|p| p.block_at(&text))
+                    {
+                        for (block, incomplete) in rep.to_doc_blocks() {
+                            push_doc_block(stack, out, block, src.clone(), incomplete);
+                        }
+                    } else {
+                        let incomplete_fence = incomplete_fence_orig
+                            .is_some_and(|start| src.start <= start && start < src.end);
+                        push_doc_block(
+                            stack,
+                            out,
+                            MarkdownDocBlock::Code { language, text },
+                            src,
+                            incomplete_fence,
+                        );
+                    }
+                }
+            }
+            Event::Start(Tag::FootnoteDefinition(label)) => {
+                stack.push(OpenFrame::Footnote {
+                    label: label.into_string(),
+                    blocks: Vec::new(),
+                });
+            }
+            Event::End(TagEnd::FootnoteDefinition) => {
+                if let Some(OpenFrame::Footnote { label, blocks }) = stack.pop() {
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    push_doc_block(
+                        stack,
+                        out,
+                        MarkdownDocBlock::Footnote { label, blocks },
+                        src,
+                        false,
+                    );
+                }
+            }
+            Event::Start(Tag::HtmlBlock) => {
+                stack.push(OpenFrame::Html {
+                    text: String::new(),
+                });
+            }
+            Event::End(TagEnd::HtmlBlock) => {
+                if let Some(OpenFrame::Html { text }) = stack.pop() {
+                    let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                    apply_html_block(&text, src, prepared, stack, out);
+                }
+            }
+            Event::Rule => {
+                let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
+                push_doc_block(stack, out, MarkdownDocBlock::Rule, src, false);
+            }
+            other => match stack.last_mut() {
+                Some(OpenFrame::Heading { spans, .. } | OpenFrame::Paragraph { spans }) => {
+                    spans.push_event(other, prepared);
+                }
+                Some(OpenFrame::Item { inline, .. }) => {
+                    inline
+                        .get_or_insert_with(SpanBuilder::default)
+                        .push_event(other, prepared);
+                }
+                Some(OpenFrame::Code { text, .. } | OpenFrame::Html { text }) => {
+                    if let Event::Text(value) | Event::Html(value) = other {
+                        text.push_str(&value);
+                    }
+                }
+                _ => {
+                    if let Event::Html(value) | Event::InlineHtml(value) = other {
+                        let src = map_src(range);
+                        apply_html_block(&value, src, prepared, stack, out);
+                    }
+                }
+            },
+        }
+    }
+
+    while let Some(top) = stack.last() {
+        if matches!(
+            top,
+            OpenFrame::HtmlDetails { .. } | OpenFrame::HtmlContainer { .. }
+        ) {
+            break;
+        }
+        stack.pop();
+    }
+}
+
+fn apply_html_block(
+    raw: &str,
+    src: std::ops::Range<usize>,
+    prepared: Option<&hugo::PreparedShortcodes>,
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+) {
+    for action in html::classify_html_block(raw) {
+        match action {
+            html::ContainerAction::OpenDetails { mut summary, open } => {
+                if let Some(p) = prepared {
+                    summary = p.expand_span_list(summary);
+                }
+                stack.push(OpenFrame::HtmlDetails {
+                    summary,
+                    open,
+                    blocks: Vec::new(),
+                    source: src.clone(),
+                });
+            }
+            html::ContainerAction::CloseDetails => {
+                if let Some(pos) = stack
+                    .iter()
+                    .rposition(|f| matches!(f, OpenFrame::HtmlDetails { .. }))
+                {
+                    while stack.len() > pos + 1 {
+                        close_top_html_container(stack, out, Some(src.end));
+                    }
+                    close_top_html_container(stack, out, Some(src.end));
+                }
+            }
+            html::ContainerAction::OpenBox { tag, style, hidden } => {
+                stack.push(OpenFrame::HtmlContainer {
+                    tag,
+                    style,
+                    hidden,
+                    blocks: Vec::new(),
+                    source: src.clone(),
+                });
+            }
+            html::ContainerAction::CloseBox { tag } => {
+                if let Some(pos) = stack.iter().rposition(|f| {
+                    matches!(f, OpenFrame::HtmlContainer { tag: open_tag, .. } if *open_tag == tag)
+                }) {
+                    while stack.len() > pos + 1 {
+                        close_top_html_container(stack, out, Some(src.end));
+                    }
+                    close_top_html_container(stack, out, Some(src.end));
+                }
+            }
+            html::ContainerAction::Blocks(blocks) => {
+                for mut block in blocks {
+                    if let Some(p) = prepared {
+                        p.expand_block_spans(&mut block);
+                    }
+                    push_doc_block(stack, out, block, src.clone(), false);
+                }
+            }
+        }
+    }
+}
+
+fn close_top_html_container(
+    stack: &mut Vec<OpenFrame>,
+    out: &mut Vec<LocatedBlock>,
+    close_end: Option<usize>,
+) {
+    match stack.pop() {
+        Some(OpenFrame::HtmlDetails {
+            summary,
+            open,
+            blocks,
+            mut source,
+        }) => {
+            if let Some(end) = close_end {
+                source.end = source.end.max(end);
+            }
+            push_doc_block(
+                stack,
+                out,
+                MarkdownDocBlock::Details {
+                    summary,
+                    open,
+                    blocks,
+                },
+                source,
+                false,
+            );
+        }
+        Some(OpenFrame::HtmlContainer {
+            style,
+            hidden,
+            blocks,
+            mut source,
+            ..
+        }) => {
+            if hidden || blocks.is_empty() {
+                return;
+            }
+            if let Some(end) = close_end {
+                source.end = source.end.max(end);
+            }
+            if style.has_visual_box() {
+                let inner_blocks = blocks.into_iter().map(|b| b.block).collect();
+                push_doc_block(
+                    stack,
+                    out,
+                    MarkdownDocBlock::StyledContainer {
+                        style,
+                        blocks: inner_blocks,
+                    },
+                    source,
+                    false,
+                );
+            } else {
+                for item in blocks {
+                    push_doc_block(stack, out, item.block, item.source, item.incomplete_fence);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Converts line-oriented [`MarkdownLine`] items (such as bounded notebook cells)
+/// into structured [`MarkdownDocBlock`] values for shared desktop rendering.
+pub fn blocks_from_lines(lines: impl IntoIterator<Item = MarkdownLine>) -> Vec<MarkdownDocBlock> {
+    let mut blocks = Vec::new();
+    let mut code: Option<(String, String)> = None;
+    let mut paragraph: Option<Vec<MarkdownSpan>> = None;
+    let mut quote: Option<Vec<MarkdownDocBlock>> = None;
+    let mut list: Option<(bool, u64, Vec<ListItem>)> = None;
+
+    let flush_paragraph = |paragraph: &mut Option<Vec<MarkdownSpan>>,
+                           blocks: &mut Vec<MarkdownDocBlock>| {
+        if let Some(spans) = paragraph.take()
+            && !spans.is_empty()
+        {
+            blocks.push(MarkdownDocBlock::Paragraph { spans });
+        }
+    };
+    let flush_quote = |quote: &mut Option<Vec<MarkdownDocBlock>>,
+                       blocks: &mut Vec<MarkdownDocBlock>| {
+        if let Some(inner) = quote.take()
+            && !inner.is_empty()
+        {
+            blocks.push(MarkdownDocBlock::Quote {
+                kind: None,
+                blocks: inner,
+            });
+        }
+    };
+    let flush_list = |list: &mut Option<(bool, u64, Vec<ListItem>)>,
+                      blocks: &mut Vec<MarkdownDocBlock>| {
+        if let Some((ordered, start, items)) = list.take()
+            && !items.is_empty()
+        {
+            blocks.push(MarkdownDocBlock::List {
+                ordered,
+                start,
+                items,
+            });
+        }
+    };
+
+    for line in lines {
+        match (line, &mut code) {
+            (MarkdownLine::CodeLine { line }, Some((_, text))) => {
+                text.push_str(&line);
+                text.push('\n');
+                continue;
+            }
+            (MarkdownLine::Empty, Some((_, text))) => {
+                text.push('\n');
+                continue;
+            }
+            (MarkdownLine::CodeFence { language }, None) => {
+                flush_paragraph(&mut paragraph, &mut blocks);
+                flush_quote(&mut quote, &mut blocks);
+                flush_list(&mut list, &mut blocks);
+                code = Some((language, String::new()));
+                continue;
+            }
+            (MarkdownLine::CodeFence { .. }, Some(_)) => {
+                if let Some((language, text)) = code.take() {
+                    blocks.push(MarkdownDocBlock::Code { language, text });
+                }
+                continue;
+            }
+            (other, _) => {
+                if let Some((language, text)) = code.take() {
+                    blocks.push(MarkdownDocBlock::Code { language, text });
+                }
+                match other {
+                    MarkdownLine::Paragraph { spans } => {
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        if let Some(existing) = &mut paragraph {
+                            push_span(existing, MarkdownSpan::Text(" ".into()));
+                            for span in spans {
+                                push_span(existing, span);
+                            }
+                        } else {
+                            paragraph = Some(spans);
+                        }
+                    }
+                    MarkdownLine::Quote { spans } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        let inner = quote.get_or_insert_with(Vec::new);
+                        if let Some(MarkdownDocBlock::Paragraph { spans: existing }) =
+                            inner.last_mut()
+                        {
+                            push_span(existing, MarkdownSpan::Text(" ".into()));
+                            for span in spans {
+                                push_span(existing, span);
+                            }
+                        } else {
+                            inner.push(MarkdownDocBlock::Paragraph { spans });
+                        }
+                    }
+                    MarkdownLine::Bullet { spans, .. } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        if list.as_ref().is_some_and(|(ordered, _, _)| *ordered) {
+                            flush_list(&mut list, &mut blocks);
+                        }
+                        let (_, _, items) = list.get_or_insert_with(|| (false, 1, Vec::new()));
+                        items.push(ListItem {
+                            task: None,
+                            blocks: vec![MarkdownDocBlock::Paragraph { spans }],
+                        });
+                    }
+                    MarkdownLine::Task { checked, spans, .. } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        if list.as_ref().is_some_and(|(ordered, _, _)| *ordered) {
+                            flush_list(&mut list, &mut blocks);
+                        }
+                        let (_, _, items) = list.get_or_insert_with(|| (false, 1, Vec::new()));
+                        items.push(ListItem {
+                            task: Some(checked),
+                            blocks: vec![MarkdownDocBlock::Paragraph { spans }],
+                        });
+                    }
+                    MarkdownLine::Numbered { number, spans } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        if list.as_ref().is_some_and(|(ordered, _, _)| !*ordered) {
+                            flush_list(&mut list, &mut blocks);
+                        }
+                        let start = number.trim_end_matches('.').parse::<u64>().unwrap_or(1);
+                        let (_, _, items) = list.get_or_insert_with(|| (true, start, Vec::new()));
+                        items.push(ListItem {
+                            task: None,
+                            blocks: vec![MarkdownDocBlock::Paragraph { spans }],
+                        });
+                    }
+                    MarkdownLine::Empty => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                    }
+                    MarkdownLine::FrontMatter(meta) => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        blocks.push(MarkdownDocBlock::FrontMatter(meta));
+                    }
+                    MarkdownLine::Heading { level, text, spans } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        blocks.push(MarkdownDocBlock::Heading { level, text, spans });
+                    }
+                    MarkdownLine::Table(table) => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        blocks.push(MarkdownDocBlock::Table(table));
+                    }
+                    MarkdownLine::Rule => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        blocks.push(MarkdownDocBlock::Rule);
+                    }
+                    MarkdownLine::IncompleteMath { source } => {
+                        flush_paragraph(&mut paragraph, &mut blocks);
+                        flush_quote(&mut quote, &mut blocks);
+                        flush_list(&mut list, &mut blocks);
+                        blocks.push(MarkdownDocBlock::IncompleteMath { source });
+                    }
+                    MarkdownLine::CodeFence { .. } | MarkdownLine::CodeLine { .. } => {}
+                }
+            }
+        }
+    }
+
+    if let Some((language, text)) = code {
+        blocks.push(MarkdownDocBlock::Code { language, text });
+    }
+    flush_paragraph(&mut paragraph, &mut blocks);
+    flush_quote(&mut quote, &mut blocks);
+    flush_list(&mut list, &mut blocks);
+    blocks
 }
 
 /// Prepares only the bounded prefix visible in a screen card. Full line counting
@@ -412,54 +1911,194 @@ fn math_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
-/// Parses inline formatting and native math with CommonMark delimiter semantics.
-pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-    let mut spans = Vec::new();
-    let (mut strong, mut emphasis) = (0usize, 0usize);
-    let mut url: Option<String> = None;
-    for event in Parser::new_ext(text, Options::ENABLE_MATH) {
+#[derive(Default)]
+struct SpanBuilder {
+    spans: Vec<MarkdownSpan>,
+    strong: usize,
+    emphasis: usize,
+    strikethrough: usize,
+    url: Option<String>,
+    image: Option<(String, String)>,
+    html_styles: Vec<(String, InlineCss)>,
+    html_links: Vec<String>,
+    suppressed_html_depth: usize,
+}
+
+impl SpanBuilder {
+    fn active_url(&self) -> Option<&str> {
+        self.html_links
+            .last()
+            .map(String::as_str)
+            .or(self.url.as_deref())
+    }
+
+    fn effective_css(&self) -> InlineCss {
+        let mut css = InlineCss {
+            bold: self.strong > 0,
+            italic: self.emphasis > 0,
+            strikethrough: self.strikethrough > 0,
+            ..Default::default()
+        };
+        for (_, layer) in &self.html_styles {
+            css = css.merge(*layer);
+        }
+        css
+    }
+
+    fn push_inline_html(&mut self, raw: &str) {
+        match html::parse_inline_token(raw) {
+            html::InlineHtmlToken::Ignore => {}
+            html::InlineHtmlToken::HardBreak => {
+                if self.suppressed_html_depth == 0 {
+                    self.spans.push(MarkdownSpan::HardBreak);
+                }
+            }
+            html::InlineHtmlToken::PushLink(href) => self.html_links.push(href),
+            html::InlineHtmlToken::PopLink => {
+                self.html_links.pop();
+            }
+            html::InlineHtmlToken::PushSuppressed => {
+                self.suppressed_html_depth += 1;
+            }
+            html::InlineHtmlToken::PopSuppressed => {
+                self.suppressed_html_depth = self.suppressed_html_depth.saturating_sub(1);
+            }
+            html::InlineHtmlToken::Image {
+                alt,
+                src,
+                style,
+                hidden,
+            } => {
+                if self.suppressed_html_depth == 0 && !hidden && !src.is_empty() {
+                    self.spans.push(MarkdownSpan::StyledImage {
+                        alt,
+                        url: src,
+                        href: self.active_url().map(str::to_owned),
+                        style,
+                    });
+                }
+            }
+            html::InlineHtmlToken::OpenStyle { tag, css } => {
+                self.html_styles.push((tag, css));
+            }
+            html::InlineHtmlToken::CloseStyle { tag } => {
+                if let Some(pos) = self.html_styles.iter().rposition(|(open, _)| *open == tag) {
+                    self.html_styles.truncate(pos);
+                }
+            }
+        }
+    }
+
+    fn push_event<'a>(
+        &mut self,
+        event: pulldown_cmark::Event<'a>,
+        prepared: Option<&hugo::PreparedShortcodes>,
+    ) {
+        use pulldown_cmark::{Event, Tag, TagEnd};
+        if let Some((_, alt)) = &mut self.image {
+            match event {
+                Event::End(TagEnd::Image) => {
+                    let (url, alt) = self.image.take().expect("image buffer present");
+                    if let Some(href) = self.active_url() {
+                        self.spans.push(MarkdownSpan::StyledImage {
+                            alt,
+                            url,
+                            href: Some(href.to_owned()),
+                            style: ImagePresentation::default(),
+                        });
+                    } else {
+                        self.spans.push(MarkdownSpan::Image { alt, url });
+                    }
+                }
+                Event::Text(v) | Event::Code(v) | Event::InlineHtml(v) | Event::Html(v) => {
+                    if let Some(p) = prepared {
+                        alt.push_str(&p.expand_plain_alt(&v));
+                    } else {
+                        alt.push_str(&v);
+                    }
+                }
+                Event::InlineMath(v) | Event::DisplayMath(v) => alt.push_str(&v),
+                Event::SoftBreak | Event::HardBreak => alt.push(' '),
+                _ => {}
+            }
+            return;
+        }
+
         match event {
-            Event::Start(Tag::Strong) => strong += 1,
-            Event::End(TagEnd::Strong) => strong = strong.saturating_sub(1),
-            Event::Start(Tag::Emphasis) => emphasis += 1,
-            Event::End(TagEnd::Emphasis) => emphasis = emphasis.saturating_sub(1),
-            Event::Start(Tag::Link { dest_url, .. }) => url = Some(dest_url.into_string()),
-            Event::End(TagEnd::Link) => url = None,
-            Event::InlineMath(source) => spans.push(MarkdownSpan::Math {
+            Event::Start(Tag::Strong) => self.strong += 1,
+            Event::End(TagEnd::Strong) => self.strong = self.strong.saturating_sub(1),
+            Event::Start(Tag::Emphasis) => self.emphasis += 1,
+            Event::End(TagEnd::Emphasis) => self.emphasis = self.emphasis.saturating_sub(1),
+            Event::Start(Tag::Strikethrough) => self.strikethrough += 1,
+            Event::End(TagEnd::Strikethrough) => {
+                self.strikethrough = self.strikethrough.saturating_sub(1);
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => self.url = Some(dest_url.into_string()),
+            Event::End(TagEnd::Link) => self.url = None,
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                self.image = Some((dest_url.into_string(), String::new()));
+            }
+            Event::InlineMath(source) => self.spans.push(MarkdownSpan::Math {
                 source: source.into_string(),
                 display: false,
-                url: url.clone(),
+                url: self.active_url().map(str::to_owned),
             }),
-            Event::DisplayMath(source) => spans.push(MarkdownSpan::Math {
+            Event::DisplayMath(source) => self.spans.push(MarkdownSpan::Math {
                 source: source.into_string(),
                 display: true,
-                url: url.clone(),
+                url: self.active_url().map(str::to_owned),
             }),
-            Event::Code(source) => spans.push(MarkdownSpan::Code(source.into_string())),
-            Event::Text(value) | Event::InlineHtml(value) | Event::Html(value) => {
-                let span = if let Some(url) = &url {
-                    MarkdownSpan::Link {
-                        label: value.into_string(),
-                        url: url.clone(),
-                    }
-                } else {
-                    match (strong > 0, emphasis > 0) {
-                        (true, true) => MarkdownSpan::BoldItalic(value.into_string()),
-                        (true, false) => MarkdownSpan::Bold(value.into_string()),
-                        (false, true) => MarkdownSpan::Italic(value.into_string()),
-                        (false, false) => MarkdownSpan::Text(value.into_string()),
-                    }
-                };
-                push_span(&mut spans, span);
+            Event::Code(source) => self.spans.push(MarkdownSpan::Code(source.into_string())),
+            Event::FootnoteReference(name) => {
+                push_span(&mut self.spans, MarkdownSpan::Text(format!("[^{name}]")));
             }
-            Event::SoftBreak | Event::HardBreak => {
-                push_span(&mut spans, MarkdownSpan::Text(" ".into()))
+            Event::InlineHtml(value) => self.push_inline_html(&value),
+            Event::Html(value) => self.push_inline_html(&value),
+            Event::Text(value) => {
+                if self.suppressed_html_depth > 0 {
+                    return;
+                }
+                let css = self.effective_css();
+                let url = self.active_url().map(str::to_owned);
+                if let Some(p) = prepared {
+                    p.expand_inline_text(&value, url.as_deref(), css, &mut self.spans);
+                } else {
+                    html::push_styled_text(
+                        &mut self.spans,
+                        value.into_string(),
+                        url.as_deref(),
+                        css,
+                    );
+                }
+            }
+            Event::SoftBreak => {
+                if self.suppressed_html_depth == 0 {
+                    let css = self.effective_css();
+                    let url = self.active_url().map(str::to_owned);
+                    html::push_styled_text(&mut self.spans, " ".to_owned(), url.as_deref(), css);
+                }
+            }
+            Event::HardBreak if self.suppressed_html_depth == 0 => {
+                self.spans.push(MarkdownSpan::HardBreak);
             }
             _ => {}
         }
     }
-    spans
+
+    fn finish(self) -> Vec<MarkdownSpan> {
+        self.spans
+    }
+}
+
+/// Parses inline formatting and native math with CommonMark delimiter semantics.
+pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
+    let prepared = hugo::prepare_shortcodes(text, 0);
+    let effective = prepared.as_ref().map_or(text, |p| p.rewritten.as_str());
+    let mut builder = SpanBuilder::default();
+    for event in pulldown_cmark::Parser::new_ext(effective, gfm_options()) {
+        builder.push_event(event, prepared.as_ref());
+    }
+    builder.finish()
 }
 
 fn push_span(spans: &mut Vec<MarkdownSpan>, span: MarkdownSpan) {
@@ -469,9 +2108,18 @@ fn push_span(spans: &mut Vec<MarkdownSpan>, span: MarkdownSpan) {
         (Some(MarkdownSpan::Text(old)), MarkdownSpan::Text(value))
         | (Some(MarkdownSpan::Bold(old)), MarkdownSpan::Bold(value))
         | (Some(MarkdownSpan::Italic(old)), MarkdownSpan::Italic(value))
-        | (Some(MarkdownSpan::BoldItalic(old)), MarkdownSpan::BoldItalic(value)) => {
+        | (Some(MarkdownSpan::BoldItalic(old)), MarkdownSpan::BoldItalic(value))
+        | (Some(MarkdownSpan::Strikethrough(old)), MarkdownSpan::Strikethrough(value)) => {
             Some((old, value))
         }
+        (
+            Some(MarkdownSpan::Styled {
+                text: old,
+                url: old_url,
+                css: old_css,
+            }),
+            MarkdownSpan::Styled { text, url, css },
+        ) if old_url == url && old_css == css => Some((old, text)),
         (
             Some(MarkdownSpan::Link {
                 label: old,
@@ -741,5 +2389,649 @@ mod tests {
         assert!(matches!(lines[9], MarkdownLine::CodeFence { .. }));
         assert!(matches!(lines[10], MarkdownLine::CodeLine { .. }));
         assert!(matches!(lines[11], MarkdownLine::CodeFence { .. }));
+    }
+
+    #[test]
+    fn gfm_tables_parse_in_both_line_and_block_models_with_alignments_and_spans() {
+        let doc = "| Name | Count | Notes |\n| :--- | :---: | ---: |\n| **Alpha** | `42` | [Docs](https://example.com) |\n| Beta | ~~9~~ | $x^2$ |\n";
+        let blocks = parse_blocks(doc);
+        assert_eq!(blocks.len(), 1);
+        let MarkdownDocBlock::Table(table) = &blocks[0] else {
+            panic!("expected Table block: {blocks:?}");
+        };
+        assert_eq!(
+            table.alignments,
+            vec![
+                TableAlignment::Left,
+                TableAlignment::Center,
+                TableAlignment::Right
+            ]
+        );
+        assert_eq!(table.headers.len(), 3);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0][0], vec![MarkdownSpan::Bold("Alpha".into())]);
+        assert_eq!(table.rows[0][1], vec![MarkdownSpan::Code("42".into())]);
+        assert_eq!(
+            table.rows[1][1],
+            vec![MarkdownSpan::Strikethrough("9".into())]
+        );
+
+        let lines = parse_markdown(doc);
+        assert_eq!(lines.len(), 1);
+        assert!(matches!(&lines[0], MarkdownLine::Table(line_table) if line_table == table));
+
+        let located = parse_located_blocks(doc);
+        assert_eq!(located.len(), 1);
+        assert_eq!(&doc[located[0].source.clone()], doc);
+    }
+
+    #[test]
+    fn document_blocks_reflow_paragraphs_group_quotes_nest_lists_and_preserve_math() {
+        let doc = concat!(
+            "First wrapped line\nsecond wrapped line  \nhard tail.\n\n",
+            "> Quote line one\n> Quote line two\n\n",
+            "- [x] Done task\n  - Nested bullet\n- [ ] Open task\n\n",
+            "##### Level Five\n\n",
+            "$$\n+ x\n---\n```\n# x\n$$\n\n",
+            "![Diagram](chart.png)\n",
+        );
+        let blocks = parse_blocks(doc);
+        assert!(matches!(
+            &blocks[0],
+            MarkdownDocBlock::Paragraph { spans }
+                if spans.contains(&MarkdownSpan::Text("First wrapped line second wrapped line".into()))
+                    && spans.contains(&MarkdownSpan::HardBreak)
+        ));
+        assert!(matches!(
+            &blocks[1],
+            MarkdownDocBlock::Quote { kind: None, blocks } if blocks.len() == 1
+        ));
+        let MarkdownDocBlock::List {
+            ordered: false,
+            items,
+            ..
+        } = &blocks[2]
+        else {
+            panic!("expected bullet list: {blocks:?}");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].task, Some(true));
+        assert_eq!(items[1].task, Some(false));
+        assert!(
+            items[0]
+                .blocks
+                .iter()
+                .any(|b| matches!(b, MarkdownDocBlock::List { .. }))
+        );
+        assert!(matches!(
+            &blocks[3],
+            MarkdownDocBlock::Heading { level: 5, text, .. } if text == "Level Five"
+        ));
+        assert!(matches!(
+            &blocks[4],
+            MarkdownDocBlock::Paragraph { spans }
+                if matches!(spans.as_slice(), [MarkdownSpan::Math { display: true, .. }])
+        ));
+        assert!(matches!(
+            &blocks[5],
+            MarkdownDocBlock::Paragraph { spans }
+                if matches!(spans.as_slice(), [MarkdownSpan::Image { alt, url }] if alt == "Diagram" && url == "chart.png")
+        ));
+    }
+
+    #[test]
+    fn located_blocks_flag_incomplete_fences_and_math_and_coalesce_lines() {
+        let incomplete_fence = "# Title\n\n```mermaid\nflowchart LR\n";
+        let blocks = parse_located_blocks(incomplete_fence);
+        assert!(blocks.iter().any(|b| b.incomplete_fence));
+
+        let incomplete_math = "Intro\n\n$$\nx + y\n";
+        let blocks = parse_located_blocks(incomplete_math);
+        assert!(matches!(
+            blocks.last().map(|b| &b.block),
+            Some(MarkdownDocBlock::IncompleteMath { .. })
+        ));
+
+        let lines = parse_markdown("Line one\nLine two\n\n> Q1\n> Q2\n");
+        let coalesced = blocks_from_lines(lines);
+        assert_eq!(coalesced.len(), 2);
+        assert!(matches!(&coalesced[0], MarkdownDocBlock::Paragraph { .. }));
+        assert!(
+            matches!(&coalesced[1], MarkdownDocBlock::Quote { blocks, .. } if blocks.len() == 1)
+        );
+    }
+
+    #[test]
+    fn inline_and_block_html_with_css_tables_details_and_images_parse_safely() {
+        let doc = concat!(
+            "<!-- ignored comment -->\n\n",
+            "Inline <span style='color: red; text-decoration: underline'>alert</span> ",
+            "<kbd>Ctrl</kbd> H<sub>2</sub>O line<br>next.\n\n",
+            "<details>\n<summary>Click to expand</summary>\n\n- nested bullet\n\n</details>\n\n",
+            "<div style='color: #336699; background: rgba(255, 255, 255, 0.05); border: 1px solid #888; border-radius: 8px; padding: 12px 16px;'>\n\n",
+            "Boxed markdown paragraph.\n\n</div>\n\n",
+            "<img src=\"/nonfree/interviews/PaulShapera.jpg\" alt=\"Paul Shapera\" style=\"float:right;height:12em;border-radius:25px;\">\n\n",
+            "<table><thead><tr><th align=\"center\">Name</th><th>Value</th></tr></thead><tbody><tr><td><b>Alpha</b></td><td><code>42</code></td></tr></tbody></table>\n\n",
+            "<div hidden><img src=\"/hidden.png\" alt=\"secret\"></div>\n\n",
+            "<script>alert(1)</script><style>.x{color:red}</style>\n",
+        );
+
+        let blocks = parse_blocks(doc);
+        assert!(
+            matches!(
+                &blocks[0],
+                MarkdownDocBlock::Paragraph { spans }
+                    if spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Styled { text, css, .. }
+                            if text == "alert" && css.color == Some(RgbaColor { r: 220, g: 40, b: 40, a: 255 }) && css.underline
+                    )) && spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Styled { text, css, .. } if text == "Ctrl" && css.kbd && css.monospace
+                    )) && spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Styled { text, css, .. } if text == "2" && css.subscript
+                    )) && spans.contains(&MarkdownSpan::HardBreak)
+            ),
+            "inline HTML/CSS spans failed: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                &blocks[1],
+                MarkdownDocBlock::Details { summary, open: false, blocks: inner }
+                    if plain_text_from_spans(summary) == "Click to expand"
+                        && inner.iter().any(|b| matches!(b, MarkdownDocBlock::List { .. }))
+            ),
+            "details block failed: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                &blocks[2],
+                MarkdownDocBlock::StyledContainer { style, blocks: inner }
+                    if style.border_width == 1.0
+                        && style.border_radius == 8.0
+                        && style.padding == [12.0, 16.0, 12.0, 16.0]
+                        && style.text_color == Some(RgbaColor { r: 0x33, g: 0x66, b: 0x99, a: 255 })
+                        && !inner.is_empty()
+            ),
+            "styled container failed: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                &blocks[3],
+                MarkdownDocBlock::Paragraph { spans }
+                    if matches!(
+                        spans.as_slice(),
+                        [MarkdownSpan::StyledImage { alt, url, style, .. }]
+                            if alt == "Paul Shapera"
+                                && url == "/nonfree/interviews/PaulShapera.jpg"
+                                && style.float == Some(TextAlign::Right)
+                                && style.height_px == Some(192.0)
+                                && style.border_radius == Some(25.0)
+                    )
+            ),
+            "styled image failed: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                &blocks[4],
+                MarkdownDocBlock::Table(table)
+                    if table.alignments == vec![TableAlignment::Center, TableAlignment::None]
+                        && table.headers.len() == 2
+                        && table.rows.len() == 1
+                        && table.rows[0][0] == vec![MarkdownSpan::Bold("Alpha".into())]
+                        && table.rows[0][1] == vec![MarkdownSpan::Code("42".into())]
+            ),
+            "HTML table failed: {blocks:#?}"
+        );
+        assert_eq!(
+            blocks.len(),
+            5,
+            "hidden/comment/script blocks must be omitted: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn hugo_shortcodes_parse_blocks_inline_nesting_and_source_ranges() {
+        let md = "\
+Intro with {{< hl rust >}}let x: Vec<i32> = vec![1, 2];{{< /hl >}} and inline {{< katex >}}\\LaTeX{{< /katex >}} and {{< latex >}}E = mc^2{{< /latex >}}.
+
+{{< katex display >}}
+
+\\begin{aligned}
+a &= b + c \\\\
+d &= e
+\\end{aligned}
+
+{{< /katex >}}
+
+{{< mermaid align=\"center\" >}}
+
+sequenceDiagram
+    Alice->>John: Hi
+
+{{< /mermaid >}}
+
+{{< code lang=\"python\" title=\"fib.py\" lines=\"20\" compact=\"true\" numbers=\"false\" >}}
+def fib(n):
+    return n
+{{< /code >}}
+
+- Bullet item:
+
+    {{< code title=\"demo.c\" numbers=\"false\" >}}
+int main(void) { return 0; }
+    {{< /code >}}
+
+{{< details \"Here for more?\" open >}}
+
+Nested list:
+* Item inside
+
+{{< code lang=\"rust\" >}}
+fn nested() {}
+{{< /code >}}
+
+{{< /details >}}
+
+| Syntax | Sample |
+| --- | --- |
+| Pipe safe | {{< hl rust >}}a || b{{< /hl >}} |
+
+Literal `{{< code >}}raw{{< /code >}}` and unknown {{< custom_widget >}}stay{{< /custom_widget >}}.
+
+Trailing paragraph.
+";
+
+        let located = parse_located_blocks(md);
+        let blocks: Vec<&MarkdownDocBlock> = located.iter().map(|b| &b.block).collect();
+
+        // Paragraph 0: inline hl (with <i32> intact), inline katex, inline latex.
+        assert!(
+            matches!(
+                blocks[0],
+                MarkdownDocBlock::Paragraph { spans }
+                    if spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::HighlightedCode { language, code }
+                            if language == "rust" && code == "let x: Vec<i32> = vec![1, 2];"
+                    )) && spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Math { source, display: false, .. } if source == "\\LaTeX"
+                    )) && spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Math { source, display: false, .. } if source == "E = mc^2"
+                    ))
+            ),
+            "inline hl/katex/latex paragraph failed: {blocks:#?}"
+        );
+
+        // Block 1: multi-line katex with internal blank lines collapsed cleanly.
+        assert!(
+            matches!(
+                blocks[1],
+                MarkdownDocBlock::Paragraph { spans }
+                    if matches!(
+                        spans.as_slice(),
+                        [MarkdownSpan::Math { source, display: true, .. }]
+                            if source.contains("\\begin{aligned}") && source.contains("\\end{aligned}")
+                    )
+            ),
+            "display katex block failed: {blocks:#?}"
+        );
+
+        // Block 2: mermaid shortcode becomes native mermaid Code block.
+        assert!(
+            matches!(
+                blocks[2],
+                MarkdownDocBlock::Code { language, text }
+                    if language == "mermaid" && text.starts_with("sequenceDiagram") && text.contains("Alice->>John: Hi")
+            ),
+            "mermaid shortcode failed: {blocks:#?}"
+        );
+
+        // Block 3: {{< code >}} preserves indentation and strips template options.
+        assert!(
+            matches!(
+                blocks[3],
+                MarkdownDocBlock::Code { language, text }
+                    if language == "python" && text == "def fib(n):\n    return n"
+            ),
+            "code shortcode failed: {blocks:#?}"
+        );
+
+        // Block 4: list item with indented {{< code title="demo.c" >}} infers C language cleanly inside Item.
+        assert!(
+            matches!(
+                blocks[4],
+                MarkdownDocBlock::List { items, .. }
+                    if items[0].blocks.iter().any(|b| matches!(
+                        b,
+                        MarkdownDocBlock::Code { language, text }
+                            if language == "c" && text == "int main(void) { return 0; }"
+                    ))
+            ),
+            "indented code shortcode inside bullet failed: {blocks:#?}"
+        );
+
+        // Block 5: {{< details "Here for more?" open >}} wraps nested list + code block.
+        assert!(
+            matches!(
+                blocks[5],
+                MarkdownDocBlock::Details { summary, open: true, blocks: inner }
+                    if plain_text_from_spans(summary) == "Here for more?"
+                        && inner.iter().any(|b| matches!(b, MarkdownDocBlock::List { .. }))
+                        && inner.iter().any(|b| matches!(
+                            b,
+                            MarkdownDocBlock::Code { language, text }
+                                if language == "rust" && text == "fn nested() {}"
+                        ))
+            ),
+            "details shortcode failed: {blocks:#?}"
+        );
+
+        // Block 6: pipe inside {{< hl rust >}}a || b{{< /hl >}} stays inside table cell.
+        assert!(
+            matches!(
+                blocks[6],
+                MarkdownDocBlock::Table(table)
+                    if table.rows.len() == 1
+                        && table.rows[0].len() == 2
+                        && table.rows[0][1].iter().any(|s| matches!(
+                            s,
+                            MarkdownSpan::HighlightedCode { language, code }
+                                if language == "rust" && code == "a || b"
+                        ))
+            ),
+            "table inline hl with pipe failed: {blocks:#?}"
+        );
+
+        // Block 7: backtick-protected shortcode and unknown shortcode remain untouched.
+        assert!(
+            matches!(
+                blocks[7],
+                MarkdownDocBlock::Paragraph { spans }
+                    if spans.iter().any(|s| matches!(s, MarkdownSpan::Code(c) if c == "{{< code >}}raw{{< /code >}}"))
+                        && plain_text_from_spans(spans).contains("{{< custom_widget >}}")
+            ),
+            "backtick/unknown preservation failed: {blocks:#?}"
+        );
+
+        // Block 8: Trailing paragraph preserves EXACT UTF-8 source byte range!
+        let trailing = located.last().expect("trailing block");
+        assert!(
+            matches!(&trailing.block, MarkdownDocBlock::Paragraph { spans } if plain_text_from_spans(spans) == "Trailing paragraph."),
+            "trailing block mismatch: {trailing:#?}"
+        );
+        assert_eq!(md[trailing.source.clone()].trim(), "Trailing paragraph.");
+
+        // Line-oriented card parser also handles block & inline shortcodes.
+        let card_lines = parse_markdown(md);
+        assert!(
+            card_lines.iter().any(|line| matches!(
+                line,
+                MarkdownLine::CodeFence { language } if language == "mermaid"
+            )),
+            "card parser should recognize {{< mermaid >}}"
+        );
+        assert!(
+            card_lines.iter().any(|line| matches!(
+                line,
+                MarkdownLine::CodeFence { language } if language == "python"
+            )),
+            "card parser should recognize {{< code >}}"
+        );
+    }
+
+    #[test]
+    fn opguides_custom_shortcodes_parse_spoilers_tabs_columns_quotes_hints_and_captions() {
+        let md = "\
+Before {{< spoiler >}}hidden **secret**{{< /spoiler >}} and {{< smalltext >}}inline note{{< /smalltext >}}.
+
+{{< attribution >}}Art by [Author](https://example.com){{< /attribution >}}
+
+{{< hint info >}}
+
+Info note body.
+
+{{< /hint >}}
+
+{{< hint danger >}}
+
+Danger alert body.
+
+{{< /hint >}}
+
+{{< quote \"David on *[Podcast](https://example.com)*\" >}}
+
+Something worth quoting.
+
+{{< /quote >}}
+
+{{< bigquote \"Source\" >}}
+
+Something huge.
+
+{{< /bigquote >}}
+
+{{< tabs \"Tools\" >}}
+
+{{< tab \"Linux\" >}}
+Use JACK or PipeWire.
+{{< /tab >}}
+
+{{< tab \"Windows\" >}}
+Use ASIO.
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< columns3 >}}
+
+Column one
+
+<--->
+
+{{< code lang=\"rust\" >}}
+// <---> inside code must not split columns
+fn a() {}
+{{< /code >}}
+
+<--->
+
+{{< attribution >}}Third column caption{{< /attribution >}}
+
+{{< /columns3 >}}
+
+{{< columns2 >}}
+
+A
+
+<--->
+
+B
+
+{{< /columns2 >}}
+";
+
+        let blocks = parse_blocks(md);
+
+        assert!(
+            matches!(
+                &blocks[0],
+                MarkdownDocBlock::Paragraph { spans }
+                    if spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Spoiler { spans: inner }
+                            if plain_text_from_spans(inner) == "hidden secret"
+                                && inner.iter().any(|x| matches!(x, MarkdownSpan::Bold(b) if b == "secret"))
+                    )) && spans.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Styled { text, css, .. } if text == "inline note" && css.small
+                    ))
+            ),
+            "spoiler/smalltext failed: {blocks:#?}"
+        );
+
+        assert!(
+            matches!(
+                &blocks[1],
+                MarkdownDocBlock::StyledContainer { style, blocks: inner }
+                    if style.margin_bottom > 0.0
+                        && inner.iter().any(|b| matches!(
+                            b,
+                            MarkdownDocBlock::Paragraph { spans }
+                                if spans.iter().any(|s| matches!(
+                                    s,
+                                    MarkdownSpan::Styled { text, url: Some(u), css }
+                                        if text == "Author" && u == "https://example.com" && css.small
+                                ))
+                        ))
+            ),
+            "attribution block failed: {blocks:#?}"
+        );
+
+        assert!(matches!(
+            &blocks[2],
+            MarkdownDocBlock::Quote {
+                kind: Some(QuoteKind::Note),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &blocks[3],
+            MarkdownDocBlock::Quote {
+                kind: Some(QuoteKind::Caution),
+                ..
+            }
+        ));
+
+        assert!(
+            matches!(
+                &blocks[4],
+                MarkdownDocBlock::PullQuote { big: false, source, .. }
+                    if source.iter().any(|s| matches!(s, MarkdownSpan::Link { label, .. } if label == "Podcast"))
+            ),
+            "quote shortcode failed: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                &blocks[5],
+                MarkdownDocBlock::PullQuote { big: true, source, .. }
+                    if plain_text_from_spans(source) == "Source"
+            ),
+            "bigquote shortcode failed: {blocks:#?}"
+        );
+
+        assert!(
+            matches!(
+                &blocks[6],
+                MarkdownDocBlock::Tabs { tabs }
+                    if tabs.len() == 2 && tabs[0].title == "Linux" && tabs[1].title == "Windows"
+            ),
+            "tabs/tab shortcode failed: {blocks:#?}"
+        );
+
+        assert!(
+            matches!(
+                &blocks[7],
+                MarkdownDocBlock::Columns { dividers: true, bottom_rule: false, columns }
+                    if columns.len() == 3
+                        && matches!(&columns[1][0], MarkdownDocBlock::Code { language, .. } if language == "rust")
+            ),
+            "columns3 shortcode failed: {blocks:#?}"
+        );
+
+        assert!(
+            matches!(
+                &blocks[8],
+                MarkdownDocBlock::Columns { dividers: false, bottom_rule: true, columns }
+                    if columns.len() == 2
+            ),
+            "columns2 shortcode failed: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn hugo_shortcodes_handle_multibyte_utf8_at_every_scan_boundary() {
+        let long_em_dash_tag = format!("{{{{< {}not_closed", "—".repeat(700));
+        let input = format!(
+            "Escaped \\— char and `inline → café` before {{{{< quote \"David — *[Pod]*\" >}}}}\n\
+Inside — body with `code → span` and \\é backslash.\n\
+{{{{< /quote >}}}}\n\n\
+{{{{< spoiler >}}}}\u{201C}secret\u{201D} — hidden{{{{< /spoiler >}} and {{{{< hl rust >}}}}let α = 'β';{{{{< /hl >}}}}\n\n\
+{{{{< tabs \"utf8\" >}}}}\n\
+{{{{< tab \"α — Beta\" >}}}}\n\
+Tab body — café\n\
+{{{{< /tab >}}}}\n\
+{{{{< /tabs >}}}}\n\n\
+{{{{< columns >}}}}\n\
+Left — α\n\
+<--->\n\
+Right — β\n\
+{{{{< /columns >}}}}\n\n\
+{{{{< code lang=\"text\" >}}}}\n\
+Diagram — box → arrow\n\
+{{{{< /code >}}}}\n\n\
+{long_em_dash_tag}"
+        );
+
+        let blocks = parse_markdown(&input);
+        assert!(!blocks.is_empty());
+
+        let (preview, _total) = parse_markdown_preview(&input);
+        assert!(!preview.is_empty());
+
+        let located = parse_located_blocks(&input);
+        assert!(!located.is_empty());
+        for item in &located {
+            assert!(
+                input.is_char_boundary(item.source.start)
+                    && input.is_char_boundary(item.source.end)
+                    && item.source.start <= item.source.end,
+                "invalid located byte range {:?} for UTF-8 source",
+                item.source
+            );
+            let _ = &input[item.source.clone()];
+        }
+    }
+
+    #[test]
+    fn hugo_ref_relref_and_button_shortcodes_parse_as_links() {
+        let md = "\
+See [Soatok]({{< relref \"Interviews/soatok\" >}}) and [Guide]({{% ref \"/a/my page#sec\" %}}).
+
+Inline {{< button relref=\"Other/conlangs/tokipona\" color=\"other\" >}}toki **pona**{{< /button >}} and {{< button relref=\"Engineering/WrappingUp/latex\" >}}{{< katex >}}\\LaTeX{{< /katex >}}{{< /button >}}.";
+
+        let located = parse_located_blocks(md);
+        assert_eq!(located.len(), 2, "expected 2 paragraphs: {located:#?}");
+
+        let MarkdownDocBlock::Paragraph { spans: p0 } = &located[0].block else {
+            panic!("expected paragraph 0");
+        };
+        assert!(p0.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Link { label, url }
+                if label == "Soatok" && url == "Interviews/soatok"
+        )));
+        assert!(p0.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Link { label, url }
+                if label == "Guide" && url == "/a/my%20page#sec"
+        )));
+
+        let MarkdownDocBlock::Paragraph { spans: p1 } = &located[1].block else {
+            panic!("expected paragraph 1");
+        };
+        assert!(p1.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Styled { text, url: Some(u), css }
+                if text == "pona" && u == "Other/conlangs/tokipona" && css.bold
+        )));
+        assert!(p1.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Math { source, url: Some(u), .. }
+                if source == "\\LaTeX" && u == "Engineering/WrappingUp/latex"
+        )));
     }
 }
