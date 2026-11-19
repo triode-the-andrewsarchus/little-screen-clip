@@ -74,21 +74,12 @@ pub(super) fn parse_gbr_at(
     let alpha = if bpp == 1 {
         payload.to_vec()
     } else {
-        // 4bpp RGBA: extract alpha channel; if opaque, fall back to luminance.
-        let (chunks, _) = payload.as_chunks::<4>();
-        let has_alpha = chunks.iter().any(|px| px[3] < 250);
-        chunks
+        // In RGBA GBR files RGB carries color and alpha carries tip coverage.
+        payload
+            .as_chunks::<4>()
+            .0
             .iter()
-            .map(|px| {
-                if has_alpha {
-                    px[3]
-                } else {
-                    let lum =
-                        (u32::from(px[0]) * 77 + u32::from(px[1]) * 150 + u32::from(px[2]) * 29)
-                            >> 8;
-                    255_u8.saturating_sub(lum as u8)
-                }
-            })
+            .map(|pixel| pixel[3])
             .collect()
     };
 

@@ -373,6 +373,25 @@ mod tests {
     }
 
     #[test]
+    fn gimp_rgba_gbr_uses_alpha_even_for_an_opaque_white_tip() {
+        let mut file = make_gbr("White", 4, 4, 20, 255);
+        file[16..20].copy_from_slice(&4_u32.to_be_bytes());
+        file.extend([255; 48]);
+        let lib = load_brush_bytes(
+            BrushFormat::GimpGbr,
+            &file,
+            "fallback",
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(matches!(
+            &lib.brushes[0].tip,
+            BrushTipKind::AlphaMask { alpha, .. } if alpha == &[255; 16]
+        ));
+    }
+
+    #[test]
     fn gimp_vbr_1_0_reads_all_fields_without_a_shape_line() {
         let file = b"GIMP-VBR\n1.0\nSoft Round\n30\n28\n0.65\n1.4\n15\n";
         let lib = load_brush_bytes(
