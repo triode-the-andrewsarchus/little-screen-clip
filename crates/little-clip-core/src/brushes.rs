@@ -3,6 +3,7 @@
 //! Supports `.abr`, `.brush`, `.brushset`, `.kpp`, `.bundle`, `.sut`, `.gbr`,
 //! `.gih`, `.vbr`, `.mpyb`/`.myb`, and best-effort `.afbrushes`.
 
+mod abr;
 mod affinity;
 mod csp;
 mod dynamics;
@@ -246,8 +247,21 @@ fn load_via_brushkit(
         return Err("Cancelled".into());
     }
 
-    let mut brushes = Vec::with_capacity(set.entries.len());
-    for entry in set.entries {
+    let entries = set.entries;
+    let indices: Vec<_> = entries.iter().map(|entry| entry.index).collect();
+    let (total_count, settings) = if format == BrushFormat::Abr {
+        abr::settings(bytes, &indices)?
+    } else {
+        (brushkit_count(format, bytes)?, Vec::new())
+    };
+    let settings = settings
+        .into_iter()
+        .chain(std::iter::repeat_with(BrushStrokeParams::default));
+    let mut brushes = Vec::with_capacity(entries.len());
+    for (entry, mut params) in entries.into_iter().zip(settings) {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Cancelled".into());
+        }
         if let brushkit::preview::TipPreview::Available(bitmap) = entry.tip {
             let name = if entry.name.trim().is_empty() {
                 set.set_name
@@ -258,6 +272,13 @@ fn load_via_brushkit(
             } else {
                 bounded_label(&entry.name).to_owned()
             };
+            if format != BrushFormat::Abr {
+                params.size_px = entry
+                    .source_dimensions
+                    .map_or(bitmap.width.max(bitmap.height), |dims| {
+                        dims.width().max(dims.height())
+                    }) as f32;
+            }
             let detail = entry.source_dimensions.map_or_else(
                 || format!("{}×{} tip", bitmap.width, bitmap.height),
                 |dims| format!("{}×{} tip", dims.width(), dims.height()),
@@ -269,7 +290,7 @@ fn load_via_brushkit(
                     height: bitmap.height,
                     alpha: bitmap.data,
                 },
-                params: BrushStrokeParams::default(),
+                params,
                 detail,
             });
         }
@@ -278,7 +299,6 @@ fn load_via_brushkit(
     if brushes.is_empty() {
         return Err(format!("No readable brush tips in {}", format.label()));
     }
-    let total_count = brushkit_count(format, bytes)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }

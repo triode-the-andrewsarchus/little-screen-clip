@@ -111,10 +111,13 @@ fn draw_stroke(
         previous = point;
     }
     let length = distances[PATH_SEGMENTS];
-    let step_floor = (length / (MAX_DABS - 1) as f32).max(0.8);
+    let dynamics = &preset.params.dynamics;
+    let count = dynamics.scatter_count.clamp(1, 16);
+    let max_steps = MAX_DABS / usize::from(count);
+    let step_floor = (length / (max_steps - 1) as f32).max(0.8);
     let seed = fnv1a(preset.name.as_bytes());
     let mut distance = 0.0;
-    for index in 0..MAX_DABS {
+    for index in 0..max_steps {
         if distance > length {
             break;
         }
@@ -133,10 +136,26 @@ fn draw_stroke(
         };
         let dab = sample_dab(preset, radius, sample);
         stamp_tip(coverage, dimensions, &preset.tip, dab);
+        let count = (f32::from(count)
+            * (1.0 - (signed_random(sample.seed, 8) + 1.0) * 0.5 * dynamics.count_jitter))
+            .round() as u8;
+        for copy in 1..count {
+            let sample = StrokeSample {
+                seed: mix_hash(sample.seed ^ u64::from(copy)),
+                ..sample
+            };
+            stamp_tip(
+                coverage,
+                dimensions,
+                &preset.tip,
+                sample_dab(preset, radius, sample),
+            );
+        }
         distance += (dab.radius * 2.0 * preset.params.spacing.clamp(0.01, 5.0)).max(step_floor);
     }
 }
 
+#[derive(Clone, Copy)]
 struct StrokeSample {
     t: f32,
     direction: f32,

@@ -50,6 +50,8 @@ pub struct BrushDynamics {
     pub(super) follow_direction: f32,
     pub(super) random_start_angle: bool,
     pub(super) scatter_along_stroke: bool,
+    pub(super) scatter_count: u8,
+    pub(super) count_jitter: f32,
     pub(super) taper_start: f32,
     pub(super) taper_end: f32,
     pub(super) taper_size: f32,
