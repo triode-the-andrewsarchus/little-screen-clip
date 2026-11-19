@@ -52,6 +52,7 @@ pub mod psd_image;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
+pub mod sqlite_snapshot;
 pub mod staging;
 pub mod subtitles;
 pub mod svg_image;

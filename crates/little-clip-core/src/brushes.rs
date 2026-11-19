@@ -146,14 +146,8 @@ pub fn load_brush_library(
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
     }
-    crate::kernel_interface::require_content(path).map_err(|error| error.to_string())?;
     let max_brushes = max_brushes.clamp(1, 256);
-
-    if format == BrushFormat::ClipStudioSut {
-        return csp::load_sut(path, max_brushes, cancelled);
-    }
-
-    let bytes = crate::file_source::read_file_bytes(path, MAX_BRUSH_FILE_BYTES, true, true)
+    let bytes = crate::file_source::read_file_snapshot(path, MAX_BRUSH_FILE_BYTES)
         .map_err(|error| format!("Cannot read brush file: {error}"))?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Cancelled".into());
@@ -192,7 +186,7 @@ pub fn load_brush_bytes(
         BrushFormat::AffinityBrushes => {
             affinity::parse_afbrushes(bytes, fallback_name, max_brushes)
         }
-        BrushFormat::ClipStudioSut => Err("Clip Studio .sut requires file access".into()),
+        BrushFormat::ClipStudioSut => csp::parse_sut(bytes, fallback_name, cancelled),
     }
 }
 
@@ -401,6 +395,28 @@ mod tests {
         let lib = load_brush_library(&sut_path, 8, &cancel).unwrap();
         assert_eq!(lib.format, BrushFormat::ClipStudioSut);
         assert_eq!(lib.brushes[0].name, "G-Pen");
+        assert_eq!(lib.brushes[0].params.size_px, 18.0);
+
+        let snapshot = std::fs::read(&sut_path).unwrap();
+        let from_bytes = load_brush_bytes(
+            BrushFormat::ClipStudioSut,
+            &snapshot,
+            "fallback",
+            8,
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(from_bytes.brushes[0].name, "G-Pen");
+        assert!(
+            load_brush_bytes(
+                BrushFormat::ClipStudioSut,
+                b"not SQLite",
+                "fallback",
+                8,
+                &cancel
+            )
+            .is_err()
+        );
         assert!(matches!(lib.brushes[0].tip, BrushTipKind::AlphaMask { .. }));
     }
 }
