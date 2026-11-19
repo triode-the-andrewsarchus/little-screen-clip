@@ -446,17 +446,29 @@ impl HoverRaster {
         edge: u32,
         source: Source,
     ) -> Option<&Ready> {
+        self.request_with(identity, position, edge, |_| source)
+    }
+
+    pub fn request_with(
+        &mut self,
+        identity: uuid::Uuid,
+        position: usize,
+        edge: u32,
+        source: impl FnOnce(uuid::Uuid) -> Source,
+    ) -> Option<&Ready> {
         self.seen = true;
-        if !self
+        let active = self
             .key
-            .is_some_and(|key| key.0 == identity && key.1 == position && key.2 == edge)
-        {
+            .filter(|key| key.0 == identity && key.1 == position);
+        let id = active.map_or_else(uuid::Uuid::new_v4, |key| key.3);
+        if active.is_none_or(|key| key.2 != edge) {
+            // Clearing the old receiver retires its result while keeping the
+            // seed for an ongoing hover stable across raster sizes.
             self.cache.clear();
-            self.key = Some((identity, position, edge, uuid::Uuid::new_v4()));
+            self.key = Some((identity, position, edge, id));
         }
-        let id = self.key.unwrap().3;
         if self.cache.needs(id) {
-            self.cache.request(id, source);
+            self.cache.request(id, source(id));
         }
         self.cache.get(id)
     }

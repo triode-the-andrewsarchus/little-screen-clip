@@ -5,8 +5,14 @@ use super::{
     shelf::preview::{HoverRaster, Previews as Cache, Ready, Source},
 };
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};
-use egui::{Align2, FontId, Rect, Ui, pos2, vec2};
-use little_clip_core::brushes::BrushLibrary;
+use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2, vec2};
+use little_clip_core::{
+    Oklch,
+    brushes::{
+        BrushLibrary,
+        render::{BRUSH_HOVER_ASPECT_RATIO, render_brush_hover_preview, render_brush_preview},
+    },
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::Path,
@@ -20,19 +26,17 @@ pub(in crate::file_manager) struct StrokeRequest {
     pub width: u32,
     pub height: u32,
     pub fg_rgb: [u8; 3],
+    pub overlap: Option<[[u8; 3]; 2]>,
 }
 
 impl StrokeRequest {
     pub fn render(&self) -> PreviewData {
         let preset = &self.library.brushes[self.index];
         let mut data = PreviewData::new(preset.name.clone(), preset.detail.clone(), Icon::Brush);
-        data.image = Some(little_clip_core::brushes::render::render_brush_preview(
-            preset,
-            self.width,
-            self.height,
-            self.fg_rgb,
-            true,
-        ));
+        data.image = Some(match self.overlap {
+            Some(colors) => render_brush_hover_preview(preset, self.height, colors),
+            None => render_brush_preview(preset, self.width, self.height, self.fg_rgb, true),
+        });
         data
     }
 }
@@ -64,13 +68,7 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
                 )
             };
             if let Some(first) = library.brushes.first() {
-                data.image = Some(little_clip_core::brushes::render::render_brush_preview(
-                    first,
-                    128,
-                    64,
-                    [235, 235, 240],
-                    true,
-                ));
+                data.image = Some(render_brush_preview(first, 128, 64, [235, 235, 240], true));
             }
             data.brush = Some(Arc::new(library));
         }
@@ -249,15 +247,11 @@ impl Previews {
                     width: req_w,
                     height: req_h,
                     fg_rgb,
+                    overlap: None,
                 },
             );
             if let Some(texture) = texture {
-                ui.painter().image(
-                    texture.id(),
-                    preview_rect,
-                    Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
+                paint_brush_texture(ui, preview_rect, texture);
             }
 
             let label_rect = Rect::from_min_max(
@@ -279,7 +273,7 @@ impl Previews {
 
             if hover_idle && super::ui::preview_hovered(ui, cell) {
                 let fallback = texture.cloned();
-                self.show_hover(ui, entry, source, index, library, fg_rgb, fallback.as_ref());
+                self.show_hover(ui, entry, source, index, library, fallback.as_ref());
             }
         }
     }
@@ -312,7 +306,6 @@ impl Previews {
         self.cache.get(id)?.texture.as_ref()
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn show_hover(
         &mut self,
         ui: &mut Ui,
@@ -320,38 +313,79 @@ impl Previews {
         source: uuid::Uuid,
         index: usize,
         library: &Arc<BrushLibrary>,
-        fg_rgb: [u8; 3],
         fallback: Option<&egui::TextureHandle>,
     ) {
         let edge = (140.0 * ui.ctx().pixels_per_point())
             .ceil()
             .clamp(96.0, 280.0) as u32;
-        let ready = self.hover.request(
-            source,
-            index,
-            edge,
+        let ready = self.hover.request_with(source, index, edge, |seed| {
             Source::BrushStroke(StrokeRequest {
                 library: library.clone(),
                 index,
-                width: edge * 3,
+                width: (edge as f32 * BRUSH_HOVER_ASPECT_RATIO).round() as u32,
                 height: edge,
-                fg_rgb,
+                fg_rgb: [242, 242, 245],
+                overlap: Some(pastel_pair(seed)),
             })
-            .checked(&entry.path, &self.context),
-        );
+            .checked(&entry.path, &self.context)
+        });
         let preset = &library.brushes[index];
-        let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
+        let texture = ready.and_then(|ready| ready.texture.as_ref());
         egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("brush-strip-hover"), |ui| {
-            ui.set_max_width((ui.ctx().screen_rect().width() - 40.0).clamp(32.0, 440.0));
-            let h = 110.0_f32;
-            let w = (h * 3.0).min((ui.ctx().screen_rect().width() - 56.0).max(64.0));
+            let available = (ui.ctx().screen_rect().width() - 56.0).max(48.0);
+            let h = 110.0_f32.min(available / BRUSH_HOVER_ASPECT_RATIO);
+            let size = vec2(h * BRUSH_HOVER_ASPECT_RATIO, h);
+            ui.set_max_width(size.x);
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 4.0, Color32::from_rgb(37, 39, 44));
             if let Some(texture) = texture {
-                ui.image((texture.id(), vec2(w, h)));
+                paint_brush_texture(ui, rect, texture);
+            } else if let Some(texture) = fallback.filter(|_| ui.visuals().dark_mode) {
+                // Fit the existing white stroke into its section while the hover job runs.
+                let left = Rect::from_min_size(rect.min, vec2(h * 3.0, h));
+                let native = texture.size_vec2();
+                let scale = (left.width() / native.x).min(left.height() / native.y);
+                paint_brush_texture(
+                    ui,
+                    Rect::from_center_size(left.center(), native * scale),
+                    texture,
+                );
             }
             ui.strong(&preset.name);
             ui.weak(&preset.detail);
         });
     }
+}
+
+fn paint_brush_texture(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {
+    ui.painter().image(
+        texture.id(),
+        rect,
+        Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+}
+
+fn pastel_pair(seed: uuid::Uuid) -> [[u8; 3]; 2] {
+    let bytes = seed.as_bytes();
+    let unit = |index| f32::from(bytes[index]) / 255.0;
+    let first = Oklch {
+        l: 0.71 + 0.08 * unit(2),
+        c: 0.09 + 0.025 * unit(3),
+        h: 360.0 * f32::from(u16::from_le_bytes([bytes[0], bytes[1]])) / 65_536.0,
+    };
+    let offset = [105.0, 125.0, 145.0][usize::from(bytes[6] % 3)];
+    let signed_offset = if bytes[7] & 1 == 0 { offset } else { -offset };
+    let second = Oklch {
+        l: 0.71 + 0.08 * unit(4),
+        c: 0.09 + 0.025 * unit(5),
+        ..first.rotate_hue(signed_offset)
+    };
+    [first, second].map(|ink| {
+        let (r, g, b) = ink.to_rgb();
+        [r, g, b]
+    })
 }
 
 fn cell_preview_rect(cell: Rect) -> Rect {
@@ -380,8 +414,57 @@ fn raster_dimensions(rect: Rect, dpi: f32) -> (u32, u32) {
 mod tests {
     use super::*;
     use little_clip_core::brushes::{
-        BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape, render::render_brush_preview,
+        BrushPreset, BrushStrokeParams, BrushTipKind, ParametricShape,
     };
+
+    #[test]
+    fn hover_pairs_are_distinct_and_keep_moderate_perceptual_lightness() {
+        let mut pairs = BTreeSet::new();
+        for hue in (0..u16::MAX).step_by(1024) {
+            let [lo, hi] = hue.to_le_bytes();
+            let mut seed = [lo; 16];
+            seed[1] = hi;
+            seed[3] = 255;
+            seed[5] = 255;
+            seed[6] = hi;
+            seed[7] = hi;
+            let pair = pastel_pair(uuid::Uuid::from_bytes(seed));
+            assert!(pairs.insert(pair));
+            let [a, b] =
+                pair.map(|[r, g, b]| little_clip_core::Oklab::from_rgb(r, g, b).to_oklch());
+            assert!(
+                [a, b].into_iter().all(|ink| {
+                    (0.70..=0.82).contains(&ink.l) && (0.07..=0.13).contains(&ink.c)
+                })
+            );
+            let separation = (b.h - a.h).rem_euclid(360.0);
+            assert!((95.0..=155.0).contains(&separation.min(360.0 - separation)));
+        }
+    }
+
+    #[test]
+    fn overlap_seed_changes_after_hover_ends() {
+        let mut hover = HoverRaster::default();
+        let source = uuid::Uuid::new_v4();
+        let mut original = None;
+        hover.request_with(source, 0, 140, |seed| {
+            original = Some(seed);
+            Source::Text(Default::default())
+        });
+        assert!(!hover.retain(|_| true));
+        hover.request_with(source, 0, 140, |_| panic!("active hover was rerendered"));
+        assert!(!hover.retain(|_| true));
+        hover.request_with(source, 0, 280, |seed| {
+            assert_eq!(Some(seed), original);
+            Source::Text(Default::default())
+        });
+        assert!(!hover.retain(|_| true));
+        assert!(hover.retain(|_| true));
+        hover.request_with(source, 0, 140, |seed| {
+            assert_ne!(Some(seed), original);
+            Source::Text(Default::default())
+        });
+    }
 
     #[test]
     fn fractional_vertical_scroll_keeps_the_raster_size() {

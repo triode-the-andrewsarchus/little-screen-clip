@@ -1,5 +1,8 @@
 use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape, mask};
-use crate::ImageThumbnail;
+use crate::{
+    ImageThumbnail,
+    palette::{linear_to_srgb, srgb_to_linear},
+};
 use std::f32::consts::PI;
 
 /// Draws a sample stroke and optional isolated tip in ink on a transparent background.
@@ -38,7 +41,7 @@ pub fn render_brush_preview(
     };
     let radius = preview_radius(preset.params.size_px, h as f32);
     let inset = (radius + 1.0).max(3.0);
-    let path = StrokePath {
+    let path = StrokePath::Wave {
         x0: stroke_x0 + inset,
         x1: (w as f32 - inset).max(stroke_x0 + inset),
         y: h as f32 * 0.5,
@@ -63,25 +66,126 @@ pub fn render_brush_preview(
     }
 }
 
+pub const BRUSH_HOVER_ASPECT_RATIO: f32 = 4.5;
+
+/// Draws an isolated tip, a white stroke, and two overlapping colored strokes.
+pub fn render_brush_hover_preview(
+    preset: &BrushPreset,
+    edge: u32,
+    colors: [[u8; 3]; 2],
+) -> ImageThumbnail {
+    let h = edge.clamp(8, 280);
+    let w = (h as f32 * BRUSH_HOVER_ASPECT_RATIO).round() as u32;
+    let white = render_brush_preview(preset, h * 3, h, [242, 242, 245], true);
+    let overlap_w = w - white.width;
+    let [lower, upper] = crossed_coverage(preset, overlap_w as usize, h as usize);
+    let linear = colors.map(|rgb| rgb.map(|channel| srgb_to_linear(f32::from(channel) / 255.0)));
+
+    let mut premultiplied_rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for ((white, lower), upper) in white
+        .premultiplied_rgba
+        .chunks_exact(white.width as usize * 4)
+        .zip(lower.chunks_exact(overlap_w as usize))
+        .zip(upper.chunks_exact(overlap_w as usize))
+    {
+        premultiplied_rgba.extend_from_slice(white);
+        for (&lower, &upper) in lower.iter().zip(upper) {
+            premultiplied_rgba.extend_from_slice(&overlap_pixel(colors, linear, lower, upper));
+        }
+    }
+    ImageThumbnail {
+        width: w,
+        height: h,
+        premultiplied_rgba,
+    }
+}
+
+fn crossed_coverage(preset: &BrushPreset, w: usize, h: usize) -> [Vec<f32>; 2] {
+    let (width, height) = (w as f32, h as f32);
+    let radius = preview_radius(preset.params.size_px, height).min(height * 0.18);
+    let y_start = (radius + 2.0).max(height * 0.13);
+    let center = width * 0.5;
+    let span = width * 0.24;
+    let bow = width * 0.09;
+    [1.0, -1.0].map(|direction| {
+        let path = StrokePath::Bow {
+            start: (center - (span + bow) * direction, y_start),
+            end: (center + (span - bow) * direction, height - y_start),
+            bend: bow * direction,
+        };
+        let mut coverage = vec![0.0; w * h];
+        draw_stroke(&mut coverage, (w, h), preset, path, radius);
+        coverage
+    })
+}
+
+fn overlap_pixel(colors: [[u8; 3]; 2], linear: [[f32; 3]; 2], lower: f32, upper: f32) -> [u8; 4] {
+    let transmitted = lower * (1.0 - upper);
+    let alpha = upper + transmitted;
+    let rgb = if transmitted == 0.0 {
+        colors[1]
+    } else if upper == 0.0 {
+        colors[0]
+    } else {
+        std::array::from_fn(|i| {
+            let mixed = (linear[0][i] * transmitted + linear[1][i] * upper) / alpha;
+            (linear_to_srgb(mixed) * 255.0).round() as u8
+        })
+    };
+    let a = (alpha * 255.0).round() as u8;
+    let af = f32::from(a) / 255.0;
+    let [r, g, b] = rgb.map(|channel| (f32::from(channel) * af).round() as u8);
+    [r, g, b, a]
+}
+
 // Fit large brushes in the cell and keep small brushes legible.
 fn preview_radius(size_px: f32, height: f32) -> f32 {
     let fraction = (size_px.max(1.0) / 128.0).sqrt().clamp(0.06, 1.0);
     (height * 0.28 * fraction).max(1.0)
 }
 
-struct StrokePath {
-    x0: f32,
-    x1: f32,
-    y: f32,
-    amplitude: f32,
+enum StrokePath {
+    Wave {
+        x0: f32,
+        x1: f32,
+        y: f32,
+        amplitude: f32,
+    },
+    Bow {
+        start: (f32, f32),
+        end: (f32, f32),
+        bend: f32,
+    },
 }
 
 impl StrokePath {
-    fn point(&self, t: f32) -> (f32, f32) {
-        (
-            self.x0 + (self.x1 - self.x0) * t,
-            self.y - self.amplitude * (t * 2.0 * PI).sin(),
-        )
+    fn geometry(&self, t: f32) -> ((f32, f32), (f32, f32)) {
+        match *self {
+            Self::Wave {
+                x0,
+                x1,
+                y,
+                amplitude,
+            } => {
+                let phase = t * 2.0 * PI;
+                let dx = x1 - x0;
+                (
+                    (x0 + dx * t, y - amplitude * phase.sin()),
+                    (dx, -amplitude * 2.0 * PI * phase.cos()),
+                )
+            }
+            Self::Bow { start, end, bend } => {
+                let dx = end.0 - start.0;
+                let dy = end.1 - start.1;
+                (
+                    (
+                        start.0 + dx * t + bend * 4.0 * t * (1.0 - t),
+                        start.1 + dy * t,
+                    ),
+                    (dx + bend * 4.0 * (1.0 - 2.0 * t), dy),
+                )
+            }
+        }
     }
 }
 
@@ -108,9 +212,9 @@ fn draw_stroke(
     const PATH_SEGMENTS: usize = 64;
     const MAX_DABS: usize = 320;
     let mut distances = [0.0_f32; PATH_SEGMENTS + 1];
-    let mut previous = path.point(0.0);
+    let mut previous = path.geometry(0.0).0;
     for i in 1..=PATH_SEGMENTS {
-        let point = path.point(i as f32 / PATH_SEGMENTS as f32);
+        let point = path.geometry(i as f32 / PATH_SEGMENTS as f32).0;
         distances[i] = distances[i - 1] + (point.0 - previous.0).hypot(point.1 - previous.1);
         previous = point;
     }
@@ -131,13 +235,14 @@ fn draw_stroke(
         let fraction = (distance - distances[end - 1])
             / (distances[end] - distances[end - 1]).max(f32::EPSILON);
         let t = (end as f32 - 1.0 + fraction) / PATH_SEGMENTS as f32;
+        let (position, tangent) = path.geometry(t);
         let sample = StrokeSample {
             index,
             t,
-            direction: (-path.amplitude * 2.0 * PI * (t * 2.0 * PI).cos()).atan2(path.x1 - path.x0),
+            direction: tangent.1.atan2(tangent.0),
             seed: mix_hash(seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)),
             start_seed: seed,
-            position: path.point(t),
+            position,
         };
         let dab = sample_dab(preset, radius, sample);
         let tip = dynamics
@@ -400,6 +505,46 @@ fn mix_hash(mut x: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hover_strokes_keep_the_white_sample_and_blend_using_brush_opacity() {
+        let mut preset = BrushPreset {
+            name: "Circle".into(),
+            tip: BrushTipKind::Parametric {
+                shape: ParametricShape::Circle,
+                hardness: 1.0,
+                aspect_ratio: 1.0,
+                angle_deg: 0.0,
+                spikes: 2,
+            },
+            params: Default::default(),
+            detail: String::new(),
+        };
+        preset.params.opacity = 0.5;
+        let colors = [[240, 0, 0], [0, 0, 240]];
+        let hover = render_brush_hover_preview(&preset, 100, colors);
+        let white = render_brush_preview(&preset, 300, 100, [242, 242, 245], true);
+        for (hover_row, white_row) in hover
+            .premultiplied_rgba
+            .chunks_exact(450 * 4)
+            .zip(white.premultiplied_rgba.chunks_exact(300 * 4))
+        {
+            assert_eq!(&hover_row[..300 * 4], white_row);
+        }
+        let pixel = (50 * 450 + 375) * 4;
+        let [red, green, blue, alpha] = hover.premultiplied_rgba[pixel..pixel + 4] else {
+            unreachable!()
+        };
+        assert!(blue > red && red > 40 && green == 0);
+        assert!((185..=193).contains(&alpha));
+
+        preset.params.opacity = 1.0;
+        let opaque = render_brush_hover_preview(&preset, 100, colors);
+        assert_eq!(
+            &opaque.premultiplied_rgba[pixel..pixel + 4],
+            &[0, 0, 240, 255]
+        );
+    }
 
     #[test]
     fn rotated_bitmaps_keep_their_proportions() {
