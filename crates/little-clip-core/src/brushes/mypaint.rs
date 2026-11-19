@@ -64,7 +64,7 @@ fn stroke_params(brush: &Brush) -> BrushStrokeParams {
         hardness,
         dynamics: BrushDynamics {
             size: Some(DabCurve::sampled(size)),
-            opacity: Some(DabCurve::sampled(|p| {
+            flow: Some(DabCurve::sampled(|p| {
                 let opaque = (pressure(Opaque, p) * pressure(OpaqueMultiply, p)).clamp(0.0, 1.0);
                 let overlap = (2.0 * (actual_dabs(p) + basic_dabs(p))).clamp(1.0, 128.0);
                 1.0 - (1.0 - opaque).powf(1.0 / (1.0 + strength * (overlap - 1.0)))
@@ -120,10 +120,10 @@ mod tests {
         let library = parse_mypaint(bytes, "Test").unwrap();
         let dynamics = &library.brushes[0].params.dynamics;
         let size = dynamics.size.as_ref().unwrap();
-        let opacity = dynamics.opacity.as_ref().unwrap();
+        let flow = dynamics.flow.as_ref().unwrap();
         assert!(size.at(0.0) < size.at(1.0));
-        assert_eq!(opacity.at(0.0), 0.0);
-        assert!(opacity.at(1.0) > 0.0);
+        assert_eq!(flow.at(0.0), 0.0);
+        assert!(flow.at(1.0) > 0.0);
         assert_eq!(dynamics.random_angle.as_ref().unwrap().at(0.0), -180.0);
     }
 }

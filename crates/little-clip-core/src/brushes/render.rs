@@ -26,6 +26,7 @@ pub fn render_brush_preview(
                 radius: h as f32 * 0.34,
                 angle: preset.params.angle_deg,
                 opacity: 1.0,
+                flow: 1.0,
                 hardness: None,
                 aspect: 1.0,
                 spacing: 0.0,
@@ -91,6 +92,7 @@ struct Dab {
     radius: f32,
     angle: f32,
     opacity: f32,
+    flow: f32,
     hardness: Option<f32>,
     aspect: f32,
     spacing: f32,
@@ -214,7 +216,8 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
         y: sample.position.1 + along * sin + across * cos,
         radius: (radius * size.clamp(0.0, 2.0)).max(0.4),
         angle,
-        opacity: (opacity * flow).clamp(0.0, 1.0),
+        opacity: opacity.clamp(0.0, 1.0),
+        flow: flow.clamp(0.0, 1.0),
         hardness: dynamics.hardness.as_ref().map(|curve| curve.at(pressure)),
         aspect: response(&dynamics.aspect, 1.0),
         spacing: response(&dynamics.spacing, params.spacing).clamp(0.01, 5.0),
@@ -222,7 +225,7 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
 }
 
 fn stamp_tip(coverage: &mut [f32], (w, h): (usize, usize), tip: &BrushTipKind, dab: Dab) {
-    if dab.opacity <= 0.0 {
+    if dab.opacity <= 0.0 || dab.flow <= 0.0 {
         return;
     }
     let (rx, ry) = match tip {
@@ -268,7 +271,8 @@ fn stamp_tip(coverage: &mut [f32], (w, h): (usize, usize), tip: &BrushTipKind, d
                 ),
             };
             let dst = &mut coverage[py * w + px];
-            *dst += (1.0 - *dst) * sample * dab.opacity;
+            // Repeated dabs build up toward the current opacity at the flow rate.
+            *dst += (dab.opacity - *dst).max(0.0) * sample * dab.flow;
         }
     }
 }
@@ -374,6 +378,7 @@ mod tests {
                 radius: 8.0,
                 angle: 90.0,
                 opacity: 1.0,
+                flow: 1.0,
                 hardness: None,
                 aspect: 1.0,
                 spacing: 0.0,
@@ -381,6 +386,33 @@ mod tests {
         );
         assert_eq!(coverage[22 * 32 + 16], 1.0);
         assert_eq!(coverage[16 * 32 + 22], 0.0);
+    }
+
+    #[test]
+    fn opacity_caps_buildup_while_flow_controls_each_dab() {
+        let tip = BrushTipKind::AlphaMask {
+            width: 1,
+            height: 1,
+            alpha: [255].into(),
+        };
+        let mut coverage = [0.0; 8 * 8];
+        let dab = Dab {
+            x: 4.0,
+            y: 4.0,
+            radius: 2.0,
+            angle: 0.0,
+            opacity: 0.5,
+            flow: 0.5,
+            hardness: None,
+            aspect: 1.0,
+            spacing: 0.0,
+        };
+        stamp_tip(&mut coverage, (8, 8), &tip, dab);
+        assert_eq!(coverage[4 * 8 + 4], 0.25);
+        for _ in 0..20 {
+            stamp_tip(&mut coverage, (8, 8), &tip, dab);
+        }
+        assert!((coverage[4 * 8 + 4] - 0.5).abs() < 1.0e-6);
     }
 
     #[test]
