@@ -11,3 +11,15 @@ lives in `src/local_input.rs`, called from upstream's keyboard translation.
 
 Wayland startup sizing and logical-to-physical key fallback now use upstream
 behavior.
+
+The upstream 0.37 audit found two application hooks in `src/lib.rs`. The
+remaining source files match upstream. Upstream's `set_clipboard_shortcuts`
+applies to the entire viewport, and the translated `egui::Event::Key` carries
+the translated logical and physical `Key` values. Constellation needs winit's
+unmodified logical character for its configurable bindings, including when
+Shift changes the translated key.
+
+Private Weston/Niri checks exercised native file and text copy, cut and paste,
+including Ctrl+F followed by Ctrl+V in the same input sequence. They also
+exercised assignment with Shift+Apostrophe, Shift+Semicolon and Shift+1, then
+undid each assignment with Ctrl+Z. Both hooks are still needed.
