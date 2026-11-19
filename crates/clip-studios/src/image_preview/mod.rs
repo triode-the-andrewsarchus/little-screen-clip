@@ -97,6 +97,8 @@ fn image_editor_hatch(
     )
 }
 
+const CAMERA_RAW_MIME: &str = "image/x-camera-raw";
+
 pub struct ImagePreviewState {
     pub path: Option<PathBuf>,
     pub title: String,
@@ -104,6 +106,7 @@ pub struct ImagePreviewState {
     pub file_size_bytes: usize,
     pub is_svg: bool,
     pub raw_bytes: Arc<Vec<u8>>,
+    raw_origin: bool,
 
     // Committed revisions are shared until an in-place edit calls Arc::make_mut.
     pub original_rgba: Arc<RgbaImage>,
@@ -392,7 +395,7 @@ impl DecodedImageData {
         };
         let layer_document = layers::Document::from_bytes(&bytes, &decoded.pixels)?;
         Ok(Self {
-            mime: "image/x-camera-raw".into(),
+            mime: CAMERA_RAW_MIME.into(),
             encoded_bytes: Arc::new(bytes),
             original_rgba: Arc::new(decoded.pixels),
             is_svg: false,
@@ -631,6 +634,7 @@ impl ImagePreviewState {
         Self {
             path,
             title,
+            raw_origin: mime == CAMERA_RAW_MIME,
             mime,
             file_size_bytes,
             is_svg,
@@ -886,20 +890,23 @@ impl ImagePreviewState {
             .is_some_and(|saved| *saved != self.input_stamp())
     }
 
+    fn save_requires_unused_destination(&self) -> bool {
+        // A file-backed session can replace its new raster output after Save As
+        // advances the source guard. Clipboard sessions have no such guard.
+        self.raw_origin && (self.mime == CAMERA_RAW_MIME || self.file_source.is_none())
+    }
+
     pub fn open_save_dialog(&mut self) {
         let default_target = if let Some(p) = &self.path {
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
             let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("png");
-            let ext = if ext.eq_ignore_ascii_case("pcx")
+            let raw = self.mime == CAMERA_RAW_MIME;
+            let writable = ext.eq_ignore_ascii_case("pcx")
                 || image::ImageFormat::from_extension(ext)
-                    .is_some_and(|format| format.writing_enabled())
-            {
-                ext
-            } else {
-                "png"
-            };
+                    .is_some_and(|format| format.writing_enabled());
+            let ext = if !raw && writable { ext } else { "png" };
             let parent = p.parent().unwrap_or_else(|| Path::new("."));
-            if self.undo_stack.is_empty() {
+            if !raw && self.undo_stack.is_empty() {
                 parent.join(format!("{}.{}", stem, ext))
             } else {
                 parent.join(format!("{}_edit.{}", stem, ext))

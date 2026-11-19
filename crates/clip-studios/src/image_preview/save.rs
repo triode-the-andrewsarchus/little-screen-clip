@@ -64,6 +64,7 @@ struct SaveResult {
 struct SaveOptions {
     source: Option<crate::file_source::FileSource>,
     path: PathBuf,
+    new_destination_only: bool,
     stamp: ImageInputStamp,
     converted: bool,
     quality: u8,
@@ -436,13 +437,20 @@ fn write_save(
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create destination directory: {e}"))?;
-    // Preserve ordinary overwrite/create semantics, including symlinks, hardlinks,
-    // permissions and the process umask. Cancellation is checked before the write;
-    // an already-started filesystem write finishes normally.
+    let directory = if options.new_destination_only {
+        Some(
+            little_clip_core::kernel_interface::create_content_directory(parent)
+                .map_err(|e| format!("Failed to create destination directory: {e}"))?,
+        )
+    } else {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create destination directory: {e}"))?;
+        None
+    };
+    // Cancellation is checked before the write. An already-started filesystem
+    // write finishes normally, including atomic installation of a RAW export.
     begin_write(phase, started)?;
-    let source = write_bytes(&options, &bytes)?;
+    let source = write_bytes(&options, &bytes, directory.as_ref())?;
 
     Ok(SaveResult {
         source,
@@ -454,7 +462,16 @@ fn write_save(
 fn write_bytes(
     options: &SaveOptions,
     bytes: &[u8],
+    directory: Option<&std::fs::File>,
 ) -> Result<Option<crate::file_source::FileSource>, String> {
+    if let Some(directory) = directory {
+        let installed = crate::file_source::create_file_in(&options.path, bytes, directory)?;
+        return options
+            .source
+            .as_ref()
+            .map(|_| crate::file_source::FileSource::capture_file(&installed))
+            .transpose();
+    }
     if let Some(source) = &options.source {
         source.write(&options.path, bytes).map(Some)
     } else {
@@ -684,6 +701,7 @@ impl ImagePreviewState {
             SaveOptions {
                 path,
                 source: self.file_source.clone(),
+                new_destination_only: self.save_requires_unused_destination(),
                 stamp,
                 converted,
                 quality: self.convert_state.quality,
@@ -1028,6 +1046,52 @@ mod tests {
             assert!(state.has_unsaved_changes());
             assert_eq!(std::fs::read(collision).unwrap(), bytes);
             assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn raw_save_requires_an_unused_destination_even_with_a_writable_extension() {
+        let jobs = BackgroundJobs::new(1, 4);
+        let original = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/raw/oriented-preview.dng"
+        ));
+        for file_backed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("camera.tiff");
+            let symlink = directory.path().join("symlink.tiff");
+            let hardlink = directory.path().join("hardlink.tiff");
+            std::fs::write(&path, original).unwrap();
+            std::os::unix::fs::symlink(&path, &symlink).unwrap();
+            std::fs::hard_link(&path, &hardlink).unwrap();
+            let mut state =
+                ImagePreviewState::from_path(path.clone(), &AppConfig::default()).unwrap();
+            if file_backed {
+                state =
+                    state.with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
+            }
+            state.open_save_dialog();
+            assert_eq!(
+                Path::new(&state.fallback_save_path),
+                directory.path().join("camera_edit.png")
+            );
+            for destination in [&path, &symlink, &hardlink] {
+                state.start_save(destination, &jobs);
+                wait_for_save(&mut state);
+                assert!(state.status_toast.is_some());
+                assert_eq!(std::fs::read(destination).unwrap(), original);
+            }
+
+            let export = directory.path().join("output").join("copy.png");
+            state.start_save(&export, &jobs);
+            wait_for_save(&mut state);
+            assert_eq!(image::open(&export).unwrap().dimensions(), (20, 32));
+            assert_eq!(state.mime, "image/png");
+
+            state.start_save(&path, &jobs);
+            wait_for_save(&mut state);
+            assert!(state.status_toast.is_some());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
         }
     }
 
