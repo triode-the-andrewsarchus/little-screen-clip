@@ -1652,10 +1652,10 @@ pub(super) fn classify_block_line(trimmed: &str) -> Option<LineBlockStart> {
     if !is_supported_name(&tag.name) {
         return None;
     }
-    if tag.close {
-        return Some(LineBlockStart::IgnoreLine);
-    }
     let rest = trimmed[tag.end..].trim_end();
+    if tag.close {
+        return rest.is_empty().then_some(LineBlockStart::IgnoreLine);
+    }
     match tag.name.as_str() {
         "code" | "mermaid" => {
             let tag_name = if tag.name == "mermaid" {

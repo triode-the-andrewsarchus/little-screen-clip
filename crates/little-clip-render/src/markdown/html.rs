@@ -92,8 +92,11 @@ pub(super) fn parse_inline_token(raw: &str) -> InlineHtmlToken {
             .to_ascii_lowercase();
         return match tag.as_str() {
             "" => InlineHtmlToken::Ignore,
+            "br" => InlineHtmlToken::HardBreak,
             "a" => InlineHtmlToken::PopLink,
-            "script" | "style" | "noscript" | "template" => InlineHtmlToken::PopSuppressed,
+            "script" | "style" | "noscript" | "template" | "iframe" | "object" | "svg" => {
+                InlineHtmlToken::PopSuppressed
+            }
             _ => InlineHtmlToken::CloseStyle { tag },
         };
     }
@@ -104,9 +107,17 @@ pub(super) fn parse_inline_token(raw: &str) -> InlineHtmlToken {
     };
     let tag = el.value().name().to_ascii_lowercase();
     let hidden = element_is_hidden(el);
+    let self_closing = trimmed.ends_with("/>");
     match tag.as_str() {
         "br" => InlineHtmlToken::HardBreak,
-        "script" | "style" | "noscript" | "template" => InlineHtmlToken::PushSuppressed,
+        "script" | "style" | "noscript" | "template" | "iframe" | "object" | "svg" => {
+            if self_closing {
+                InlineHtmlToken::Ignore
+            } else {
+                InlineHtmlToken::PushSuppressed
+            }
+        }
+        "embed" | "source" | "link" | "meta" | "input" => InlineHtmlToken::Ignore,
         "a" => {
             if let Some(href) = el.attr("href") {
                 InlineHtmlToken::PushLink(href.to_owned())
