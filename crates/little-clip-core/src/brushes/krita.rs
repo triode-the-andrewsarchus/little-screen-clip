@@ -616,7 +616,8 @@ struct ResourceTip {
 
 fn resource_tip(bytes: &[u8], filename: Option<&str>) -> Option<ResourceTip> {
     if bytes.starts_with(mask::PNG_MAGIC) {
-        let (tip, width, height) = mask::png(bytes, mask::OpaqueCoverage::Light)?;
+        // Krita's opaque grayscale tip images use white for empty canvas.
+        let (tip, width, height) = mask::png(bytes, mask::OpaqueCoverage::Dark)?;
         return Some(ResourceTip {
             tip,
             size: width.max(height) as f32,
@@ -832,6 +833,17 @@ fn read_bundle_entry(entry: impl Read, size: u64, remaining: &mut u64) -> Option
 #[cfg(test)]
 mod curve_tests {
     use super::*;
+
+    #[test]
+    fn opaque_krita_png_tips_use_dark_pixels_as_ink() {
+        let image = image::GrayImage::from_raw(3, 1, vec![255, 128, 0]).unwrap();
+        let mut png = Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let tip = resource_tip(&png.into_inner(), Some("tip.png")).unwrap();
+        assert!(
+            matches!(tip.tip, BrushTipKind::AlphaMask { alpha, .. } if *alpha == [0, 127, 255])
+        );
+    }
 
     #[test]
     fn krita_curves_use_splines_and_keep_marked_corners() {
