@@ -1035,6 +1035,14 @@ fn render_quote_block(
     ui.add_space(if ctx.compact_spacing { 4.0 } else { 8.0 });
 }
 
+fn effective_bold_color(palette: &AppPalette, ctx: BlockStyleContext) -> Color32 {
+    if ctx.text_color != hex_to_c32(&palette.colors.text_secondary) {
+        ctx.text_color
+    } else {
+        hex_to_c32(&palette.colors.text_primary)
+    }
+}
+
 struct DetailsContent<'a> {
     summary: &'a [MarkdownSpan],
     open: bool,
@@ -1049,7 +1057,7 @@ fn render_details_block(
     ctx: BlockStyleContext,
     mut media: DocMedia<'_>,
 ) {
-    let summary_color = hex_to_c32(&palette.colors.text_primary);
+    let summary_color = effective_bold_color(palette, ctx);
     let built_summary = build_prose_layout_job_with_options(
         details.summary,
         BODY_FONT_SIZE,
@@ -1236,11 +1244,7 @@ fn render_block(
     mut media: DocMedia<'_>,
 ) {
     let prose_color = ctx.text_color;
-    let bold_color = if ctx.text_color != hex_to_c32(&palette.colors.text_secondary) {
-        ctx.text_color
-    } else {
-        hex_to_c32(&palette.colors.text_primary)
-    };
+    let bold_color = effective_bold_color(palette, ctx);
     let compact_spacing = ctx.compact_spacing;
 
     match block {
