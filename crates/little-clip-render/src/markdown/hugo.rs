@@ -206,6 +206,38 @@ impl PreparedShortcodes {
                 MarkdownSpan::Text(t) if t.contains(self.inline_open) => {
                     self.expand_inline_text(&t, None, InlineCss::default(), &mut out);
                 }
+                MarkdownSpan::Bold(t) if t.contains(self.inline_open) => {
+                    let css = InlineCss {
+                        bold: true,
+                        ..Default::default()
+                    };
+                    self.expand_inline_text(&t, None, css, &mut out);
+                }
+                MarkdownSpan::Italic(t) if t.contains(self.inline_open) => {
+                    let css = InlineCss {
+                        italic: true,
+                        ..Default::default()
+                    };
+                    self.expand_inline_text(&t, None, css, &mut out);
+                }
+                MarkdownSpan::BoldItalic(t) if t.contains(self.inline_open) => {
+                    let css = InlineCss {
+                        bold: true,
+                        italic: true,
+                        ..Default::default()
+                    };
+                    self.expand_inline_text(&t, None, css, &mut out);
+                }
+                MarkdownSpan::Strikethrough(t) if t.contains(self.inline_open) => {
+                    let css = InlineCss {
+                        strikethrough: true,
+                        ..Default::default()
+                    };
+                    self.expand_inline_text(&t, None, css, &mut out);
+                }
+                MarkdownSpan::Link { label, url } if label.contains(self.inline_open) => {
+                    self.expand_inline_text(&label, Some(&url), InlineCss::default(), &mut out);
+                }
                 MarkdownSpan::Styled { text, url, css } if text.contains(self.inline_open) => {
                     self.expand_inline_text(&text, url.as_deref(), css, &mut out);
                 }
@@ -225,8 +257,14 @@ impl PreparedShortcodes {
 
     fn span_contains_inline(&self, span: &MarkdownSpan) -> bool {
         match span {
-            MarkdownSpan::Text(t) => t.contains(self.inline_open),
-            MarkdownSpan::Styled { text, .. } => text.contains(self.inline_open),
+            MarkdownSpan::Text(t)
+            | MarkdownSpan::Bold(t)
+            | MarkdownSpan::Italic(t)
+            | MarkdownSpan::BoldItalic(t)
+            | MarkdownSpan::Strikethrough(t) => t.contains(self.inline_open),
+            MarkdownSpan::Link { label: text, .. } | MarkdownSpan::Styled { text, .. } => {
+                text.contains(self.inline_open)
+            }
             MarkdownSpan::Spoiler { spans } => spans.iter().any(|s| self.span_contains_inline(s)),
             _ => false,
         }
@@ -776,7 +814,7 @@ fn handle_open_shortcode(
         }
         "spoiler" => {
             let (close_start, close_end) =
-                find_closing_tag_within_paragraph(input, body_start, "spoiler")?;
+                find_closing_tag_within_paragraph(input, body_start, "spoiler", true)?;
             let inner = input[body_start..close_start].trim();
             let spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
             let id = prepared.inlines.len();
@@ -792,7 +830,7 @@ fn handle_open_shortcode(
         }
         "smalltext" => {
             if let Some((close_start, close_end)) =
-                find_closing_tag_within_paragraph(input, body_start, "smalltext")
+                find_closing_tag_within_paragraph(input, body_start, "smalltext", true)
             {
                 let inner = input[body_start..close_start].trim();
                 let mut spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
@@ -875,7 +913,7 @@ fn handle_open_shortcode(
         "hl" => {
             let language = extract_hl_language(&open.args);
             if let Some((close_start, close_end)) =
-                find_closing_tag_within_paragraph(input, body_start, "hl")
+                find_closing_tag_within_paragraph(input, body_start, "hl", false)
             {
                 let code = input[body_start..close_start]
                     .trim_matches(['\r', '\n'])
@@ -925,7 +963,7 @@ fn handle_open_shortcode(
         }
         "button" => {
             let (close_start, close_end) =
-                find_closing_tag_within_paragraph(input, body_start, "button")?;
+                find_closing_tag_within_paragraph(input, body_start, "button", true)?;
             let target = open
                 .args
                 .iter()
@@ -1176,7 +1214,14 @@ pub(super) fn parse_shortcode_tag(input: &str, start: usize) -> Option<ParsedTag
         return None;
     }
 
-    let args_raw = rest[name_end..].trim().trim_end_matches('/').trim();
+    let mut args_raw = rest[name_end..].trim_start();
+    if rest.as_bytes().get(name_end) == Some(&b'/') {
+        args_raw = args_raw[1..].trim_start();
+    }
+    args_raw = args_raw.trim_end();
+    if !matches!(name.as_str(), "ref" | "relref") {
+        args_raw = args_raw.trim_end_matches('/').trim_end();
+    }
     let args = if close {
         Vec::new()
     } else {
@@ -1396,6 +1441,12 @@ fn find_closing_tag(
             }
         }
 
+        if track_nesting && let Some(next_pos) = advance_inline_code_span(input, pos) {
+            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
+            pos = next_pos;
+            continue;
+        }
+
         if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
             && let Some(tag) = parse_shortcode_tag(input, pos)
         {
@@ -1434,12 +1485,17 @@ fn find_closing_tag_within_paragraph(
     input: &str,
     from: usize,
     name: &str,
+    skip_backticks: bool,
 ) -> Option<(usize, usize)> {
     let bytes = input.as_bytes();
     let mut pos = from;
     while pos < input.len() {
         if bytes[pos..].starts_with(b"\n\n") || bytes[pos..].starts_with(b"\r\n\r\n") {
             return None;
+        }
+        if skip_backticks && let Some(next_pos) = advance_inline_code_span(input, pos) {
+            pos = next_pos;
+            continue;
         }
         if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
             && let Some(tag) = parse_shortcode_tag(input, pos)
@@ -1452,6 +1508,15 @@ fn find_closing_tag_within_paragraph(
         pos += step;
     }
     None
+}
+
+fn advance_inline_code_span(input: &str, pos: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    if bytes.get(pos) != Some(&b'`') {
+        return None;
+    }
+    let tick_run = bytes[pos..].iter().take_while(|&&ch| ch == b'`').count();
+    Some(find_inline_code_end(input, pos + tick_run, tick_run).unwrap_or(pos + tick_run))
 }
 
 fn find_inline_code_end(input: &str, from: usize, run_len: usize) -> Option<usize> {
@@ -1781,6 +1846,12 @@ fn parse_tabs_inner(raw: &str, depth: usize) -> Vec<MarkdownTab> {
             }
         }
 
+        if let Some(next_pos) = advance_inline_code_span(raw, pos) {
+            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
+            pos = next_pos;
+            continue;
+        }
+
         if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
             && let Some(tag) = parse_shortcode_tag(raw, pos)
             && !tag.close
@@ -1857,6 +1928,12 @@ fn split_columns_inner(raw: &str) -> Vec<&str> {
                 pos = line_end;
                 continue;
             }
+        }
+
+        if let Some(next_pos) = advance_inline_code_span(raw, pos) {
+            at_line_start = bytes.get(next_pos.saturating_sub(1)) == Some(&b'\n');
+            pos = next_pos;
+            continue;
         }
 
         if (bytes[pos..].starts_with(b"{{<") || bytes[pos..].starts_with(b"{{%"))
