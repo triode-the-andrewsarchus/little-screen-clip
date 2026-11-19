@@ -268,7 +268,12 @@ pub(super) fn build_inline_css_text_format(
     let color = if let Some(raw_fg) = css.color {
         css_text_color_on(effective_bg, raw_fg, palette)
     } else if has_link {
-        link_color(palette)
+        crate::ui_ext::contrast_text_c32_on(
+            effective_bg,
+            effective_bg,
+            Some(link_color(palette)),
+            palette,
+        )
     } else if css.strikethrough {
         hex_to_c32(&palette.colors.text_muted)
     } else if css.kbd || css.monospace {

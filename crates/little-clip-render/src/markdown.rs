@@ -1947,7 +1947,7 @@ struct SpanBuilder {
     strikethrough: usize,
     url: Option<String>,
     image: Option<(String, String)>,
-    html_styles: Vec<(String, InlineCss)>,
+    html_styles: Vec<(String, InlineCss, bool)>,
     html_links: Vec<String>,
     suppressed_html_depth: usize,
 }
@@ -1960,6 +1960,10 @@ impl SpanBuilder {
             .or(self.url.as_deref())
     }
 
+    fn is_suppressed(&self) -> bool {
+        self.suppressed_html_depth > 0 || self.html_styles.iter().any(|(_, _, hidden)| *hidden)
+    }
+
     fn effective_css(&self) -> InlineCss {
         let mut css = InlineCss {
             bold: self.strong > 0,
@@ -1967,7 +1971,7 @@ impl SpanBuilder {
             strikethrough: self.strikethrough > 0,
             ..Default::default()
         };
-        for (_, layer) in &self.html_styles {
+        for (_, layer, _) in &self.html_styles {
             css = css.merge(*layer);
         }
         css
@@ -1977,7 +1981,7 @@ impl SpanBuilder {
         match html::parse_inline_token(raw) {
             html::InlineHtmlToken::Ignore => {}
             html::InlineHtmlToken::HardBreak => {
-                if self.suppressed_html_depth == 0 {
+                if !self.is_suppressed() {
                     self.spans.push(MarkdownSpan::HardBreak);
                 }
             }
@@ -1997,7 +2001,7 @@ impl SpanBuilder {
                 style,
                 hidden,
             } => {
-                if self.suppressed_html_depth == 0 && !hidden && !src.is_empty() {
+                if !self.is_suppressed() && !hidden && !src.is_empty() {
                     self.spans.push(MarkdownSpan::StyledImage {
                         alt,
                         url: src,
@@ -2006,11 +2010,15 @@ impl SpanBuilder {
                     });
                 }
             }
-            html::InlineHtmlToken::OpenStyle { tag, css } => {
-                self.html_styles.push((tag, css));
+            html::InlineHtmlToken::OpenStyle { tag, css, hidden } => {
+                self.html_styles.push((tag, css, hidden));
             }
             html::InlineHtmlToken::CloseStyle { tag } => {
-                if let Some(pos) = self.html_styles.iter().rposition(|(open, _)| *open == tag) {
+                if let Some(pos) = self
+                    .html_styles
+                    .iter()
+                    .rposition(|(open, _, _)| *open == tag)
+                {
                     self.html_styles.truncate(pos);
                 }
             }
@@ -2027,15 +2035,17 @@ impl SpanBuilder {
             match event {
                 Event::End(TagEnd::Image) => {
                     let (url, alt) = self.image.take().expect("image buffer present");
-                    if let Some(href) = self.active_url() {
-                        self.spans.push(MarkdownSpan::StyledImage {
-                            alt,
-                            url,
-                            href: Some(href.to_owned()),
-                            style: ImagePresentation::default(),
-                        });
-                    } else {
-                        self.spans.push(MarkdownSpan::Image { alt, url });
+                    if !self.is_suppressed() {
+                        if let Some(href) = self.active_url() {
+                            self.spans.push(MarkdownSpan::StyledImage {
+                                alt,
+                                url,
+                                href: Some(href.to_owned()),
+                                style: ImagePresentation::default(),
+                            });
+                        } else {
+                            self.spans.push(MarkdownSpan::Image { alt, url });
+                        }
                     }
                 }
                 Event::Text(v) | Event::Code(v) | Event::InlineHtml(v) | Event::Html(v) => {
@@ -2066,24 +2076,40 @@ impl SpanBuilder {
             Event::Start(Tag::Image { dest_url, .. }) => {
                 self.image = Some((dest_url.into_string(), String::new()));
             }
-            Event::InlineMath(source) => self.spans.push(MarkdownSpan::Math {
-                source: source.into_string(),
-                display: false,
-                url: self.active_url().map(str::to_owned),
-            }),
-            Event::DisplayMath(source) => self.spans.push(MarkdownSpan::Math {
-                source: source.into_string(),
-                display: true,
-                url: self.active_url().map(str::to_owned),
-            }),
-            Event::Code(source) => self.spans.push(MarkdownSpan::Code(source.into_string())),
-            Event::FootnoteReference(name) => {
+            Event::InlineMath(source) if !self.is_suppressed() => {
+                self.spans.push(MarkdownSpan::Math {
+                    source: source.into_string(),
+                    display: false,
+                    url: self.active_url().map(str::to_owned),
+                });
+            }
+            Event::DisplayMath(source) if !self.is_suppressed() => {
+                self.spans.push(MarkdownSpan::Math {
+                    source: source.into_string(),
+                    display: true,
+                    url: self.active_url().map(str::to_owned),
+                });
+            }
+            Event::Code(source) => {
+                if !self.is_suppressed() {
+                    let mut css = self.effective_css();
+                    css.monospace = true;
+                    let url = self.active_url().map(str::to_owned);
+                    html::push_styled_text(
+                        &mut self.spans,
+                        source.into_string(),
+                        url.as_deref(),
+                        css,
+                    );
+                }
+            }
+            Event::FootnoteReference(name) if !self.is_suppressed() => {
                 push_span(&mut self.spans, MarkdownSpan::Text(format!("[^{name}]")));
             }
             Event::InlineHtml(value) => self.push_inline_html(&value),
             Event::Html(value) => self.push_inline_html(&value),
             Event::Text(value) => {
-                if self.suppressed_html_depth > 0 {
+                if self.is_suppressed() {
                     return;
                 }
                 let css = self.effective_css();
@@ -2100,13 +2126,13 @@ impl SpanBuilder {
                 }
             }
             Event::SoftBreak => {
-                if self.suppressed_html_depth == 0 {
+                if !self.is_suppressed() {
                     let css = self.effective_css();
                     let url = self.active_url().map(str::to_owned);
                     html::push_styled_text(&mut self.spans, " ".to_owned(), url.as_deref(), css);
                 }
             }
-            Event::HardBreak if self.suppressed_html_depth == 0 => {
+            Event::HardBreak if !self.is_suppressed() => {
                 self.spans.push(MarkdownSpan::HardBreak);
             }
             _ => {}
@@ -2942,7 +2968,11 @@ B
             matches!(
                 &blocks[4],
                 MarkdownDocBlock::PullQuote { big: false, source, .. }
-                    if source.iter().any(|s| matches!(s, MarkdownSpan::Link { label, .. } if label == "Podcast"))
+                    if source.iter().any(|s| matches!(
+                        s,
+                        MarkdownSpan::Styled { text, url: Some(_), css }
+                            if text == "Podcast" && css.italic
+                    ))
             ),
             "quote shortcode failed: {blocks:#?}"
         );
@@ -3152,5 +3182,45 @@ Outside normal paragraph
         );
         let spans = parse_markdown_spans(&nested);
         assert!(!spans.is_empty());
+    }
+
+    #[test]
+    fn linked_code_hidden_inline_html_and_shortcodes_in_html_and_columns() {
+        let linked_code = parse_markdown_spans(
+            "Call [`init()`](/docs/api), [Home]({{< relref / >}}), [Docs]({{< relref docs/ >}}) <span hidden>`secret`</span><span style=\"display:none\">gone</span>.",
+        );
+        assert!(linked_code.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Styled { text, url: Some(u), css }
+                if text == "init()" && u == "/docs/api" && css.monospace
+        )));
+        assert!(linked_code.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Link { label, url } if label == "Home" && url == "/"
+        )));
+        assert!(linked_code.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Link { label, url } if label == "Docs" && url == "docs/"
+        )));
+        let plain = plain_text_from_spans(&linked_code);
+        assert!(!plain.contains("secret") && !plain.contains("gone"));
+
+        let html_shortcode = parse_located_blocks("<p><b>{{< katex >}}x{{< /katex >}}</b></p>");
+        let Some(MarkdownDocBlock::Paragraph { spans }) = html_shortcode.first().map(|b| &b.block)
+        else {
+            panic!("expected paragraph: {html_shortcode:#?}");
+        };
+        assert!(spans.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::Math { source, .. } if source == "x"
+        )));
+
+        let cols = parse_located_blocks(
+            "{{< columns >}}\nLeft `<--->` split\n<--->\nRight\n{{< /columns >}}",
+        );
+        let Some(MarkdownDocBlock::Columns { columns, .. }) = cols.first().map(|b| &b.block) else {
+            panic!("expected columns: {cols:#?}");
+        };
+        assert_eq!(columns.len(), 2, "backtick `<--->` should not split column");
     }
 }

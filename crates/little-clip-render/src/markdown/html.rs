@@ -31,6 +31,7 @@ pub(super) enum InlineHtmlToken {
     OpenStyle {
         tag: String,
         css: InlineCss,
+        hidden: bool,
     },
     CloseStyle {
         tag: String,
@@ -122,7 +123,7 @@ pub(super) fn parse_inline_token(raw: &str) -> InlineHtmlToken {
         _ => {
             let mut css = inline_css_for_tag(&tag);
             merge_element_inline_css(el, &mut css);
-            InlineHtmlToken::OpenStyle { tag, css }
+            InlineHtmlToken::OpenStyle { tag, css, hidden }
         }
     }
 }
@@ -877,7 +878,9 @@ pub(super) fn push_styled_text(
     if text.is_empty() {
         return;
     }
-    let span = if !css.is_plain_compatible() {
+    let needs_styled = !css.is_plain_compatible()
+        || (url.is_some() && (css.bold || css.italic || css.strikethrough || css.monospace));
+    let span = if needs_styled {
         MarkdownSpan::Styled {
             text,
             url: url.map(str::to_owned),

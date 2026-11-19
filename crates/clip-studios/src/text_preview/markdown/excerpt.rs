@@ -49,14 +49,21 @@ impl MarkdownExcerptData {
             .or_else(|| nearest_block_index(&located, offset))
             .unwrap_or(0);
         let selected = selection(&located, index)?;
-        let bytes = located[selected.start].source.start..located[selected.end - 1].source.end;
-        validate(&located[selected.clone()], bytes.len())?;
-        let first = source[..bytes.start]
+        let start =
+            source.floor_char_boundary(located[selected.start].source.start.min(source.len()));
+        let end = source.floor_char_boundary(
+            located[selected.end - 1]
+                .source
+                .end
+                .clamp(start, source.len()),
+        );
+        validate(&located[selected.clone()], end - start)?;
+        let first = source[..start]
             .bytes()
             .filter(|byte| *byte == b'\n')
             .count()
             + 1;
-        let last = source[..bytes.end].lines().count().max(first);
+        let last = source[..end].lines().count().max(first);
         let blocks = located.drain(selected).map(|item| item.block).collect();
         Ok(Arc::new(Self {
             blocks,
