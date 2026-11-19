@@ -19,7 +19,10 @@ pub(super) fn parse_afbrushes(
             brushes.push(BrushPreset {
                 name: format!("{fallback_name} #{idx}"),
                 tip,
-                params: BrushStrokeParams::default(),
+                params: BrushStrokeParams {
+                    size_px: width.max(height) as f32,
+                    ..Default::default()
+                },
                 detail: format!("{width}×{height} tip"),
             });
         }
