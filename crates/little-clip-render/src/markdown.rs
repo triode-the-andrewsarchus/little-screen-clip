@@ -758,8 +758,9 @@ fn parse_body_into(input: &str, mut sink: impl FnMut(MarkdownLine, std::ops::Ran
                     ..
                 } => {
                     let has_close = ranges[index + 1..].iter().any(|r| {
-                        let line_txt = &input[r.clone()];
-                        line_txt.contains("{{< /") || line_txt.contains("{{% /")
+                        let raw_next = input[r.clone()].trim_end_matches(['\r', '\n']);
+                        hugo::is_closing_shortcode_line(raw_next.trim(), tag_name)
+                            || hugo::strip_closing_on_same_line(raw_next, tag_name).is_some()
                     });
                     if has_close {
                         hugo_math = Some((tag_name, String::new(), range.start));
@@ -3222,5 +3223,16 @@ Outside normal paragraph
             panic!("expected columns: {cols:#?}");
         };
         assert_eq!(columns.len(), 2, "backtick `<--->` should not split column");
+
+        let card_lines = parse_markdown(
+            "{{< katex >}}\n\n# Visible Heading\n\n{{< details \"Info\" >}}\nBody\n{{< /details >}}",
+        );
+        assert!(
+            card_lines.iter().any(|line| matches!(
+                line,
+                MarkdownLine::Heading { level: 1, text, .. } if text == "Visible Heading"
+            )),
+            "zero-body {{{{< katex >}}}} loader must not consume subsequent blocks: {card_lines:#?}"
+        );
     }
 }

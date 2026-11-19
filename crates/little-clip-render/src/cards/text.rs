@@ -99,6 +99,9 @@ impl ScreenRenderer {
                                 .highlight_line(line, &SYNTAX_SET)
                                 .unwrap_or_default()
                             {
+                                if x + occupied >= clip_right {
+                                    break;
+                                }
                                 let hex = self.palette.map_syntax_color_hex(
                                     style.foreground.r,
                                     style.foreground.g,
@@ -114,6 +117,9 @@ impl ScreenRenderer {
                                 );
                                 occupied += run.width;
                                 runs.push(run);
+                            }
+                            if x + occupied >= clip_right {
+                                break;
                             }
                         }
                         continue;
@@ -499,7 +505,9 @@ impl ScreenRenderer {
                     let panel_bg = self.color_from_hex(&self.palette.colors.surface_panel);
                     let recessed_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
                     let canvas_bg = self.color_from_hex(&self.palette.colors.canvas);
-                    let all_rows = std::iter::once((true, &table.headers))
+                    let all_rows = (!table.headers.is_empty())
+                        .then_some((true, &table.headers))
+                        .into_iter()
                         .chain(table.rows.iter().map(|r| (false, r)));
                     for (r_idx, (is_header, row)) in all_rows.enumerate() {
                         if y + row_h > max_y {

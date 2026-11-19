@@ -59,15 +59,28 @@ pub fn resolve_document_link(doc_path: &Path, reference: &str) -> Option<PathBuf
 
     for cleaned in candidates {
         let found = if cleaned.starts_with('/') {
-            hugo_roots.iter().find_map(|(_, content_dir)| {
-                resolve_content_target(content_dir, content_dir, &cleaned)
-            })
-        } else {
-            resolve_relative_target(doc_dir, site_ceiling, &cleaned).or_else(|| {
-                hugo_roots.iter().find_map(|(_, content_dir)| {
+            hugo_roots
+                .iter()
+                .find_map(|(_, content_dir)| {
                     resolve_content_target(content_dir, content_dir, &cleaned)
                 })
-            })
+                .or_else(|| {
+                    (!hugo_roots.is_empty())
+                        .then(|| resolve_in_hugo_ancestors(doc_dir, &cleaned, false))
+                        .flatten()
+                })
+        } else {
+            resolve_relative_target(doc_dir, site_ceiling, &cleaned)
+                .or_else(|| {
+                    hugo_roots.iter().find_map(|(_, content_dir)| {
+                        resolve_content_target(content_dir, content_dir, &cleaned)
+                    })
+                })
+                .or_else(|| {
+                    (!hugo_roots.is_empty())
+                        .then(|| resolve_in_hugo_ancestors(doc_dir, &cleaned, false))
+                        .flatten()
+                })
         };
         if let Some(path) = found
             && self_identity
@@ -237,10 +250,15 @@ fn lexical_join(base: &Path, rel: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn resolve_in_hugo_ancestors(doc_dir: &Path, rel: &str) -> Option<PathBuf> {
+fn resolve_in_hugo_ancestors(doc_dir: &Path, rel: &str, include_public: bool) -> Option<PathBuf> {
     let rel_trimmed = rel.trim_start_matches('/');
+    let roots: &[&str] = if include_public {
+        &["static", "assets", "public"]
+    } else {
+        &["static", "assets"]
+    };
     for ancestor in doc_dir.ancestors().take(MAX_HUGO_ANCESTORS + 1) {
-        for folder in ["static", "assets", "public"] {
+        for folder in roots {
             if let Some(candidate) = safe_rel_under(&ancestor.join(folder), rel_trimmed)
                 && let Some(found) = try_regular_file(candidate)
             {
@@ -346,7 +364,7 @@ fn is_direct_absolute_allowed(doc_dir: &Path, candidate: &Path) -> bool {
 
 fn resolve_cleaned(doc_dir: &Path, cleaned: &str) -> Option<PathBuf> {
     if cleaned.starts_with('/') {
-        if let Some(found) = resolve_in_hugo_ancestors(doc_dir, cleaned) {
+        if let Some(found) = resolve_in_hugo_ancestors(doc_dir, cleaned, true) {
             return Some(found);
         }
         // Only allow a direct filesystem absolute path when it contains no `..`
@@ -369,7 +387,7 @@ fn resolve_cleaned(doc_dir: &Path, cleaned: &str) -> Option<PathBuf> {
     {
         return Some(found);
     }
-    resolve_in_hugo_ancestors(doc_dir, cleaned)
+    resolve_in_hugo_ancestors(doc_dir, cleaned, true)
 }
 
 fn collect_hugo_content_roots(doc_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
@@ -691,6 +709,18 @@ mod tests {
             resolve_document_link(&plugin, "../../Engineering/Engineering.md"),
             Some(eng_page.clone())
         );
+        // Hugo static assets linked directly resolve, while stale build outputs in `public/` do not.
+        let static_diagram = site.join("static/images/cpu.svg");
+        let public_stale = site.join("public/stale.html");
+        std::fs::create_dir_all(static_diagram.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(public_stale.parent().unwrap()).unwrap();
+        std::fs::write(&static_diagram, b"<svg/>").unwrap();
+        std::fs::write(&public_stale, b"<html/>").unwrap();
+        assert_eq!(
+            resolve_document_link(&webdev, "/images/cpu.svg"),
+            Some(static_diagram)
+        );
+        assert_eq!(resolve_document_link(&webdev, "/stale.html"), None);
 
         // Self-links, missing pages, external URLs, fragments, and site escapes return None.
         for non_navigable in [
