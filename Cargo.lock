@@ -1454,6 +1454,7 @@ dependencies = [
  "egui_extras",
  "flate2",
  "fuse-binwalk",
+ "gif 0.14.2",
  "hound",
  "image 0.25.10",
  "imagesize 0.12.0",

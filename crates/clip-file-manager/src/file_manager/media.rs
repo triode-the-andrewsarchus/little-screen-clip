@@ -112,22 +112,59 @@ pub(in crate::file_manager) struct AnimatedFrame {
     pub delay: Duration,
 }
 
+impl AnimatedFrame {
+    fn from_gif_frame(frame: image::Frame, edge: u32) -> Self {
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        let raw_delay = numer.checked_div(denom).unwrap_or(100);
+        // Browsers normalize < 20ms GIF frame delays to 100ms to avoid runaway CPU usage.
+        let delay_ms = if raw_delay < 20 {
+            100
+        } else {
+            raw_delay.min(10_000)
+        };
+        let delay = Duration::from_millis(u64::from(delay_ms));
+
+        let buffer = frame.into_buffer();
+        let rgba = if buffer.width().max(buffer.height()) > edge && edge > 0 {
+            image::DynamicImage::ImageRgba8(buffer)
+                .thumbnail(edge, edge)
+                .to_rgba8()
+        } else {
+            buffer
+        };
+        Self {
+            image: ImageThumbnail::from_rgba(rgba),
+            delay,
+        }
+    }
+}
+
 pub(in crate::file_manager) struct AnimatedFrames {
     pub frames: Vec<AnimatedFrame>,
     pub total_duration: Duration,
+    cycles: Option<u32>,
 }
 
 impl AnimatedFrames {
-    /// Returns `(frame_index, remaining_delay)` for `elapsed` within the looping animation.
+    /// Returns `(frame_index, remaining_delay)` for the elapsed playback time.
+    ///
+    /// Finite playback holds the last frame with a zero delay after its final pass.
     pub fn frame_at(&self, elapsed: Duration) -> (usize, Duration) {
         if self.frames.len() <= 1 {
             return (0, Duration::ZERO);
         }
-        let total_ms = self.total_duration.as_millis() as u64;
+        let total_ms = self.total_duration.as_millis();
         if total_ms == 0 {
             return (0, Duration::ZERO);
         }
-        let pos_ms = (elapsed.as_millis() as u64) % total_ms;
+        let elapsed_ms = elapsed.as_millis();
+        if self
+            .cycles
+            .is_some_and(|count| elapsed_ms / total_ms >= u128::from(count))
+        {
+            return (self.frames.len() - 1, Duration::ZERO);
+        }
+        let pos_ms = (elapsed_ms % total_ms) as u64;
         let mut accum = 0u64;
         for (idx, frame) in self.frames.iter().enumerate() {
             let delay_ms = frame.delay.as_millis() as u64;
@@ -171,6 +208,14 @@ pub(in crate::file_manager) fn decode_animated_gif(
         return None;
     }
 
+    // Read the GIF repeat extension directly to distinguish an absent extension
+    // (one pass) from an explicit infinite loop.
+    let repeat = gif::DecodeOptions::new().read_info(bytes).ok()?.repeat();
+    let cycles = match repeat {
+        gif::Repeat::Infinite => None,
+        gif::Repeat::Finite(repeats) => Some(1 + u32::from(repeats)),
+    };
+
     let mut frames = Vec::new();
     let mut total_duration = Duration::ZERO;
     let mut total_bytes = 0usize;
@@ -182,31 +227,10 @@ pub(in crate::file_manager) fn decode_animated_gif(
         let Ok(frame) = frame_result else {
             break;
         };
-        let (numer, denom) = frame.delay().numer_denom_ms();
-        let raw_delay = numer.checked_div(denom).unwrap_or(100);
-        // Browsers normalize < 20ms GIF frame delays to 100ms to avoid runaway CPU usage.
-        let delay_ms = if raw_delay < 20 {
-            100
-        } else {
-            raw_delay.min(10_000)
-        };
-        let delay = Duration::from_millis(u64::from(delay_ms));
-
-        let buffer = frame.into_buffer();
-        let rgba = if buffer.width().max(buffer.height()) > edge && edge > 0 {
-            image::DynamicImage::ImageRgba8(buffer)
-                .thumbnail(edge, edge)
-                .to_rgba8()
-        } else {
-            buffer
-        };
-        let thumb = ImageThumbnail::from_rgba(rgba);
-        total_bytes = total_bytes.saturating_add(thumb.premultiplied_rgba.len());
-        frames.push(AnimatedFrame {
-            image: thumb,
-            delay,
-        });
-        total_duration += delay;
+        let frame = AnimatedFrame::from_gif_frame(frame, edge);
+        total_bytes = total_bytes.saturating_add(frame.image.premultiplied_rgba.len());
+        total_duration += frame.delay;
+        frames.push(frame);
 
         if frames.len() >= MAX_ANIMATION_FRAMES || total_bytes >= MAX_ANIMATION_BYTES {
             break;
@@ -221,6 +245,7 @@ pub(in crate::file_manager) fn decode_animated_gif(
         AnimatedFrames {
             frames,
             total_duration,
+            cycles,
         },
     ))
 }
@@ -438,12 +463,14 @@ mod tests {
         assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
     }
 
-    fn encode_gif(frame_colors: &[[u8; 4]], delay_ms: u32) -> Vec<u8> {
-        use image::codecs::gif::{GifEncoder, Repeat};
+    use image::codecs::gif::Repeat;
+
+    fn encode_gif(frame_colors: &[[u8; 4]], delay_ms: u32, repeat: Repeat) -> Vec<u8> {
+        use image::codecs::gif::GifEncoder;
         let mut bytes = Vec::new();
         {
             let mut encoder = GifEncoder::new(&mut bytes);
-            encoder.set_repeat(Repeat::Infinite).unwrap();
+            encoder.set_repeat(repeat).unwrap();
             let frames = frame_colors.iter().map(|&rgba| {
                 let img = image::RgbaImage::from_pixel(4, 4, image::Rgba(rgba));
                 image::Frame::from_parts(img, 0, 0, image::Delay::from_numer_denom_ms(delay_ms, 1))
@@ -456,10 +483,14 @@ mod tests {
     #[test]
     fn decode_animated_gif_distinguishes_still_and_animated_gifs() {
         let cancelled = std::sync::atomic::AtomicBool::new(false);
-        let still = encode_gif(&[[255, 0, 0, 255]], 100);
+        let still = encode_gif(&[[255, 0, 0, 255]], 100, Repeat::Infinite);
         assert!(decode_animated_gif(&still, 128, &cancelled).is_none());
 
-        let animated = encode_gif(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]], 100);
+        let animated = encode_gif(
+            &[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]],
+            100,
+            Repeat::Infinite,
+        );
         let ((w, h), frames) = decode_animated_gif(&animated, 128, &cancelled).unwrap();
         assert_eq!((w, h), (4, 4));
         assert_eq!(frames.frames.len(), 3);
@@ -467,5 +498,21 @@ mod tests {
         assert_eq!(frames.frame_at(Duration::from_millis(120)).0, 1);
         assert_eq!(frames.frame_at(Duration::from_millis(250)).0, 2);
         assert_eq!(frames.frame_at(Duration::from_millis(320)).0, 0);
+    }
+
+    #[test]
+    fn animated_gif_stops_after_its_configured_repeats() {
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let colors = [[255, 0, 0, 255], [0, 255, 0, 255]];
+        for repeats in [0, 1, 2] {
+            let bytes = encode_gif(&colors, 100, Repeat::Finite(repeats));
+            let (_, frames) = decode_animated_gif(&bytes, 128, &cancelled).unwrap();
+            let last_start = Duration::from_millis(200 * u64::from(repeats));
+            assert_eq!(frames.frame_at(last_start), (0, Duration::from_millis(100)));
+            assert_eq!(
+                frames.frame_at(last_start + Duration::from_millis(200)),
+                (1, Duration::ZERO)
+            );
+        }
     }
 }
