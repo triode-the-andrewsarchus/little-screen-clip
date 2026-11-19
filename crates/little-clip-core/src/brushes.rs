@@ -426,6 +426,29 @@ mod tests {
     }
 
     #[test]
+    fn krita_bundle_uses_its_own_tip_resource_for_the_preset() {
+        let xml = r#"<Preset name="Stamp"><param name="brush_definition"><![CDATA[<Brush type="gbr_brush" filename="seeds.gbr" scale="2"/>]]></param></Preset>"#;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("paintoppresets/stamp.kpp", options).unwrap();
+        zip.write_all(&make_kpp(xml)).unwrap();
+        zip.start_file("brushes/seeds.gbr", options).unwrap();
+        zip.write_all(&make_gbr("Tip", 7, 3, 20, 200)).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let library = krita::parse_bundle(&bytes, 1, &AtomicBool::new(false)).unwrap();
+        let preset = &library.brushes[0];
+        assert_eq!(preset.params.size_px, 14.0);
+        assert!(matches!(
+            preset.tip,
+            BrushTipKind::AlphaMask {
+                width: 7,
+                height: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn krita_reads_only_active_master_pressure_and_fuzzy_rotation() {
         let xml = r#"<Preset name="Test" paintopid="paintbrush">
           <param name="PressureSize">true</param>
