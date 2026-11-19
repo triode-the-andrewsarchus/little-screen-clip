@@ -34,7 +34,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Default `./launch.sh build` runs `scripts/build_workspace.py`: after a successful full build, it uses Cargo's complete JSON artifact graph (including fresh units and build-script outputs) to remove obsolete hashed release artifacts. It preserves all current versions/feature variants, debug artifacts and bundled helpers. Failed builds, incomplete inventories and custom/partial builds skip automatic pruning. Explicit `./launch.sh sweep` performs aggressive cleanup toward a 20 GB cache budget (`LITTLE_CLIP_TARGET_MAXSIZE` overrides it), retaining two incremental sessions per crate/configuration; this may evict active dependencies. Without `cargo-sweep`, explicit cleanup clears debug artifacts with `cargo clean --profile dev`. Serialize launch builds and sweeps with all other Cargo commands so cleanup cannot prune a compiler's active artifacts or incremental session.
 
-Development/test profiles disable incremental caching and retain line-level debug information. Cargo defaults to one build job to limit overlapping compiler/linker work; override explicitly when resources permit. Check free disk space before large builds, and serialize cleanup with every Cargo build/test process.
+Development/test profiles disable incremental caching and retain line-level debug information. The workspace defaults to `jobs = -4`, leaving four logical CPUs free when possible. Check free disk space before large builds, and serialize cleanup with every Cargo build/test process.
 
 `./launch.sh test` can stop a running daemon and access attached hardware; use it only when that is intended.
 
