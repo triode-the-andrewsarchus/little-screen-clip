@@ -176,11 +176,11 @@ Keep this limitation explicit rather than adding abstractions to hide a score.
 
 Use `egui_kittest` for deterministic application interactions. Query the
 accessible widget name, send input through the harness, then assert the
-resulting application state. Shared tab selection and the Files search
-controls use this approach. Keep direct egui inputs for cases that must
-deliver several native events in a single frame. Use the private Weston/Niri
-runner for compositor geometry, native file drag and drop, and clipboard
-protocol checks.
+resulting application state. Shared tab selection, Files search, and
+Workbench gallery-to-studio handoffs use this approach. Keep direct egui inputs
+for cases that must deliver several native events in a single frame. Use the
+private Weston/Niri runner for compositor geometry, native file drag and drop,
+and clipboard protocol checks.
 
 Both desktop binaries support live inspection through the optional
 `ui-inspection` feature. With `egui-mcp` 0.3 installed, configure it as a
@@ -196,3 +196,10 @@ Set `EGUI_INSPECTION=127.0.0.1:5719` in the private workbench launch
 environment, or use another loopback port for a second app. Query the widget
 tree to find controls by name and use the screenshot tool to inspect
 appearance. Native input and window behavior still use the compositor runner.
+
+For a Files smoke test, open a fixture directory with two named files. Attach
+with `attach`, use `press_key` to send Ctrl+F, type into the `Find` text input
+with `type_text`, and click the `Search` button by label. Use `widget_tree`
+to verify that the matching file row remains visible. In the Workbench
+component gallery, click `Open Image Studio` and wait for `Save As...` in
+the new view. Both flows can save a PNG with `screenshot`.

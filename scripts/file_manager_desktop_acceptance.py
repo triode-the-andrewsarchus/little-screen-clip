@@ -11,6 +11,9 @@ import ui_acceptance_capture as private
 from file_manager_acceptance import Session, wait_for, isolated_runner, finish_run
 
 
+OUTPUT_SIZE = (1280, 1200)
+
+
 def position(session, name, word, left):
     data = private.run_checked(["tesseract", str(session.output / f"{name}-ocr.png"), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0"], env=session.env)
     for item in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE):
@@ -28,7 +31,7 @@ def drag(session, source, destination, copy=False):
         modifier = subprocess.Popen(["wtype", "-M", "ctrl", "-s", "2500", "-m", "ctrl"], env=session.env)
         time.sleep(0.15)
     try:
-        private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *destination))], env=session.env)
+        private.run_checked([str(session.pointer), "drag", *map(str, (*session.logical_size, *source, *destination))], env=session.env)
     finally:
         if copy:
             modifier.wait(timeout=4)
@@ -36,13 +39,17 @@ def drag(session, source, destination, copy=False):
 
 
 def start_two_clients(output, appearance, binary, roots, children):
-    config, env = isolated_runner(output, appearance, children)
+    config, env = isolated_runner(output, appearance, children, logical_size=OUTPUT_SIZE)
+    # Keep both source and destination rows visible as the folders fill up.
+    for config_path in (config["scratch"] / "config.toml", output / "config/little-screen-clip/config.toml"):
+        with config_path.open("a") as file:
+            file.write("\n[file_manager]\ninline_container_previews = false\n")
     apps = []
     for index, root in enumerate(roots):
         process = children.start(f"files-{index}", [str(binary.resolve()), str(root)], env=env | {"WAYLAND_DEBUG": "client"}, cwd=config["scratch"], log_path=output / f"files-{index}.log")
         windows, _ = private.wait_for_app_window(config["niri_bin"], env, process, output)
         window_id = str(windows[0]["id"])
-        for action in [["set-window-width", "--id", window_id, "640"], ["set-window-height", "--id", window_id, "700"], ["move-floating-window", "--id", window_id, "--x", str(index * 640), "--y", "0"]]:
+        for action in [["set-window-width", "--id", window_id, "640"], ["set-window-height", "--id", window_id, "1060"], ["move-floating-window", "--id", window_id, "--x", str(index * 640), "--y", "0"]]:
             private.run_checked([str(config["niri_bin"]), "msg", "action", *action], env=env)
         apps.append(process)
     return config, env, apps
@@ -66,32 +73,29 @@ def main():
         for name in ("Nested", "TREE"):
             folder = left / name
             folder.mkdir()
-            # Keep the two folders collapsed in the compact windows. The test
-            # exercises file transfers with the native protocol.
-            for index in range(9):
-                (folder / f"fixture-{index}").write_text("owned fixture")
         (left / "TREE/data").write_text("tree payload")
         binary = Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager"
         config, env, apps = start_two_clients(output, args.appearance, binary, [left, right], children)
-        session = Session(output, env, config["niri_bin"], apps[0])
+        session = Session(output, env, config["niri_bin"], apps[0], logical_size=OUTPUT_SIZE)
+        left_drop, right_drop = (300, 690), (920, 690)
         session.observe("01-two-clients", ["COPYME", "MOVEME", "RETURNME"])
-        drag(session, position(session, "01-two-clients", "COPYME", True), (1090, 470), copy=True)
+        drag(session, position(session, "01-two-clients", "COPYME", True), right_drop, copy=True)
         wait_for(lambda: (right / "COPYME").exists(), "native desktop copy")
         assert (right / "COPYME").read_text() == (left / "COPYME").read_text() == "copy payload"
         session.observe("02-copied", ["COPYME", "RETURNME"])
-        drag(session, position(session, "02-copied", "MOVEME", True), (1090, 470))
+        drag(session, position(session, "02-copied", "MOVEME", True), right_drop)
         wait_for(lambda: (right / "MOVEME").exists() and not (left / "MOVEME").exists(), "native desktop move")
         assert (right / "MOVEME").read_text() == "move payload"
         session.observe("03-moved", ["MOVEME", "RETURNME"])
-        drag(session, position(session, "03-moved", "RETURNME", False), (470, 470))
+        drag(session, position(session, "03-moved", "RETURNME", False), left_drop)
         wait_for(lambda: (left / "RETURNME").exists() and not (right / "RETURNME").exists(), "reverse native move")
         assert (left / "RETURNME").read_text() == "return payload"
         session.observe("04-returned", ["RETURNME", "TREE"])
-        drag(session, position(session, "04-returned", "TREE", True), (1090, 470), copy=True)
+        drag(session, position(session, "04-returned", "TREE", True), right_drop, copy=True)
         wait_for(lambda: (right / "TREE/data").exists(), "native recursive copy")
         assert (right / "TREE/data").read_text() == (left / "TREE/data").read_text()
         session.observe("05-tree-copy", ["TREE", "COPYME"])
-        drag(session, position(session, "05-tree-copy", "COPYME", True), (470, 770))
+        drag(session, position(session, "05-tree-copy", "COPYME", True), (470, 1170))
         time.sleep(0.5)
         assert (left / "COPYME").read_text() == "copy payload"
         session.observe("06-cancelled", ["COPYME", "RETURNME"])
@@ -99,7 +103,7 @@ def main():
         drag(session, position(session, "06-cancelled", "RETURNME", True), position(session, "06-cancelled", "Nested", True))
         wait_for(lambda: (left / "Nested/RETURNME").exists() and not (left / "RETURNME").exists(), "native same-window folder move")
         session.observe("07-internal-folder", ["Nested", "COPYME"])
-        drag(session, position(session, "07-internal-folder", "COPYME", True), (1090, 470))
+        drag(session, position(session, "07-internal-folder", "COPYME", True), right_drop)
         session.observe("08-move-conflict", ["Destination already exists", "Skip"])
         x, y = session.word("08-move-conflict", "Skip", minimum_y=250)
         session.click(x - 35, y + 42)
