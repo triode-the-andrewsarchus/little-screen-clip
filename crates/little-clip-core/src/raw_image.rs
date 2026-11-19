@@ -118,7 +118,7 @@ pub fn develop(bytes: &[u8]) -> Result<DevelopedImage, String> {
 }
 
 enum EmbeddedPixels {
-    Encoded(Vec<u8>, &'static str),
+    Jpeg(Vec<u8>),
     Rgb(RgbImage),
 }
 
@@ -175,8 +175,7 @@ fn select_embedded_preview<T>(
 
 fn materialize_preview(preview: &PreviewInfo, data: &[u8]) -> Option<EmbeddedPreview> {
     let pixels = match preview.encoding {
-        PreviewEncoding::Jpeg => EmbeddedPixels::Encoded(data.to_vec(), "image/jpeg"),
-        PreviewEncoding::JpegXl => EmbeddedPixels::Encoded(data.to_vec(), "image/jxl"),
+        PreviewEncoding::Jpeg => EmbeddedPixels::Jpeg(data.to_vec()),
         PreviewEncoding::Rgb8 => EmbeddedPixels::Rgb(RgbImage::from_raw(
             preview.width,
             preview.height,
@@ -214,7 +213,7 @@ fn preview_candidate<'a>(
             }
             (preview.width, preview.height)
         }
-        PreviewEncoding::Jpeg | PreviewEncoding::JpegXl => preview_dimensions(bytes)?,
+        PreviewEncoding::Jpeg => preview_dimensions(bytes)?,
         _ => return None,
     };
     let edge = width.max(height);
@@ -242,8 +241,8 @@ pub fn decode_embedded_preview(
 
 fn oriented_preview(preview: EmbeddedPreview) -> Option<DynamicImage> {
     match preview.pixels {
-        EmbeddedPixels::Encoded(bytes, mime) => {
-            decode_preview(&bytes, Some(mime), Some(preview.orientation))
+        EmbeddedPixels::Jpeg(bytes) => {
+            decode_preview(&bytes, Some("image/jpeg"), Some(preview.orientation))
         }
         EmbeddedPixels::Rgb(pixels) => {
             let mut image = DynamicImage::ImageRgb8(pixels);
@@ -329,9 +328,9 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
 
 fn clipboard_jpeg(preview: EmbeddedPreview) -> Option<(Vec<u8>, u32, u32)> {
     let mut image = match preview.pixels {
-        EmbeddedPixels::Encoded(bytes, mime) => {
-            let image = decode_preview(&bytes, Some(mime), None)?;
-            if mime == "image/jpeg" && preview.orientation == 1 {
+        EmbeddedPixels::Jpeg(bytes) => {
+            let image = decode_preview(&bytes, Some("image/jpeg"), None)?;
+            if preview.orientation == 1 {
                 return Some((bytes, image.width(), image.height()));
             }
             image
