@@ -613,7 +613,7 @@ fn handle_open_shortcode(
         "details" => {
             let (close_start, close_end) = find_closing_tag(input, body_start, "details", true)?;
             let (summary_text, is_open) = extract_details_params(&open.args);
-            let summary = parse_markdown_spans(&summary_text);
+            let summary = super::parse_markdown_spans_at_depth(&summary_text, depth + 1);
             let raw_inner = clean_container_body(&input[body_start..close_start]);
             let inner_located: Vec<LocatedBlock> =
                 parse_located_body_inner(&raw_inner, 0, depth + 1);
@@ -657,7 +657,7 @@ fn handle_open_shortcode(
             let source = if source_text.is_empty() {
                 Vec::new()
             } else {
-                parse_markdown_spans(&source_text)
+                super::parse_markdown_spans_at_depth(&source_text, depth + 1)
             };
             let raw_inner = clean_container_body(&input[body_start..close_start]);
             let blocks = parse_located_body_inner(&raw_inner, 0, depth + 1)
@@ -778,7 +778,7 @@ fn handle_open_shortcode(
             let (close_start, close_end) =
                 find_closing_tag_within_paragraph(input, body_start, "spoiler")?;
             let inner = input[body_start..close_start].trim();
-            let spans = parse_markdown_spans(inner);
+            let spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
             let id = prepared.inlines.len();
             prepared
                 .inlines
@@ -795,7 +795,7 @@ fn handle_open_shortcode(
                 find_closing_tag_within_paragraph(input, body_start, "smalltext")
             {
                 let inner = input[body_start..close_start].trim();
-                let mut spans = parse_markdown_spans(inner);
+                let mut spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
                 let small_css = InlineCss {
                     small: true,
                     ..Default::default()
@@ -933,7 +933,7 @@ fn handle_open_shortcode(
                 .map(|arg| arg.value.trim().to_owned())
                 .filter(|v| !v.is_empty());
             let inner = input[body_start..close_start].trim();
-            let mut spans = parse_markdown_spans(inner);
+            let mut spans = super::parse_markdown_spans_at_depth(inner, depth + 1);
             if let Some(url) = target {
                 spans = spans
                     .into_iter()
@@ -1975,6 +1975,23 @@ fn style_single_span(
             source,
             display,
             url: url.or_else(|| outer_url.map(str::to_owned)),
+        },
+        MarkdownSpan::Image { alt, url } if outer_url.is_some() => MarkdownSpan::StyledImage {
+            alt,
+            url,
+            href: outer_url.map(str::to_owned),
+            style: super::ImagePresentation::default(),
+        },
+        MarkdownSpan::StyledImage {
+            alt,
+            url,
+            href,
+            style,
+        } => MarkdownSpan::StyledImage {
+            alt,
+            url,
+            href: href.or_else(|| outer_url.map(str::to_owned)),
+            style,
         },
         other => other,
     }

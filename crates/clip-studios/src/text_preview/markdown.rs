@@ -1080,7 +1080,7 @@ fn render_block(
                 ui.available_width().max(1.0),
                 egui::Align::LEFT,
                 ProseFormatOptions::default(),
-                media.links.as_deref_mut(),
+                None,
             );
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.colors.surface_recessed))

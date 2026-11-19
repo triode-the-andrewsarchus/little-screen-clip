@@ -397,6 +397,7 @@ impl Viewers {
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.confirm_close = false;
+            self.pending_navigation_target = None;
         }
         self.close_confirmation(ui, palette);
         !self.active()
@@ -556,6 +557,7 @@ impl Viewers {
             return false;
         }
         if self.session_dirty() || self.collection_dirty() {
+            self.pending_navigation_target = None;
             self.confirm_close = true;
             return false;
         }
@@ -1512,6 +1514,34 @@ mod tests {
             panic!("expected Text viewer session for target markdown");
         };
         assert_eq!(state.path(), second);
+
+        // Escape-cancelling an unsaved-edits confirmation clears any pending link target
+        // so a later close/discard returns to the folder instead of navigating there.
+        viewers.confirm_close = true;
+        viewers.pending_navigation_target = Some((first.clone(), None));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 480.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _ = viewers.ui(ui, &AppPalette::default());
+                });
+            },
+        );
+        assert!(!viewers.confirm_close);
+        assert!(viewers.pending_navigation_target.is_none());
 
         assert!(viewers.request_close());
         assert!(!viewers.active());

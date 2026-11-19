@@ -1350,6 +1350,7 @@ fn parse_markdown_segment(
                 });
             }
             Event::End(TagEnd::BlockQuote(_)) => {
+                close_trailing_html_containers(stack, out);
                 if let Some(OpenFrame::Quote { kind, blocks }) = stack.pop() {
                     let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
                     push_doc_block(
@@ -1372,6 +1373,7 @@ fn parse_markdown_segment(
                 });
             }
             Event::End(TagEnd::List(_)) => {
+                close_trailing_html_containers(stack, out);
                 if let Some(OpenFrame::List {
                     ordered,
                     start,
@@ -1400,6 +1402,7 @@ fn parse_markdown_segment(
                 });
             }
             Event::End(TagEnd::Item) => {
+                close_trailing_html_containers(stack, out);
                 if let Some(mut frame) = stack.pop() {
                     flush_item_inline(&mut frame, prepared);
                     if let OpenFrame::Item { task, blocks, .. } = frame
@@ -1458,6 +1461,7 @@ fn parse_markdown_segment(
                 });
             }
             Event::End(TagEnd::FootnoteDefinition) => {
+                close_trailing_html_containers(stack, out);
                 if let Some(OpenFrame::Footnote { label, blocks }) = stack.pop() {
                     let src = top_range.clone().unwrap_or_else(|| map_src(range.clone()));
                     push_doc_block(
@@ -1526,6 +1530,17 @@ fn apply_html_block(
     stack: &mut Vec<OpenFrame>,
     out: &mut Vec<LocatedBlock>,
 ) {
+    let html_floor = |stack: &[OpenFrame]| {
+        stack
+            .iter()
+            .rposition(|f| {
+                !matches!(
+                    f,
+                    OpenFrame::HtmlDetails { .. } | OpenFrame::HtmlContainer { .. }
+                )
+            })
+            .map_or(0, |idx| idx + 1)
+    };
     for action in html::classify_html_block(raw) {
         match action {
             html::ContainerAction::OpenDetails { mut summary, open } => {
@@ -1540,10 +1555,12 @@ fn apply_html_block(
                 });
             }
             html::ContainerAction::CloseDetails => {
-                if let Some(pos) = stack
+                let floor = html_floor(stack);
+                if let Some(rel) = stack[floor..]
                     .iter()
                     .rposition(|f| matches!(f, OpenFrame::HtmlDetails { .. }))
                 {
+                    let pos = floor + rel;
                     while stack.len() > pos + 1 {
                         close_top_html_container(stack, out, Some(src.end));
                     }
@@ -1560,9 +1577,11 @@ fn apply_html_block(
                 });
             }
             html::ContainerAction::CloseBox { tag } => {
-                if let Some(pos) = stack.iter().rposition(|f| {
+                let floor = html_floor(stack);
+                if let Some(rel) = stack[floor..].iter().rposition(|f| {
                     matches!(f, OpenFrame::HtmlContainer { tag: open_tag, .. } if *open_tag == tag)
                 }) {
+                    let pos = floor + rel;
                     while stack.len() > pos + 1 {
                         close_top_html_container(stack, out, Some(src.end));
                     }
@@ -1578,6 +1597,15 @@ fn apply_html_block(
                 }
             }
         }
+    }
+}
+
+fn close_trailing_html_containers(stack: &mut Vec<OpenFrame>, out: &mut Vec<LocatedBlock>) {
+    while matches!(
+        stack.last(),
+        Some(OpenFrame::HtmlDetails { .. } | OpenFrame::HtmlContainer { .. })
+    ) {
+        close_top_html_container(stack, out, None);
     }
 }
 
@@ -2092,7 +2120,11 @@ impl SpanBuilder {
 
 /// Parses inline formatting and native math with CommonMark delimiter semantics.
 pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
-    let prepared = hugo::prepare_shortcodes(text, 0);
+    parse_markdown_spans_at_depth(text, 0)
+}
+
+pub(super) fn parse_markdown_spans_at_depth(text: &str, depth: usize) -> Vec<MarkdownSpan> {
+    let prepared = hugo::prepare_shortcodes(text, depth);
     let effective = prepared.as_ref().map_or(text, |p| p.rewritten.as_str());
     let mut builder = SpanBuilder::default();
     for event in pulldown_cmark::Parser::new_ext(effective, gfm_options()) {
@@ -3033,5 +3065,92 @@ Inline {{< button relref=\"Other/conlangs/tokipona\" color=\"other\" >}}toki **p
             MarkdownSpan::Math { source, url: Some(u), .. }
                 if source == "\\LaTeX" && u == "Engineering/WrappingUp/latex"
         )));
+    }
+
+    #[test]
+    fn html_container_boundaries_and_blockquote_isolation_preserve_blocks() {
+        let md = "\
+<div style=\"border: 1px solid red\">
+<p>Outer lead</p>
+<div style=\"background: yellow\">
+Inner line
+</div>
+</div>
+<div style=\"color: blue\">
+Next box
+</div>
+
+> <div style=\"color: green\">
+> Inside quote without close
+
+Outside normal paragraph
+
+<details open title=\"x > y\"><summary>Sum <b>bold</b></summary>Body text</details>";
+
+        let blocks: Vec<MarkdownDocBlock> = parse_located_blocks(md)
+            .into_iter()
+            .map(|item| item.block)
+            .collect();
+        let Some(MarkdownDocBlock::StyledContainer {
+            blocks: outer_children,
+            ..
+        }) = blocks.first()
+        else {
+            panic!("expected outer styled container: {blocks:#?}");
+        };
+        assert!(
+            outer_children.iter().any(|b| matches!(
+                b,
+                MarkdownDocBlock::Paragraph { spans }
+                    if plain_text_from_spans(spans) == "Outer lead"
+            )),
+            "outer container must preserve intermediate blocks before nested open container: {outer_children:#?}"
+        );
+        assert!(
+            outer_children
+                .iter()
+                .any(|b| matches!(b, MarkdownDocBlock::StyledContainer { .. })),
+            "outer container must contain inner container: {outer_children:#?}"
+        );
+        let quote = blocks.iter().find_map(|b| match b {
+            MarkdownDocBlock::Quote { blocks, .. } => Some(blocks),
+            _ => None,
+        });
+        assert!(
+            quote.is_some_and(|inner| !inner.is_empty()),
+            "blockquote with unclosed <div> must keep its inner content: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                blocks.last(),
+                Some(MarkdownDocBlock::Details { open: true, .. })
+            ),
+            "details with '>' inside quoted attribute should parse cleanly: {blocks:#?}"
+        );
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            MarkdownDocBlock::Paragraph { spans }
+                if plain_text_from_spans(spans) == "Outside normal paragraph"
+        )));
+    }
+
+    #[test]
+    fn deeply_nested_inline_shortcodes_are_bounded_and_button_links_images() {
+        let img_btn = parse_markdown_spans(
+            "{{< button relref=\"/docs/guide\" >}}<img src=\"/icon.png\" alt=\"Go\">{{< /button >}}",
+        );
+        assert!(img_btn.iter().any(|s| matches!(
+            s,
+            MarkdownSpan::StyledImage { url, href: Some(h), .. }
+                if url == "/icon.png" && h == "/docs/guide"
+        )));
+
+        let nested = format!(
+            "{}leaf{}",
+            "{{< spoiler >}}".repeat(16),
+            "{{< /spoiler >}}".repeat(16)
+        );
+        let spans = parse_markdown_spans(&nested);
+        assert!(!spans.is_empty());
     }
 }

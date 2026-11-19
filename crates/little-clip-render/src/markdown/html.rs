@@ -76,7 +76,11 @@ pub(super) fn strip_html_comments(input: &str) -> String {
 pub(super) fn parse_inline_token(raw: &str) -> InlineHtmlToken {
     let stripped = strip_html_comments(raw);
     let trimmed = stripped.trim();
-    if trimmed.is_empty() || trimmed.starts_with("<!") || trimmed.starts_with("<?") {
+    if trimmed.is_empty()
+        || trimmed.len() > MAX_HTML_FRAGMENT_BYTES
+        || trimmed.starts_with("<!")
+        || trimmed.starts_with("<?")
+    {
         return InlineHtmlToken::Ignore;
     }
     if let Some(closing) = trimmed.strip_prefix("</") {
@@ -132,103 +136,117 @@ pub(super) fn classify_html_block(raw: &str) -> Vec<ContainerAction> {
         return Vec::new();
     }
 
-    let container_tags = scan_top_container_balance(trimmed);
-    if !container_tags.extra_closes.is_empty() && container_tags.opens.is_empty() {
-        let mut actions = Vec::new();
-        for tag in container_tags.extra_closes {
-            if tag == "details" {
-                actions.push(ContainerAction::CloseDetails);
-            } else {
-                actions.push(ContainerAction::CloseBox {
-                    tag: tag.to_owned(),
-                });
-            }
-        }
-        return actions;
+    let boundaries = scan_container_boundaries(trimmed);
+    if boundaries.is_empty() {
+        let blocks = parse_fragment_blocks(trimmed);
+        return if blocks.is_empty() {
+            Vec::new()
+        } else {
+            vec![ContainerAction::Blocks(blocks)]
+        };
     }
 
-    if !container_tags.opens.is_empty() {
-        let mut actions = Vec::new();
-        for tag in container_tags.extra_closes {
-            if tag == "details" {
-                actions.push(ContainerAction::CloseDetails);
-            } else {
-                actions.push(ContainerAction::CloseBox {
-                    tag: tag.to_owned(),
-                });
-            }
+    let mut actions = Vec::new();
+    let mut cursor = 0usize;
+    let push_blocks = |slice: &str, actions: &mut Vec<ContainerAction>| {
+        let blocks = parse_fragment_blocks(slice);
+        if !blocks.is_empty() {
+            actions.push(ContainerAction::Blocks(blocks));
         }
-        let lower = trimmed.to_ascii_lowercase();
-        let frag = Html::parse_fragment(trimmed);
-        let first_open = container_tags.opens[0];
-        if first_open == "details" && container_tags.opens.len() == 1 {
-            let details_el = first_element_named(&frag, "details");
-            let open = details_el.is_some_and(|el| el.attr("open").is_some());
-            let mut summary = Vec::new();
-            if let Some(sum_el) = first_element_named(&frag, "summary") {
-                collect_inline_spans(sum_el, InlineCss::default(), None, &mut summary);
-            }
-            if summary.is_empty() {
-                summary.push(MarkdownSpan::Text("Details".to_owned()));
-            }
-            let after_summary = if let Some(sum_end) = lower.find("</summary>") {
-                &trimmed[sum_end + "</summary>".len()..]
-            } else if let Some(gt) = trimmed.find('>') {
-                &trimmed[gt + 1..]
-            } else {
-                ""
-            };
-            actions.push(ContainerAction::OpenDetails { summary, open });
-            let trailing = parse_fragment_blocks(after_summary);
-            if !trailing.is_empty() {
-                actions.push(ContainerAction::Blocks(trailing));
-            }
-            return actions;
-        }
+    };
 
-        let mut remaining = trimmed;
-        for &open_tag in &container_tags.opens {
-            let frag = Html::parse_fragment(remaining);
-            let box_el = first_element_named(&frag, open_tag);
-            let hidden = box_el.is_some_and(element_is_hidden);
-            let mut style = box_el.map(parse_block_box_style).unwrap_or_default();
-            if open_tag == "center" && style.align.is_none() {
-                style.align = Some(TextAlign::Center);
+    for idx in 0..boundaries.len() {
+        let boundary = boundaries[idx];
+        if boundary.start < cursor {
+            continue;
+        }
+        if boundary.start > cursor {
+            push_blocks(&trimmed[cursor..boundary.start], &mut actions);
+        }
+        match boundary.kind {
+            BoundaryKind::Close => {
+                actions.push(close_action_for(boundary.tag));
+                cursor = boundary.end;
             }
-            actions.push(ContainerAction::OpenBox {
-                tag: open_tag.to_owned(),
-                style,
-                hidden,
-            });
-            remaining = remaining
-                .find('>')
-                .map_or("", |gt| remaining[gt + 1..].trim());
+            BoundaryKind::Open => {
+                let tag_slice = &trimmed[boundary.start..boundary.end];
+                let tag_frag = Html::parse_fragment(tag_slice);
+                if boundary.tag == "details" {
+                    let details_el = first_element_named(&tag_frag, "details");
+                    let open = details_el.is_some_and(|el| el.attr("open").is_some());
+                    let next_limit = boundaries
+                        .get(idx + 1)
+                        .map_or(trimmed.len(), |next| next.start);
+                    let mut summary = Vec::new();
+                    let mut after_open = boundary.end;
+                    if let Some(sum_close_end) =
+                        find_summary_close_end(&trimmed[boundary.end..next_limit])
+                    {
+                        let sum_frag = Html::parse_fragment(
+                            &trimmed[boundary.start..boundary.end + sum_close_end],
+                        );
+                        if let Some(sum_el) = first_element_named(&sum_frag, "summary") {
+                            collect_inline_spans(sum_el, InlineCss::default(), None, &mut summary);
+                        }
+                        after_open = boundary.end + sum_close_end;
+                    }
+                    if summary.is_empty() {
+                        summary.push(MarkdownSpan::Text("Details".to_owned()));
+                    }
+                    actions.push(ContainerAction::OpenDetails { summary, open });
+                    cursor = after_open;
+                } else {
+                    let box_el = first_element_named(&tag_frag, boundary.tag);
+                    let hidden = box_el.is_some_and(element_is_hidden);
+                    let mut style = box_el.map(parse_block_box_style).unwrap_or_default();
+                    if boundary.tag == "center" && style.align.is_none() {
+                        style.align = Some(TextAlign::Center);
+                    }
+                    actions.push(ContainerAction::OpenBox {
+                        tag: boundary.tag.to_owned(),
+                        style,
+                        hidden,
+                    });
+                    cursor = boundary.end;
+                }
+            }
         }
-        let trailing = parse_fragment_blocks(remaining);
-        if !trailing.is_empty() {
-            actions.push(ContainerAction::Blocks(trailing));
-        }
-        return actions;
     }
 
-    let blocks = parse_fragment_blocks(trimmed);
-    if blocks.is_empty() {
-        Vec::new()
+    if cursor < trimmed.len() {
+        push_blocks(&trimmed[cursor..], &mut actions);
+    }
+    actions
+}
+
+fn close_action_for(tag: &str) -> ContainerAction {
+    if tag == "details" {
+        ContainerAction::CloseDetails
     } else {
-        vec![ContainerAction::Blocks(blocks)]
+        ContainerAction::CloseBox {
+            tag: tag.to_owned(),
+        }
     }
 }
 
-#[derive(Default)]
-struct ContainerBalance {
-    opens: Vec<&'static str>,
-    extra_closes: Vec<&'static str>,
+#[derive(Clone, Copy)]
+enum BoundaryKind {
+    Open,
+    Close,
 }
 
-fn scan_top_container_balance(html: &str) -> ContainerBalance {
+#[derive(Clone, Copy)]
+struct ContainerBoundary {
+    tag: &'static str,
+    start: usize,
+    end: usize,
+    kind: BoundaryKind,
+}
+
+fn scan_container_boundaries(html: &str) -> Vec<ContainerBoundary> {
     const TRACKED: &[&str] = &["details", "div", "center", "section", "article", "figure"];
-    let mut opens: Vec<&'static str> = Vec::new();
-    let mut extra_closes: Vec<&'static str> = Vec::new();
+    let mut open_stack: Vec<ContainerBoundary> = Vec::new();
+    let mut unmatched_closes: Vec<ContainerBoundary> = Vec::new();
 
     let bytes = html.as_bytes();
     let mut i = 0;
@@ -241,6 +259,7 @@ fn scan_top_container_balance(html: &str) -> ContainerBalance {
         let Some(gt_rel) = find_tag_end(rest) else {
             break;
         };
+        let tag_end = i + gt_rel + 1;
         let tag_body = &rest[1..gt_rel];
         let trimmed = tag_body.trim();
         let is_close = trimmed.starts_with('/');
@@ -256,22 +275,48 @@ fn scan_top_container_balance(html: &str) -> ContainerBalance {
         if let Some(known) = matched {
             let self_closing = !is_close && trimmed.ends_with('/');
             if is_close {
-                if let Some(pos) = opens.iter().rposition(|open| *open == known) {
-                    opens.truncate(pos);
+                if let Some(pos) = open_stack.iter().rposition(|open| open.tag == known) {
+                    open_stack.truncate(pos);
                 } else {
-                    extra_closes.push(known);
+                    unmatched_closes.push(ContainerBoundary {
+                        tag: known,
+                        start: i,
+                        end: tag_end,
+                        kind: BoundaryKind::Close,
+                    });
                 }
             } else if !self_closing {
-                opens.push(known);
+                open_stack.push(ContainerBoundary {
+                    tag: known,
+                    start: i,
+                    end: tag_end,
+                    kind: BoundaryKind::Open,
+                });
             }
         }
-        i += gt_rel + 1;
+        i = tag_end;
     }
 
-    ContainerBalance {
-        opens,
-        extra_closes,
+    let mut boundaries = unmatched_closes;
+    boundaries.extend(open_stack);
+    boundaries.sort_by_key(|b| b.start);
+    boundaries
+}
+
+fn find_summary_close_end(slice: &str) -> Option<usize> {
+    let lower = slice.to_ascii_lowercase();
+    let mut offset = 0usize;
+    while let Some(rel) = lower[offset..].find("</summary") {
+        let start = offset + rel;
+        let tail = &lower[start + "</summary".len()..];
+        if let Some(gt_rel) = tail.find('>')
+            && tail[..gt_rel].trim().is_empty()
+        {
+            return Some(start + "</summary".len() + gt_rel + 1);
+        }
+        offset = start + "</summary".len();
     }
+    None
 }
 
 fn find_tag_end(slice: &str) -> Option<usize> {

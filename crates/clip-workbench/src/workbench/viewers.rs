@@ -174,7 +174,12 @@ impl WorkbenchApp {
             return true;
         }
         if !close && let Some(target) = text_open_request {
-            self.open_slot_file_preview(&target, false);
+            if !self.try_open_slot_file_preview(&target, false) {
+                self.status_msg = Some(format!(
+                    "Text preview failed: unsupported file type ({})",
+                    target.display()
+                ));
+            }
             ctx.request_repaint();
             return true;
         }
@@ -348,35 +353,58 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
+        let _ = self.try_open_slot_file_preview(fp, is_image);
+    }
+
+    pub(crate) fn try_open_slot_file_preview(
+        &mut self,
+        fp: &std::path::Path,
+        is_image: bool,
+    ) -> bool {
         if fp
             .extension()
             .and_then(|s| s.to_str())
-            .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
-            .unwrap_or(false)
+            .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
         {
             self.start_midi_load(fp.to_path_buf());
-        } else if little_clip_scene::is_splat_file(fp) || is_3d_model_file(fp) {
+            return true;
+        }
+        if little_clip_scene::is_splat_file(fp) || is_3d_model_file(fp) {
             self.replace_viewer(Some(scene_file_viewer(fp.to_path_buf(), &self.config)));
-        } else if is_image && little_clip_core::notebook::is_candidate_path(fp) {
+            return true;
+        }
+        if is_image && little_clip_core::notebook::is_candidate_path(fp) {
             self.replace_viewer(Some(ViewerSession::Pdf(
                 PdfEditorState::new_notebook_checked(
                     fp.to_path_buf(),
                     crate::file_source::ReadCheck::default(),
                 ),
             )));
-        } else if little_clip_core::pdf::is_pdf_path(fp) {
+            return true;
+        }
+        if little_clip_core::pdf::is_pdf_path(fp) {
             self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(
                 fp.to_path_buf(),
             ))));
-        } else if little_clip_core::document::is_office_document(fp) {
-            self.start_office_document_load(fp.to_path_buf());
-        } else if is_spreadsheet_file(fp) {
-            self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
-        } else if is_image || is_image_path(fp) {
-            self.start_image_load(ImageLoadSource::File(fp.to_path_buf()));
-        } else if little_clip_ops::is_text_file(fp) {
-            self.start_text_file_load(fp.to_path_buf());
+            return true;
         }
+        if little_clip_core::document::is_office_document(fp) {
+            self.start_office_document_load(fp.to_path_buf());
+            return true;
+        }
+        if is_spreadsheet_file(fp) {
+            self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
+            return true;
+        }
+        if is_image || is_image_path(fp) {
+            self.start_image_load(ImageLoadSource::File(fp.to_path_buf()));
+            return true;
+        }
+        if little_clip_ops::is_text_file(fp) {
+            self.start_text_file_load(fp.to_path_buf());
+            return true;
+        }
+        false
     }
 
     pub(crate) fn open_slot_text_preview(&mut self, text: String, title: &str) {
