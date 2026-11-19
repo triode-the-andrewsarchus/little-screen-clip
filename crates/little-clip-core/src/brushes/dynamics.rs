@@ -20,6 +20,17 @@ impl DabCurve {
         Some(Self(points))
     }
 
+    pub(super) fn sampled(f: impl Fn(f32) -> f32) -> Self {
+        Self(
+            (0..=32)
+                .map(|index| {
+                    let input = index as f32 / 32.0;
+                    (input, f(input))
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn at(&self, input: f32) -> f32 {
         let end = self.0.partition_point(|point| point.0 < input);
         match end {
@@ -40,6 +51,8 @@ pub struct BrushDynamics {
     pub(super) size: Option<DabCurve>,
     pub(super) opacity: Option<DabCurve>,
     pub(super) flow: Option<DabCurve>,
+    pub(super) spacing: Option<DabCurve>,
+    pub(super) scatter: Option<DabCurve>,
     pub(super) angle: Option<DabCurve>,
     pub(super) random_angle: Option<DabCurve>,
     pub(super) hardness: Option<DabCurve>,

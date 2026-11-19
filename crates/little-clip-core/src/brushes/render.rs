@@ -28,6 +28,7 @@ pub fn render_brush_preview(
                 opacity: 1.0,
                 hardness: None,
                 aspect: 1.0,
+                spacing: 0.0,
             },
         );
         h as f32 + 4.0
@@ -92,6 +93,7 @@ struct Dab {
     opacity: f32,
     hardness: Option<f32>,
     aspect: f32,
+    spacing: f32,
 }
 
 fn draw_stroke(
@@ -151,7 +153,7 @@ fn draw_stroke(
                 sample_dab(preset, radius, sample),
             );
         }
-        distance += (dab.radius * 2.0 * preset.params.spacing.clamp(0.01, 5.0)).max(step_floor);
+        distance += (dab.radius * 2.0 * dab.spacing).max(step_floor);
     }
 }
 
@@ -193,7 +195,7 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
             .map_or(0.0, |curve| curve.at((random(9) + 1.0) * 0.5))
         + signed_random(sample.start_seed, 7) * 180.0 * f32::from(dynamics.random_start_angle);
     let (sin, cos) = sample.direction.sin_cos();
-    let scatter = params.scatter.clamp(0.0, 4.0) * radius;
+    let scatter = response(&dynamics.scatter, params.scatter).clamp(0.0, 4.0) * radius;
     let across = random(5) * scatter;
     let along = random(6) * scatter * f32::from(dynamics.scatter_along_stroke);
 
@@ -205,6 +207,7 @@ fn sample_dab(preset: &BrushPreset, radius: f32, sample: StrokeSample) -> Dab {
         opacity: (opacity * flow).clamp(0.0, 1.0),
         hardness: dynamics.hardness.as_ref().map(|curve| curve.at(pressure)),
         aspect: response(&dynamics.aspect, 1.0),
+        spacing: response(&dynamics.spacing, params.spacing).clamp(0.01, 5.0),
     }
 }
 
@@ -363,6 +366,7 @@ mod tests {
                 opacity: 1.0,
                 hardness: None,
                 aspect: 1.0,
+                spacing: 0.0,
             },
         );
         assert_eq!(coverage[22 * 32 + 16], 1.0);
