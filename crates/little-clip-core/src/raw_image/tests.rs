@@ -72,7 +72,7 @@ fn clipboard_skips_a_corrupt_large_preview_for_a_decodable_smaller_one() {
     jpeg.truncate(scan);
     jpeg.extend_from_slice(&[0xff, 0xd9]);
     assert_eq!(preview_dimensions(&jpeg), Some((64, 48)));
-    assert!(decode_preview(&jpeg, Some("image/jpeg")).is_none());
+    assert!(decode_preview(&jpeg, Some("image/jpeg"), None).is_none());
 
     let mut raw = FIXTURE.to_vec();
     // Replace the first embedded RGB strip with the truncated JPEG. The second
@@ -104,5 +104,5 @@ fn clipboard_skips_a_corrupt_large_preview_for_a_decodable_smaller_one() {
     std::fs::write(&path, &raw).unwrap();
     let (bytes, width, height) = extract_raw_image_preview(&path).unwrap();
     assert_eq!((width, height), (4, 8));
-    assert!(decode_preview(&bytes, Some("image/jpeg")).is_some());
+    assert!(decode_preview(&bytes, Some("image/jpeg"), None).is_some());
 }

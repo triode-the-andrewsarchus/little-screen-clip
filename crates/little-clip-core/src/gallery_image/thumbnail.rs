@@ -71,12 +71,19 @@ fn decode_source(
         );
     }
     if crate::raw_image::is_raw_image_path(path) {
-        return raw_thumbnail(path, edge, cancelled)
-            .or_else(|| exiftool_thumbnail(path, edge, orientation, true, cancelled));
+        let mut file = crate::file_source::open_regular_file(path, true).ok()?;
+        let decoded =
+            crate::raw_image::decode_embedded_preview(&mut file, edge, orientation, cancelled)?;
+        return thumbnail_image(decoded, edge, cancelled);
     }
     let embedded = match mime.as_str() {
         "image/jpeg" | "image/jpg" => jpeg_preview(path, edge, orientation, cancelled),
-        "image/tiff" => exiftool_thumbnail(path, edge, orientation, false, cancelled),
+        "image/tiff" => crate::file_source::open_regular_file(path, true)
+            .ok()
+            .and_then(|file| {
+                crate::raw_image::exiftool_raster(&file, edge, orientation, false, cancelled)
+            })
+            .and_then(|image| thumbnail_image(image, edge, cancelled)),
         _ => None,
     };
     if embedded.is_some() {
@@ -111,52 +118,6 @@ fn jpeg_preview(
     }
     let orientation = field(exif::Tag::Orientation).map_or(orientation, |value| value as u8);
     raster(bytes, "image/jpeg", edge, orientation, cancelled)
-}
-
-fn raw_thumbnail(path: &Path, edge: u32, cancelled: &AtomicBool) -> Option<ImageThumbnail> {
-    use crate::raw_image::EmbeddedPixels;
-    crate::raw_image::embedded_preview(path, edge, cancelled, |preview| match preview.pixels {
-        EmbeddedPixels::Encoded(bytes, mime) => {
-            raster(&bytes, mime, edge, preview.orientation, cancelled)
-        }
-        EmbeddedPixels::Rgb(pixels) => {
-            let orientation = image::metadata::Orientation::from_exif(preview.orientation)
-                .unwrap_or(image::metadata::Orientation::NoTransforms);
-            oriented_thumbnail(
-                image::DynamicImage::ImageRgb8(pixels),
-                edge,
-                orientation,
-                cancelled,
-            )
-        }
-    })
-}
-
-fn exiftool_thumbnail(
-    path: &Path,
-    edge: u32,
-    orientation: u8,
-    allow_smaller: bool,
-    cancelled: &AtomicBool,
-) -> Option<ImageThumbnail> {
-    let mut largest = None;
-    for tag in ["-ThumbnailImage", "-PreviewImage", "-JpgFromRaw"] {
-        let Some(bytes) = crate::raw_image::exiftool_preview(path, tag, cancelled) else {
-            continue;
-        };
-        let Some((width, height)) = crate::raw_image::preview_dimensions(&bytes) else {
-            continue;
-        };
-        let size = width.max(height);
-        if size >= edge {
-            if let Some(thumbnail) = raster(&bytes, "image/jpeg", edge, orientation, cancelled) {
-                return Some(thumbnail);
-            }
-        } else if allow_smaller && largest.as_ref().is_none_or(|(best, _)| size > *best) {
-            largest = Some((size, bytes));
-        }
-    }
-    largest.and_then(|(_, bytes)| raster(&bytes, "image/jpeg", edge, orientation, cancelled))
 }
 
 fn raster(
@@ -200,20 +161,22 @@ fn raster(
     if cancelled.load(Ordering::Relaxed) {
         return None;
     }
-    let decoded = image::DynamicImage::from_decoder(decoder).ok()?;
-    oriented_thumbnail(decoded, edge, orientation, cancelled)
+    let mut decoded = image::DynamicImage::from_decoder(decoder).ok()?;
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
+    decoded.apply_orientation(orientation);
+    thumbnail_image(decoded, edge, cancelled)
 }
 
-fn oriented_thumbnail(
-    mut decoded: image::DynamicImage,
+fn thumbnail_image(
+    decoded: image::DynamicImage,
     edge: u32,
-    orientation: image::metadata::Orientation,
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
     if cancelled.load(Ordering::Relaxed) {
         return None;
     }
-    decoded.apply_orientation(orientation);
     let small = decoded
         .thumbnail(edge.min(decoded.width()), edge.min(decoded.height()))
         .to_rgba8();
