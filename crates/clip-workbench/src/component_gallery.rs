@@ -489,17 +489,19 @@ impl ComponentGalleryState {
                 });
 
                 render_section(&mut columns[1], "Fields and choices", palette, |ui| {
-                    ui.label("Single-line field");
+                    let query_label = ui.label("Single-line field");
                     ui.add_sized(
                         Vec2::new(ui.available_width(), ui_ext::CONTROL_HEIGHT),
                         egui::TextEdit::singleline(&mut self.query)
                             .hint_text("Type to preview field styling"),
-                    );
-                    ui.label("Multiline field");
+                    )
+                    .labelled_by(query_label.id);
+                    let notes_label = ui.label("Multiline field");
                     ui.add_sized(
                         Vec2::new(ui.available_width(), 76.0),
                         egui::TextEdit::multiline(&mut self.notes),
-                    );
+                    )
+                    .labelled_by(notes_label.id);
                     ui.checkbox(&mut self.enabled, "Enabled setting");
                     ui.horizontal_wrapped(|ui| {
                         let mut choice = self.selected_mode == 1;

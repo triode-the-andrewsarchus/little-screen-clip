@@ -178,7 +178,9 @@ fn visible_gallery_actions_open_full_studios() {
         harness
             .get_by_role_and_label(egui::Role::Button, label)
             .click();
-        harness.run();
+        // The live 3D studio requests repaints continuously. The handoff is
+        // synchronous, so inspect it after the click frame.
+        harness.step();
 
         let opened_expected_studio = match (kind, harness.state().viewer.as_ref()) {
             (component_gallery::GalleryPreviewKind::Image, Some(ViewerSession::Image(_)))

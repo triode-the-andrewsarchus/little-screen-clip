@@ -316,7 +316,7 @@ fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
                 let point = text.pos + cursor.center().to_vec2();
                 clipped.clip_rect.contains(point).then_some(point)
             })
-            .expect("source cursor must be visible")
+            .unwrap_or_else(|| panic!("source cursor at byte {byte} must be visible"))
     };
     let start_pos = point_for(&frame, first, start);
     let end_pos = point_for(&frame, second, end);

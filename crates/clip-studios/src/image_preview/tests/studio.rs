@@ -128,21 +128,27 @@ fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales(
             })
             .expect("viewport canvas should paint");
         assert!(root.contains(footer.min) && root.contains(footer.max));
-        let control_bounds = |label: &str| {
+        let control_bounds = |matches_label: &dyn Fn(&str) -> bool| {
             output
                 .shapes
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
-                    egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                    egui::epaint::Shape::Text(text)
+                        if text.pos.y >= viewport.bottom() && matches_label(text.galley.text()) =>
+                    {
                         Some(text.galley.rect.translate(text.pos.to_vec2()))
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| panic!("missing footer control {label}"))
         };
-        let reset = control_bounds("Reset");
-        let pixel = control_bounds("1:1");
-        let percentage = control_bounds(&format!("{:.0}%", state.zoom * 100.0));
+        let reset = control_bounds(&|label| label == "Reset").expect("Reset control");
+        let pixel = control_bounds(&|label| label == "1:1").expect("1:1 control");
+        let percentage = control_bounds(&|label| {
+            label
+                .strip_suffix('%')
+                .is_some_and(|value| value.parse::<u32>().is_ok())
+        })
+        .expect("zoom percentage");
         for bounds in [reset, pixel, percentage] {
             assert!(root.contains(bounds.min) && root.contains(bounds.max));
             assert!(

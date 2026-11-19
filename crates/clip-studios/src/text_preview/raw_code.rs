@@ -157,12 +157,10 @@ impl TextPreviewState {
                                         .map(|line| self.code_rows.offset(line.saturating_sub(1)))
                                         .unwrap_or(anchored_offset)
                                 });
-                            // A jump near EOF must stay inside the document so the scroll
-                            // physics do not start a rebound during text selection.
-                            let max_offset =
-                                (self.code_rows.total_height() - ui.available_height()).max(0.0);
-                            scroll_area = scroll_area
-                                .vertical_scroll_offset(requested_offset.clamp(0.0, max_offset));
+                            // Keep pointer coordinates stable when a jump to the last
+                            // source line is clamped to the scrollable document.
+                            ui.spacing_mut().scroll.kinetic.rubber_band = false;
+                            scroll_area = scroll_area.vertical_scroll_offset(requested_offset);
                             let output = scroll_area.show_viewport(ui, |ui, viewport| {
                                 let origin = ui.max_rect().min;
                                 let mut row =
