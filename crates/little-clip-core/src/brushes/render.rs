@@ -1,4 +1,5 @@
 mod smudge;
+mod vector;
 
 use super::{BrushPreset, BrushTipKind, DabCurve, ParametricShape, mask};
 use crate::{
@@ -224,6 +225,10 @@ fn draw_stroke(
     path: StrokePath,
     radius: f32,
 ) {
+    if preset.params.dynamics.vector_texture {
+        vector::draw(coverage, dimensions, preset, path, radius);
+        return;
+    }
     visit_dabs(preset, path, radius, |tip, dab, _| {
         stamp_tip(coverage, dimensions, tip, dab);
     });
