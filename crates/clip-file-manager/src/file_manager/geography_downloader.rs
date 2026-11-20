@@ -45,6 +45,7 @@ pub enum DownloadPack {
     LandCover,
     HydroRivers,
     Sky,
+    StarCatalog,
     NightLights,
     DetailedTransportation,
     All,
@@ -64,6 +65,7 @@ impl DownloadPack {
             Self::LandCover => "Copernicus 300m Land Cover",
             Self::HydroRivers => "HydroRIVERS Global Network",
             Self::Sky => "Sky and Earth Lighting",
+            Self::StarCatalog => "Constellations and Star Catalog",
             Self::NightLights => "Black Marble Night Lights (2016)",
             Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "Base Offline Maps",
@@ -107,7 +109,9 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
-            Self::Sky | Self::NightLights | Self::DetailedTransportation => true, // Verified by their own loaders.
+            Self::Sky | Self::NightLights | Self::StarCatalog | Self::DetailedTransportation => {
+                true
+            } // Verified by their own loaders.
             Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -208,6 +212,15 @@ impl DownloadPack {
                 url: "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_01deg.jpg",
                 suffixes: &[],
             }],
+            Self::StarCatalog => sky::catalog::SOURCES
+                .into_iter()
+                .map(|(name, url, _)| AssetFile {
+                    folder: sky::DIRECTORY,
+                    name,
+                    url,
+                    suffixes: &[],
+                })
+                .collect(),
             _ => vec![],
         }
     }
@@ -295,7 +308,9 @@ impl DownloadSession<'_> {
             ),
             DownloadPack::LandCover => self.land_cover(base, span),
             DownloadPack::DetailedTransportation => self.transportation(base, span),
-            DownloadPack::Sky | DownloadPack::NightLights => self.download_sky(pack, base, span),
+            DownloadPack::Sky | DownloadPack::NightLights | DownloadPack::StarCatalog => {
+                self.download_sky(pack, base, span)
+            }
             _ => {
                 let files = pack.files(self.config);
                 let n = files.len().max(1) as f32;
@@ -327,8 +342,13 @@ impl DownloadSession<'_> {
                 let present =
                     little_clip_core::kernel_interface::open_content(&root.join(file.name), false)
                         .ok()
-                        .and_then(|file| file.metadata().ok())
-                        .is_some_and(|meta| sizes.contains(&meta.len()));
+                        .is_some_and(|existing| {
+                            existing
+                                .metadata()
+                                .is_ok_and(|meta| sizes.contains(&meta.len()))
+                                && (pack != DownloadPack::StarCatalog
+                                    || sky::catalog::verified(file.name, &existing))
+                        });
                 (!present).then_some((file, sizes))
             })
             .collect();
@@ -347,6 +367,11 @@ impl DownloadSession<'_> {
             let bytes = downloaded.file.metadata().map_err(|e| e.to_string())?.len();
             if !sizes.contains(&bytes) {
                 return Err(format!("Unexpected source size for {}", file.name));
+            }
+            if pack == DownloadPack::StarCatalog
+                && !sky::catalog::verified(file.name, &downloaded.file)
+            {
+                return Err(format!("Unexpected source contents for {}", file.name));
             }
         }
         Ok(())

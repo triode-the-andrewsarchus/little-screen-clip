@@ -51,6 +51,7 @@ regex = { workspace = true }
 tempfile = "3.27"
 libc = "0.2"
 chrono = "0.4"
+csv = "1.4"
 anise = { version = "0.9.6", default-features = false }
 erfa = "0.2.1"
 geographiclib-rs = { version = "0.2", default-features = false }

@@ -1571,6 +1571,7 @@ dependencies = [
  "clip-search",
  "clip-studios",
  "clip-ui",
+ "csv",
  "eframe",
  "egui",
  "egui-winit",

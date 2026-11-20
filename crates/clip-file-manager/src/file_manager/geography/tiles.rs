@@ -258,6 +258,7 @@ impl Tiles {
             star_trail: 0.0,
             show_sky: false,
             readable_sky: false,
+            show_constellations: false,
             earth_lighting: false,
             city_lights: false,
         }

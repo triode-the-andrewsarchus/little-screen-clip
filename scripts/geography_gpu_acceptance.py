@@ -186,6 +186,42 @@ def check_vectors(vectors, width, height, output):
     GL.glDeleteVertexArrays(1, [vector_vao])
 
 
+def check_constellation_projection(root, width, height):
+    figures = program(root, "figures")
+    vao, vbo = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
+    GL.glBindVertexArray(vao)
+    GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vbo)
+    directions = np.array([[-.28, -.16, -1], [.35, .21, -1],
+        [-.28, .16, 1], [.35, -.21, 1]], dtype=np.float32)
+    GL.glBufferData(GL.GL_ARRAY_BUFFER, directions.nbytes, directions, GL.GL_STATIC_DRAW)
+    GL.glEnableVertexAttribArray(0)
+    GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, False, 12, ctypes.c_void_p(0))
+    GL.glUseProgram(figures)
+    uniform = lambda name: GL.glGetUniformLocation(figures, name)
+    focal = .95 * min(width, height)
+    GL.glUniform2f(uniform("u_fov"), width / (2 * focal), height / (2 * focal))
+    GL.glUniform1f(uniform("u_opacity"), 1)
+    GL.glClearColor(0, 0, 0, 1)
+    for theta in [0, .37]:
+        s, c = np.sin(theta), np.cos(theta)
+        axes = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]], dtype=np.float32)
+        GL.glUniformMatrix3fv(uniform("u_camera_inertial"), 1, False, axes)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDrawArrays(GL.GL_LINES, 0, len(directions))
+        pixels = np.frombuffer(GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE),
+            dtype=np.uint8).reshape(height, width, 4)
+        camera = directions[:2] @ axes.T
+        x, y = (camera[:, :2] * focal + [width / 2, height / 2]).T
+        for px, py in zip(x, y):
+            assert pixels[round(py)-2:round(py)+3, round(px)-2:round(px)+3, 2].max() > 100
+        drawn_y, drawn_x = np.where(pixels[:, :, 2] > 0)
+        deviation = abs((drawn_x + .5 - x[0]) * (y[1] - y[0]) - (drawn_y + .5 - y[0]) * (x[1] - x[0]))
+        assert len(drawn_x) > 100 and deviation.max() < np.hypot(x[1] - x[0], y[1] - y[0])
+    GL.glDeleteBuffers(1, [vbo])
+    GL.glDeleteVertexArrays(1, [vao])
+    GL.glDeleteProgram(figures)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/geography-gpu-acceptance"))
@@ -337,8 +373,9 @@ def main():
             if i >= 10:
                 timings.append((time.perf_counter() - start) * 1000)
         check_sky_sizes(root, width, height)
+        check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
-        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 3,
+        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 4,
             "sky_sizing_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "warm_frame_median_ms": statistics.median(timings),

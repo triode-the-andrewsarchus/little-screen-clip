@@ -1,4 +1,5 @@
 //! The globe's local ephemeris and inertial sky assets.
+pub(crate) mod catalog;
 mod orientation;
 pub(super) use orientation::RotationSource;
 
@@ -35,7 +36,12 @@ pub(crate) fn asset_size(name: &str) -> Option<std::ops::RangeInclusive<u64>> {
         MOON => MOON_BYTES,
         NIGHT => NIGHT_BYTES,
         EOP => return Some(1_000_000..=EOP_LIMIT as u64),
-        _ => return None,
+        _ => {
+            catalog::SOURCES
+                .iter()
+                .find(|(file, _, _)| *file == name)?
+                .2
+        }
     } as u64;
     Some(exact..=exact)
 }
@@ -63,6 +69,7 @@ pub(super) struct Assets {
     pub stars: Texture,
     pub moon: Option<Texture>,
     pub night: Option<Texture>,
+    pub catalog: Result<Option<catalog::Catalog>, String>,
 }
 
 #[derive(Clone)]
@@ -89,6 +96,10 @@ impl Scene {
 }
 
 impl Assets {
+    pub(super) fn star_catalog(&self) -> Option<&catalog::Catalog> {
+        self.catalog.as_ref().ok()?.as_ref()
+    }
+
     pub fn load(root: &Path) -> Result<Self, String> {
         let dir = root.join(DIRECTORY);
         let kernel = read_file_snapshot(&dir.join(KERNEL), KERNEL_BYTES)?;
@@ -114,6 +125,7 @@ impl Assets {
             stars: read_texture(&dir, STARS, STARS_BYTES, [4096, 2048], ImageFormat::OpenExr)?,
             moon: read_texture(&dir, MOON, MOON_BYTES, [2048, 1024], ImageFormat::Tiff).ok(),
             night: read_texture(&dir, NIGHT, NIGHT_BYTES, [3600, 1800], ImageFormat::Jpeg).ok(),
+            catalog: catalog::Catalog::load(&dir),
         })
     }
 

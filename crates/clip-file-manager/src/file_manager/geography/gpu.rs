@@ -11,7 +11,7 @@ use little_clip_core::geography::basemap::{
     BasemapStyle, GlobeCamera,
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
-pub(super) use sky::sky_body_at;
+pub(super) use sky::{SkyObject, sky_object_at};
 use std::{
     collections::{BTreeSet, HashMap},
     marker::PhantomData,
@@ -96,6 +96,7 @@ pub(super) struct Frame {
     pub star_trail: f32,
     pub show_sky: bool,
     pub readable_sky: bool,
+    pub show_constellations: bool,
     pub earth_lighting: bool,
     pub city_lights: bool,
 }
@@ -227,6 +228,7 @@ impl Renderer {
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.bind_vertex_array(Some(resources.vao));
             self.sky.paint_frame(gl, frame);
+            gl.bind_vertex_array(Some(resources.vao));
             gl.use_program(Some(resources.program));
             let p = resources.program;
             self.sky.earth_uniforms(gl, p, frame);

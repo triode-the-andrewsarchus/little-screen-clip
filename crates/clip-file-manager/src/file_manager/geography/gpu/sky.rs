@@ -1,4 +1,6 @@
-use crate::file_manager::geography::sky;
+mod figures;
+
+use crate::file_manager::geography::sky::{self, catalog::Star};
 use eframe::egui;
 use eframe::glow::{self, HasContext};
 use little_clip_core::geography::basemap::{BasemapStyle, GlobeCamera};
@@ -11,6 +13,8 @@ pub(super) struct SkyRenderer {
     stars: Option<glow::Texture>,
     moon: Option<glow::Texture>,
     night: Option<glow::Texture>,
+    figures: Option<figures::Figures>,
+    figures_failed: bool,
     failed: bool,
 }
 
@@ -40,12 +44,7 @@ impl SkyProjection {
     }
 
     fn project(&self, position: [f32; 3]) -> Option<egui::Vec2> {
-        let [x, y, z] = self.basis.map(|axis| {
-            axis.into_iter()
-                .zip(position)
-                .map(|(a, b)| a * b)
-                .sum::<f32>()
-        });
+        let [x, y, z] = self.basis.map(|axis| dot(axis, position));
         let depth = self.distance - z;
         if depth <= 0.0 {
             return None;
@@ -53,14 +52,46 @@ impl SkyProjection {
         let offset = egui::vec2(x, -y) * (self.focal / depth);
         (offset.length_sq() > self.radius.powi(2)).then_some(offset)
     }
+
+    fn inertial_axes(&self, rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+        self.basis
+            .map(|axis| std::array::from_fn(|i| dot(axis, [rows[0][i], rows[1][i], rows[2][i]])))
+    }
+
+    fn star_offset(&self, axes: [[f32; 3]; 3], direction: [f32; 3]) -> Option<egui::Vec2> {
+        let [x, y, z] = axes.map(|axis| dot(axis, direction));
+        (z < 0.0).then(|| egui::vec2(x, -y) * (self.focal / -z))
+    }
+
+    fn inertial_ray(&self, [east, north, outward]: [[f32; 3]; 3], offset: egui::Vec2) -> [f32; 3] {
+        let slope = offset / self.focal;
+        let ray: [f32; 3] =
+            std::array::from_fn(|i| east[i] * slope.x - north[i] * slope.y - outward[i]);
+        let magnitude = dot(ray, ray).sqrt();
+        ray.map(|v| v / magnitude)
+    }
+
+    fn fov(&self, [width, height]: [f32; 2]) -> [f32; 2] {
+        [width, height].map(|size| size / (2.0 * self.focal))
+    }
 }
 
-pub(in super::super) fn sky_body_at(
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+pub(in super::super) enum SkyObject<'a> {
+    Body(&'static str),
+    Star(&'a Star),
+}
+
+pub(in super::super) fn sky_object_at(
     frame: &super::Frame,
     rect: egui::Rect,
     pointer: egui::Pos2,
-) -> Option<&'static str> {
-    if !frame.show_sky || frame.camera.globe_blend() < 1.0 {
+    identify_stars: bool,
+) -> Option<SkyObject<'_>> {
+    if !frame.show_sky || frame.camera.globe_blend() < 1.0 || !rect.contains(pointer) {
         return None;
     }
     let projection = SkyProjection::new(frame.camera, frame.size);
@@ -68,9 +99,8 @@ pub(in super::super) fn sky_body_at(
     if pointer.distance_sq(center) <= projection.radius.powi(2) {
         return None;
     }
-    frame
-        .sky
-        .as_ref()?
+    let scene = frame.sky.as_ref()?;
+    let body = scene
         .bodies()
         .filter_map(|(name, position)| {
             let point = center + projection.project(position)?;
@@ -78,7 +108,46 @@ pub(in super::super) fn sky_body_at(
             (rect.contains(point) && distance <= 14.0_f32.powi(2)).then_some((name, distance))
         })
         .min_by(|(_, a), (_, b)| a.total_cmp(b))
-        .map(|(name, _)| name)
+        .map(|(name, _)| SkyObject::Body(name));
+    body.or_else(|| {
+        identify_stars
+            .then(|| find_star(scene, &projection, rect, pointer))
+            .flatten()
+            .map(SkyObject::Star)
+    })
+}
+
+fn find_star<'a>(
+    scene: &'a sky::Scene,
+    projection: &SkyProjection,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> Option<&'a Star> {
+    let catalog = scene.assets.star_catalog()?;
+    if projection.focal < 32.0 {
+        return None;
+    }
+    let center = rect.center();
+    let axes = projection.inertial_axes(scene.inertial_rows);
+    let ray = projection.inertial_ray(axes, pointer - center);
+    const PICK_RADIUS: f32 = 5.0;
+    catalog
+        .nearby(ray, PICK_RADIUS / projection.focal)
+        .filter_map(|star| {
+            let offset = projection.star_offset(axes, star.direction)?;
+            let point = center + offset;
+            let distance = pointer.distance_sq(point);
+            (distance <= PICK_RADIUS.powi(2)
+                && rect.contains(point)
+                && offset.length_sq() > projection.radius.powi(2))
+            .then_some((star, distance))
+        })
+        .min_by(|(a, da), (b, db)| {
+            a.magnitude
+                .total_cmp(&b.magnitude)
+                .then_with(|| da.total_cmp(db))
+        })
+        .map(|(star, _)| star)
 }
 
 impl SkyRenderer {
@@ -101,7 +170,6 @@ impl SkyRenderer {
         frame: &super::Frame,
     ) -> Result<(), String> {
         let camera = frame.camera;
-        let [width, height] = frame.size;
         let opacity = camera.globe_blend() as f32;
         if opacity <= 0.0 {
             return Ok(());
@@ -125,6 +193,7 @@ impl SkyRenderer {
                 return Ok(());
             }
             let projection = SkyProjection::new(camera, frame.size);
+            let [half_x, half_y] = projection.fov(frame.size);
 
             gl.use_program(Some(p));
             gl.uniform_matrix_3_f32_slice(
@@ -137,11 +206,7 @@ impl SkyRenderer {
                 false,
                 projection.basis.as_flattened(),
             );
-            gl.uniform_2_f32(
-                gl.get_uniform_location(p, "u_fov").as_ref(),
-                width / (2.0 * projection.focal),
-                height / (2.0 * projection.focal),
-            );
+            gl.uniform_2_f32(gl.get_uniform_location(p, "u_fov").as_ref(), half_x, half_y);
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_camera_distance").as_ref(),
                 projection.distance,
@@ -180,9 +245,45 @@ impl SkyRenderer {
             bind(gl, p, "u_lunar_albedo", 4, self.moon);
             bind(gl, p, "u_stars", 3, self.stars);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            if frame.show_constellations {
+                self.paint_figures(gl, scene, &projection, [half_x, half_y], opacity);
+            }
             gl.active_texture(glow::TEXTURE0);
         }
         Ok(())
+    }
+
+    unsafe fn paint_figures(
+        &mut self,
+        gl: &glow::Context,
+        scene: &sky::Scene,
+        projection: &SkyProjection,
+        fov: [f32; 2],
+        opacity: f32,
+    ) {
+        let Some(catalog) = scene.assets.star_catalog() else {
+            return;
+        };
+        // SAFETY: this pass shares the current context and viewport with the sky.
+        unsafe {
+            if self.figures.is_none() && !self.figures_failed {
+                match figures::Figures::upload(gl, &catalog.figures) {
+                    Ok(figures) => self.figures = Some(figures),
+                    Err(error) => {
+                        self.figures_failed = true;
+                        tracing::warn!(%error, "Constellation overlay unavailable");
+                    }
+                }
+            }
+            if let Some(figures) = &self.figures {
+                figures.paint(
+                    gl,
+                    projection.inertial_axes(scene.inertial_rows),
+                    fov,
+                    opacity,
+                );
+            }
+        }
     }
 
     pub(super) unsafe fn earth_uniforms(
@@ -270,6 +371,7 @@ impl SkyRenderer {
         }
         // SAFETY: texture work stays in the owner callback on the current context.
         unsafe {
+            self.clear_figures(gl);
             for (old, image) in [
                 (&mut self.stars, Some(&scene.assets.stars)),
                 (&mut self.moon, scene.assets.moon.as_ref()),
@@ -293,6 +395,7 @@ impl SkyRenderer {
     pub(super) unsafe fn destroy(&mut self, gl: &glow::Context) {
         // SAFETY: only the renderer's current context deletes its objects.
         unsafe {
+            self.clear_figures(gl);
             for texture in [self.stars.take(), self.moon.take(), self.night.take()]
                 .into_iter()
                 .flatten()
@@ -303,6 +406,14 @@ impl SkyRenderer {
                 gl.delete_program(program);
             }
         }
+    }
+
+    unsafe fn clear_figures(&mut self, gl: &glow::Context) {
+        if let Some(figures) = self.figures.take() {
+            // SAFETY: both destruction and source replacement run on the owning context.
+            unsafe { figures.destroy(gl) };
+        }
+        self.figures_failed = false;
     }
 }
 
@@ -406,6 +517,23 @@ mod tests {
         let offset = projection.project([-1e8, 5e7, 2e7]).unwrap();
         assert!((offset.x - 285.0).abs() < 0.1);
         assert!((offset.y + 114.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn star_catalog_projection_round_trips_an_inertial_ray() {
+        let camera = GlobeCamera {
+            center_lat: 38.0,
+            center_lon: -104.0,
+            ..GlobeCamera::default()
+        };
+        let projection = SkyProjection::new(camera, [1000.0, 600.0]);
+        let rotation = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let axes = projection.inertial_axes(rotation);
+        let offset = egui::vec2(310.0, -190.0);
+        let shader_ray = projection.inertial_ray(projection.basis, offset);
+        let ray = [-shader_ray[1], shader_ray[0], shader_ray[2]];
+        assert!((projection.star_offset(axes, ray).unwrap() - offset).length() < 0.001);
+        assert!(projection.star_offset(axes, ray.map(|v| -v)).is_none());
     }
 
     #[test]

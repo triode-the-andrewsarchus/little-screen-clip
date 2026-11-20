@@ -142,6 +142,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         star_trail: 0.0,
         show_sky: false,
         readable_sky: false,
+        show_constellations: false,
         earth_lighting: false,
         city_lights: false,
         layers: Layers {
@@ -371,6 +372,7 @@ fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
         star_trail: 0.0,
         show_sky: false,
         readable_sky: false,
+        show_constellations: false,
         earth_lighting: false,
         city_lights: false,
     };

@@ -155,6 +155,8 @@ struct SkyState {
     transition: Option<SceneTransition>,
     visible: bool,
     readable: bool,
+    constellations: bool,
+    identify_stars: bool,
     lighting: bool,
     lights: bool,
     error: Option<String>,
@@ -196,6 +198,8 @@ impl SkyState {
             transition: None,
             visible: true,
             readable: true,
+            constellations: false,
+            identify_stars: true,
             lighting: true,
             lights: false,
             error: None,
@@ -422,7 +426,10 @@ impl Viewer {
         self.sky.poll(ctx);
         let active = self.downloader.active;
         if let Some(downloaded) = self.downloader.poll(ctx) {
-            if matches!(active, Some(DownloadPack::Sky | DownloadPack::NightLights)) {
+            if matches!(
+                active,
+                Some(DownloadPack::Sky | DownloadPack::NightLights | DownloadPack::StarCatalog)
+            ) {
                 self.sky.reload(&self.downloader.assets_dir);
             }
             self.assets = Some(downloaded);
@@ -667,11 +674,12 @@ impl Viewer {
             paint_scene_clock(ui, &painter, rect, scale_badge, time, frame.sky.as_ref());
             frame.show_sky = visible;
             frame.readable_sky = self.sky.readable;
+            frame.show_constellations = self.sky.constellations;
             frame.earth_lighting = self.sky.lighting;
             frame.city_lights = self.sky.lights;
         }
         if hovered.is_none() {
-            show_sky_body(ui, rect, &frame);
+            show_sky_object(ui, rect, &frame, self.sky.identify_stars);
         }
         let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
         if self.render_error != error {
@@ -807,6 +815,11 @@ impl Viewer {
                     egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
                 )
                 .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
+                if assets.star_catalog().is_some() {
+                    ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.constellations, "Constellations"))
+                        .on_hover_text("Show Stellarium’s Modern constellation figures.");
+                    ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.identify_stars, "Star hover"));
+                }
             }
             ui.separator();
             if ui
@@ -1127,21 +1140,69 @@ impl Viewer {
                 .start(DownloadPack::NightLights, &self.config);
         }
         if self.sky.assets.is_some() {
-            ui.horizontal_wrapped(|ui| {
-                ui.hyperlink_to(
-                    "JPL DE440",
-                    "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
-                );
-                ui.hyperlink_to("NASA star map", "https://svs.gsfc.nasa.gov/4851/");
-                ui.hyperlink_to("NASA Moon albedo", "https://svs.gsfc.nasa.gov/4720/");
-                ui.hyperlink_to(
-                    "NASA ΔT uncertainty",
-                    "https://eclipse.gsfc.nasa.gov/SEcat5/uncertainty.html",
-                );
-            });
+            ui.end_row();
+            self.star_catalog_assets(ui, palette, colors);
+            ui.end_row();
+            ui.hyperlink_to(
+                "JPL DE440",
+                "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+            );
+            ui.hyperlink_to("NASA star map", "https://svs.gsfc.nasa.gov/4851/");
+            ui.hyperlink_to("NASA Moon albedo", "https://svs.gsfc.nasa.gov/4720/");
+            ui.hyperlink_to(
+                "NASA ΔT uncertainty",
+                "https://eclipse.gsfc.nasa.gov/SEcat5/uncertainty.html",
+            );
         }
         if let Some(error) = &self.sky.error {
             ui.colored_label(colors.warning, format!("Sky assets: {error}"));
+        }
+    }
+
+    fn star_catalog_assets(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        colors: WorkbenchColors,
+    ) {
+        let Some(assets) = &self.sky.assets else {
+            return;
+        };
+        if assets.star_catalog().is_some() {
+            ui.hyperlink_to(
+                "Stellarium team · Modern figures",
+                sky::catalog::STELLARIUM_CREDIT,
+            );
+            ui.hyperlink_to(
+                "David Nash / Astronexus · HYG v4.1",
+                sky::catalog::HYG_CREDIT,
+            );
+            ui.hyperlink_to(
+                "CC BY-SA 4.0",
+                "https://creativecommons.org/licenses/by-sa/4.0/",
+            );
+            return;
+        }
+        if let Err(error) = &assets.catalog {
+            ui.colored_label(colors.warning, format!("Star catalog: {error}"));
+        }
+        if ui
+            .add_enabled(
+                self.sky.job.is_none(),
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button(
+                        format!(
+                            "Get Constellations & Star Catalog ({:.2} MB)",
+                            sky::catalog::DOWNLOAD_BYTES as f64 / 1e6
+                        ),
+                        palette,
+                    )
+                    .compact(),
+            )
+            .clicked()
+        {
+            self.downloader
+                .start(DownloadPack::StarCatalog, &self.config);
         }
     }
 
@@ -1593,21 +1654,32 @@ fn live_scene_time(ctx: &egui::Context) -> DateTime<Utc> {
     DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
 }
 
-fn show_sky_body(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
-    let name = ui
+fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame, identify_stars: bool) {
+    let target = ui
         .ctx()
         .pointer_hover_pos()
         .filter(|_| super::ui::preview_hovered(ui, rect))
-        .and_then(|pointer| gpu::sky_body_at(frame, rect, pointer));
-    if let Some(name) = name {
+        .and_then(|pointer| gpu::sky_object_at(frame, rect, pointer, identify_stars));
+    if let Some(target) = target {
         egui::Tooltip::always_open(
             ui.ctx().clone(),
             ui.layer_id(),
             egui::Id::unique("sky-object-name"),
             egui::PopupAnchor::Pointer,
         )
-        .show(|ui| {
-            ui.label(name);
+        .show(|ui| match target {
+            gpu::SkyObject::Body(name) => {
+                ui.label(name);
+            }
+            gpu::SkyObject::Star(star) => {
+                ui.label(star.name.as_ref());
+                if let Some(hip) = star.hip
+                    && !star.name.starts_with("HIP ")
+                {
+                    ui.label(format!("HIP {hip}"));
+                }
+                ui.label(format!("Visual magnitude {:.2}", star.magnitude));
+            }
         });
     }
 }
