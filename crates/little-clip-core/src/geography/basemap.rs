@@ -969,6 +969,19 @@ impl GrwlMaskEntry {
         (x >= 0. && y >= 0. && x < self.width as f64 && y < self.height as f64)
             .then_some((x as u32, y as u32))
     }
+
+    fn open_decoder(
+        &self,
+        directory: &AssetDirectory,
+    ) -> Option<tiff::decoder::Decoder<BufReader<fs::File>>> {
+        let file = directory.open_file(std::ffi::OsStr::new(&self.file)).ok()?;
+        let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
+            .ok()?
+            .with_limits(tiff_limits(16 * 1024 * 1024));
+        (decoder.dimensions().ok()? == (self.width, self.height)
+            && decoder.colortype().ok()? == tiff::ColorType::Gray(8))
+        .then_some(decoder)
+    }
 }
 
 /// On-demand 30 m GRWL GeoTIFF water-mask store (`GRWL_mask_V01.01`).
@@ -1074,29 +1087,30 @@ impl GrwlMaskStore {
         }
         let cell = (((lat + 90.0) / 2.0).floor() as i32).clamp(0, 89) as usize * 180
             + (((lon + 180.0) / 2.0).floor() as i32).clamp(0, 179) as usize;
-        let (idx, px, py) = self.cells[cell].iter().find_map(|&i| {
+        let mut candidates = self.cells[cell].iter().filter_map(|&i| {
             let e = &self.entries[i as usize];
             if lon < e.min_lon || lon > e.max_lon || lat < e.min_lat || lat > e.max_lat {
                 return None;
             }
             e.pixel(lat, lon, &self.geographic)
                 .map(|(x, y)| (i as usize, x, y))
-        })?;
-        let entry = &self.entries[idx];
+        });
+        let first = candidates.next()?;
         let mut inner = self.inner.lock().ok()?;
+        // Adjacent GRWL rasters have overlapping projected bounds. A zero in
+        // one raster's padding must not hide water observed in its neighbor.
+        let mut observed = std::iter::once(first)
+            .chain(candidates)
+            .filter_map(|(idx, px, py)| self.sample_pixel(&mut inner, idx, px, py));
+        observed
+            .next()
+            .map(|water| water || observed.any(|water| water))
+    }
+
+    fn sample_pixel(&self, inner: &mut MaskInner, idx: usize, px: u32, py: u32) -> Option<bool> {
+        let entry = &self.entries[idx];
         if !inner.decoders.contains_key(&idx) {
-            let file = self
-                .mask_dir
-                .open_file(std::ffi::OsStr::new(&entry.file))
-                .ok()?;
-            let mut decoder = tiff::decoder::Decoder::new(BufReader::new(file))
-                .ok()?
-                .with_limits(tiff_limits(16 * 1024 * 1024));
-            if decoder.dimensions().ok()? != (entry.width, entry.height)
-                || decoder.colortype().ok()? != tiff::ColorType::Gray(8)
-            {
-                return None;
-            }
+            let decoder = entry.open_decoder(&self.mask_dir)?;
             if inner.decoders.len() >= 8 {
                 inner.decoders.clear();
             }
@@ -1118,7 +1132,7 @@ impl GrwlMaskStore {
             else {
                 return None;
             };
-            let MaskInner { cache, order, .. } = &mut *inner;
+            let MaskInner { cache, order, .. } = inner;
             cache_chunk(cache, order, key, bytes, 32 * 1024 * 1024)?
         };
         let actual_w = (entry.width - (px / cw) * cw).min(cw);
@@ -3232,6 +3246,56 @@ mod tests {
                 .sum::<usize>(),
             32
         );
+    }
+
+    #[test]
+    fn overlapping_grwl_masks_keep_water_from_either_tile() {
+        let root = tempfile::tempdir().unwrap();
+        for (name, pixels) in [("padding.tif", [0, 0, 0, 0]), ("river.tif", [0, 1, 0, 1])] {
+            let file = fs::File::create(root.path().join(name)).unwrap();
+            tiff::encoder::TiffEncoder::new(file)
+                .unwrap()
+                .write_image::<tiff::encoder::colortype::Gray8>(2, 2, &pixels)
+                .unwrap();
+        }
+        let entry = |file: &str, west: f64| GrwlMaskEntry {
+            file: file.into(),
+            epsg: 4326,
+            origin: [west, 2.],
+            scale: [1., 1.],
+            width: 2,
+            height: 2,
+            projection: None,
+            min_lon: 0.,
+            max_lon: 0.,
+            min_lat: 0.,
+            max_lat: 0.,
+        };
+        let dir = Arc::new(AssetDirectory::open(root.path()).unwrap());
+        for mut entries in [
+            vec![entry("padding.tif", 0.), entry("river.tif", -0.5)],
+            vec![entry("river.tif", -0.5), entry("padding.tif", 0.)],
+        ] {
+            entries.insert(0, entry("missing.tif", 0.));
+            let store = GrwlMaskStore::from_entries(dir.clone(), entries).unwrap();
+            assert_eq!(store.sample_water(1., 1.), Some(true));
+            assert_eq!(store.sample_water(1., 0.2), Some(false));
+            assert_eq!(store.sample_water(1., 2.5), None);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the installed GRWL masks"]
+    fn grwl_mask_overlaps_restore_columbia_and_platte_river_crossings() {
+        let root = std::env::var_os("LITTLE_CLIP_WATER_FIXTURE").unwrap();
+        let store = GrwlMaskStore::load_or_index(Path::new(&root)).unwrap();
+        for (lat, lon) in [
+            (47.99630339, -119.64288965),
+            (47.36670103, -120.14544937),
+            (41.06561119, -96.03071672),
+        ] {
+            assert_eq!(store.sample_water(lat, lon), Some(true), "{lat}, {lon}");
+        }
     }
 
     #[test]
