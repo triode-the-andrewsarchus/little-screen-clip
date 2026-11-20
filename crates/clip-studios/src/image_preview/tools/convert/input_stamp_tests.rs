@@ -2,11 +2,16 @@ use super::*;
 
 #[test]
 fn webp_rejects_zero_or_oversized_dimensions_before_importing_pixels() {
-    for (width, height) in [(0, 1), (1, 0), (16_384, 1), (1, 16_384)] {
+    for (width, height, expected) in [
+        (0, 1, "non-zero"),
+        (1, 0, "non-zero"),
+        (16_384, 1, "dimensions exceed maximum"),
+        (1, 16_384, "dimensions exceed maximum"),
+    ] {
         let image = RgbaImage::new(width, height);
         let error =
             super::super::super::encode_webp_cancellable(&image, false, 80, None).unwrap_err();
-        assert!(error.contains("dimensions"), "{width}x{height}: {error}");
+        assert!(error.contains(expected), "{width}x{height}: {error}");
     }
 }
 
