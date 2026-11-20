@@ -379,15 +379,16 @@ fn matches_plan(file: &Downloaded, a: &Archive) -> Result<bool, String> {
     if file.file.metadata().map_err(|e| e.to_string())?.len() != a.download_bytes {
         return Ok(false);
     }
-    let mut zip = zip::ZipArchive::new(file.file.try_clone().map_err(|e| e.to_string())?)
+    let zip = zip::ZipArchive::new(file.file.try_clone().map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     if zip.len() > 65_536 {
         return Err("Viewfinder archive has too many entries".into());
     }
     let mut actual = Vec::new();
     for i in 0..zip.len() {
-        let f = zip.by_index_raw(i).map_err(|e| e.to_string())?;
-        let name = f.name().rsplit('/').next().unwrap_or("");
+        let f = zip.by_index_data(i).map_err(|e| e.to_string())?;
+        let member_name = f.name().map_err(|error| error.to_string())?;
+        let name = member_name.rsplit('/').next().unwrap_or("");
         if name.to_ascii_lowercase().ends_with(".hgt") {
             actual.push((name.to_string(), f.size(), f.crc32()));
         }

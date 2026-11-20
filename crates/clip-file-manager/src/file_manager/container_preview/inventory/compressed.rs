@@ -262,25 +262,35 @@ mod tests {
     #[test]
     fn complete_scans_validate_compressed_trailers_and_concatenated_members() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("collection.tgz");
+        for (kind, suffix) in [
+            (Format::Gzip, "tgz"),
+            (Format::Bzip2, "tbz2"),
+            (Format::Xz, "txz"),
+            (Format::Zstd, "tzst"),
+        ] {
+            let path = directory.path().join(format!("collection.{suffix}"));
+            let mut bytes = encode(kind, &tar_bytes("one.txt", 3));
+            bytes.extend(encode(kind, &tar_bytes("two.txt", 4)));
+            std::fs::write(&path, &bytes).unwrap();
+            let ready = inventory_file(&path).unwrap();
+            assert!(ready.complete, "{kind:?}");
+            assert_eq!(
+                ready
+                    .children
+                    .iter()
+                    .map(|child| child.name())
+                    .collect::<Vec<_>>(),
+                ["one.txt", "two.txt"],
+                "{kind:?}",
+            );
+            let truncated = &bytes[..bytes.len() - 4];
+            std::fs::write(&path, truncated).unwrap();
+            assert!(inventory_file(&path).is_err(), "{kind:?}");
+        }
+        let path = directory.path().join("bad-crc.tgz");
         let mut bytes = encode(Format::Gzip, &tar_bytes("one.txt", 3));
-        bytes.extend(encode(Format::Gzip, &tar_bytes("two.txt", 4)));
-        std::fs::write(&path, &bytes).unwrap();
-        let ready = inventory_file(&path).unwrap();
-        assert!(ready.complete);
-        assert_eq!(
-            ready
-                .children
-                .iter()
-                .map(|child| child.name())
-                .collect::<Vec<_>>(),
-            ["one.txt", "two.txt"]
-        );
         let checksum = bytes.len() - 8;
         bytes[checksum] ^= 0x80;
-        std::fs::write(&path, &bytes).unwrap();
-        assert!(inventory_file(&path).is_err());
-        bytes.truncate(bytes.len() - 4);
         std::fs::write(&path, &bytes).unwrap();
         assert!(inventory_file(&path).is_err());
     }

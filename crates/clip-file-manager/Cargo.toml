@@ -35,10 +35,10 @@ image = { workspace = true }
 gif = "0.14.2"
 tar = "0.4"
 flate2 = "1.1"
-bzip2 = "0.4"
+bzip2 = "0.6"
 xz2 = "0.1"
-zstd = { version = "0.13", default-features = false }
-zip = { version = "7.4", default-features = false, features = ["deflate"] }
+zstd.workspace = true
+zip.workspace = true
 imagesize = "0.12"
 tiny-skia = { workspace = true }
 lyon_tessellation = "=1.0.22"

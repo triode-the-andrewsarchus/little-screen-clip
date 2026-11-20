@@ -52,10 +52,8 @@ impl<R: Read + Seek> Package<R> {
             if entry.is_dir() {
                 continue;
             }
-            if names
-                .insert(canonical(entry.name())?, entry.name().to_owned())
-                .is_some()
-            {
+            let name = entry.name().map_err(|error| error.to_string())?;
+            if names.insert(canonical(&name)?, name.into_owned()).is_some() {
                 return Err("Duplicate reMarkable archive member".into());
             }
         }

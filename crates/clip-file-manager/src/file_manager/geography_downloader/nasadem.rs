@@ -223,7 +223,7 @@ fn present(directory: &AssetDirectory, tile: &Tile) -> bool {
     )
 }
 fn validate_zip(file: &Downloaded, tile: &Tile) -> Result<(), String> {
-    let mut zip =
+    let zip =
         zip::ZipArchive::new(file.file.try_clone().map_err(|e| e.to_string())?).map_err(|_| {
             "NASA did not return a valid ZIP; check Earthdata login/application authorization"
                 .to_string()
@@ -233,8 +233,9 @@ fn validate_zip(file: &Downloaded, tile: &Tile) -> Result<(), String> {
     }
     let mut found = 0;
     for i in 0..zip.len() {
-        let f = zip.by_index_raw(i).map_err(|e| e.to_string())?;
-        let name = Path::new(f.name())
+        let f = zip.by_index_data(i).map_err(|e| e.to_string())?;
+        let member_name = f.name().map_err(|error| error.to_string())?;
+        let name = Path::new(member_name.as_ref())
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("");

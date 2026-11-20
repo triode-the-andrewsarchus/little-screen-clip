@@ -202,10 +202,7 @@ fn check_encryption(
     zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
     items: &Items<'_>,
 ) -> Result<(), String> {
-    if !zip
-        .file_names()
-        .any(|name| name == "META-INF/encryption.xml")
-    {
+    if zip.index_for_name_raw(b"META-INF/encryption.xml").is_none() {
         return Ok(());
     }
     let bytes = entry(zip, "META-INF/encryption.xml", XML_LIMIT)?;
@@ -429,13 +426,19 @@ mod tests {
         let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for index in 0..input.len() {
             let mut member = input.by_index(index).unwrap();
-            if changes.iter().any(|(name, _)| *name == member.name()) {
+            if changes
+                .iter()
+                .any(|(name, _)| *name == member.name().unwrap())
+            {
                 continue;
             }
             let mut bytes = Vec::new();
             member.read_to_end(&mut bytes).unwrap();
             output
-                .start_file(member.name(), zip::write::SimpleFileOptions::default())
+                .start_file(
+                    member.name().unwrap(),
+                    zip::write::SimpleFileOptions::default(),
+                )
                 .unwrap();
             output.write_all(&bytes).unwrap();
         }

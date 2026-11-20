@@ -762,7 +762,8 @@ fn extract_matching_from_zip(
         if entry.is_dir() {
             continue;
         }
-        let Some(name) = Path::new(entry.name())
+        let member_name = entry.name().map_err(|error| error.to_string())?;
+        let Some(name) = Path::new(member_name.as_ref())
             .file_name()
             .and_then(|n| n.to_str())
             .map(str::to_string)

@@ -161,7 +161,8 @@ fn read_metadata(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<(Value, String),
         if total > MAX_ARCHIVE_BYTES || entry.size() > 64 * 1024 * 1024 {
             return Err(invalid("SOG expanded archive exceeds the import budget"));
         }
-        check_metadata_entry(entry.name(), entry.size(), &mut metadata_name)?;
+        let name = entry.name().map_err(|error| invalid(error.to_string()))?;
+        check_metadata_entry(&name, entry.size(), &mut metadata_name)?;
     }
     let metadata_name = metadata_name.ok_or_else(|| invalid("SOG has no meta.json"))?;
     let entry = zip

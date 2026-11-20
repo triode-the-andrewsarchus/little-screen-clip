@@ -26,8 +26,9 @@ impl Document {
         let archive = zip_content::archive_file(file, 2 * 1024 * 1024 * 1024)?;
         let mut pages: Vec<_> = archive
             .file_names()
+            .filter_map(Result::ok)
             .filter(|name| page_name(name))
-            .map(str::to_owned)
+            .map(std::borrow::Cow::into_owned)
             .collect();
         pages.sort_by(|a, b| natural_cmp(a, b));
         if token.load(Ordering::Relaxed) {

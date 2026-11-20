@@ -200,7 +200,7 @@ fn source_kind(input: &mut File, header: &[u8]) -> Result<Option<SourceKind>, St
     if header.starts_with(b"PK\x03\x04") {
         let has_xournal = {
             let archive = zip::ZipArchive::new(&mut *input).map_err(|error| error.to_string())?;
-            archive.file_names().any(|name| name == "content.xml")
+            archive.index_for_name_raw(b"content.xml").is_some()
         };
         input.rewind().map_err(|error| error.to_string())?;
         if !has_xournal {

@@ -357,12 +357,12 @@ mod tests {
                 continue;
             }
             if std::str::from_utf8(entry.name_raw()).is_ok() {
-                assert_eq!(entry.name().as_bytes(), entry.name_raw());
+                assert_eq!(entry.name().unwrap().as_bytes(), entry.name_raw());
             }
             assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
             assert_eq!(entry.unix_mode().unwrap() & 0o777, 0o640);
             let extras = entry.extra_data().unwrap();
-            let fields = rawzip::extra_fields::ExtraFields::new(extras).collect::<Vec<_>>();
+            let fields = rawzip::extra_fields::ExtraFields::new(&extras).collect::<Vec<_>>();
             let owner = fields
                 .iter()
                 .find(|(id, _)| *id == ExtraFieldId::INFO_ZIP_UNIX_UID_GID)

@@ -269,7 +269,8 @@ impl Members {
         }
         let ordinal = self.observed;
         let directory = member.is_dir() || kind == 0o040000;
-        self.add(member.name(), directory, member.size())?;
+        let name = member.name().map_err(|error| error.to_string())?;
+        self.add(&name, directory, member.size())?;
         Ok(((self.output.is_some() || self.target == Some(ordinal))
             && self.observed > ordinal
             && !directory)

@@ -59,7 +59,7 @@ tempfile = "3.27"
 regex.workspace = true
 base64 = "0.22"
 flate2 = "1.1"
-zstd = { version = "0.13", default-features = false }
+zstd.workspace = true
 quick-xml = "0.41"
 roxmltree = "0.20"
 resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
@@ -78,7 +78,7 @@ jxl-oxide = { version = "0.12.6", default-features = false, features = ["image",
 hayro-jpeg2000 = "0.5.0"
 tinypsd = "0.1.0"
 oxideav-pcx = { version = "0.1.2", default-features = false }
-zip = { version = "7.4", default-features = false, features = ["deflate"] }
+zip.workspace = true
 anydoc = "0.2"
 rdocx = "0.17"
 proj4rs = { version = "0.3", default-features = false }

@@ -752,9 +752,9 @@ pub(super) fn parse_bundle(
         .map_err(|error| format!("Invalid Krita .bundle archive: {error}"))?;
     // In preset bundles, the brush bitmaps are resources for the presets.
     // Tip-only bundles still expose those tips directly.
-    let extensions: &[_] = if archive.file_names().any(|name| {
+    let extensions: &[_] = if archive.file_names().filter_map(Result::ok).any(|name| {
         !name.ends_with(['/', '\\'])
-            && Path::new(name)
+            && Path::new(name.as_ref())
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("kpp"))
     }) {
@@ -774,7 +774,10 @@ pub(super) fn parse_bundle(
         let Ok(entry) = archive.by_index_raw(i) else {
             continue;
         };
-        let (name, size) = (entry.name().to_owned(), entry.size());
+        let Ok(name) = entry.name().map(std::borrow::Cow::into_owned) else {
+            continue;
+        };
+        let size = entry.size();
         if entry.is_dir() || size > MAX_ZIP_ENTRY_BYTES {
             continue;
         }

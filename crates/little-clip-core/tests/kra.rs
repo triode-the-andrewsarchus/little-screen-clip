@@ -13,14 +13,17 @@ fn changed(name: &str, replacement: Option<&[u8]>) -> Vec<u8> {
         let mut file = source.by_index(index).unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
-        let content = if file.name() == name {
+        let content = if file.name().unwrap() == name {
             replacement
         } else {
             Some(bytes.as_slice())
         };
         if let Some(content) = content {
             output
-                .start_file(file.name(), zip::write::SimpleFileOptions::default())
+                .start_file(
+                    file.name().unwrap(),
+                    zip::write::SimpleFileOptions::default(),
+                )
                 .unwrap();
             output.write_all(content).unwrap();
         }

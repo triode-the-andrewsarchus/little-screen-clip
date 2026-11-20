@@ -126,12 +126,13 @@ fn manifests(zip: &zip::ZipArchive<File>, path: &Path) -> Result<Vec<String>, St
     }
     let mut entries: Vec<String> = zip
         .file_names()
+        .filter_map(Result::ok)
         .filter(|n| {
-            Path::new(n)
+            Path::new(n.as_ref())
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("dspreset"))
         })
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect();
     if entries.is_empty() || entries.len() > 256 {
         return Err("Sampler library needs between 1 and 256 presets".into());
@@ -147,6 +148,7 @@ fn manifests(zip: &zip::ZipArchive<File>, path: &Path) -> Result<Vec<String>, St
 fn renoise_members(zip: &zip::ZipArchive<File>) -> Result<Vec<(usize, String)>, String> {
     let mut members = Vec::new();
     for name in zip.file_names() {
+        let name = name.map_err(|error| error.to_string())?;
         let Some(suffix) = name.strip_prefix("SampleData/Sample") else {
             continue;
         };
@@ -157,7 +159,7 @@ fn renoise_members(zip: &zip::ZipArchive<File>) -> Result<Vec<(usize, String)>, 
         let index = suffix[..digits]
             .parse::<usize>()
             .map_err(|_| "Invalid Renoise sample index")?;
-        let path = local_member("", name)?;
+        let path = local_member("", &name)?;
         members.push((index, path));
     }
     Ok(members)

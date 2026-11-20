@@ -157,10 +157,10 @@ mod tests {
             let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
             for index in 0..original.len() {
                 let mut entry = original.by_index(index).unwrap();
-                if !corrupt_ink && entry.name().ends_with(".pdf") {
+                if !corrupt_ink && entry.name().unwrap().ends_with(".pdf") {
                     continue;
                 }
-                let name = entry.name().to_owned();
+                let name = entry.name().unwrap().into_owned();
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes).unwrap();
                 if corrupt_ink && name.ends_with(".rm") {

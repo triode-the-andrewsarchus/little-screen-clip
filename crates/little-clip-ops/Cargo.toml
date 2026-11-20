@@ -33,4 +33,4 @@ rawzip = "0.5.2"
 flate2 = "1.1"
 
 [dev-dependencies]
-zip = { version = "7.4", default-features = false, features = ["deflate"] }
+zip.workspace = true
