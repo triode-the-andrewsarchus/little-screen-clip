@@ -2,6 +2,7 @@
 pub(super) mod detail;
 mod geometry;
 pub(super) mod gpu;
+mod map_camera;
 mod overlay;
 mod radiation;
 mod river_coverage;
@@ -127,6 +128,7 @@ pub(super) struct Viewer {
     selected: usize,
     current: Option<Hit>,
     camera: GlobeCamera,
+    moon_camera: Option<GlobeCamera>,
     style: BasemapStyle,
     show_country_borders: bool,
     show_state_borders: bool,
@@ -350,6 +352,7 @@ impl Viewer {
             selected,
             current: None,
             camera: GlobeCamera::default(),
+            moon_camera: None,
             style: BasemapStyle::Natural,
             show_country_borders: true,
             show_state_borders: true,
@@ -399,6 +402,7 @@ impl Viewer {
     }
 
     fn fit_document(&mut self) {
+        self.moon_camera = None;
         self.camera.fit_bounds(self.document.geographic_bounds);
     }
 
@@ -455,8 +459,10 @@ impl Viewer {
             self.toolbar(ui, palette);
 
             let feature = &self.document.features[self.selected];
-            let profile_visible =
-                feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
+            let profile_visible = self.moon_camera.is_none()
+                && feature.kind != Kind::Point
+                && feature.elevation.is_some()
+                && feature.points > 1;
             let mut available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
             available.max.y -= ui.spacing().item_spacing.y;
             if !available.is_positive() {
@@ -497,48 +503,24 @@ impl Viewer {
                 egui::Sense::click_and_drag(),
             );
 
-            // Handle drag-to-rotate/pan and scroll-to-zoom with smooth 3D -> 2D transition
-            if response.dragged() {
-                let delta = response.drag_delta();
-                if delta.length_sq() > 0.0 {
-                    self.camera
-                        .pan_by(delta.x, delta.y, rect.width(), rect.height());
-                }
-            }
-            if response.hovered() {
-                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll.abs() > 0.01 {
-                    let factor = (scroll * 0.004).exp() as f64;
-                    self.camera.zoom =
-                        (self.camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
-                    ui.ctx().request_repaint();
-                }
-            }
-
-            self.camera.constrain_view(rect.width(), rect.height());
-            self.terrain_download.viewport = [rect.width(), rect.height()];
+            let size = [rect.width(), rect.height()];
+            map_camera::navigate(
+                self.moon_camera.as_mut().unwrap_or(&mut self.camera),
+                &response,
+            );
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             let slot = ui.painter_at(rect).add(egui::Shape::Noop);
-            let prepared = self.tiles.prepare_frame(
-                ui,
-                rect,
-                self.assets.as_ref(),
-                self.downloader.transport.source.as_ref(),
-                self.labels,
-                self.camera,
-                tiles::Appearance {
-                    style: self.style,
-                    contours: self.show_contours,
-                    layers: geometry::Layers {
-                        countries: self.show_country_borders,
-                        states: self.show_state_borders,
-                        rivers: self.show_rivers,
-                        roads: self.show_roads,
-                    },
-                },
-            );
-            self.contour_interval_m = self.tiles.contour;
-            self.local_elev_range = self.tiles.range;
+            if let Some(camera) = self.moon_camera {
+                let frame = self.tiles.frame(
+                    tiles::Requests::default(),
+                    camera,
+                    size,
+                    geometry::Layers::default(),
+                );
+                self.paint_frame(ui, &response, slot, Some((frame, Ok(()))), None);
+                return;
+            }
+            let prepared = self.prepare_earth_frame(ui, rect);
 
             let detail_tiles = prepared
                 .as_ref()
@@ -550,28 +532,7 @@ impl Viewer {
                 self.selected = hit.sample.feature;
                 self.current = Some(hit.sample);
             }
-            if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
-                && let Some([px, py]) = self.camera.project(
-                    sample.point.lat,
-                    sample.point.lon,
-                    rect.width(),
-                    rect.height(),
-                )
-            {
-                for copy in self.camera.world_shifts(rect.width(), rect.height()) {
-                    if self.camera.globe_blend() > 0.0 && copy != 0 {
-                        continue;
-                    }
-                    let offset = copy as f32
-                        * self.camera.world_width_px(rect.width(), rect.height()) as f32;
-                    let point = egui::pos2(rect.left() + px + offset, rect.top() + py);
-                    if rect.contains(point) {
-                        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                        painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
-                        painter.circle_filled(point, 2.5, colors.text_primary);
-                    }
-                }
-            }
+            self.paint_selected_position(ui, rect, colors);
 
             let hovered = profile
                 .and_then(|profile| self.profile_hover(ui, profile, colors))
@@ -585,13 +546,86 @@ impl Viewer {
                         }
                     })
                 });
-            self.paint_frame(ui, rect, slot, prepared, hovered);
+            self.paint_frame(ui, &response, slot, prepared, hovered);
         });
     }
 
+    fn prepare_earth_frame(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+    ) -> Option<(gpu::Frame, Result<(), String>)> {
+        let size = [rect.width(), rect.height()];
+        self.terrain_download.viewport = size;
+        let mut prepared = self.tiles.prepare_frame(
+            ui,
+            rect,
+            self.assets.as_ref(),
+            self.downloader.transport.source.as_ref(),
+            self.labels,
+            self.camera,
+            self.style,
+            self.show_contours,
+            geometry::Layers {
+                countries: self.show_country_borders,
+                states: self.show_state_borders,
+                rivers: self.show_rivers,
+                roads: self.show_roads,
+            },
+        );
+        map_camera::follow_ground(&mut self.camera, &self.tiles, size);
+        if let Some((frame, _)) = &mut prepared {
+            if (frame.camera.orbit.target_height_m - self.camera.orbit.target_height_m).abs() > 0.5
+                || (frame.camera.orbit.eye_ground_m - self.camera.orbit.eye_ground_m).abs() > 0.5
+            {
+                ui.ctx().request_repaint();
+            }
+            frame.camera = self.camera;
+        }
+        self.contour_interval_m = self.tiles.contour;
+        self.local_elev_range = self.tiles.range;
+        prepared
+    }
+
+    fn paint_selected_position(&self, ui: &egui::Ui, rect: egui::Rect, colors: WorkbenchColors) {
+        let size = [rect.width(), rect.height()];
+        if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
+            && let Some([px, py]) = match map_camera::Draped::new(&self.camera, &self.tiles, size) {
+                Some(pose) => pose.project(sample.point.lat, sample.point.lon),
+                None => self.camera.project(
+                    sample.point.lat,
+                    sample.point.lon,
+                    rect.width(),
+                    rect.height(),
+                ),
+            }
+        {
+            for copy in self.camera.world_shifts(rect.width(), rect.height()) {
+                if self.camera.globe_blend() > 0.0 && copy != 0 {
+                    continue;
+                }
+                let offset =
+                    copy as f32 * self.camera.world_width_px(rect.width(), rect.height()) as f32;
+                let point = egui::pos2(rect.left() + px + offset, rect.top() + py);
+                if rect.contains(point) {
+                    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                    painter.circle_stroke(point, 7.0, egui::Stroke::new(2.0_f32, colors.focus));
+                    painter.circle_filled(point, 2.5, colors.text_primary);
+                }
+            }
+        }
+    }
+
     fn map_status(&self, ui: &mut egui::Ui) {
+        if let Some(camera) = self.moon_camera {
+            ui.label(format!("Offline Moon ({:.2}×)", camera.zoom))
+                .on_hover_text(map_camera::CONTROLS);
+            return;
+        }
         let blend = self.camera.globe_blend();
-        let projection = if blend > 0.9 {
+        let projection = if self.camera.orbit.active() {
+            "3D Terrain"
+        } else if blend > 0.9 {
             "3D Globe"
         } else if blend < 0.1 {
             "2D Map"
@@ -609,7 +643,7 @@ impl Viewer {
                 "Offline {projection} ({:.2}×) · {terrain}",
                 self.camera.zoom
             ))
-            .on_hover_text("Drag to rotate or pan. Scroll to zoom.");
+            .on_hover_text(map_camera::CONTROLS);
             if self.downloader.transport.source.is_some()
                 && (self.show_roads || self.labels.cities || self.labels.detailed)
             {
@@ -647,26 +681,35 @@ impl Viewer {
     fn paint_frame(
         &mut self,
         ui: &egui::Ui,
-        rect: egui::Rect,
+        response: &egui::Response,
         slot: egui::layers::ShapeIdx,
         prepared: Option<(gpu::Frame, Result<(), String>)>,
         hovered: Option<Option<DateTime<Utc>>>,
     ) {
+        let rect = response.rect;
         let painter = ui.painter_at(rect);
+        let moon = self.moon_camera.is_some();
+        let camera = self.moon_camera.as_ref().unwrap_or(&self.camera);
         let scale_badge = paint_scale_and_contour_overlay(
             ui,
             &painter,
             rect,
-            &self.camera,
-            self.contour_interval_m,
+            camera,
+            self.contour_interval_m.filter(|_| !moon),
             self.local_elev_range,
             self.config.geography.units,
+            if moon {
+                map_camera::MOON_RADIUS_M
+            } else {
+                map_camera::EARTH_RADIUS_M
+            },
         );
         let Some((mut frame, result)) = prepared else {
             return;
         };
         let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
-        if self.sky.assets.is_some() && (visible || self.sky.lighting) {
+        frame.moon_view = moon;
+        if self.sky.assets.is_some() && (visible || self.sky.lighting || moon) {
             let recorded = recorded_scene_time(&self.document, self.selected, hovered.flatten());
             let (time, star_trail) = self.sky.scene_time(recorded, ui.ctx());
             frame.sky = self.sky.at(time);
@@ -679,6 +722,14 @@ impl Viewer {
         }
         if hovered.is_none() {
             show_sky_object(ui, rect, &frame);
+            if response.clicked()
+                && let Some(pointer) = response.interact_pointer_pos()
+                && gpu::moon_at(&frame, rect, pointer)
+            {
+                self.moon_camera = Some(map_camera::lunar_camera());
+                self.tiles.suspend();
+                ui.ctx().request_repaint();
+            }
         }
         let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
         if self.render_error != error {
@@ -703,6 +754,7 @@ impl Viewer {
             .flatten();
         let mut hit = None;
         let camera = &self.camera;
+        let draped = map_camera::Draped::new(camera, &self.tiles, [rect.width(), rect.height()]);
         let flat = camera.globe_blend() == 0.0;
         let period = camera.world_width_px(rect.width(), rect.height());
         let cities = self.assets.as_deref().filter(|_| self.labels.cities);
@@ -713,6 +765,7 @@ impl Viewer {
             detail_tiles,
             self.labels,
             self.show_roads,
+            draped,
         );
         for copy in camera.world_shifts(rect.width(), rect.height()) {
             if copy != 0
@@ -730,12 +783,14 @@ impl Viewer {
                     assets,
                     offset,
                     (56, detail_tiles),
+                    draped,
                 );
             }
             let projection = overlay::Projection {
                 camera,
                 rect,
                 offset,
+                draped,
             };
             if let Some(candidate) =
                 self.overlay
@@ -754,6 +809,12 @@ impl Viewer {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if let Some(camera) = self.moon_camera.as_mut() {
+            if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
+                self.moon_camera = None;
+            }
+            return;
+        }
         let terrain_available =
             self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0;
         ui.horizontal_wrapped(|ui| {
@@ -763,10 +824,11 @@ impl Viewer {
                 ("2D Map", ProjectionMode::Map2D),
             ] {
                 if ui
-                    .selectable_label(self.camera.mode == mode, label)
+                    .selectable_label(self.camera.mode == mode && !self.camera.orbit.active(), label)
                     .clicked()
                 {
                     self.camera.mode = mode;
+                    self.camera.orbit = Default::default();
                 }
             }
             ui.separator();
@@ -826,6 +888,7 @@ impl Viewer {
                 .clicked()
             {
                 self.camera.zoom = 1.0;
+                self.camera.orbit = Default::default();
             }
             if ui
                 .add(
@@ -1270,7 +1333,7 @@ impl Viewer {
             self.document.features.len(),
             self.document.points
         ));
-        let mut zoom_f32 = self.camera.zoom as f32;
+        let mut zoom_f32 = self.moon_camera.as_ref().unwrap_or(&self.camera).zoom as f32;
         ui.horizontal(|ui| {
             if ui
                 .add(
@@ -1292,7 +1355,7 @@ impl Viewer {
                 )
                 .changed()
             {
-                self.camera.zoom = zoom_f32 as f64;
+                self.moon_camera.as_mut().unwrap_or(&mut self.camera).zoom = zoom_f32 as f64;
             }
         });
         let height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
@@ -1393,6 +1456,7 @@ fn paint_cities(
             Arc<detail::Tile>,
         )],
     ),
+    draped: Option<map_camera::Draped<'_>>,
 ) {
     // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
     let min_pop = if camera.zoom < 3.0 {
@@ -1407,7 +1471,10 @@ fn paint_cities(
         if city.pop_max < min_pop {
             break;
         }
-        let Some([px, py]) = camera.project(city.lat, city.lon, rect.width(), rect.height()) else {
+        let Some([px, py]) = (match draped {
+            Some(pose) => pose.project(city.lat, city.lon),
+            None => camera.project(city.lat, city.lon, rect.width(), rect.height()),
+        }) else {
             continue;
         };
         let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
@@ -1467,9 +1534,10 @@ fn paint_scale_and_contour_overlay(
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
     units: Units,
+    radius_m: f64,
 ) -> egui::Rect {
     let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
-    let meters_per_px = 6_371_000.0 / scale_px;
+    let meters_per_px = radius_m / scale_px;
     let target_m = meters_per_px * 110.0;
     let (nice_m, scale_label) = units.scale_bar(target_m);
     let bar_w = (nice_m / meters_per_px) as f32;
@@ -1631,6 +1699,7 @@ fn paint_strip_map(
         camera: &camera,
         rect,
         offset: 0.0,
+        draped: None,
     };
     let hit = preview
         .overlay
@@ -1665,6 +1734,9 @@ fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
         .show(|ui| match target {
             gpu::SkyObject::Body(name) => {
                 ui.label(name);
+                if name == "Moon" {
+                    ui.label("Click to explore");
+                }
             }
             gpu::SkyObject::Star(star) => {
                 ui.label(star.name.as_ref());
@@ -1992,6 +2064,7 @@ mod tests {
                                     camera: &viewer.camera,
                                     rect,
                                     offset: 0.0,
+                                    draped: None,
                                 },
                                 Some(0),
                                 colors,

@@ -49,7 +49,7 @@ pub(super) struct Scene {
     pub batches: Vec<Batch>,
     pub index: BTreeMap<TileId, Vec<usize>>,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Layers {
     pub countries: bool,
     pub states: bool,

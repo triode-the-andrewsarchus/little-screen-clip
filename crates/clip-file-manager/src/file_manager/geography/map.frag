@@ -9,6 +9,7 @@ uniform sampler2D u_water;
 uniform int u_style;
 uniform bool u_show_water;
 uniform float u_blend;
+uniform bool u_perspective;
 uniform float u_zoom;
 uniform float u_side;
 uniform float u_contour;
@@ -172,7 +173,8 @@ float contour_ink(float height, float close) {
 }
 
 void main() {
-    if((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
+    if(u_perspective ? v_front < -.12 :
+       ((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend)))) discard;
     vec4 base=texture(u_color,v_uv);
     vec2 dem=texture(u_height,v_uv).rg;
     float h=dem.r, shade=1.0;

@@ -2,6 +2,7 @@
 //! Workers deliver source tiles; callbacks upload each tile once and draw it with
 //! camera uniforms. No framebuffer readback or per-camera CPU raster is involved.
 mod sky;
+mod terrain;
 use super::geometry::{Batch, Layer, Layers, RiverKey, Scene};
 use eframe::{
     egui_glow,
@@ -9,9 +10,10 @@ use eframe::{
 };
 use little_clip_core::geography::basemap::{
     BasemapStyle, GlobeCamera,
+    perspective::{EARTH_RADIUS_M, Perspective},
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
-pub(super) use sky::{SkyObject, sky_object_at};
+pub(super) use sky::{SkyObject, moon_at, sky_object_at};
 use std::{
     collections::{BTreeSet, HashMap},
     marker::PhantomData,
@@ -94,6 +96,7 @@ pub(super) struct Frame {
     pub sky: Option<super::sky::Scene>,
     pub star_trail: f32,
     pub show_sky: bool,
+    pub moon_view: bool,
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
@@ -159,6 +162,7 @@ pub(super) fn paint_at(
 struct Renderer {
     resources: Option<Resources>,
     sky: sky::SkyRenderer,
+    heights: terrain::HeightAtlas,
     tiles: HashMap<(u64, TileId), TextureTile>,
     bytes: usize,
     frame: u64,
@@ -172,6 +176,7 @@ struct Resources {
     vao: glow::VertexArray,
     grid: glow::Buffer,
     vertices: i32,
+    relief_grid: [std::ops::Range<i32>; 2],
 }
 struct TextureTile {
     textures: [glow::Texture; 3],
@@ -226,6 +231,11 @@ impl Renderer {
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.bind_vertex_array(Some(resources.vao));
             self.sky.paint_frame(gl, frame);
+            if frame.moon_view {
+                gl.bind_vertex_array(None);
+                gl.active_texture(glow::TEXTURE0);
+                return Ok(false);
+            }
             gl.bind_vertex_array(Some(resources.vao));
             gl.use_program(Some(resources.program));
             let p = resources.program;
@@ -233,6 +243,11 @@ impl Renderer {
             let camera = frame.camera;
             let width = info.viewport.width();
             let height = info.viewport.height();
+            let perspective = camera
+                .orbit
+                .active()
+                .then(|| Perspective::new(&camera, [width, height], EARTH_RADIUS_M));
+            terrain::uniforms(gl, p, perspective);
             gl.uniform_4_f32(
                 gl.get_uniform_location(p, "u_camera").as_ref(),
                 camera.center_lat as f32,
@@ -269,35 +284,9 @@ impl Renderer {
             for (unit, name) in ["u_color", "u_height", "u_water"].into_iter().enumerate() {
                 gl.uniform_1_i32(gl.get_uniform_location(p, name).as_ref(), unit as i32);
             }
-            for tile in &frame.tiles {
-                let Some(cached) = self.tiles.get(&(frame.source, tile.id)) else {
-                    continue;
-                };
-                for (unit, texture) in cached.textures.iter().enumerate() {
-                    gl.active_texture(glow::TEXTURE0 + unit as u32);
-                    gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
-                }
-                let [west, north, side] = tile.id.bounds();
-                let west = little_clip_core::geography::basemap::wrap_lon_delta(
-                    west + side * 0.5 - camera.center_lon,
-                ) - side * 0.5;
-                gl.uniform_1_f32(gl.get_uniform_location(p, "u_side").as_ref(), side as f32);
-                for copy in camera.world_shifts(width, height) {
-                    let start = west + copy as f64 * 360.0;
-                    if camera.globe_blend() > 0.0 && (start > 180.0 || start + side < -180.0) {
-                        continue;
-                    }
-                    gl.uniform_4_f32(
-                        gl.get_uniform_location(p, "u_tile").as_ref(),
-                        start as f32,
-                        north as f32,
-                        side as f32,
-                        0.0,
-                    );
-                    gl.draw_arrays(glow::TRIANGLES, 0, resources.vertices);
-                }
-            }
-            missing_vectors = self.paint_vectors(gl, frame, width, height)?;
+            self.paint_surface(gl, resources, frame, [width, height], perspective.is_some());
+            missing_vectors = self.paint_vectors(gl, frame, width, height, perspective)?;
+            gl.disable(glow::DEPTH_TEST);
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);
         }
@@ -307,6 +296,77 @@ impl Renderer {
             .any(|tile| !self.tiles.contains_key(&(frame.source, tile.id)));
         Ok(missing_tiles || missing_vectors)
     }
+    unsafe fn paint_surface(
+        &self,
+        gl: &glow::Context,
+        resources: &Resources,
+        frame: &Frame,
+        [width, height]: [f32; 2],
+        raised: bool,
+    ) {
+        let camera = frame.camera;
+        let p = resources.program;
+        // SAFETY: caller has bound the owning GL context, raster program and grid.
+        unsafe {
+            if raised {
+                gl.depth_mask(true);
+                gl.clear_depth_f64(1.0);
+                gl.clear(glow::DEPTH_BUFFER_BIT);
+                gl.enable(glow::DEPTH_TEST);
+                gl.depth_func(glow::LEQUAL);
+                for patch in terrain::patches(frame, &self.tiles) {
+                    let cached = &self.tiles[&(frame.source, patch.source)];
+                    let [west, north, side] = patch.source.bounds();
+                    let west = little_clip_core::geography::basemap::wrap_lon_delta(
+                        west + side * 0.5 - camera.center_lon,
+                    ) - side * 0.5;
+                    cached.bind(gl);
+                    gl.uniform_1_f32(gl.get_uniform_location(p, "u_side").as_ref(), side as f32);
+                    gl.uniform_4_f32(
+                        gl.get_uniform_location(p, "u_tile").as_ref(),
+                        west as f32,
+                        north as f32,
+                        side as f32,
+                        0.0,
+                    );
+                    gl.uniform_3_f32_slice(
+                        gl.get_uniform_location(p, "u_patch").as_ref(),
+                        &patch.uv(),
+                    );
+                    let fine = camera.zoom >= 64.0 && patch.source.level >= 8;
+                    let grid = &resources.relief_grid[usize::from(fine)];
+                    gl.draw_arrays(glow::TRIANGLES, grid.start, grid.end - grid.start);
+                }
+            } else {
+                for tile in &frame.tiles {
+                    let Some(cached) = self.tiles.get(&(frame.source, tile.id)) else {
+                        continue;
+                    };
+                    cached.bind(gl);
+                    let [west, north, side] = tile.id.bounds();
+                    let west = little_clip_core::geography::basemap::wrap_lon_delta(
+                        west + side * 0.5 - camera.center_lon,
+                    ) - side * 0.5;
+                    gl.uniform_1_f32(gl.get_uniform_location(p, "u_side").as_ref(), side as f32);
+                    for copy in camera.world_shifts(width, height) {
+                        let start = west + copy as f64 * 360.0;
+                        if camera.globe_blend() > 0.0 && (start > 180.0 || start + side < -180.0) {
+                            continue;
+                        }
+                        gl.uniform_4_f32(
+                            gl.get_uniform_location(p, "u_tile").as_ref(),
+                            start as f32,
+                            north as f32,
+                            side as f32,
+                            0.0,
+                        );
+                        gl.draw_arrays(glow::TRIANGLES, 0, resources.vertices);
+                    }
+                }
+            }
+        }
+    }
+
     unsafe fn evict(&mut self, gl: &glow::Context, incoming: usize) {
         while self.bytes + incoming > GPU_BUDGET {
             let Some(key) = self
@@ -328,6 +388,7 @@ impl Renderer {
         // SAFETY: caller retains the owning current context throughout teardown.
         unsafe {
             self.sky.destroy(gl);
+            self.heights.destroy(gl);
             for (_, batch) in self.vectors.drain() {
                 batch.destroy(gl);
             }
@@ -352,17 +413,20 @@ impl Resources {
         unsafe {
             let program = program(
                 gl,
-                include_str!("map.vert"),
+                &with_projection(include_str!("map.vert")),
                 &with_shadow(include_str!("map.frag")),
             )?;
-            let vector_program =
-                match self::program(gl, include_str!("vector.vert"), include_str!("vector.frag")) {
-                    Ok(p) => p,
-                    Err(error) => {
-                        gl.delete_program(program);
-                        return Err(error);
-                    }
-                };
+            let vector_program = match self::program(
+                gl,
+                &with_projection(include_str!("vector.vert")),
+                include_str!("vector.frag"),
+            ) {
+                Ok(p) => p,
+                Err(error) => {
+                    gl.delete_program(program);
+                    return Err(error);
+                }
+            };
             let vao = match gl.create_vertex_array() {
                 Ok(vao) => vao,
                 Err(error) => {
@@ -381,14 +445,11 @@ impl Resources {
                 }
             };
             let mut vertices = Vec::new();
-            for y in 0..32 {
-                for x in 0..32 {
-                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (0, 1), (1, 0), (1, 1)] {
-                        vertices
-                            .extend_from_slice(&[(x + dx) as f32 / 32.0, (y + dy) as f32 / 32.0]);
-                    }
-                }
-            }
+            let legacy = terrain::grid(32, false, &mut vertices);
+            let relief_grid = [
+                terrain::grid(32, true, &mut vertices),
+                terrain::grid(128, true, &mut vertices),
+            ];
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(grid));
             gl.buffer_data_u8_slice(
@@ -397,20 +458,32 @@ impl Resources {
                 glow::STATIC_DRAW,
             );
             gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 12, 0);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 1, glow::FLOAT, false, 12, 8);
             gl.bind_vertex_array(None);
             Ok(Self {
                 program,
                 vector_program,
                 vao,
                 grid,
-                vertices: (vertices.len() / 2) as i32,
+                vertices: legacy.end,
+                relief_grid,
             })
         }
     }
 }
 
 impl TextureTile {
+    unsafe fn bind(&self, gl: &glow::Context) {
+        // SAFETY: the renderer owns these textures and the current context.
+        unsafe {
+            for (unit, texture) in self.textures.iter().enumerate() {
+                gl.active_texture(glow::TEXTURE0 + unit as u32);
+                gl.bind_texture(glow::TEXTURE_2D, Some(*texture));
+            }
+        }
+    }
     unsafe fn upload(gl: &glow::Context, tile: &SourceTile, used: u64) -> Result<Self, String> {
         // SAFETY: fixed-size initialized source buffers match their texture formats.
         unsafe {
@@ -526,6 +599,11 @@ fn with_shadow(shader: &str) -> String {
         include_str!("eclipse.glsl"),
         include_str!("atmosphere.glsl"),
     )
+}
+
+fn with_projection(shader: &str) -> String {
+    let (version, body) = shader.split_once('\n').unwrap_or(("", shader));
+    format!("{version}\n{}\n{body}", include_str!("perspective.glsl"))
 }
 
 pub(super) unsafe fn program(
@@ -730,8 +808,10 @@ impl Renderer {
         frame: &Frame,
         width: f32,
         height: f32,
+        perspective: Option<Perspective>,
     ) -> Result<bool, String> {
         let batches = visible_batches(frame);
+        let missing_heights;
         // SAFETY: this method runs inside the owning current-context callback.
         unsafe {
             self.upload_vectors(gl, frame.source, &batches)?;
@@ -741,6 +821,11 @@ impl Renderer {
                 .ok_or("Map resources unavailable")?
                 .vector_program;
             gl.use_program(Some(p));
+            terrain::uniforms(gl, p, perspective);
+            missing_heights = self.heights.bind(gl, p, frame, perspective.is_some())?;
+            if perspective.is_some() {
+                gl.depth_mask(false);
+            }
             gl.uniform_4_f32(
                 gl.get_uniform_location(p, "u_camera").as_ref(),
                 frame.camera.center_lat as f32,
@@ -816,10 +901,14 @@ impl Renderer {
                     );
                 }
             }
+            if perspective.is_some() {
+                gl.depth_mask(true);
+            }
         }
-        Ok(batches
-            .iter()
-            .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
+        Ok(missing_heights
+            || batches
+                .iter()
+                .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
     }
 }
 

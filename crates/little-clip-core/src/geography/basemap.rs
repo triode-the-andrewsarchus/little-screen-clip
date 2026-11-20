@@ -2234,6 +2234,10 @@ impl GlobeCamera {
         }
         let x = (px as f64 - width as f64 * 0.5) / scale;
         let y = -(py as f64 - height as f64 * 0.5) / scale;
+        self.unproject_blended(x, y, scale)
+    }
+
+    fn unproject_blended(&self, x: f64, y: f64, scale: f64) -> Option<(f64, f64)> {
         let blend = self.globe_blend();
         let phi0 = self.center_lat.to_radians();
         let aspect = phi0.cos().abs().max(0.25);

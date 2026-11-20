@@ -178,16 +178,20 @@ pub(super) struct Projection<'a> {
     pub camera: &'a GlobeCamera,
     pub rect: Rect,
     pub offset: f32,
+    pub draped: Option<super::map_camera::Draped<'a>>,
 }
 
 impl Projection<'_> {
     fn point(self, position: Position) -> Option<Pos2> {
-        let [x, y] = self.camera.project_relative(
-            position.lat,
-            position.lon,
-            self.rect.width(),
-            self.rect.height(),
-        )?;
+        let [x, y] = match self.draped {
+            Some(draped) => draped.project(position.lat, position.lon + self.camera.center_lon),
+            None => self.camera.project_relative(
+                position.lat,
+                position.lon,
+                self.rect.width(),
+                self.rect.height(),
+            ),
+        }?;
         Some(pos2(
             self.rect.left() + x + self.offset,
             self.rect.top() + y,
@@ -524,6 +528,7 @@ mod tests {
                 camera: &camera,
                 rect,
                 offset: 0.0,
+                draped: None,
             },
             leg,
         );
@@ -552,6 +557,7 @@ mod tests {
                 camera: &camera,
                 rect,
                 offset: 0.0,
+                draped: None,
             };
             let lines = project_path(projection, &overlay.0[0].vertices);
             let period = camera.world_width_px(rect.width(), rect.height()) as f32;
@@ -578,6 +584,7 @@ mod tests {
             camera: &camera,
             rect,
             offset: 0.0,
+            draped: None,
         };
         let mut lines = Vec::new();
         projection.line(
@@ -628,6 +635,7 @@ mod tests {
             camera: &camera,
             rect,
             offset: 0.0,
+            draped: None,
         };
         let ctx = egui::Context::default();
         clip_ui::test_support::run_frame(

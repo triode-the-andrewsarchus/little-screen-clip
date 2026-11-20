@@ -4,6 +4,7 @@ in float v_front;
 in float v_edge;
 in float v_along;
 uniform float u_blend;
+uniform bool u_perspective;
 uniform vec4 u_color;
 uniform bool u_dashed;
 uniform bool u_fallback_road;
@@ -19,7 +20,8 @@ uniform sampler2D u_night;
 uniform vec3 u_sun;
 out vec4 frag;
 void main() {
-    if((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend))) discard;
+    if(u_perspective ? v_front < -.12 :
+       ((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend)))) discard;
     float lon = mod(v_geo.x + u_longitude + 180.0, 360.0);
     if (u_fallback_road && u_covered_count > 0) {
         ivec2 cell = ivec2(floor(vec2(lon, 90.0-v_geo.y) / u_detail_span));

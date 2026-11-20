@@ -346,6 +346,7 @@ pub(super) fn paint_labels(
     tiles: &[(TileId, Arc<Tile>)],
     layers: LabelLayers,
     roads: bool,
+    draped: Option<super::map_camera::Draped<'_>>,
 ) {
     let painter = ui.painter_at(rect);
     let mut placed = Vec::with_capacity(MAX_VIEW_LABELS);
@@ -362,7 +363,7 @@ pub(super) fn paint_labels(
                     && layers.shows(label.class, roads)
                     && camera.zoom >= label.min_zoom()
             });
-        let mut cells = label_cells(rect, camera, candidates).map(|mut cell| {
+        let mut cells = label_cells(rect, camera, draped, candidates).map(|mut cell| {
             cell.sort_by(|a, b| a.label.placement_order(b.label));
             cell.into_iter()
         });
@@ -391,12 +392,16 @@ struct VisibleLabel<'a> {
 fn label_cells<'a>(
     rect: egui::Rect,
     camera: GlobeCamera,
+    draped: Option<super::map_camera::Draped<'_>>,
     labels: impl Iterator<Item = &'a Label>,
 ) -> [Vec<VisibleLabel<'a>>; LABEL_COLUMNS * LABEL_ROWS] {
     let project = |[lon, lat]: [f32; 2]| {
-        camera
-            .project(f64::from(lat), f64::from(lon), rect.width(), rect.height())
-            .map(|[x, y]| rect.min + egui::vec2(x, y))
+        let (lat, lon) = (f64::from(lat), f64::from(lon));
+        match draped {
+            Some(pose) => pose.project(lat, lon),
+            None => camera.project(lat, lon, rect.width(), rect.height()),
+        }
+        .map(|[x, y]| rect.min + egui::vec2(x, y))
     };
     let inner = rect.shrink(12.0);
     let mut cells = std::array::from_fn(|_| Vec::new());
@@ -545,6 +550,7 @@ mod tests {
                             detailed: true,
                         },
                         true,
+                        None,
                     );
                 });
             },

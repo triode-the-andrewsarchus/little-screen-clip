@@ -3,7 +3,10 @@ mod figures;
 use crate::file_manager::geography::sky::{self, catalog::Star};
 use eframe::egui;
 use eframe::glow::{self, HasContext};
-use little_clip_core::geography::basemap::{BasemapStyle, GlobeCamera};
+use little_clip_core::geography::basemap::{
+    BasemapStyle, GlobeCamera,
+    perspective::{EARTH_RADIUS_M, MOON_RADIUS_M, Perspective, sphere_distance},
+};
 use std::sync::{Arc, Weak};
 
 #[derive(Default)]
@@ -23,34 +26,92 @@ struct SkyProjection {
     focal: f32,
     radius: f32,
     distance: f32,
+    eye: [f32; 3],
+    sphere_eye: Option<[f32; 3]>,
 }
 
 impl SkyProjection {
     fn new(camera: GlobeCamera, [width, height]: [f32; 2]) -> Self {
+        if camera.orbit.active() {
+            let pose = Perspective::new(&camera, [width, height], EARTH_RADIUS_M);
+            return Self::perspective(
+                pose,
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                [0.0; 3],
+            );
+        }
         let (sin_lat, cos_lat) = (camera.center_lat as f32).to_radians().sin_cos();
         let (sin_lon, cos_lon) = (camera.center_lon as f32).to_radians().sin_cos();
         let focal = width.min(height) * 0.95;
         let radius = camera.scale_px(width, height) as f32;
+        let distance = 6378.137 * (1.0 + (focal / radius).powi(2)).sqrt();
+        let outward = [cos_lon * cos_lat, sin_lon * cos_lat, sin_lat];
         Self {
             basis: [
                 [-sin_lon, cos_lon, 0.0],
                 [-cos_lon * sin_lat, -sin_lon * sin_lat, cos_lat],
-                [cos_lon * cos_lat, sin_lon * cos_lat, sin_lat],
+                outward,
             ],
             focal,
             radius,
-            distance: 6378.137 * (1.0 + (focal / radius).powi(2)).sqrt(),
+            distance,
+            eye: outward.map(|value| value * distance),
+            sphere_eye: None,
+        }
+    }
+
+    fn perspective(pose: Perspective, body_fixed: [[f32; 3]; 3], center: [f32; 3]) -> Self {
+        let to_fixed = |v: [f64; 3]| {
+            std::array::from_fn(|i| {
+                (0..3)
+                    .map(|axis| body_fixed[axis][i] * v[axis] as f32)
+                    .sum::<f32>()
+            })
+        };
+        let eye = to_fixed(pose.eye);
+        Self {
+            basis: pose.axes.map(to_fixed),
+            focal: pose.focal as f32,
+            radius: 0.0,
+            distance: 0.0,
+            eye: std::array::from_fn(|i| center[i] + eye[i] * (pose.radius_m / 1000.0) as f32),
+            sphere_eye: Some(eye),
+        }
+    }
+
+    fn for_frame(frame: &super::Frame, scene: &sky::Scene) -> Self {
+        if frame.moon_view {
+            Self::perspective(
+                Perspective::new(&frame.camera, frame.size, MOON_RADIUS_M),
+                moon_axes(scene),
+                scene.moon,
+            )
+        } else {
+            Self::new(frame.camera, frame.size)
+        }
+    }
+
+    fn exposed(&self, offset: egui::Vec2) -> bool {
+        match self.sphere_eye {
+            Some(eye) => sphere_distance(
+                eye.map(f64::from),
+                self.inertial_ray(self.basis, offset).map(f64::from),
+                1.0,
+            )
+            .is_none(),
+            None => offset.length_sq() > self.radius.powi(2),
         }
     }
 
     fn project(&self, position: [f32; 3]) -> Option<egui::Vec2> {
-        let [x, y, z] = self.basis.map(|axis| dot(axis, position));
-        let depth = self.distance - z;
+        let relative = subtract(position, self.eye);
+        let [x, y, z] = self.basis.map(|axis| dot(axis, relative));
+        let depth = -z;
         if depth <= 0.0 {
             return None;
         }
         let offset = egui::vec2(x, -y) * (self.focal / depth);
-        (offset.length_sq() > self.radius.powi(2)).then_some(offset)
+        self.exposed(offset).then_some(offset)
     }
 
     fn inertial_axes(&self, rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
@@ -80,6 +141,71 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+fn subtract(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] - b[i])
+}
+
+fn cross([ax, ay, az]: [f32; 3], [bx, by, bz]: [f32; 3]) -> [f32; 3] {
+    [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
+}
+
+fn unit(v: [f32; 3]) -> [f32; 3] {
+    let length = dot(v, v).sqrt();
+    v.map(|x| x / length)
+}
+
+fn moon_axes(scene: &sky::Scene) -> [[f32; 3]; 3] {
+    let pole = [-0.0000355, -0.39813, 0.91733];
+    let north = unit(scene.inertial_rows.map(|row| dot(row, pole)));
+    let projected = dot(scene.moon, north);
+    let front = unit(std::array::from_fn(|i| {
+        -scene.moon[i] + projected * north[i]
+    }));
+    [front, cross(north, front), north]
+}
+
+pub(in super::super) fn moon_at(
+    frame: &super::Frame,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> bool {
+    let Some(scene) = frame.sky.as_ref() else {
+        return false;
+    };
+    if frame.moon_view
+        || !frame.show_sky
+        || frame.camera.globe_blend() < 1.0
+        || !rect.contains(pointer)
+    {
+        return false;
+    }
+    let pose = SkyProjection::for_frame(frame, scene);
+    let offset = pointer - rect.center();
+    if !pose.exposed(offset) {
+        return false;
+    }
+    let ray = pose.inertial_ray(pose.basis, offset);
+    let moon = subtract(scene.moon, pose.eye);
+    let scale = if frame.readable_sky {
+        let sun = subtract(scene.sun, pose.eye);
+        let [a, b] = [unit(sun), unit(moon)];
+        let separation = dot(cross(a, b), cross(a, b)).sqrt().atan2(dot(a, b));
+        let radii = 695_700.0 / dot(sun, sun).sqrt() + 1737.4 / dot(moon, moon).sqrt();
+        let clearance = std::array::from_fn(|i| pose.eye[i] + b[i] * (-dot(pose.eye, b)).max(0.0));
+        let above_limb = dot(clearance, clearance).sqrt() - 6378.137;
+        let smooth = |x: f32| {
+            let t = x.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        1.0 + 15.0 * smooth((separation / radii - 16.0) / 1.5) * smooth(above_limb / 600.0)
+    } else {
+        1.0
+    };
+    let across = cross(ray, moon);
+    let radius = (1737.4 * scale).max(dot(moon, moon).sqrt() * 5.0 / pose.focal);
+    dot(ray, moon) > 0.0 && dot(across, across) <= radius * radius
+}
+
 pub(in super::super) enum SkyObject<'a> {
     Body(&'static str),
     Star(&'a Star),
@@ -93,14 +219,18 @@ pub(in super::super) fn sky_object_at(
     if !frame.show_sky || frame.camera.globe_blend() < 1.0 || !rect.contains(pointer) {
         return None;
     }
-    let projection = SkyProjection::new(frame.camera, frame.size);
+    let scene = frame.sky.as_ref()?;
+    let projection = SkyProjection::for_frame(frame, scene);
     let center = rect.center();
-    if pointer.distance_sq(center) <= projection.radius.powi(2) {
+    if !projection.exposed(pointer - center) {
         return None;
     }
-    let scene = frame.sky.as_ref()?;
+    if moon_at(frame, rect, pointer) {
+        return Some(SkyObject::Body("Moon"));
+    }
     let body = scene
         .bodies()
+        .filter(|(name, _)| *name != "Moon")
         .filter_map(|(name, position)| {
             let point = center + projection.project(position)?;
             let distance = point.distance_sq(pointer);
@@ -131,10 +261,8 @@ fn find_star<'a>(
             let offset = projection.star_offset(axes, star.direction)?;
             let point = center + offset;
             let distance = pointer.distance_sq(point);
-            (distance <= PICK_RADIUS.powi(2)
-                && rect.contains(point)
-                && offset.length_sq() > projection.radius.powi(2))
-            .then_some((star, distance))
+            (distance <= PICK_RADIUS.powi(2) && rect.contains(point) && projection.exposed(offset))
+                .then_some((star, distance))
         })
         .min_by(|(a, da), (b, db)| {
             a.magnitude
@@ -146,7 +274,7 @@ fn find_star<'a>(
 
 impl SkyRenderer {
     pub(super) unsafe fn paint_frame(&mut self, gl: &glow::Context, frame: &super::Frame) {
-        if self.failed || !frame.show_sky {
+        if self.failed || (!frame.show_sky && !frame.moon_view) {
             return;
         }
         let Some(scene) = &frame.sky else { return };
@@ -164,7 +292,11 @@ impl SkyRenderer {
         frame: &super::Frame,
     ) -> Result<(), String> {
         let camera = frame.camera;
-        let opacity = camera.globe_blend() as f32;
+        let opacity = if frame.moon_view {
+            1.0
+        } else {
+            camera.globe_blend() as f32
+        };
         if opacity <= 0.0 {
             return Ok(());
         }
@@ -186,7 +318,7 @@ impl SkyRenderer {
             if self.stars.is_none() {
                 return Ok(());
             }
-            let projection = SkyProjection::new(camera, frame.size);
+            let projection = SkyProjection::for_frame(frame, scene);
             let [half_x, half_y] = projection.fov(frame.size);
 
             gl.use_program(Some(p));
@@ -205,6 +337,26 @@ impl SkyRenderer {
                 gl.get_uniform_location(p, "u_camera_distance").as_ref(),
                 projection.distance,
             );
+            let loc = |name| gl.get_uniform_location(p, name);
+            gl.uniform_1_i32(
+                loc("u_sky_eye_override").as_ref(),
+                i32::from(projection.sphere_eye.is_some()),
+            );
+            gl.uniform_3_f32_slice(loc("u_sky_eye").as_ref(), &projection.eye);
+            gl.uniform_1_i32(loc("u_moon_view").as_ref(), i32::from(frame.moon_view));
+            gl.uniform_1_i32(loc("u_moon_only").as_ref(), 0);
+            if frame.moon_view {
+                gl.uniform_3_f32_slice(
+                    loc("u_moon_eye").as_ref(),
+                    &projection.sphere_eye.unwrap_or_default(),
+                );
+                let phase = if frame.earth_lighting {
+                    zoom_fade(camera.zoom, 2.5, 30.0)
+                } else {
+                    0.0
+                };
+                gl.uniform_1_f32(loc("u_moon_phase").as_ref(), phase);
+            }
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_star_trail").as_ref(),
@@ -216,7 +368,11 @@ impl SkyRenderer {
             );
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_atmosphere").as_ref(),
-                atmosphere(camera, frame.style),
+                if frame.moon_view {
+                    0.0
+                } else {
+                    atmosphere(camera, frame.style)
+                },
             );
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_sun").as_ref(), &scene.sun);
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_moon").as_ref(), &scene.moon);
@@ -238,9 +394,18 @@ impl SkyRenderer {
             );
             bind(gl, p, "u_lunar_albedo", 4, self.moon);
             bind(gl, p, "u_stars", 3, self.stars);
-            gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            if frame.show_constellations {
-                self.paint_figures(gl, scene, &projection, [half_x, half_y], opacity);
+            if frame.show_sky {
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                if frame.show_constellations {
+                    let vao = gl.get_parameter_vertex_array(glow::VERTEX_ARRAY_BINDING);
+                    self.paint_figures(gl, scene, &projection, [half_x, half_y], opacity);
+                    gl.bind_vertex_array(vao);
+                }
+            }
+            if frame.moon_view {
+                gl.use_program(Some(p));
+                gl.uniform_1_i32(loc("u_moon_only").as_ref(), 1);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
             }
             gl.active_texture(glow::TEXTURE0);
         }

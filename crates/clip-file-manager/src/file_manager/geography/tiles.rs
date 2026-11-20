@@ -46,6 +46,7 @@ pub(super) struct Tiles {
 #[derive(Default)]
 pub(super) struct Requests {
     raster: BTreeSet<TileId>,
+    raster_priority: Vec<TileId>,
     rivers: BTreeSet<RiverKey>,
 }
 
@@ -54,6 +55,7 @@ impl Requests {
         let level = raster.iter().map(|tile| tile.level).max().unwrap_or(0);
         Self {
             raster,
+            raster_priority: Vec::new(),
             rivers: RiverKey::visible(camera, size, rivers, level),
         }
     }
@@ -112,14 +114,16 @@ impl Tiles {
     ) -> Option<(gpu::Frame, Result<(), String>)> {
         let assets = assets?;
         let size = [rect.width(), rect.height()];
-        let wanted = Requests::new(
-            visible_tiles(&camera, size[0], size[1], ui.ctx().pixels_per_point())
-                .into_iter()
-                .collect(),
+        let priority = visible_tiles(&camera, size[0], size[1], ui.ctx().pixels_per_point());
+        let mut wanted = Requests::new(
+            priority.iter().copied().collect(),
             &camera,
             size,
             layers.rivers,
         );
+        if camera.orbit.active() {
+            wanted.raster_priority = priority;
+        }
         let mut raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
         let wanted_detail = detail::visible(
             &camera,
@@ -129,6 +133,7 @@ impl Tiles {
         if let Some(source) = transport.cloned() {
             let error = self.detail.update(
                 &wanted_detail,
+                &[],
                 DETAIL_BUDGET,
                 detail::Tile::bytes,
                 move |key, cancel| source.prepare(key, cancel),
@@ -196,6 +201,7 @@ impl Tiles {
         let source = assets.clone();
         let raster_error = self.raster.update(
             &wanted.raster,
+            &wanted.raster_priority,
             raster_budget,
             SourceTile::bytes,
             move |id, cancel| {
@@ -206,6 +212,7 @@ impl Tiles {
         let source = assets.clone();
         let river_error = self.rivers.update(
             &wanted.rivers,
+            &[],
             river_budget,
             Scene::bytes,
             move |key, cancel| key.prepare(&source, cancel),
@@ -229,17 +236,26 @@ impl Tiles {
         size: [f32; 2],
         layers: Layers,
     ) -> gpu::Frame {
+        let tiles = if wanted.raster_priority.is_empty() {
+            wanted
+                .raster
+                .iter()
+                .filter_map(|id| self.raster.ready.get(id).cloned())
+                .collect()
+        } else {
+            wanted
+                .raster_priority
+                .iter()
+                .filter_map(|id| self.raster.ready.get(id).cloned())
+                .collect()
+        };
         gpu::Frame {
             source: self.source,
             size,
             camera,
             style: BasemapStyle::Natural,
             contours: None,
-            tiles: wanted
-                .raster
-                .iter()
-                .filter_map(|id| self.raster.ready.get(id).cloned())
-                .collect(),
+            tiles,
             scene: self.scene.clone(),
             rivers: wanted
                 .rivers
@@ -256,6 +272,7 @@ impl Tiles {
             sky: None,
             star_trail: 0.0,
             show_sky: false,
+            moon_view: false,
             readable_sky: false,
             show_constellations: false,
             earth_lighting: false,
@@ -291,6 +308,16 @@ impl Tiles {
         self.detail.pending.clear();
         self.scene_job = None;
     }
+
+    pub(super) fn height_at(&self, lat: f64, lon: f64) -> Option<f64> {
+        use little_clip_core::geography::basemap::tiles::MAX_LEVEL;
+        (0..=MAX_LEVEL).rev().find_map(|level| {
+            self.raster
+                .ready
+                .get(&TileId::at(level, lat, lon))?
+                .height_at(lat, lon)
+        })
+    }
 }
 
 /// Raster and river tiles share admission, cancellation and byte-bounded retention.
@@ -316,6 +343,7 @@ impl<K: Copy + Ord + Send + 'static, T: Send + 'static> TileCache<K, T> {
     fn update(
         &mut self,
         wanted: &BTreeSet<K>,
+        priority: &[K],
         budget: usize,
         bytes: fn(&T) -> usize,
         prepare: impl Fn(K, &AtomicBool) -> Result<T, String> + Clone + Send + 'static,
@@ -357,7 +385,7 @@ impl<K: Copy + Ord + Send + 'static, T: Send + 'static> TileCache<K, T> {
                 self.bytes -= bytes(&tile);
             }
         }
-        for &id in wanted {
+        for &id in priority.iter().chain(wanted) {
             if self.pending.len() >= 4 {
                 break;
             }
@@ -388,7 +416,7 @@ mod tests {
         let wanted = BTreeSet::from([1]);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let error = cache.update(&wanted, 8, Vec::len, |_, _| Ok(vec![0; 16]));
+            let error = cache.update(&wanted, &[], 8, Vec::len, |_, _| Ok(vec![0; 16]));
             if error.is_some() {
                 break;
             }
@@ -401,7 +429,7 @@ mod tests {
         loop {
             assert!(
                 cache
-                    .update(&next, 8, Vec::len, |_, _| Ok(vec![1; 4]))
+                    .update(&next, &[], 8, Vec::len, |_, _| Ok(vec![1; 4]))
                     .is_none()
             );
             if cache.ready.contains_key(&2) {

@@ -121,6 +121,7 @@ impl Strips {
                 assets,
                 0.0,
                 (2, &[]),
+                None,
             );
         }
     }

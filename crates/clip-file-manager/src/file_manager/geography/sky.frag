@@ -5,6 +5,12 @@ uniform mat3 u_inertial_from_fixed;
 uniform mat3 u_camera_basis; // East, north, outward in Earth-fixed coordinates.
 uniform vec2 u_fov;          // Half extents at unit focal depth.
 uniform float u_camera_distance;
+uniform bool u_sky_eye_override;
+uniform vec3 u_sky_eye;
+uniform bool u_moon_view;
+uniform bool u_moon_only;
+uniform vec3 u_moon_eye;
+uniform float u_moon_phase;
 uniform float u_opacity;
 uniform float u_atmosphere;
 uniform float u_star_trail; // Offset in right ascension during a clock transition.
@@ -49,14 +55,8 @@ float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance)
     return distance > 0.0 ? aperture * (1.0 - smoothstep(max(0.0, angular - pixel*.5), angular + pixel*.5, off_axis)) : 0.0;
 }
 
-vec3 lunar_surface(vec3 ray, vec3 offset) {
-    const float radius = MOON_RADIUS_KM;
-    // The closest point to the sphere center is stable even when the body
-    // spans only a few pixels. Find the near intersection for its phase.
-    vec3 across = cross(ray, cross(ray, offset));
-    float chord = sqrt(max(0.0, radius*radius - dot(across, across)));
-    vec3 normal = normalize(across - ray * chord);
-    vec3 point = radius * normal;
+vec3 lunar_color(vec3 normal, float phase) {
+    vec3 point = MOON_RADIUS_KM * normal;
     vec3 sunlight = u_lunar_sun - point;
     vec3 earth = u_lunar_earth - point;
     vec3 light = normalize(sunlight);
@@ -78,11 +78,27 @@ vec3 lunar_surface(vec3 ray, vec3 offset) {
         .5 - asin(clamp(dot(normal,north),-1.0,1.0))/PI);
     vec3 albedo = u_has_lunar_albedo ? texture(u_lunar_albedo, uv).rgb : vec3(.6,.59,.57);
     vec3 lighting = vec3(earthshine) + (vec3(direct) + copper) * pow(diffuse,.67);
-    return albedo * min(lighting * 1.55, vec3(1.3));
+    return albedo * mix(vec3(1.0), min(lighting * 1.55, vec3(1.3)), phase);
+}
+
+vec3 lunar_surface(vec3 ray, vec3 offset) {
+    vec3 across = cross(ray, cross(ray, offset));
+    float chord = sqrt(max(0.0, MOON_RADIUS_KM * MOON_RADIUS_KM - dot(across, across)));
+    return lunar_color(normalize(across - ray * chord), 1.0);
 }
 void main() {
-    vec3 eye = u_camera_basis[2] * u_camera_distance;
+    vec3 eye = u_sky_eye_override ? u_sky_eye : u_camera_basis[2] * u_camera_distance;
     vec3 ray = u_camera_basis * normalize(vec3(v_ndc * u_fov, -1.0));
+    if (u_moon_only) {
+        vec3 across = cross(ray, cross(u_moon_eye, ray));
+        float margin = 1.0 - dot(across, across);
+        float feather = max(fwidth(margin), .000001);
+        float coverage = smoothstep(-feather * .55, feather * .55, margin);
+        if (dot(u_moon_eye, ray) >= 0.0 || coverage == 0.0) discard;
+        vec3 normal = normalize(across - ray * sqrt(max(0.0, margin)));
+        frag = vec4(lunar_color(normal, u_moon_phase) * coverage, coverage);
+        return;
+    }
     vec3 icrf = u_inertial_from_fixed * ray;
     vec2 uv = vec2(0.5 - atan(icrf.y, icrf.x) / (2.0 * PI), 0.5 - asin(clamp(icrf.z,-1.0,1.0)) / PI);
     vec3 rgb = texture(u_stars, uv).rgb + vec3(.018,.023,.034);
@@ -121,7 +137,7 @@ void main() {
     }
     vec3 sun_offset = u_sun - eye, moon_offset = u_moon - eye;
     vec3 sun_direction = normalize(sun_offset), moon_direction = normalize(moon_offset);
-    float enlargement = u_readable_sky ? disk_enlargement(sun_offset, moon_offset) : 0.0;
+    float enlargement = u_readable_sky ? (u_moon_view ? 1.0 : disk_enlargement(sun_offset, moon_offset)) : 0.0;
     float sun_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, sun_direction));
     float moon_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, moon_direction));
     float sun_scale = mix(1.0, READABLE_DISK_SCALE, sun_growth);
@@ -137,7 +153,7 @@ void main() {
         nearest = distance;
     }
     float moon = disk(ray, moon_offset, MOON_RADIUS_KM * moon_scale, pixel, distance);
-    if (moon > 0.0 && distance < nearest) {
+    if (!u_moon_view && moon > 0.0 && distance < nearest) {
         vec3 surface_ray = normalize(mix(moon_direction, ray, 1.0 / moon_scale));
         rgb = mix(rgb, lunar_surface(surface_ray, moon_offset), moon);
     }

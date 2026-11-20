@@ -851,6 +851,7 @@ impl eframe::App for FileManagerApp {
 
 pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
+        depth_buffer: 24,
         viewport: egui::ViewportBuilder::default()
             .with_app_id("little-clip-file-manager")
             .with_title("Little Screen Clip — Files")
