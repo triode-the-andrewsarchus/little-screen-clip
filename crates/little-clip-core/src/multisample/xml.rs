@@ -40,6 +40,7 @@ fn document(bytes: &[u8]) -> Result<roxmltree::Document<'_>, String> {
         roxmltree::ParsingOptions {
             allow_dtd: false,
             nodes_limit: 100_000,
+            ..Default::default()
         },
     )
     .map_err(|e| e.to_string())

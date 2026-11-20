@@ -3,11 +3,10 @@ use little_clip_core::{
     CommandRequest,
     diagram::{Format, MAX_DRAWING_SOURCE_BYTES as MAX_DRAWING_SOURCE},
 };
-use resvg::usvg::{TreeParsing, TreeTextToPath};
 use std::{
     io::{Read, Write},
     sync::{
-        LazyLock,
+        Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -444,22 +443,26 @@ fn render_inline(
     Ok(rendered)
 }
 
-fn default_fonts() -> &'static resvg::usvg::fontdb::Database {
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
+fn default_fonts() -> &'static Arc<resvg::usvg::fontdb::Database> {
+    static FONTS: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
         let mut database = resvg::usvg::fontdb::Database::new();
-        database.load_font_data(little_clip_core::font_assets::CJK_FONT_BYTES.to_vec());
-        database.load_font_data(little_clip_core::font_assets::EMOJI_FONT_BYTES.to_vec());
+        database.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(
+            little_clip_core::font_assets::CJK_FONT_BYTES,
+        )));
+        database.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(
+            little_clip_core::font_assets::EMOJI_FONT_BYTES,
+        )));
         database.set_sans_serif_family("Noto Sans CJK JP");
         database.set_serif_family("Noto Sans CJK JP");
         database.set_monospace_family("Noto Sans CJK JP");
-        database
+        Arc::new(database)
     });
     &FONTS
 }
 
 fn parse_svg(
     svg: &str,
-    fonts: &resvg::usvg::fontdb::Database,
+    fonts: &Arc<resvg::usvg::fontdb::Database>,
     family: &str,
     images: ImagePolicy,
 ) -> Result<(resvg::usvg::Tree, Vec<String>), String> {
@@ -468,6 +471,8 @@ fn parse_svg(
     let mut options = resvg::usvg::Options {
         font_family: family.into(),
         image_href_resolver,
+        fontdb: Arc::clone(fonts),
+        max_depth: 64,
         ..Default::default()
     };
     // Responsive SVGs use percentages for their root size. Their viewBox,
@@ -476,11 +481,11 @@ fn parse_svg(
         options.default_size = resvg::usvg::Size::from_wh(viewbox.width(), viewbox.height())
             .ok_or("Diagram viewBox has non-positive dimensions")?;
     }
-    let mut tree = resvg::usvg::Tree::from_str(svg, &options).map_err(|error| error.to_string())?;
-    if tree.size.width() > 16_384.0 || tree.size.height() > 16_384.0 {
+    let tree =
+        resvg::usvg::Tree::from_xmltree(&document, &options).map_err(|error| error.to_string())?;
+    if tree.size().width() > 16_384.0 || tree.size().height() > 16_384.0 {
         return Err("Diagram dimensions exceed 16384 pixels".into());
     }
-    tree.convert_text(fonts);
     let has_images = document
         .descendants()
         .any(|node| node.has_tag_name("image"));
@@ -539,12 +544,11 @@ enum ViewportPolicy {
 // clipping IDs cannot cross between independently authored diagrams.
 fn compose_svg(
     diagrams: impl IntoIterator<Item = String>,
-    fonts: &resvg::usvg::fontdb::Database,
+    fonts: &Arc<resvg::usvg::fontdb::Database>,
     family: &str,
     images: ImagePolicy,
     viewport_policy: ViewportPolicy,
 ) -> Result<(String, Vec<String>), String> {
-    use resvg::usvg::{NodeExt, TreeWriting};
     use std::fmt::Write;
     let mut body = String::new();
     let mut warnings = Vec::new();
@@ -553,45 +557,51 @@ fn compose_svg(
         if index >= 16 {
             return Err("Previews support at most sixteen diagram planes".into());
         }
-        let (mut tree, limitations) = parse_svg(&svg, fonts, family, images)?;
-        // Some generators size the root from shapes alone, excluding external
-        // labels. Text has been outlined, so fit its real glyph geometry before
-        // nesting rather than clipping labels or guessing a fixed text margin.
-        // Authored native viewports already account for image/frame clips.
-        // NodeExt's geometric bbox includes invisible portions of clipped images.
+        let (tree, limitations) = parse_svg(&svg, fonts, family, images)?;
+        let size = tree.size();
+        // usvg resolves the authored viewBox and glyph geometry into pixel space.
+        // Expand the composed viewport in that same space to retain overflow labels.
+        let mut viewport = size.to_non_zero_rect(0.0, 0.0);
         if viewport_policy == ViewportPolicy::FitContent
-            && let Some(bounds) = tree.root.calculate_bbox()
+            && let Some(bounds) = tree.root().abs_bounding_box()
         {
-            let old = tree.view_box.rect;
-            let viewport = resvg::usvg::NonZeroRect::from_ltrb(
-                old.left().min(bounds.left() - 2.0),
-                old.top().min(bounds.top() - 2.0),
-                old.right().max(bounds.right() + 2.0),
-                old.bottom().max(bounds.bottom() + 2.0),
+            viewport = resvg::usvg::NonZeroRect::from_ltrb(
+                viewport.left().min(bounds.left() - 2.0),
+                viewport.top().min(bounds.top() - 2.0),
+                viewport.right().max(bounds.right() + 2.0),
+                viewport.bottom().max(bounds.bottom() + 2.0),
             )
             .ok_or("Invalid diagram content bounds")?;
-            if viewport.width() > 16_384.0 || viewport.height() > 16_384.0 {
-                return Err("Diagram labels exceed the viewport budget".into());
-            }
-            tree.size = resvg::usvg::Size::from_wh(
-                tree.size.width() * viewport.width() / old.width(),
-                tree.size.height() * viewport.height() / old.height(),
-            )
-            .ok_or("Invalid diagram content size")?;
-            tree.view_box.rect = viewport;
+        }
+        if viewport.width() > 16_384.0 || viewport.height() > 16_384.0 {
+            return Err("Diagram labels exceed the viewport budget".into());
         }
         warnings.extend(limitations);
-        width = width.max(tree.size.width());
-        let normalized = tree.to_string(&resvg::usvg::XmlOptions {
+        width = width.max(viewport.width());
+        let normalized = tree.to_string(&resvg::usvg::WriteOptions {
             id_prefix: Some(format!("graph-{index}-")),
             ..Default::default()
         });
+        let (_, contents) = normalized
+            .split_once('>')
+            .ok_or("Missing normalized SVG root")?;
+        let contents = if contents.is_empty() {
+            "</svg>"
+        } else {
+            contents
+        };
+        let (x, y, w, h) = (
+            viewport.x(),
+            viewport.y(),
+            viewport.width(),
+            viewport.height(),
+        );
         write!(
             body,
-            "<g transform=\"translate(0 {height})\">{normalized}</g>"
+            "<g transform=\"translate(0 {height})\"><svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{w}\" height=\"{h}\" viewBox=\"{x} {y} {w} {h}\">{contents}</g>"
         )
         .map_err(|error| error.to_string())?;
-        height += tree.size.height() + 16.0;
+        height += h + 16.0;
         if height > 16_384.0 || body.len() > MAX_SVG {
             return Err("Combined diagrams exceed the viewport budget".into());
         }
@@ -618,8 +628,7 @@ fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<
         .descendants()
         .any(|node| node.has_tag_name("text"))
     {
-        use resvg::usvg::TreeWriting;
-        let outlined = tree.to_string(&resvg::usvg::XmlOptions::default());
+        let outlined = tree.to_string(&resvg::usvg::WriteOptions::default());
         if outlined.len() <= MAX_SVG {
             outlined
         } else {
@@ -631,18 +640,19 @@ fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<
     } else {
         svg
     };
-    let scale = (WIDTH as f32 / tree.size.width())
-        .min(HEIGHT as f32 / tree.size.height())
+    let scale = (WIDTH as f32 / tree.size().width())
+        .min(HEIGHT as f32 / tree.size().height())
         .min(2.0);
-    let width = ((tree.size.width() * scale).ceil().max(1.0) as u32).min(WIDTH);
-    let height = ((tree.size.height() * scale).ceil().max(1.0) as u32).min(HEIGHT);
+    let width = ((tree.size().width() * scale).ceil().max(1.0) as u32).min(WIDTH);
+    let height = ((tree.size().height() * scale).ceil().max(1.0) as u32).min(HEIGHT);
     let mut pixmap =
         tiny_skia::Pixmap::new(width, height).ok_or("Diagram raster allocation failed")?;
     // White paper preserves renderer-defined colors in either application theme.
     if white_paper {
         pixmap.fill(tiny_skia::Color::WHITE);
     }
-    resvg::Tree::from_usvg(&tree).render(
+    resvg::render(
+        &tree,
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
@@ -731,6 +741,26 @@ mod tests {
                 .iter()
                 .any(|p| p.alpha() > 150 && p.green() > 150 && p.red() < 60)
         );
+    }
+
+    #[test]
+    fn composed_svg_expands_transformed_content_only_when_requested() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="10 20 200 100"><rect x="210" y="20" width="40" height="40" fill="red"/></svg>"#;
+        for (policy, expected_width) in [
+            (ViewportPolicy::Preserve, 100.0),
+            (ViewportPolicy::FitContent, 122.0),
+        ] {
+            let (output, _) = compose_svg(
+                [svg.into()],
+                default_fonts(),
+                "Noto Sans CJK JP",
+                ImagePolicy::Block,
+                policy,
+            )
+            .unwrap();
+            let tree = resvg::usvg::Tree::from_str(&output, &Default::default()).unwrap();
+            assert_eq!(tree.size().width(), expected_width);
+        }
     }
 
     #[test]

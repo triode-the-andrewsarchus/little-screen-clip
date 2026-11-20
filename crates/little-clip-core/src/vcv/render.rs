@@ -7,9 +7,8 @@ use super::layout::{
 };
 use super::panels::PanelAssets;
 use super::rack::{RACK_HP_WIDTH, RACK_ROW_HEIGHT, RackRailLayout, StripLineup};
-use resvg::usvg::{TreeParsing, TreeTextToPath, TreeWriting};
 use std::fmt::Write as _;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 /// Rendered RGBA pixel buffer returned to desktop/workbench callers.
 #[derive(Clone, Debug)]
@@ -283,12 +282,12 @@ pub fn render_rack_rails_svg(rack: &RackRailLayout, assets: &PanelAssets, dark: 
 fn outline_svg(svg: &str) -> Result<String, String> {
     let options = resvg::usvg::Options {
         font_family: "Arimo".into(),
+        fontdb: Arc::clone(diagram_fonts()),
         ..Default::default()
     };
-    let mut tree = resvg::usvg::Tree::from_str(svg, &options)
+    let tree = resvg::usvg::Tree::from_str(svg, &options)
         .map_err(|e| format!("VCV diagram SVG parse failed: {e}"))?;
-    tree.convert_text(diagram_fonts());
-    Ok(tree.to_string(&resvg::usvg::XmlOptions::default()))
+    Ok(tree.to_string(&resvg::usvg::WriteOptions::default()))
 }
 
 /// Renders a `DiagramLayout` into standalone vector SVG markup.
@@ -1230,20 +1229,21 @@ fn rasterize_svg_rgba(svg: &str, scale: f32) -> Result<RenderedDiagram, String> 
     }
     let options = resvg::usvg::Options {
         font_family: "Arimo".into(),
+        fontdb: Arc::clone(diagram_fonts()),
         ..Default::default()
     };
-    let mut tree = resvg::usvg::Tree::from_str(svg, &options)
+    let tree = resvg::usvg::Tree::from_str(svg, &options)
         .map_err(|e| format!("VCV diagram SVG parse failed: {e}"))?;
-    tree.convert_text(diagram_fonts());
     let scale = scale.min(4.0);
     let fit_scale = scale
-        .min(4096.0 / tree.size.width().max(1.0))
-        .min(4096.0 / tree.size.height().max(1.0));
-    let width = (tree.size.width() * fit_scale).ceil().clamp(1.0, 4096.0) as u32;
-    let height = (tree.size.height() * fit_scale).ceil().clamp(1.0, 4096.0) as u32;
+        .min(4096.0 / tree.size().width().max(1.0))
+        .min(4096.0 / tree.size().height().max(1.0));
+    let width = (tree.size().width() * fit_scale).ceil().clamp(1.0, 4096.0) as u32;
+    let height = (tree.size().height() * fit_scale).ceil().clamp(1.0, 4096.0) as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| "VCV diagram raster allocation failed".to_string())?;
-    resvg::Tree::from_usvg(&tree).render(
+    resvg::render(
+        &tree,
         resvg::tiny_skia::Transform::from_scale(fit_scale, fit_scale),
         &mut pixmap.as_mut(),
     );
@@ -1254,17 +1254,19 @@ fn rasterize_svg_rgba(svg: &str, scale: f32) -> Result<RenderedDiagram, String> 
     })
 }
 
-fn diagram_fonts() -> &'static resvg::usvg::fontdb::Database {
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
+fn diagram_fonts() -> &'static Arc<resvg::usvg::fontdb::Database> {
+    static FONTS: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
         let mut fonts = resvg::usvg::fontdb::Database::new();
         for bytes in crate::font_assets::GRAPHVIZ_FONT_BYTES {
-            fonts.load_font_data(bytes.to_vec());
+            fonts.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(bytes)));
         }
-        fonts.load_font_data(crate::font_assets::EMOJI_FONT_BYTES.to_vec());
+        fonts.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(
+            crate::font_assets::EMOJI_FONT_BYTES,
+        )));
         fonts.set_sans_serif_family("Arimo");
         fonts.set_serif_family("Tinos");
         fonts.set_monospace_family("Cousine");
-        fonts
+        Arc::new(fonts)
     });
     &FONTS
 }

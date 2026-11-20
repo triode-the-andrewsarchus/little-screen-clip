@@ -5,6 +5,7 @@
 //! no filesystem, network or font-discovery resolver is installed.
 
 use super::images;
+use resvg::usvg;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -17,7 +18,7 @@ use std::{
 /// `ImageKind::PNG` byte allocations, only for this in-memory scene's lifetime;
 /// they are neither file identities nor persisted identifiers.
 pub struct Svg {
-    pub tree: usvg_vector::Tree,
+    pub tree: usvg::Tree,
     pub images: HashMap<usize, Arc<image::RgbaImage>>,
 }
 
@@ -53,8 +54,9 @@ fn prepare_viewport(svg: &str, expand_export_planes: bool) -> Result<Svg, String
         budget,
         rasters,
     } = images::retained_resolver();
-    let options = usvg_vector::Options {
+    let options = usvg::Options {
         image_href_resolver: resolver,
+        max_depth: 64,
         ..Default::default()
     };
     let interactive = if expand_export_planes {
@@ -62,8 +64,7 @@ fn prepare_viewport(svg: &str, expand_export_planes: bool) -> Result<Svg, String
     } else {
         Cow::Borrowed(svg)
     };
-    let tree =
-        usvg_vector::Tree::from_str(&interactive, &options).map_err(|error| error.to_string())?;
+    let tree = usvg::Tree::from_str(&interactive, &options).map_err(|error| error.to_string())?;
     if tree.size().width() > 16_384.0 || tree.size().height() > 16_384.0 {
         return Err("Interactive diagram dimensions exceed 16384 pixels.".into());
     }
@@ -139,19 +140,19 @@ struct Limits {
     segments: usize,
 }
 impl Limits {
-    fn group(&mut self, group: &usvg_vector::Group, depth: usize) -> Result<(), String> {
+    fn group(&mut self, group: &usvg::Group, depth: usize) -> Result<(), String> {
         if depth > 64 {
             return Err("Interactive diagram groups exceed the depth budget.".into());
         }
         for node in group.children() {
             self.nodes += 1;
             match node {
-                usvg_vector::Node::Group(group) => self.group(group, depth + 1)?,
-                usvg_vector::Node::Path(path) => self.segments += path.data().segments().count(),
-                usvg_vector::Node::Text(_) => {
+                usvg::Node::Group(group) => self.group(group, depth + 1)?,
+                usvg::Node::Path(path) => self.segments += path.data().segments().count(),
+                usvg::Node::Text(_) => {
                     return Err("Interactive diagram text was not outlined.".into());
                 }
-                usvg_vector::Node::Image(_) => {}
+                usvg::Node::Image(_) => {}
             }
             if self.nodes > 32_768 || self.segments > 262_144 {
                 return Err("Interactive diagram exceeds its retained geometry budget.".into());
@@ -192,13 +193,13 @@ mod tests {
         let prepared = prepare(&rendered.svg).unwrap();
         assert_eq!(prepared.tree.size().width(), 500.0);
         assert_eq!(prepared.tree.size().height(), 295.0);
-        fn objects(group: &usvg_vector::Group) -> usize {
+        fn objects(group: &usvg::Group) -> usize {
             usize::from(group.id().starts_with("graph-0-drawing-element-"))
                 + group
                     .children()
                     .iter()
                     .map(|node| match node {
-                        usvg_vector::Node::Group(child) => objects(child),
+                        usvg::Node::Group(child) => objects(child),
                         _ => 0,
                     })
                     .sum::<usize>()
@@ -248,13 +249,13 @@ mod tests {
                 .unwrap();
             let exported = super::super::excalidraw::render(&committed).unwrap();
             let retained = prepare(&exported.svg).unwrap();
-            fn paths(group: &usvg_vector::Group) -> Vec<&usvg_vector::Path> {
+            fn paths(group: &usvg::Group) -> Vec<&usvg::Path> {
                 group
                     .children()
                     .iter()
                     .flat_map(|node| match node {
-                        usvg_vector::Node::Path(path) => vec![path.as_ref()],
-                        usvg_vector::Node::Group(group) => paths(group),
+                        usvg::Node::Path(path) => vec![path.as_ref()],
+                        usvg::Node::Group(group) => paths(group),
                         _ => Vec::new(),
                     })
                     .collect()
@@ -264,7 +265,7 @@ mod tests {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
             let id = format!("graph-0-drawing-geometry-{encoded}");
-            let usvg_vector::Node::Group(group) = retained.tree.node_by_id(&id).unwrap() else {
+            let usvg::Node::Group(group) = retained.tree.node_by_id(&id).unwrap() else {
                 panic!("Missing retained geometry group")
             };
             let expected = paths(group);
@@ -318,7 +319,7 @@ mod tests {
             2,
             "the authored nested SVG and frame retain their crops"
         );
-        assert!(prepared.tree.root().abs_bounding_box().width() >= 140.0);
+        assert!(prepared.tree.root().abs_bounding_box().unwrap().width() >= 140.0);
     }
 
     #[test]

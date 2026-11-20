@@ -17,10 +17,10 @@ tracing.workspace = true
 tiny-skia.workspace = true
 toml.workspace = true
 image.workspace = true
-resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
+resvg.workspace = true
 regex.workspace = true
 uuid.workspace = true
-base64 = "0.22"
+base64.workspace = true
 libc = "0.2"
 chrono = "0.4"
 

@@ -115,6 +115,7 @@ fn svg_png(bytes: &[u8], edge: u32, cancel: &AtomicBool) -> Result<Vec<u8>, Stri
         ParsingOptions {
             allow_dtd: false,
             nodes_limit: 100_000,
+            ..Default::default()
         },
     )
     .map_err(|error| error.to_string())?;

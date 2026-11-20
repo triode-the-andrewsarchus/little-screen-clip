@@ -1,11 +1,11 @@
 //! Bundled metric-compatible SVG text faces, without system-font discovery.
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-pub(super) fn metric_fonts() -> &'static resvg::usvg::fontdb::Database {
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
-        let mut database = super::default_fonts().clone();
+pub(super) fn metric_fonts() -> &'static Arc<resvg::usvg::fontdb::Database> {
+    static FONTS: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+        let mut database = super::default_fonts().as_ref().clone();
         for bytes in little_clip_core::font_assets::GRAPHVIZ_FONT_BYTES {
-            database.load_font_data(bytes.to_vec());
+            database.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(bytes)));
         }
         // The SVG names the metric families (Helvetica/Times/Courier), while
         // the bundled faces use their own family names. Keep both names on
@@ -34,7 +34,7 @@ pub(super) fn metric_fonts() -> &'static resvg::usvg::fontdb::Database {
         database.set_serif_family("Tinos");
         database.set_sans_serif_family("Arimo");
         database.set_monospace_family("Cousine");
-        database
+        Arc::new(database)
     });
     &FONTS
 }

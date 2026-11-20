@@ -23,7 +23,14 @@ pub(super) struct Budget {
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PIXELS: u64 = 8 * 1024 * 1024;
 
-pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver, Arc<Budget>) {
+pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver<'static>, Arc<Budget>) {
+    resolver_with_rasters(policy, None)
+}
+
+fn resolver_with_rasters(
+    policy: Policy,
+    rasters: Option<Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>>,
+) -> (ImageHrefResolver<'static>, Arc<Budget>) {
     let budget = Arc::new(Budget::default());
     let data_budget = budget.clone();
     let path_budget = budget.clone();
@@ -32,7 +39,16 @@ pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver, Arc<Budget>) {
             resolve_data: Box::new(move |mime, data, _| {
                 let image = (policy == Policy::EmbeddedRaster)
                     .then(|| {
-                        decode(mime, &data, &data_budget).map(|image| ImageKind::PNG(image.png))
+                        decode(mime, &data, &data_budget).map(|image| {
+                            if let Some(rasters) = &rasters {
+                                let key = Arc::as_ptr(&image.png) as usize;
+                                rasters
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .insert(key, image.pixels);
+                            }
+                            ImageKind::PNG(image.png)
+                        })
                     })
                     .flatten();
                 if image.is_none() {
@@ -51,36 +67,15 @@ pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver, Arc<Budget>) {
 // Adapt the same admission policy to the thread-safe retained tree, keeping
 // its already-decoded pixels so the UI never decodes a raster during painting.
 pub(super) struct RetainedImages {
-    pub resolver: usvg_vector::ImageHrefResolver<'static>,
+    pub resolver: ImageHrefResolver<'static>,
     pub budget: Arc<Budget>,
     pub rasters: Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>,
 }
 
 pub(super) fn retained_resolver() -> RetainedImages {
-    let budget = Arc::new(Budget::default());
     let rasters = Arc::new(Mutex::new(HashMap::new()));
-    let data_budget = budget.clone();
-    let path_budget = budget.clone();
-    let decoded = rasters.clone();
-    let resolver = usvg_vector::ImageHrefResolver {
-        resolve_data: Box::new(move |mime, bytes, _| {
-            if let Some(image) = decode(mime, &bytes, &data_budget) {
-                let key = Arc::as_ptr(&image.png) as usize;
-                decoded
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(key, image.pixels);
-                Some(usvg_vector::ImageKind::PNG(image.png))
-            } else {
-                data_budget.rejected.store(true, Ordering::Relaxed);
-                None
-            }
-        }),
-        resolve_string: Box::new(move |_, _| {
-            path_budget.rejected.store(true, Ordering::Relaxed);
-            None
-        }),
-    };
+    let (resolver, budget) =
+        resolver_with_rasters(Policy::EmbeddedRaster, Some(Arc::clone(&rasters)));
     RetainedImages {
         resolver,
         budget,

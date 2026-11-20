@@ -2,14 +2,14 @@ use super::*;
 
 // The display and workbench share the same play SVG. Rasterize it once at badge size.
 static PLAY_ICON: std::sync::LazyLock<Option<Pixmap>> = std::sync::LazyLock::new(|| {
-    use resvg::usvg::TreeParsing;
     let tree = resvg::usvg::Tree::from_data(
         include_bytes!("../../assets/icons/play.svg"),
         &resvg::usvg::Options::default(),
     )
     .ok()?;
     let mut icon = Pixmap::new(14, 14)?;
-    resvg::Tree::from_usvg(&tree).render(
+    resvg::render(
+        &tree,
         Transform::from_scale(14.0 / 24.0, 14.0 / 24.0),
         &mut icon.as_mut(),
     );

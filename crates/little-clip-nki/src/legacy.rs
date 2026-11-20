@@ -65,6 +65,7 @@ fn xml(bytes: Vec<u8>) -> Result<Vec<Value>> {
         roxmltree::ParsingOptions {
             allow_dtd: false,
             nodes_limit: 100_000,
+            ..Default::default()
         },
     )
     .map_err(|e| e.to_string())?;

@@ -353,7 +353,7 @@ mod tests {
             .tree
             .node_by_id("graph-0-a_wireviz-pin-0-0")
             .expect("semantic pin group survives outlining");
-        assert!(pin.abs_bounding_box().width() > 0.0);
+        assert!(pin.abs_bounding_box().unwrap().width() > 0.0);
         assert!(
             prepared
                 .tree
@@ -484,7 +484,7 @@ mod wiring_tests {
             "graph-0-a_wireviz-shield-0",
         ] {
             let node = prepared.tree.node_by_id(id).expect(id);
-            assert!(node.abs_bounding_box().width() > 0.0, "{id}");
+            assert!(node.abs_bounding_box().unwrap().width() > 0.0, "{id}");
         }
         assert_eq!(wireviz::parse(&connected).unwrap().links.len(), 6);
         assert!(connected.contains("# three distinct parallel lanes"));

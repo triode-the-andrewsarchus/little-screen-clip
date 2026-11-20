@@ -361,15 +361,18 @@ mod tests {
         let posts = tree
             .node_by_id("graph-0-dbml-table-1")
             .unwrap()
-            .abs_bounding_box();
+            .abs_bounding_box()
+            .unwrap();
         let users = tree
             .node_by_id("graph-0-dbml-table-0")
             .unwrap()
-            .abs_bounding_box();
+            .abs_bounding_box()
+            .unwrap();
         let edge = tree
             .node_by_id("graph-0-dbml-ref-1")
             .unwrap()
-            .abs_bounding_box();
+            .abs_bounding_box()
+            .unwrap();
         assert!(
             edge.left() >= posts.right() - 2.0,
             "relationship must leave outside the field text"
@@ -460,7 +463,8 @@ mod tests {
             let edge = tree
                 .node_by_id("graph-0-dbml-ref-1")
                 .unwrap()
-                .abs_bounding_box();
+                .abs_bounding_box()
+                .unwrap();
             assert!(
                 edge.width() > 20.0 && edge.height() > 4.0,
                 "{operator}: optional endpoint glyphs must have visible geometry"

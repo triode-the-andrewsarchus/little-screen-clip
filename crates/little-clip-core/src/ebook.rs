@@ -88,6 +88,7 @@ fn xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
         roxmltree::ParsingOptions {
             allow_dtd: true,
             nodes_limit: 100_000,
+            ..Default::default()
         },
     )
     .map_err(|e| format!("Invalid EPUB XML: {e}"))

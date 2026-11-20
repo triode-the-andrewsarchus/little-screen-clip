@@ -435,7 +435,7 @@ fn spline_second_derivatives(points: &[CurvePoint]) -> Vec<f64> {
     second
 }
 
-fn preset_xml_options() -> roxmltree::ParsingOptions {
+fn preset_xml_options<'input>() -> roxmltree::ParsingOptions<'input> {
     roxmltree::ParsingOptions {
         nodes_limit: 100_000,
         ..Default::default()

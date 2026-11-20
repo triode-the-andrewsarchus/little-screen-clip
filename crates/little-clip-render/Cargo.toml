@@ -16,8 +16,7 @@ test-support = []
 little-clip-core = { path = "../little-clip-core" }
 little-clip-scene = { path = "../little-clip-scene" }
 tiny-skia.workspace = true
-resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
-usvg-vector = { package = "usvg", version = "0.49", default-features = false }
+resvg.workspace = true
 fontdue.workspace = true
 ttf-parser = "0.25"
 image.workspace = true
@@ -27,7 +26,7 @@ syntect.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-roxmltree = "0.20"
+roxmltree.workspace = true
 pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }
@@ -52,7 +51,7 @@ bpmnkit-spec = "=0.6.0"
 rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 
 excalidraw-render = { version = "=0.1.0", default-features = false, features = ["cjk", "svg-text-outlines", "svg-source-groups"] }
-base64 = "0.22"
+base64.workspace = true
 data-url = "0.3"
 quick-xml = "0.41"
 dbml-rs = "=1.0.1"

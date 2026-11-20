@@ -47,8 +47,10 @@ impl Changes {
 
     fn static_layer_bounds(&self, group: &usvg::Group) -> Option<usvg::Rect> {
         // An edit can move or replace a descendant outside its canonical ancestor.
-        self.is_empty()
-            .then(|| group.layer_bounding_box().to_rect())
+        if !self.is_empty() {
+            return None;
+        }
+        group.layer_bounding_box().map(|bounds| bounds.to_rect())
     }
 }
 
@@ -70,8 +72,10 @@ impl Geometry {
         let mut groups = HashMap::new();
         let mut pending = vec![tree.root()];
         while let Some(group) = pending.pop() {
-            if !group.id().is_empty() && group.id().starts_with(prefix) {
-                let bounds = group.abs_bounding_box();
+            if !group.id().is_empty()
+                && group.id().starts_with(prefix)
+                && let Some(bounds) = group.abs_bounding_box()
+            {
                 groups.insert(
                     group.id().to_owned(),
                     egui::Rect::from_min_max(
@@ -326,7 +330,9 @@ fn collect_non_overlapping_leaves(group: &usvg::Group, leaves: &mut Vec<usvg::Re
                 if leaves.len() >= 64 {
                     return false;
                 }
-                leaves.push(path.abs_stroke_bounding_box());
+                if let Some(bounds) = path.abs_stroke_bounding_box() {
+                    leaves.push(bounds);
+                }
             }
             usvg::Node::Image(_) | usvg::Node::Text(_) => return false,
         }

@@ -115,6 +115,7 @@ fn parse(xml: &str) -> Result<roxmltree::Document<'_>, String> {
         roxmltree::ParsingOptions {
             allow_dtd: false,
             nodes_limit: 500_000,
+            ..Default::default()
         },
     )
     .map_err(|error| format!("Invalid Xournal XML: {error}"))

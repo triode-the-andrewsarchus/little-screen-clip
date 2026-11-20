@@ -133,7 +133,7 @@ mod tests {
         let group = tree
             .node_by_id("graph-0-drawing-element-6e61746976652d74657874")
             .unwrap();
-        let usvg_vector::Node::Group(group) = group else {
+        let resvg::usvg::Node::Group(group) = group else {
             panic!("source identity must remain a group");
         };
         assert!(
@@ -145,6 +145,7 @@ mod tests {
             tree.node_by_id("graph-0-drawing-element-6e61746976652d74657874")
                 .unwrap()
                 .abs_bounding_box()
+                .unwrap()
                 .width()
                 > 100.0
         );

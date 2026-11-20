@@ -15,7 +15,7 @@ egui_extras.workspace = true
 tracing.workspace = true
 egui_glow.workspace = true
 femtovg = { version = "=0.28.0", default-features = false }
-usvg = { version = "0.49", default-features = false }
+usvg.workspace = true
 image.workspace = true
 
 [dev-dependencies]

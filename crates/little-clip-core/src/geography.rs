@@ -186,6 +186,7 @@ fn gpx_xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
         roxmltree::ParsingOptions {
             allow_dtd: false,
             nodes_limit: 800_000,
+            ..Default::default()
         },
     )
     .map_err(|e| e.to_string())?;

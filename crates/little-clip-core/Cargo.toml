@@ -57,12 +57,12 @@ ufbx = "0.11.5"
 tobj = "4.0"
 tempfile = "3.27"
 regex.workspace = true
-base64 = "0.22"
+base64.workspace = true
 flate2 = "1.1"
 zstd.workspace = true
 quick-xml = "0.41"
-roxmltree = "0.20"
-resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
+roxmltree.workspace = true
+resvg.workspace = true
 ttf-parser = "0.25"
 unicode-linebreak = "0.1"
 remarkable-rm = "=0.1.1"

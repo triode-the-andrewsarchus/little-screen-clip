@@ -1,20 +1,22 @@
 //! Static vector thumbnails with bundled fonts and no external resource loading.
 use super::{Engine, Prepared, STANDARD};
-use resvg::usvg::{self, TreeParsing, TreeTextToPath};
+use resvg::usvg;
 use std::sync::{
     Arc, LazyLock,
     atomic::{AtomicBool, Ordering},
 };
 
-static FONTS: LazyLock<usvg::fontdb::Database> = LazyLock::new(|| {
+static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fonts = usvg::fontdb::Database::new();
     // Use the same bundled fallback as the application; never scan SVG-selected
     // font paths or host font directories in this content reader.
-    fonts.load_font_data(little_clip_core::font_assets::CJK_FONT_BYTES.to_vec());
+    fonts.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(
+        little_clip_core::font_assets::CJK_FONT_BYTES,
+    )));
     fonts.set_sans_serif_family("Noto Sans CJK JP");
     fonts.set_serif_family("Noto Sans CJK JP");
     fonts.set_monospace_family("Noto Sans CJK JP");
-    fonts
+    Arc::new(fonts)
 });
 
 pub(super) fn prepare(bytes: &[u8]) -> Result<Prepared, String> {
@@ -24,9 +26,10 @@ pub(super) fn prepare(bytes: &[u8]) -> Result<Prepared, String> {
     let raster = usvg::ImageHrefResolver::default_data_resolver();
     let options = usvg::Options {
         font_family: "Noto Sans CJK JP".into(),
+        fontdb: Arc::clone(&FONTS),
         image_href_resolver: usvg::ImageHrefResolver {
-            // usvg 0.37 resets the resolver while parsing embedded SVG. Permit
-            // only raster MIME types, whose decoders cannot resolve SVG hrefs.
+            // Nested vectors are omitted from search thumbnails; raster data
+            // remains subject to the reader’s decode budget.
             resolve_data: Box::new(move |mime, data, options| {
                 if matches!(mime, "image/jpg" | "image/jpeg" | "image/png" | "image/gif") {
                     raster(mime, data, options)
@@ -42,21 +45,19 @@ pub(super) fn prepare(bytes: &[u8]) -> Result<Prepared, String> {
         },
         ..Default::default()
     };
-    let mut tree = usvg::Tree::from_data(bytes, &options).map_err(|e| e.to_string())?;
-    if tree.has_text_nodes() {
-        tree.convert_text(&FONTS);
-    }
-    let scale = (1024.0 / tree.size.width())
-        .min(1024.0 / tree.size.height())
+    let tree = usvg::Tree::from_data(bytes, &options).map_err(|e| e.to_string())?;
+    let scale = (1024.0 / tree.size().width())
+        .min(1024.0 / tree.size().height())
         .min(1.0);
-    let width = ((tree.size.width() * scale).ceil() as u32).clamp(1, 1024);
-    let height = ((tree.size.height() * scale).ceil() as u32).clamp(1, 1024);
+    let width = ((tree.size().width() * scale).ceil() as u32).clamp(1, 1024);
+    let height = ((tree.size().height() * scale).ceil() as u32).clamp(1, 1024);
     let mut pixels =
         tiny_skia::Pixmap::new(width, height).ok_or("Invalid SVG thumbnail dimensions")?;
     // The model consumes RGB. Give transparent artwork a neutral background
     // so black paths/text do not disappear when its alpha channel is discarded.
     pixels.fill(tiny_skia::Color::WHITE);
-    resvg::Tree::from_usvg(&tree).render(
+    resvg::render(
+        &tree,
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixels.as_mut(),
     );

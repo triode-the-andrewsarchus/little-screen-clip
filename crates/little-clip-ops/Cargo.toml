@@ -15,7 +15,7 @@ serde_json.workspace = true
 serde-saphyr = { workspace = true, features = ["deserialize", "serialize"] }
 uuid = { workspace = true }
 regex = "1.13"
-base64 = "0.22"
+base64.workspace = true
 similar = { version = "3.2", features = ["inline"] }
 syntect.workspace = true
 image = { workspace = true }
