@@ -16,6 +16,7 @@ uniform sampler2DArray u_terrain_dem;
 uniform usampler2D u_terrain_pages;
 uniform int u_dem_level;
 uniform float u_drape_step;
+uniform float u_drape_relief;
 
 const float CELLS_PER_CHUNK = 7.0;
 
@@ -110,6 +111,19 @@ vec3 first_crossings(vec3 origin, vec3 direction) {
     return mix(forward, backward, lessThan(direction, vec3(0.0))) / max(abs(direction), vec3(1e-7));
 }
 
+// Test a conservative Earth-fixed sphere before any atlas reads. The
+// margin covers the widest river stroke and the tile's displacement.
+bool chunk_visible(vec2 a, vec2 b) {
+    vec2 d = abs(b - a);
+    float radius = radians(d.x + d.y) * .5 + u_drape_relief;
+    vec2 midpoint = (a + b) * .5 + vec2(u_camera.y, 0.0);
+    vec3 center = transpose(u_view_axes) * (sphere_normal(midpoint) - u_eye);
+    float far_depth = -center.z + radius;
+    vec2 frustum = u_half_fov * (1.0 + 52.0 / u_view);
+    return far_depth >= u_near
+        && all(lessThanEqual(abs(center.xy), far_depth * frustum + radius));
+}
+
 void line_strip(vec2 a, vec2 b) {
     vec2 span = abs(b - a);
     int chunks = max(1, int(ceil(max(span.x, span.y) / (CELLS_PER_CHUNK * u_drape_step))));
@@ -117,6 +131,7 @@ void line_strip(vec2 a, vec2 b) {
     if (chunk >= chunks) return;
     vec2 start = mix(a, b, float(chunk) / float(chunks));
     vec2 end = mix(a, b, float(chunk+1) / float(chunks));
+    if (!chunk_visible(start, end)) return;
     vec2 delta = end - start;
     vec3 direction = vec3(delta.x, -delta.y, delta.x - delta.y) / u_drape_step;
     vec3 crossings = first_crossings(grid_coordinates(start), direction);

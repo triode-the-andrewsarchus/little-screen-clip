@@ -113,6 +113,17 @@ impl Perspective {
         ])
     }
 
+    /// Rejects a body-fixed bounding sphere wholly outside the viewport.
+    pub fn intersects_sphere(self, center: [f64; 3], radius: f64, margin_px: f64) -> bool {
+        let offset = combine(center, 1.0, self.eye, -1.0);
+        let [x, y, z] = self.axes.map(|axis| dot(axis, offset));
+        let far_depth = radius - z;
+        far_depth > 0.0
+            && [x, y].into_iter().zip(self.size).all(|(axis, extent)| {
+                axis.abs() <= radius + far_depth * (extent * 0.5 + margin_px) / self.focal
+            })
+    }
+
     /// Horizontal scale at the center of the orbit view.
     pub fn meters_per_pixel(self) -> Option<f64> {
         let (_, depth) = self.ground((self.size[0] * 0.5) as f32, (self.size[1] * 0.5) as f32)?;

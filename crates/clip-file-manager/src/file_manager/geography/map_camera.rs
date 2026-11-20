@@ -140,6 +140,9 @@ impl<'a> Draped<'a> {
         let Some(surface) = self.surface else {
             return self.camera.project(lat, lon, 0.0);
         };
+        if !surface.intersects_view(self.camera, lat, lon, 0.0) {
+            return None;
+        }
         if let Some((pixel, point)) = surface.project(self.camera, lat, lon) {
             let [x, y] = pixel;
             // A small guard keeps strokes and labels that overlap the edge.
@@ -149,6 +152,18 @@ impl<'a> Draped<'a> {
             .then_some(pixel);
         }
         self.camera.project(lat, lon, 0.0)
+    }
+
+    pub fn intersects_leg(self, a: [f64; 2], b: [f64; 2]) -> bool {
+        self.surface.is_none_or(|surface| {
+            let radius = ((b[0] - a[0]).abs() + (b[1] - a[1]).abs()).to_radians() * 0.5;
+            surface.intersects_view(
+                self.camera,
+                a[0].midpoint(b[0]),
+                a[1].midpoint(b[1]),
+                radius,
+            )
+        })
     }
 
     pub fn mesh_step(self) -> f64 {

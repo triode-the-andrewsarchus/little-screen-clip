@@ -21,6 +21,7 @@ pub(in super::super) struct Surface {
     pub(super) zoom: f64,
     pub(in super::super) mesh_step_deg: f64,
     max_radius: f64,
+    mesh_sag: f64,
     max_level: u8,
 }
 
@@ -58,6 +59,13 @@ impl Surface {
                     .filter_map(|tile| tile.elevation_range.map(|range| range[1]))
                     .fold(0.0, f32::max),
             ) / EARTH_RADIUS_M;
+        let largest_cell = patches
+            .values()
+            .map(|patch| patch.mesh_step(zoom))
+            .fold(0.0, f64::max);
+        // Every mesh triangle blends three vertices on or above the sphere.
+        // Its radial depth is bounded by the largest spherical cell diagonal.
+        let mesh_sag = 1.0 - (largest_cell.to_radians() * std::f64::consts::SQRT_2).cos();
         let max_level = patches.keys().map(|p| p.level).max().unwrap_or(0);
         Self {
             sources,
@@ -65,19 +73,36 @@ impl Surface {
             zoom,
             mesh_step_deg,
             max_radius,
+            mesh_sag,
             max_level,
         }
     }
 
-    fn sample(&self, lat: f64, lon: f64) -> Option<([f64; 3], f64)> {
+    fn patch_at(&self, lat: f64, lon: f64) -> Option<(&Patch, &SourceTile)> {
         let mut id = TileId::at(self.max_level, lat, lon);
-        let patch = loop {
+        loop {
             if let Some(patch) = self.patches.get(&id) {
-                break patch;
+                return Some((patch, &self.sources[&patch.source]));
             }
             id = id.parent()?;
-        };
-        let tile = &self.sources[&patch.source];
+        }
+    }
+
+    fn relief(&self) -> f64 {
+        self.mesh_sag.max(self.max_radius - 1.0)
+    }
+
+    pub(in super::super) fn intersects_view(
+        &self,
+        camera: Perspective,
+        lat: f64,
+        lon: f64,
+        angular_radius: f64,
+    ) -> bool {
+        camera.intersects_sphere(unit(lat, lon), self.relief() + angular_radius, 24.0)
+    }
+
+    fn sample(&self, patch: &Patch, tile: &SourceTile, lat: f64, lon: f64) -> [f64; 3] {
         let [west, north, _] = patch.region.bounds();
         let steps = patch.steps(self.zoom) as f64;
         let step = patch.mesh_step(self.zoom);
@@ -108,7 +133,7 @@ impl Surface {
                 point[axis] += normal[axis] * (1.0 + meters / EARTH_RADIUS_M) * weight;
             }
         }
-        Some((point, step))
+        point
     }
 
     pub(in super::super) fn project(
@@ -117,7 +142,8 @@ impl Surface {
         lat: f64,
         lon: f64,
     ) -> Option<([f32; 2], [f64; 3])> {
-        let (point, _) = self.sample(lat, lon)?;
+        let (patch, tile) = self.patch_at(lat, lon)?;
+        let point = self.sample(patch, tile, lat, lon);
         Some((camera.project_position(point)?, point))
     }
 
@@ -137,11 +163,18 @@ impl Surface {
         while traveled < distance - clearance {
             let position = std::array::from_fn(|axis| eye[axis] + ray[axis] * traveled);
             let (lat, lon) = coordinates(position);
-            let step = if let Some((point, step)) = self.sample(lat, lon) {
-                if length(position) + clearance < length(point) {
+            let radial_distance = length(position);
+            let step = if let Some((patch, tile)) = self.patch_at(lat, lon) {
+                let top = tile
+                    .elevation_range
+                    .map_or(0.0, |r| f64::from(r[1]).max(0.0));
+                let ray = radial_distance + clearance;
+                if ray < 1.0 + top / EARTH_RADIUS_M
+                    && ray < length(self.sample(patch, tile, lat, lon))
+                {
                     return true;
                 }
-                step
+                patch.mesh_step(self.zoom)
             } else {
                 self.mesh_step_deg
             };
@@ -368,6 +401,7 @@ impl HeightAtlas {
             );
             gl.uniform_1_i32(loc("u_dem_level").as_ref(), i32::from(surface.max_level));
             gl.uniform_1_f32(loc("u_drape_step").as_ref(), surface.mesh_step_deg as f32);
+            gl.uniform_1_f32(loc("u_drape_relief").as_ref(), surface.relief() as f32);
             gl.active_texture(glow::TEXTURE0);
             Ok(self.pages.len() < visible.len())
         }

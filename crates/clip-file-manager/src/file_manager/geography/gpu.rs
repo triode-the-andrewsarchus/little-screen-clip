@@ -15,6 +15,7 @@ use little_clip_core::geography::basemap::{
 };
 pub(super) use sky::{SkyObject, moon_at, sky_object_at};
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
     marker::PhantomData,
     rc::Rc,
@@ -723,27 +724,80 @@ unsafe fn link_program<'a>(
     }
 }
 
+struct VectorRange {
+    start: usize,
+    count: i32,
+    span: f32,
+}
+
+fn vector_ranges(batch: &Batch) -> (Cow<'_, [f32]>, Vec<VectorRange>) {
+    const BINS: usize = 20;
+    const BASE: f32 = 1.0 / 2048.0;
+    let data = batch.data.as_slice();
+    let span = |line: &[f32]| {
+        let dx = (line[2] - line[0] + 180.0).rem_euclid(360.0) - 180.0;
+        dx.abs().max((line[3] - line[1]).abs())
+    };
+    let bucket = |span: f32| ((span / BASE).log2().ceil().max(0.0) as usize).min(BINS - 1);
+    let records = data.chunks_exact(6);
+    if batch.layer == Layer::Lake {
+        return (
+            Cow::Borrowed(data),
+            vec![VectorRange {
+                start: 0,
+                count: records.len() as i32,
+                span: 0.0,
+            }],
+        );
+    }
+    let mut bins = [(0usize, 0.0_f32); BINS];
+    for line in records.clone() {
+        let length = span(line);
+        let (count, longest) = &mut bins[bucket(length)];
+        *count += 1;
+        *longest = longest.max(length);
+    }
+    let mut offsets = [0usize; BINS];
+    let mut start = 0;
+    let ranges: Vec<_> = bins
+        .into_iter()
+        .enumerate()
+        .filter_map(|(bin, (count, span))| {
+            offsets[bin] = start;
+            let range = VectorRange {
+                start,
+                count: count as i32,
+                span,
+            };
+            start += count * 6;
+            (count != 0).then_some(range)
+        })
+        .collect();
+    if ranges.len() <= 1 {
+        return (Cow::Borrowed(data), ranges);
+    }
+
+    // A long border or route must not multiply every short road in its batch.
+    let mut sorted = vec![0.0; data.len()];
+    for line in records {
+        let offset = &mut offsets[bucket(span(line))];
+        sorted[*offset..*offset + 6].copy_from_slice(line);
+        *offset += 6;
+    }
+    (Cow::Owned(sorted), ranges)
+}
+
 struct VectorBatch {
     vao: glow::VertexArray,
     buffer: glow::Buffer,
-    max_span: f32,
+    ranges: Vec<VectorRange>,
     count: i32,
     bytes: usize,
     used: u64,
 }
 impl VectorBatch {
     unsafe fn upload(gl: &glow::Context, batch: &Batch, used: u64) -> Result<Self, String> {
-        let data = &batch.data;
-        let max_span = if batch.layer == Layer::Lake {
-            0.0
-        } else {
-            data.chunks_exact(6)
-                .map(|line| {
-                    let dx = (line[2] - line[0] + 180.0).rem_euclid(360.0) - 180.0;
-                    dx.abs().max((line[3] - line[1]).abs())
-                })
-                .fold(0.0, f32::max)
-        };
+        let (data, ranges) = vector_ranges(batch);
         // SAFETY: the instance buffer contains six initialized floats per record.
         unsafe {
             let vao = gl.create_vertex_array()?;
@@ -756,30 +810,49 @@ impl VectorBatch {
             };
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, float_bytes(data), glow::STATIC_DRAW);
-            for (index, size, offset) in [(0, 4, 0), (1, 2, 16)] {
-                gl.enable_vertex_attrib_array(index);
-                gl.vertex_attrib_pointer_f32(index, size, glow::FLOAT, false, 24, offset);
-                gl.vertex_attrib_divisor(index, 1);
-            }
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, float_bytes(&data), glow::STATIC_DRAW);
+            Self::instance_attributes(gl, 0);
             Ok(Self {
                 vao,
                 buffer,
-                max_span,
+                ranges,
                 count: (data.len() / 6) as i32,
                 bytes: data.len() * 4,
                 used,
             })
         }
     }
+    unsafe fn instance_attributes(gl: &glow::Context, start: usize) {
+        // SAFETY: the caller binds this batch's instance buffer and VAO.
+        unsafe {
+            for (index, size, offset) in [(0, 4, 0), (1, 2, 16)] {
+                gl.enable_vertex_attrib_array(index);
+                gl.vertex_attrib_pointer_f32(
+                    index,
+                    size,
+                    glow::FLOAT,
+                    false,
+                    24,
+                    (start * 4) as i32 + offset,
+                );
+                gl.vertex_attrib_divisor(index, 1);
+            }
+        }
+    }
+
     unsafe fn draw(&self, gl: &glow::Context, program: glow::Program, frame: &Frame, layer: Layer) {
         // SAFETY: the caller has bound this batch's VAO and active program.
         unsafe {
             if let Some(surface) = &frame.terrain {
                 // Each input point covers at most seven cells in either axis.
                 let step = surface.mesh_step_deg as f32;
-                let chunks = (self.max_span / (7.0 * step)).ceil().max(1.0) as i32;
-                gl.draw_arrays_instanced(glow::POINTS, 0, chunks, self.count);
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
+                for range in &self.ranges {
+                    Self::instance_attributes(gl, range.start);
+                    let chunks = (range.span / (7.0 * step)).ceil().max(1.0) as i32;
+                    gl.draw_arrays_instanced(glow::POINTS, 0, chunks, range.count);
+                }
+                Self::instance_attributes(gl, 0);
             } else {
                 for copy in frame.camera.world_shifts(frame.size[0], frame.size[1]) {
                     gl.uniform_1_f32(

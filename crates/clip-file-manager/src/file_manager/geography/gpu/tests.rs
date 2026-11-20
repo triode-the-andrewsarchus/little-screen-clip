@@ -1,6 +1,30 @@
 //! Opt-in native renderer checks, isolated from the desktop/compositor.
 use super::*;
 use std::ffi::{CString, c_char, c_void};
+#[test]
+fn a_long_line_does_not_expand_the_draw_for_short_road_segments() {
+    let short = [0.0, 0.0, 0.001, 0.0, 1.0, 0.0];
+    let long = [0.0, 0.0, 0.5, 0.0, 1.0, 0.0];
+    let batch = Batch {
+        tile: TileId {
+            level: 0,
+            x: 0,
+            y: 0,
+        },
+        layer: Layer::RoadMajor,
+        data: [short, long, short].concat(),
+    };
+    let (data, groups) = vector_ranges(&batch);
+    assert_eq!(data.as_ref(), [short, short, long].concat());
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].count, 2);
+    assert!(groups[0].span < 0.002);
+    assert_eq!(
+        (groups[1].start, groups[1].count, groups[1].span),
+        (12, 1, 0.5)
+    );
+}
+
 type Display = *mut c_void;
 #[link(name = "EGL")]
 unsafe extern "C" {

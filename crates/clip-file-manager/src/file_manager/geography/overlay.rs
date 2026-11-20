@@ -210,7 +210,10 @@ impl Projection<'_> {
             ..b
         };
         if let Some(draped) = self.draped {
-            self.draped_line(a, b, draped.mesh_step(), draw);
+            let center = self.camera.center_lon;
+            if draped.intersects_leg([a.lat, a.lon + center], [b.lat, b.lon + center]) {
+                self.draped_line(a, b, draped.mesh_step(), draw);
+            }
             return;
         }
         if let Some((edge, fractions)) = self.clipped_line([a, b]) {
