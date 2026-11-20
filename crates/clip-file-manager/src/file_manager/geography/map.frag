@@ -36,8 +36,15 @@ vec3 light_surface(vec3 rgb, vec2 geo) {
     float elevation = dot(normal, normalize(sunlight));
     float day = smoothstep(-0.105, 0.0349, elevation);
     float shade = 0.0;
-    if (u_solar_possible && elevation > 0.0) {
-        shade = shadow(sunlight, u_moon-point, 1737.4).covered;
+    if (u_solar_possible) {
+        float solar_radius = SOLAR_RADIUS_KM / length(sunlight);
+        // At sunrise or sunset only part of the finite solar disk can light
+        // the surface. Keep the indirect twilight through this transition.
+        float above_horizon = smoothstep(-solar_radius, solar_radius, elevation);
+        if (above_horizon > 0.0) {
+            float blocked = shadow(sunlight, u_moon-point, 1737.4).covered;
+            shade = pow(blocked, 1.35) * above_horizon;
+        }
     }
     // Grade the same terrain into night so the relief and coastline line up
     // through the terminator. Keep the brighter grade for navigating up close.
@@ -48,7 +55,7 @@ vec3 light_surface(vec3 rgb, vec2 geo) {
         vec3 dark_surface = rgb * vec3(.06,.075,.10) + luma * luma * vec3(.055,.080,.15);
         night_surface = mix(night_surface, dark_surface, overview);
     }
-    rgb = mix(night_surface, rgb, day * (1.0 - .82 * pow(shade, 1.35)));
+    rgb = mix(night_surface, rgb, day * (1.0 - .82 * shade));
     if (u_black_marble) {
         vec2 uv = vec2(angles.x / 6.28318530718 + .5, .5 - angles.y / 3.14159265359);
         vec2 dx = dFdx(uv), dy = dFdy(uv);

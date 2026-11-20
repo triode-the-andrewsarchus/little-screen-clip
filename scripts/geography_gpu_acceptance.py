@@ -104,6 +104,7 @@ def main():
             GL.glUniform4f(uniform("u_camera"), lat, lon, min(width, height) * 0.43 * zoom, blend)
             GL.glUniform1f(uniform("u_blend"), blend)
             GL.glUniform1f(uniform("u_zoom"), zoom)
+            GL.glUniform1f(uniform("u_longitude"), lon)
             GL.glUniform1i(uniform("u_style"), style)
             GL.glUniform1f(uniform("u_natural_detail"), max(0, min(1, (zoom - 5) / 4)))
             GL.glUniform1f(uniform("u_contour"), 100 if zoom >= 3.5 else 0)
@@ -193,6 +194,23 @@ def main():
         faded = lit_exposure(-150e6, 1, zoom=6) - lit_exposure(-150e6, 0, zoom=6)
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
+
+        # Center a solar eclipse on the geometric horizon. The shadow darkens
+        # gradually across the height of the visible solar disk.
+        GL.glUniform1f(uniform("u_earth_lighting"), 1.0)
+        GL.glUniform1i(uniform("u_black_marble"), 0)
+        GL.glUniform3f(uniform("u_sun"), -150e6, 6378.137, 0.0)
+        GL.glUniform3f(uniform("u_moon"), -355e3, 6378.137, 0.0)
+        eclipse_rows = []
+        for enabled in [0, 1]:
+            GL.glUniform1i(uniform("u_solar_possible"), enabled)
+            draw(lon=90, blend=0, zoom=32)
+            pixels = GL.glReadPixels(center - 42, height // 2, 84, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            eclipse_rows.append(np.frombuffer(pixels, dtype=np.uint8).reshape(84, 4)[:, :3].astype(int))
+        dimming = eclipse_rows[0] - eclipse_rows[1]
+        assert not dimming[0].any() and dimming[55:62].max() > 30
+        assert np.abs(np.diff(dimming[6:65], axis=0)).max() < 12
+        GL.glUniform1i(uniform("u_solar_possible"), 0)
         GL.glUniform1f(uniform("u_earth_lighting"), 0.0)
         GL.glDeleteTextures([night_texture])
 
