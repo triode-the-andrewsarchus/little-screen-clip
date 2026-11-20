@@ -52,14 +52,19 @@ vec3 light_surface(vec3 rgb, vec2 geo) {
     if (u_black_marble) {
         vec2 uv = vec2(angles.x / 6.28318530718 + .5, .5 - angles.y / 3.14159265359);
         vec2 dx = dFdx(uv), dy = dFdy(uv);
-        // Use the existing mip chain to pick up light around the detailed core.
-        // Keep that footprint at least four texels wide even at close zoom.
-        vec2 glow_extent = max(2.0 * (abs(dx) + abs(dy)), 4.0 / vec2(textureSize(u_night, 0)));
-        if (elevation < 0.0) {
+        vec2 footprint = abs(dx) + abs(dy);
+        vec2 texture_size = vec2(textureSize(u_night, 0));
+        vec2 texels_per_pixel = footprint * texture_size;
+        // Fade the raster as source texels enlarge from 4.5 to 12 screen pixels.
+        // Detailed roads sample the same light data separately for their styling.
+        float detail = smoothstep(1.0 / 12.0, 1.0 / 4.5, min(texels_per_pixel.x, texels_per_pixel.y));
+        if (elevation < 0.0 && detail > 0.0) {
+            // Use coarser mip levels for nearby light around the detailed core.
+            vec2 glow_extent = max(2.0 * footprint, 4.0 / texture_size);
             float local = night_signal(textureGrad(u_night, uv, dx, dy).rgb);
             float nearby = night_signal(textureGrad(u_night, uv,
                 vec2(glow_extent.x, 0.0), vec2(0.0, glow_extent.y)).rgb);
-            float night = 1.0 - smoothstep(-.105, 0.0, elevation);
+            float night = detail * (1.0 - smoothstep(-.105, 0.0, elevation));
             vec3 warm = vec3(1.0, .76, .36);
             vec3 core_color = mix(warm, vec3(1.0, .98, .92), smoothstep(.24, .74, local));
             rgb = mix(rgb, warm, .14 * smoothstep(.10, .40, nearby) * night);

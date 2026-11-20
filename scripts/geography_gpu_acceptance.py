@@ -161,6 +161,9 @@ def main():
         assert np.all(lit_exposure(-150e6, 0, 1, 1)[center] < unlit[center])
         assert np.array_equal(lit_exposure(-150e6, 0, 1, 4)[center],
             lit_exposure(-150e6, 0, 0, 4)[center])
+        faded = lit_exposure(-150e6, 1, zoom=6) - lit_exposure(-150e6, 0, zoom=6)
+        assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
+        assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
         GL.glUniform1i(uniform("u_earth_lighting"), 0)
         GL.glDeleteTextures([night_texture])
 
