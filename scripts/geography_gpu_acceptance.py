@@ -25,9 +25,10 @@ def context(width, height):
     major, minor = EGL.EGLint(), EGL.EGLint()
     assert EGL.eglInitialize(display, major, minor)
     assert EGL.eglBindAPI(EGL.EGL_OPENGL_API)
-    attrs = (EGL.EGLint * 13)(EGL.EGL_SURFACE_TYPE, EGL.EGL_PBUFFER_BIT,
+    attrs = (EGL.EGLint * 15)(EGL.EGL_SURFACE_TYPE, EGL.EGL_PBUFFER_BIT,
         EGL.EGL_RENDERABLE_TYPE, EGL.EGL_OPENGL_BIT, EGL.EGL_RED_SIZE, 8,
-        EGL.EGL_GREEN_SIZE, 8, EGL.EGL_BLUE_SIZE, 8, EGL.EGL_ALPHA_SIZE, 8, EGL.EGL_NONE)
+        EGL.EGL_GREEN_SIZE, 8, EGL.EGL_BLUE_SIZE, 8, EGL.EGL_ALPHA_SIZE, 8,
+        EGL.EGL_DEPTH_SIZE, 24, EGL.EGL_NONE)
     configs, count = (EGL.EGLConfig * 1)(), EGL.EGLint()
     assert EGL.eglChooseConfig(display, attrs, configs, 1, count) and count.value
     surface_attrs = (EGL.EGLint * 5)(EGL.EGL_WIDTH, width, EGL.EGL_HEIGHT, height, EGL.EGL_NONE)
@@ -39,12 +40,21 @@ def context(width, height):
 
 
 def program(root, name):
+    vertex = (root / f"{name}.vert").read_text()
+    if name in ("map", "vector"):
+        version, body = vertex.split("\n", 1)
+        vertex = f"{version}\n{(root / 'perspective.glsl').read_text()}\n{body}"
     fragment = (root / f"{name}.frag").read_text()
     if name in ("map", "sky"):
         version, body = fragment.split("\n", 1)
         fragment = f"{version}\n{(root / 'eclipse.glsl').read_text()}\n{(root / 'atmosphere.glsl').read_text()}\n{body}"
-    return compileProgram(compileShader((root / f"{name}.vert").read_text(), GL.GL_VERTEX_SHADER),
-        compileShader(fragment, GL.GL_FRAGMENT_SHADER))
+    linked = compileProgram(compileShader(vertex, GL.GL_VERTEX_SHADER),
+        compileShader(fragment, GL.GL_FRAGMENT_SHADER), validate=False)
+    if name == "vector":
+        GL.glUseProgram(linked)
+        GL.glUniform1i(GL.glGetUniformLocation(linked, "u_terrain_dem"), 6)
+        GL.glUniform1i(GL.glGetUniformLocation(linked, "u_terrain_pages"), 7)
+    return linked
 
 
 def texture(internal, external, data_type, data):
@@ -140,6 +150,89 @@ def check_sky_sizes(root, width, height):
     GL.glDeleteTextures([star_texture])
     GL.glDeleteTextures([background])
     GL.glDeleteProgram(sky)
+
+
+def check_moon_view(root, width, height):
+    sky = program(root, "sky")
+    GL.glUseProgram(sky)
+    loc = lambda name: GL.glGetUniformLocation(sky, name)
+    GL.glUniformMatrix3fv(loc("u_inertial_from_fixed"), 1, False, np.eye(3, dtype=np.float32))
+    GL.glUniform2f(loc("u_fov"), width / (1.9 * height), 1 / 1.9)
+    GL.glUniform3f(loc("u_moon"), -384400.0, 0.0, 0.0)
+    GL.glUniform3f(loc("u_lunar_sun"), -150e6, 0.0, 0.0)
+    GL.glUniform3f(loc("u_lunar_earth"), 384400.0, 0.0, 0.0)
+    GL.glUniform1i(loc("u_moon_view"), 1)
+    GL.glUniform1i(loc("u_moon_only"), 1)
+    GL.glUniform1i(loc("u_has_lunar_albedo"), 1)
+    GL.glUniform1i(loc("u_lunar_albedo"), 4)
+    GL.glActiveTexture(GL.GL_TEXTURE4)
+    colors = np.zeros((32, 128, 3), dtype=np.uint8)
+    colors[:, :78, :] = [212, 79, 47]
+    colors[:, 78:, :] = [52, 111, 211]
+    albedo = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, colors)
+
+    def center(axes, eye, phase):
+        GL.glUniformMatrix3fv(loc("u_camera_basis"), 1, False, np.asarray(axes, dtype=np.float32))
+        GL.glUniform3f(loc("u_moon_eye"), *eye)
+        GL.glUniform1f(loc("u_moon_phase"), phase)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
+        return np.frombuffer(GL.glReadPixels(width // 2, height // 2, 1, 1,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8)[:3]
+
+    face = [[0, 1, 0], [0, 0, 1], [1, 0, 0]]
+    side = [[-1, 0, 0], [0, 0, 1], [0, 1, 0]]
+    dark = center(face, [1.7, 0, 0], 1.0)
+    near = center(face, [1.02, 0, 0], 0.0)
+    rotated = center(side, [0, 1.02, 0], 0.0)
+    assert dark[0] < near[0] / 3
+    assert near[0] > 190 and rotated[2] > 190, (near, rotated)
+    GL.glDeleteTextures([albedo])
+    GL.glDeleteProgram(sky)
+
+
+def check_raised_terrain(raster, vao, vertex_count, width, height, height_texture, output):
+    GL.glUseProgram(raster)
+    GL.glBindVertexArray(vao)
+    loc = lambda name: GL.glGetUniformLocation(raster, name)
+    tilt = np.deg2rad(77)
+    s, c = np.sin(tilt), np.cos(tilt)
+    axes = np.array([[0, 1, 0], [s, 0, c], [c, 0, -s]], dtype=np.float32)
+    GL.glUniformMatrix3fv(loc("u_view_axes"), 1, False, axes)
+    GL.glUniform3f(loc("u_eye"), 1 + .0025 * c, 0, -.0025 * s)
+    GL.glUniform2f(loc("u_half_fov"), width / (1.9 * height), 1 / 1.9)
+    GL.glUniform1f(loc("u_near"), .00004)
+    GL.glUniform1i(loc("u_perspective"), 1)
+    GL.glUniform3f(loc("u_patch"), 0, 0, 1)
+    GL.glUniform4f(loc("u_tile"), -.35, .35, .7, 0)
+    GL.glUniform4f(loc("u_camera"), 0, 0, 12000, 1)
+    GL.glUniform1f(loc("u_zoom"), 100)
+    GL.glUniform1f(loc("u_side"), .7)
+    GL.glUniform1f(loc("u_contour"), 0)
+    GL.glUniform1f(loc("u_earth_lighting"), 0)
+    GL.glUniform1i(loc("u_style"), 0)
+    GL.glActiveTexture(GL.GL_TEXTURE1)
+    v, u = np.mgrid[0:258, 0:258]
+    hill = 150.0 + 5000.0 * np.exp(-(((u - 129) / 36) ** 2 + ((v - 125) / 22) ** 2))
+    mask = np.ones_like(hill)
+    pixels = []
+    GL.glEnable(GL.GL_DEPTH_TEST)
+    for elevations in [np.full_like(hill, 150.0), hill]:
+        dem = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT, np.stack([elevations, mask], axis=-1).astype(np.float32))
+        GL.glClearColor(0, 0, 0, 1)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, vertex_count)
+        rasterized = np.frombuffer(GL.glReadPixels(0, 0, width, height,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+        pixels.append(rasterized)
+        GL.glDeleteTextures([dem])
+    GL.glDisable(GL.GL_DEPTH_TEST)
+    flat, raised = pixels
+    silhouette = (flat[:, :, :3].max(axis=2) == 0) & (raised[:, :, :3].max(axis=2) > 50)
+    Image.fromarray(np.flipud(raised)).save(output / "tilted-terrain.png")
+    assert np.count_nonzero(silhouette) > 300, "Elevation should change the perspective silhouette"
+    GL.glBindTexture(GL.GL_TEXTURE_2D, height_texture)
+    GL.glUniform1i(loc("u_perspective"), 0)
 
 
 def check_vectors(vectors, width, height, output):
@@ -304,6 +397,19 @@ def check_natural_terrain_tone(raster, draw, width, height, textures):
     GL.glUniform1f(uniform("u_side"), 180)
 
 
+def warm_frame_timings(draw):
+    # Measure warm GPU drawing with all source textures resident. Readback is
+    # used only above for assertions and is excluded from these timings.
+    timings = []
+    for i in range(70):
+        start = time.perf_counter()
+        draw(1, 35, -105 + i * 0.01, 0, 6)
+        GL.glFinish()
+        if i >= 10:
+            timings.append((time.perf_counter() - start) * 1000)
+    return timings
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/geography-gpu-acceptance"))
@@ -444,22 +550,17 @@ def main():
         check_eclipse_horizon(raster, draw, center, height // 2, textures[0])
         GL.glDeleteTextures([night_texture])
 
+        check_raised_terrain(raster, vao, len(grid), width, height, textures[1], args.output)
         check_vectors(vectors, width, height, args.output)
-        # Measure warm GPU drawing with all source textures resident. Readback is
-        # used only above for assertions and is excluded from these timings.
-        timings = []
-        for i in range(70):
-            start = time.perf_counter()
-            draw(1, 35, -105 + i * 0.01, 0, 6)
-            GL.glFinish()
-            if i >= 10:
-                timings.append((time.perf_counter() - start) * 1000)
+        timings = warm_frame_timings(draw)
         check_sky_sizes(root, width, height)
+        check_moon_view(root, width, height)
         check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 4,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
+            "raised_terrain_checked": True, "moon_view_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
