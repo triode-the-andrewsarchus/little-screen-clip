@@ -389,9 +389,11 @@ impl RiverKey {
             target: Some(self.tile),
         };
         let mask = assets.grwl_masks.as_ref().filter(|_| self.mask_level >= 8);
-        // A mask narrower than a couple of raster texels can disappear during
-        // resampling. Keep its centerline until the raster can resolve the river.
+        // A narrow channel can disappear in a coarsely resampled mask. At
+        // fine levels let the observed match decide for either line source.
         let mask_width = 1.5 * 111_320. * 180. / (256. * (1u32 << self.mask_level) as f64);
+        let matching_mask =
+            |width: f32| mask.filter(|_| self.mask_level >= 10 || f64::from(width) >= mask_width);
         let mut coverage = Coverage::new(self.tile, &assets.lakes);
         if let Some(grwl) = &assets.grwl_summary {
             for seg in grwl.query_bbox(
@@ -416,7 +418,7 @@ impl RiverKey {
                     seg.width_med_m,
                     cancel,
                     None,
-                    mask.filter(|_| seg.width_med_m as f64 >= mask_width),
+                    matching_mask(seg.width_med_m),
                 )?;
             }
         }
@@ -445,9 +447,7 @@ impl RiverKey {
                     width,
                     cancel,
                     Some(&coverage),
-                    // At fine tile levels, observed mask matches are stronger
-                    // evidence than the width estimated from discharge.
-                    mask.filter(|_| self.mask_level >= 10 || width as f64 >= mask_width),
+                    matching_mask(width),
                 )?;
             }
         }
@@ -507,6 +507,47 @@ fn triangulate(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<[[f32;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the installed GRWL summary and masks"]
+    fn raccoon_river_summary_yields_to_its_fine_water_mask() {
+        use little_clip_core::geography::basemap::GrwlSummaryIndex;
+        let dir = std::env::var_os("LITTLE_CLIP_WATER_FIXTURE").unwrap();
+        let root = std::path::Path::new(&dir);
+        let cancel = AtomicBool::new(false);
+        let assets = BasemapAssets {
+            grwl_summary: Some(GrwlSummaryIndex::load_or_build(root, &cancel).unwrap()),
+            grwl_masks: Some(GrwlMaskStore::load_or_index(root).unwrap()),
+            ..BasemapAssets::default()
+        };
+        let contains_chord = |mask_level| {
+            RiverKey {
+                tile: TileId::at(5, 41.54, -93.75),
+                detail: 4,
+                mask_level,
+            }
+            .prepare(&assets, &cancel)
+            .unwrap()
+            .batches
+            .iter()
+            .filter(|batch| batch.layer == Layer::GrwlSmall)
+            .flat_map(|batch| batch.data.chunks_exact(6))
+            .any(|r| {
+                let lon = (r[0] + r[2]) * 0.5;
+                let lat = (r[1] + r[3]) * 0.5;
+                (-93.76..-93.74).contains(&lon) && (41.54..41.55).contains(&lat)
+            })
+        };
+        assert!(
+            contains_chord(9),
+            "coarse mask lost its centerline fallback"
+        );
+        assert!(
+            !contains_chord(11),
+            "duplicate beside the fine mask survived"
+        );
+    }
+
     #[test]
     fn observed_masks_replace_both_centerlines_and_retain_uncovered_waterways() {
         use std::{fs, path::Path};
