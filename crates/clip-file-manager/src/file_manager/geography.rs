@@ -432,10 +432,7 @@ impl Viewer {
         let active = self.downloader.active;
         if let Some(downloaded) = self.downloader.poll(ctx) {
             self.terrain_download.invalidate_coverage();
-            if matches!(
-                active,
-                Some(DownloadPack::Sky | DownloadPack::NightLights | DownloadPack::StarCatalog)
-            ) {
+            if matches!(active, Some(DownloadPack::Sky | DownloadPack::StarCatalog)) {
                 self.sky.reload(&self.downloader.assets_dir);
             }
             self.assets = Some(downloaded);
@@ -1164,39 +1161,25 @@ impl Viewer {
         colors: WorkbenchColors,
     ) {
         self.transport_assets(ui, palette);
-        if self.sky.assets.is_none()
+        let sky_download = match &self.sky.assets {
+            None => Some(format!(
+                "Get Sky & Earth Lighting (~{:.0} MB)",
+                sky::PACK_BYTES as f64 / 1e6
+            )),
+            Some(assets) if assets.night.is_none() => Some("Complete Sky & Earth Lighting".into()),
+            Some(_) => None,
+        };
+        if let Some(label) = sky_download
             && ui
                 .add_enabled(
                     self.sky.job.is_none(),
                     clip_ui::buttons::ButtonRole::Secondary
-                        .button(
-                            format!(
-                                "Get Sky & Earth Lighting (~{:.0} MB)",
-                                sky::PACK_BYTES as f64 / 1e6
-                            ),
-                            palette,
-                        )
+                        .button(label, palette)
                         .compact(),
                 )
                 .clicked()
         {
             self.downloader.start(DownloadPack::Sky, &self.config);
-        }
-        if self
-            .sky
-            .assets
-            .as_ref()
-            .is_some_and(|assets| assets.night.is_none())
-            && ui
-                .add(
-                    clip_ui::buttons::ButtonRole::Secondary
-                        .button("Get Black Marble Night Lights (0.8 MB)", palette)
-                        .compact(),
-                )
-                .clicked()
-        {
-            self.downloader
-                .start(DownloadPack::NightLights, &self.config);
         }
         if self.sky.assets.is_some() {
             ui.end_row();

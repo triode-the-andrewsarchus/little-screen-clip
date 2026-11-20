@@ -46,7 +46,6 @@ pub enum DownloadPack {
     HydroRivers,
     Sky,
     StarCatalog,
-    NightLights,
     DetailedTransportation,
     All,
 }
@@ -66,7 +65,6 @@ impl DownloadPack {
             Self::HydroRivers => "HydroRIVERS Global Network",
             Self::Sky => "Sky and Earth Lighting",
             Self::StarCatalog => "Constellations and Star Catalog",
-            Self::NightLights => "Black Marble Night Lights (2016)",
             Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "Base Offline Maps",
         }
@@ -109,9 +107,7 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
-            Self::Sky | Self::NightLights | Self::StarCatalog | Self::DetailedTransportation => {
-                true
-            } // Verified by their own loaders.
+            Self::Sky | Self::StarCatalog | Self::DetailedTransportation => true, // Verified by their own loaders.
             Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -197,6 +193,10 @@ impl DownloadPack {
                     sky::MOON,
                     "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_2k.tif",
                 ),
+                (
+                    sky::NIGHT,
+                    "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_01deg.jpg",
+                ),
             ]
             .into_iter()
             .map(|(name, url)| AssetFile {
@@ -206,12 +206,6 @@ impl DownloadPack {
                 suffixes: &[],
             })
             .collect(),
-            Self::NightLights => vec![AssetFile {
-                folder: sky::DIRECTORY,
-                name: sky::NIGHT,
-                url: "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_01deg.jpg",
-                suffixes: &[],
-            }],
             Self::StarCatalog => sky::catalog::SOURCES
                 .into_iter()
                 .map(|(name, url, _)| AssetFile {
@@ -308,9 +302,12 @@ impl DownloadSession<'_> {
             ),
             DownloadPack::LandCover => self.land_cover(base, span),
             DownloadPack::DetailedTransportation => self.transportation(base, span),
-            DownloadPack::Sky | DownloadPack::NightLights | DownloadPack::StarCatalog => {
-                self.download_sky(pack, base, span)
-            }
+            DownloadPack::Sky | DownloadPack::StarCatalog => self.download_sky(
+                pack.files(self.config),
+                pack == DownloadPack::StarCatalog,
+                base,
+                span,
+            ),
             _ => {
                 let files = pack.files(self.config);
                 let n = files.len().max(1) as f32;
@@ -332,10 +329,15 @@ impl DownloadSession<'_> {
             }
         }
     }
-    fn download_sky(&self, pack: DownloadPack, base: f32, span: f32) -> Result<(), String> {
+    fn download_sky(
+        &self,
+        assets: Vec<AssetFile<'_>>,
+        verify_catalog: bool,
+        base: f32,
+        span: f32,
+    ) -> Result<(), String> {
         let root = self.root.path().join(sky::DIRECTORY);
-        let files: Vec<_> = pack
-            .files(self.config)
+        let files: Vec<_> = assets
             .into_iter()
             .filter_map(|file| {
                 let sizes = sky::asset_size(file.name)?;
@@ -346,8 +348,7 @@ impl DownloadSession<'_> {
                             existing
                                 .metadata()
                                 .is_ok_and(|meta| sizes.contains(&meta.len()))
-                                && (pack != DownloadPack::StarCatalog
-                                    || sky::catalog::verified(file.name, &existing))
+                                && (!verify_catalog || sky::catalog::verified(file.name, &existing))
                         });
                 (!present).then_some((file, sizes))
             })
@@ -368,9 +369,7 @@ impl DownloadSession<'_> {
             if !sizes.contains(&bytes) {
                 return Err(format!("Unexpected source size for {}", file.name));
             }
-            if pack == DownloadPack::StarCatalog
-                && !sky::catalog::verified(file.name, &downloaded.file)
-            {
+            if verify_catalog && !sky::catalog::verified(file.name, &downloaded.file) {
                 return Err(format!("Unexpected source contents for {}", file.name));
             }
         }
@@ -1193,6 +1192,61 @@ mod tests {
         assert_eq!(
             root.open_file(states).unwrap().metadata().unwrap().len(),
             payload.len() as u64
+        );
+    }
+
+    #[test]
+    fn sky_pack_installs_black_marble_and_only_transfers_it_for_an_existing_pack() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = AssetDirectory::create(&temp.path().join("assets")).unwrap();
+        let config = AppConfig::default();
+        let cancelled = AtomicBool::new(false);
+        let progress = Mutex::new(DownloadProgress {
+            fraction: 0.0,
+            message: String::new(),
+        });
+        let session = DownloadSession {
+            root: &root,
+            config: &config,
+            cancelled: &cancelled,
+            progress: &progress,
+            viewfinder: None,
+            all_ceiling: None,
+        };
+        let mut files = DownloadPack::Sky.files(&config);
+        let urls: Vec<_> = files
+            .iter()
+            .map(|file| {
+                let path = temp.path().join(file.name);
+                let size = *sky::asset_size(file.name).unwrap().start();
+                fs::File::create(&path).unwrap().set_len(size).unwrap();
+                format!("file://{}", path.display())
+            })
+            .collect();
+        for (file, url) in files.iter_mut().zip(&urls) {
+            file.url = url;
+        }
+        let installed = root.path().join(sky::DIRECTORY);
+        session.download_sky(files, false, 0.0, 1.0).unwrap();
+        for name in [sky::KERNEL, sky::EOP, sky::STARS, sky::MOON, sky::NIGHT] {
+            let size = fs::metadata(installed.join(name)).unwrap().len();
+            assert!(sky::asset_size(name).unwrap().contains(&size));
+        }
+
+        // An earlier install has the original four assets. If any is
+        // transferred again this run will fail because its source is gone.
+        fs::remove_file(installed.join(sky::NIGHT)).unwrap();
+        let mut files = DownloadPack::Sky.files(&config);
+        for (file, url) in files.iter_mut().zip(&urls) {
+            file.url = url;
+            if file.name != sky::NIGHT {
+                fs::remove_file(temp.path().join(file.name)).unwrap();
+            }
+        }
+        session.download_sky(files, false, 0.0, 1.0).unwrap();
+        assert_eq!(
+            fs::metadata(installed.join(sky::NIGHT)).unwrap().len(),
+            sky::NIGHT_BYTES as u64
         );
     }
 

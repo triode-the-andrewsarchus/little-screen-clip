@@ -27,7 +27,8 @@ const STARS_BYTES: usize = 35_997_085;
 const MOON_BYTES: usize = 3_339_438;
 pub(crate) const NIGHT_BYTES: usize = 779_638;
 const EOP_LIMIT: usize = 5_000_000;
-pub(crate) const PACK_BYTES: u64 = (KERNEL_BYTES + STARS_BYTES + MOON_BYTES + EOP_LIMIT) as u64;
+pub(crate) const PACK_BYTES: u64 =
+    (KERNEL_BYTES + STARS_BYTES + MOON_BYTES + EOP_LIMIT + NIGHT_BYTES) as u64;
 
 pub(crate) fn asset_size(name: &str) -> Option<std::ops::RangeInclusive<u64>> {
     let exact = match name {
