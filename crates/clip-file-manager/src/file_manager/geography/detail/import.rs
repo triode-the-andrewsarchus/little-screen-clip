@@ -664,6 +664,7 @@ mod tests {
         assert!(!store::is_complete(&db).unwrap());
         assert!(finish(&db).is_err());
         store::finish(&db).unwrap();
+        drop(db);
 
         let source = super::super::Status::load(root.path()).source.unwrap();
         let loads = |lon| {

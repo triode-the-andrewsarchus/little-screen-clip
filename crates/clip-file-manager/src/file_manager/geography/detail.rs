@@ -182,9 +182,7 @@ impl Tile {
 pub(crate) fn database_bytes(
     dir: &little_clip_core::geography::basemap::storage::AssetDirectory,
 ) -> u64 {
-    dir.open_file(std::ffi::OsStr::new(DATABASE))
-        .and_then(|file| file.metadata())
-        .map_or(0, |metadata| metadata.len())
+    store::database_metadata(&dir.path().join(DATABASE)).map_or(0, |metadata| metadata.len())
 }
 
 #[derive(Default)]

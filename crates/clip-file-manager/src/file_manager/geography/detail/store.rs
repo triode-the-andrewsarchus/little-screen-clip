@@ -2,15 +2,30 @@
 use super::{BRIDGE, COLS, Class, DATABASE, Label, SIDE, Stroke, TUNNEL, manifest};
 use little_clip_core::{
     geography::basemap::{storage::AssetDirectory, tiles::TileId},
-    kernel_interface::open_content,
+    kernel_interface::{classify_handle, pin},
 };
 use rusqlite::{Connection, OpenFlags, limits::Limit, params};
-use std::{collections::BTreeMap, ffi::OsStr};
+use std::{collections::BTreeMap, ffi::OsStr, fs::Metadata, io, path::Path};
 
 pub(super) const BLOCK_BYTES: usize = 1 << 20;
+
+pub(super) fn database_metadata(path: &Path) -> io::Result<Metadata> {
+    // A metadata-only pin lets us validate and size the index without closing
+    // a data descriptor that could release SQLite's process-wide file locks.
+    let pin = pin(path, false)?;
+    let metadata = pin.metadata()?;
+    if !metadata.is_file() || classify_handle(&pin)?.protected() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Transportation index must be an ordinary regular file",
+        ));
+    }
+    Ok(metadata)
+}
+
 pub(super) fn read_only(dir: &AssetDirectory) -> Result<Connection, String> {
     let path = dir.path().join(DATABASE);
-    let _source = open_content(&path, false).map_err(err)?;
+    database_metadata(&path).map_err(err)?;
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err)?;
     db.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;")
         .map_err(err)?;
@@ -21,17 +36,22 @@ pub(super) fn read_only(dir: &AssetDirectory) -> Result<Connection, String> {
 
 pub(super) fn writer(dir: &AssetDirectory) -> Result<Connection, String> {
     let path = dir.path().join(DATABASE);
-    let _database = match open_content(&path, false) {
-        Ok(file) => file,
+    match database_metadata(&path) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let staged = dir.stage().map_err(err)?;
-            dir.install(staged, OsStr::new(DATABASE)).map_err(err)?
+            dir.install(staged, OsStr::new(DATABASE)).map_err(err)?;
         }
         Err(error) => return Err(err(error)),
-    };
+    }
     // SQLite rejects OPEN_NOFOLLOW on the deliberately pinned /proc parent.
     // The guarded file is already present, so SQLite only opens an existing database.
-    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(err)?;
+    // The importer owns the directory lock for its whole run. unix-excl holds
+    // one exclusive database lock until close, avoiding the shared-to-exclusive
+    // lock upgrade that fails on CIFS while retaining rollback-journal recovery.
+    let db =
+        Connection::open_with_flags_and_vfs(path, OpenFlags::SQLITE_OPEN_READ_WRITE, "unix-excl")
+            .map_err(err)?;
     db.execute_batch(
         "PRAGMA trusted_schema=OFF;
          PRAGMA journal_mode=DELETE;
