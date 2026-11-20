@@ -22,6 +22,7 @@ pub(super) struct Budget {
 }
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PIXELS: u64 = 8 * 1024 * 1024;
+type DecodedRasters = Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>;
 
 pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver<'static>, Arc<Budget>) {
     resolver_with_rasters(policy, None)
@@ -29,7 +30,7 @@ pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver<'static>, Arc<Budge
 
 fn resolver_with_rasters(
     policy: Policy,
-    rasters: Option<Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>>,
+    rasters: Option<DecodedRasters>,
 ) -> (ImageHrefResolver<'static>, Arc<Budget>) {
     let budget = Arc::new(Budget::default());
     let data_budget = budget.clone();
@@ -69,7 +70,7 @@ fn resolver_with_rasters(
 pub(super) struct RetainedImages {
     pub resolver: ImageHrefResolver<'static>,
     pub budget: Arc<Budget>,
-    pub rasters: Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>,
+    pub rasters: DecodedRasters,
 }
 
 pub(super) fn retained_resolver() -> RetainedImages {
