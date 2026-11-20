@@ -39,7 +39,7 @@ bzip2 = "0.6"
 xz2 = "0.1"
 zstd.workspace = true
 zip.workspace = true
-imagesize = "0.12"
+imagesize = "0.15"
 tiny-skia = { workspace = true }
 lyon_tessellation = "=1.0.22"
 ttf-parser = "0.25"
@@ -61,7 +61,7 @@ sha2 = "0.10"
 ort = { version = "2.0.0-rc.15", features = ["download-binaries", "cuda"] }
 ndarray = "0.17.2"
 fuse-binwalk = { git = "https://github.com/triode-the-andrewsarchus/fuse-binwalk" }
-rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions", "serialize"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint", "backup", "limits", "hooks", "functions", "serialize"] }
 realfft = "3.5.1"
 midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }

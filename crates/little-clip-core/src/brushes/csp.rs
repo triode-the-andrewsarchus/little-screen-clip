@@ -15,7 +15,7 @@ pub(super) fn parse_sut(
     if bytes.len() < 100 || !bytes.starts_with(b"SQLite format 3\0") {
         return Err("Not a Clip Studio SQLite database".into());
     }
-    let conn = sqlite_snapshot::open(bytes, 16 * 1024 * 1024)
+    let mut conn = sqlite_snapshot::open(bytes, 16 * 1024 * 1024)
         .map_err(|error| format!("Cannot open Clip Studio .sut: {error}"))?;
     let has_node = has_table(&conn, "Node")?;
     let has_variant = has_table(&conn, "Variant")?;
@@ -23,7 +23,7 @@ pub(super) fn parse_sut(
     if !(has_node || has_variant || has_material) {
         return Err("No Clip Studio brush tables in .sut".into());
     }
-    sqlite_snapshot::authorize_reads(&conn);
+    sqlite_snapshot::authorize_reads(&mut conn).map_err(|error| error.to_string())?;
 
     let name =
         if has_node {
@@ -174,13 +174,13 @@ mod tests {
 
     #[test]
     fn reads_saved_rotation_without_requiring_every_column() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE Variant(BrushSize REAL, BrushRotation REAL);
              INSERT INTO Variant VALUES (60, 134);",
         )
         .unwrap();
-        sqlite_snapshot::authorize_reads(&conn);
+        sqlite_snapshot::authorize_reads(&mut conn).unwrap();
         let params = variant_params(&conn);
         assert_eq!(params.size_px, 60.0);
         assert_eq!(params.angle_deg, 134.0);

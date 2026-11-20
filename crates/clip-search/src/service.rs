@@ -835,14 +835,14 @@ impl Worker {
         };
         self.finishing.pop_front();
         let state = {
-            let _guard = super::retrieval::SqlCancellation::new(&store.connection, &cancel);
+            let _guard = store.cancel_read(&cancel);
             store.scan_state(id)
         };
         if cancel.load(Ordering::Relaxed) {
             self.finishing.push_back(id);
             return;
         }
-        // The read handler must be gone before this small accepted write.
+        // The cancellation scope must be gone before this small accepted write.
         let result = state.and_then(|state| store.finish_scan_state(id, &state, None));
         if result.is_ok() {
             self.monitor.succeeded(id);
@@ -869,7 +869,7 @@ impl Worker {
             return;
         };
         let batch = {
-            let _guard = super::retrieval::SqlCancellation::new(&store.connection, &cancel);
+            let _guard = store.cancel_read(&cancel);
             store.prune_candidates(cursor)
         };
         if cancel.load(Ordering::Relaxed) {
@@ -966,9 +966,9 @@ impl Worker {
         let Some(cancel) = self.read_admission() else {
             return Ok(None);
         };
-        // Only this read is interruptible. Remove its handler before any later
+        // Only this read is interruptible. Clear its token before any later
         // accepted mutation; keep the previous snapshot until a retry succeeds.
-        let _guard = super::retrieval::SqlCancellation::new(&store.connection, &cancel);
+        let _guard = store.cancel_read(&cancel);
         let result = store.roots();
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);

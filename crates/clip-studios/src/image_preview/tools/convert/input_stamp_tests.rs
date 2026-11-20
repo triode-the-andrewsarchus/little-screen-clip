@@ -11,13 +11,13 @@ fn webp_rejects_zero_or_oversized_dimensions_before_importing_pixels() {
 }
 
 #[test]
-fn cancellable_webp_bytes_match_the_existing_encoder_for_lossy_and_lossless() {
+fn preview_and_saved_webp_use_the_same_settings_and_preserve_alpha() {
     let image = RgbaImage::from_fn(37, 23, |x, y| {
         image::Rgba([
             (x.wrapping_mul(17) ^ y.wrapping_mul(3)) as u8,
             (y.wrapping_mul(29) ^ x.wrapping_mul(5)) as u8,
             ((x + y).wrapping_mul(11)) as u8,
-            ((x * 7 + y * 13) % 256) as u8,
+            ((x * 7 + y * 13) % 255 + 1) as u8,
         ])
     });
     for (lossless, quality) in [(false, 83), (true, 100)] {
@@ -25,6 +25,17 @@ fn cancellable_webp_bytes_match_the_existing_encoder_for_lossy_and_lossless() {
         let actual =
             super::super::super::encode_webp_cancellable(&image, lossless, quality, None).unwrap();
         assert_eq!(actual, expected, "lossless={lossless}, quality={quality}");
+        let decoded = image::load_from_memory(&actual).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), image.dimensions());
+        assert!(
+            decoded
+                .pixels()
+                .zip(image.pixels())
+                .all(|(a, b)| a[3] == b[3])
+        );
+        if lossless {
+            assert_eq!(decoded, image);
+        }
     }
 }
 
@@ -38,19 +49,29 @@ fn webp_progress_hook_aborts_when_preview_cancel_token_becomes_stale() {
             255,
         ])
     });
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
-    let callbacks = std::sync::atomic::AtomicUsize::new(0);
-    let result = super::super::super::encode_webp_cancellable_with_progress(
-        &image,
-        false,
-        86,
-        Some(&cancelled),
-        Some(&callbacks),
-        true,
-    );
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Default)]
+    struct CancelOnNativeProgress(AtomicBool);
+
+    impl webpx::Stop for CancelOnNativeProgress {
+        fn check(&self) -> Result<(), webpx::StopReason> {
+            if self.0.load(Ordering::Acquire) {
+                return Err(webpx::StopReason::Cancelled);
+            }
+            Ok(())
+        }
+
+        fn should_stop(&self) -> bool {
+            self.0.store(true, Ordering::Release);
+            true
+        }
+    }
+
+    let cancel = CancelOnNativeProgress::default();
+    let result = super::super::super::encoding::encode_webp_with_stop(&image, false, 86, &cancel);
     assert_eq!(result.unwrap_err(), "cancelled");
-    assert!(callbacks.load(std::sync::atomic::Ordering::Relaxed) > 0);
-    assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+    assert!(cancel.0.load(Ordering::Acquire));
 }
 
 #[cfg(unix)]

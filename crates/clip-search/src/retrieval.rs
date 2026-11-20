@@ -276,28 +276,7 @@ fn context_path<'a>(context: &'a rusqlite::functions::Context<'_>) -> rusqlite::
     use std::os::unix::ffi::OsStrExt;
     match context.get_raw(0) {
         rusqlite::types::ValueRef::Blob(bytes) => Ok(Path::new(std::ffi::OsStr::from_bytes(bytes))),
-        value => Err(rusqlite::Error::InvalidFunctionParameterType(
-            0,
-            value.data_type(),
-        )),
-    }
-}
-
-/// Scoped SQLite cancellation for one read on a coordinator-owned connection.
-///
-/// Covers prepare/step and removes the callback on drop before later writes.
-/// Do not nest guards or share the connection with another request owner.
-pub struct SqlCancellation<'a>(&'a rusqlite::Connection);
-impl<'a> SqlCancellation<'a> {
-    pub fn new(connection: &'a rusqlite::Connection, cancel: &Arc<AtomicBool>) -> Self {
-        let cancel = Arc::clone(cancel);
-        connection.progress_handler(4096, Some(move || cancel.load(AtomicOrdering::Relaxed)));
-        Self(connection)
-    }
-}
-impl Drop for SqlCancellation<'_> {
-    fn drop(&mut self) {
-        self.0.progress_handler(0, None::<fn() -> bool>);
+        value => Err(rusqlite::Error::InvalidParameterType(0, value.data_type())),
     }
 }
 
@@ -327,7 +306,7 @@ impl Retrieval<'_> {
     /// Returns cancellation, invalid input, vector or SQLite failures.
     pub fn search(&self) -> Result<Vec<Hit>, String> {
         check(self.cancel)?;
-        let _cancellation = SqlCancellation::new(&self.store.connection, self.cancel);
+        let _cancellation = self.store.cancel_read(self.cancel);
         self.validate_inputs()?;
         register_name_filter(&self.store.connection)?;
         let cache_epoch = if self.vector.is_empty() {
@@ -384,10 +363,7 @@ fn register_name_filter(connection: &rusqlite::Connection) -> Result<(), String>
                     ValueRef::Text(bytes) => std::str::from_utf8(bytes)
                         .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?,
                     value => {
-                        return Err(rusqlite::Error::InvalidFunctionParameterType(
-                            1,
-                            value.data_type(),
-                        ));
+                        return Err(rusqlite::Error::InvalidParameterType(1, value.data_type()));
                     }
                 };
                 let name = little_clip_core::path_address::display_path_cow(Path::new(

@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) fn encode_jpeg_with_quality(
     img: &RgbaImage,
@@ -40,77 +41,17 @@ pub(super) fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, image::ImageError> 
 }
 
 pub(super) fn encode_webp(img: &RgbaImage, lossless: bool, quality: u8) -> Result<Vec<u8>, String> {
-    let encoder = webp::Encoder::from_rgba(img.as_raw(), img.width(), img.height());
-    let memory = if lossless {
-        encoder.encode_lossless()
-    } else {
-        encoder.encode(quality as f32)
-    };
-    Ok(memory.to_vec())
+    encode_webp_with_stop(img, lossless, quality, webpx::Unstoppable)
 }
 
-struct WebpProgressContext<'a> {
-    cancel: Option<&'a std::sync::atomic::AtomicBool>,
-    callback_count: Option<&'a std::sync::atomic::AtomicUsize>,
-    cancel_on_callback: bool,
-}
+struct WebpCancellation<'a>(Option<&'a AtomicBool>);
 
-struct WebpPictureGuard(libwebp_sys::WebPPicture);
-
-impl Drop for WebpPictureGuard {
-    fn drop(&mut self) {
-        // SAFETY: WebPPicture::new initialized this uniquely owned picture;
-        // only libwebp populated its pixel allocations, and this guard frees them once.
-        unsafe { libwebp_sys::WebPPictureFree(&mut self.0) };
-    }
-}
-
-struct WebpMemoryWriterGuard(libwebp_sys::WebPMemoryWriter);
-
-impl Drop for WebpMemoryWriterGuard {
-    fn drop(&mut self) {
-        // SAFETY: WebPMemoryWriterInit initialized this writer. Its encoded
-        // allocation stays owned here through the output copy and is freed once.
-        unsafe { libwebp_sys::WebPMemoryWriterClear(&mut self.0) };
-    }
-}
-
-// Called synchronously by WebPEncode; it never retains the context or unwinds.
-// SAFETY: libwebp supplies a live picture whose user_data was set immediately
-// before this encode to the stationary WebpProgressContext below.
-unsafe extern "C" fn webp_cancel_progress_hook(
-    _percent: std::ffi::c_int,
-    picture: *const libwebp_sys::WebPPicture,
-) -> std::ffi::c_int {
-    if picture.is_null() {
-        return 0;
-    }
-    // SAFETY: the callback contract supplies a live picture. user_data is
-    // null or the aligned context pointer installed below, live until Encode returns.
-    let context = unsafe {
-        (*picture)
-            .user_data
-            .cast::<WebpProgressContext<'_>>()
-            .as_ref()
-    };
-    let Some(context) = context else {
-        return 0;
-    };
-    if let Some(count) = context.callback_count {
-        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-    if context.cancel_on_callback
-        && let Some(cancel) = context.cancel
-    {
-        cancel.store(true, std::sync::atomic::Ordering::Release);
-    }
-    if context
-        .cancel
-        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
-    {
-        0
-    } else {
-        1
+impl webpx::Stop for WebpCancellation<'_> {
+    fn check(&self) -> Result<(), webpx::StopReason> {
+        if self.0.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Err(webpx::StopReason::Cancelled);
+        }
+        Ok(())
     }
 }
 
@@ -118,103 +59,25 @@ pub(super) fn encode_webp_cancellable(
     img: &RgbaImage,
     lossless: bool,
     quality: u8,
-    cancel: Option<&std::sync::atomic::AtomicBool>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    encode_webp_cancellable_with_progress(img, lossless, quality, cancel, None, false)
+    encode_webp_with_stop(img, lossless, quality, WebpCancellation(cancel))
 }
 
-pub(super) fn encode_webp_cancellable_with_progress(
+pub(super) fn encode_webp_with_stop(
     img: &RgbaImage,
     lossless: bool,
     quality: u8,
-    cancel: Option<&std::sync::atomic::AtomicBool>,
-    callback_count: Option<&std::sync::atomic::AtomicUsize>,
-    cancel_on_callback: bool,
+    stop: impl webpx::Stop,
 ) -> Result<Vec<u8>, String> {
-    use std::sync::atomic::Ordering;
-    if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-        return Err("cancelled".into());
-    }
-
-    let mut config = libwebp_sys::WebPConfig::new()
-        .map_err(|_| "WebP encoder configuration initialization failed".to_string())?;
-    config.lossless = i32::from(lossless);
-    config.alpha_compression = i32::from(!lossless);
-    config.quality = if lossless { 75.0 } else { quality as f32 };
-    // SAFETY: the safe constructor initializes the full configuration; validation
-    // only reads it and no other thread mutates it during this call.
-    if unsafe { libwebp_sys::WebPValidateConfig(&config) } == 0 {
-        return Err("WebP encoder configuration is invalid".into());
-    }
-
-    let mut picture = WebpPictureGuard(
-        libwebp_sys::WebPPicture::new()
-            .map_err(|_| "WebP picture initialization failed".to_string())?,
-    );
-    picture.0.use_argb = 1;
-    if [img.width(), img.height()]
-        .into_iter()
-        .any(|dimension| !(1..=libwebp_sys::WEBP_MAX_DIMENSION).contains(&dimension))
-    {
-        return Err("WebP dimensions must be between 1 and 16383 pixels".into());
-    }
-    picture.0.width = img.width() as i32;
-    picture.0.height = img.height() as i32;
-    let context = WebpProgressContext {
-        cancel,
-        callback_count,
-        cancel_on_callback,
-    };
-    picture.0.progress_hook = Some(webp_cancel_progress_hook);
-    picture.0.user_data = (&context as *const WebpProgressContext<'_>)
-        .cast_mut()
-        .cast();
-
-    let mut writer = std::mem::MaybeUninit::<libwebp_sys::WebPMemoryWriter>::uninit();
-    // SAFETY: writable, correctly aligned storage for one native writer. Init
-    // initializes every field before the guard or encoder observes them.
-    unsafe { libwebp_sys::WebPMemoryWriterInit(writer.as_mut_ptr()) };
-    // SAFETY: the immediately preceding initializer completed unconditionally.
-    let mut writer = WebpMemoryWriterGuard(unsafe { writer.assume_init() });
-    picture.0.writer = Some(libwebp_sys::WebPMemoryWrite);
-    picture.0.custom_ptr = (&mut writer.0 as *mut libwebp_sys::WebPMemoryWriter).cast();
-
-    // SAFETY: dimensions are within libwebp's bound, so width*4 fits i32.
-    // RgbaImage owns tightly packed width*height*4 bytes, borrowed for this call;
-    // libwebp copies them into the guard's picture and never retains img's pointer.
-    let imported = unsafe {
-        libwebp_sys::WebPPictureImportRGBA(
-            &mut picture.0,
-            img.as_raw().as_ptr(),
-            img.width() as i32 * 4,
-        )
-    };
-    let result = if imported == 0 {
-        Err("WebP RGBA import failed".into())
-    } else if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-        Err("cancelled".into())
+    let config = if lossless {
+        webpx::EncoderConfig::new_lossless()
     } else {
-        // SAFETY: config, imported picture, writer and callback context remain
-        // live and stationary throughout this synchronous call. The callback only
-        // uses atomics, cannot panic, and cannot outlive this function's borrows.
-        let status = unsafe { libwebp_sys::WebPEncode(&config, &mut picture.0) };
-        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-            Err("cancelled".into())
-        } else if status != 0 {
-            if writer.0.mem.is_null() || writer.0.size == 0 || writer.0.size > isize::MAX as usize {
-                Err("WebP encoder produced no output".into())
-            } else {
-                // SAFETY: the successful memory writer owns size initialized
-                // bytes in one live allocation, checked non-null/nonempty and
-                // bounded by isize::MAX. Copy before the writer guard frees it.
-                Ok(unsafe { std::slice::from_raw_parts(writer.0.mem, writer.0.size) }.to_vec())
-            }
-        } else {
-            Err(format!("WebP encoding failed: {:?}", picture.0.error_code))
-        }
+        webpx::EncoderConfig::new().quality(f32::from(quality))
     };
-    // Both RAII guards clean up libwebp allocations on normal return or unwind.
-    drop(picture);
-    drop(writer);
-    result
+    let encoded = webpx::Encoder::new_rgba(img.as_raw(), img.width(), img.height())
+        .config(config)
+        .encode(&stop);
+    stop.check().map_err(|_| "cancelled")?;
+    encoded.map_err(|error| error.to_string())
 }

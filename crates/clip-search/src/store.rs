@@ -36,6 +36,10 @@ use std::{
         },
     },
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 #[cfg(test)]
 pub use vectors::cosine_score;
@@ -110,8 +114,19 @@ pub struct Store {
     owner: IndexOwner,
     vector_count: u64,
     storage_fault: Cell<bool>,
+    read_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     process_scope: uuid::Uuid,
 }
+pub(crate) struct ReadCancellation<'a> {
+    active: &'a Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl Drop for ReadCancellation<'_> {
+    fn drop(&mut self) {
+        self.active.lock().unwrap().take();
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Index coverage and availability for one enrolled root.
 pub struct RootState {
@@ -146,10 +161,25 @@ impl Store {
         Self::from_owner(IndexOwner::acquire(folder)?)
     }
     fn from_owner(owner: IndexOwner) -> Result<Self, String> {
-        let connection = open_database(&owner.held().join("index.sqlite"))?;
+        let mut connection = open_database(&owner.held().join("index.sqlite"))?;
+        let read_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>> = Default::default();
+        let active = Arc::clone(&read_cancel);
+        connection
+            .progress_handler(
+                4096,
+                Some(move || {
+                    active
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+                }),
+            )
+            .map_err(|error| error.to_string())?;
         let mut store = Self {
             vector_count: 0,
             storage_fault: Cell::new(false),
+            read_cancel,
             process_scope: uuid::Uuid::new_v4(),
             connection,
             vectors: Default::default(),
@@ -160,6 +190,15 @@ impl Store {
             safety::apply_content_policy(&mut store.connection, &store.storage_fault)?;
         Ok(store)
     }
+    /// Enables cancellation for a scoped read on the coordinator's connection.
+    /// Drop the guard before accepting a write. Do not overlap read scopes.
+    pub(crate) fn cancel_read(&self, cancel: &Arc<AtomicBool>) -> ReadCancellation<'_> {
+        *self.read_cancel.lock().unwrap() = Some(Arc::clone(cancel));
+        ReadCancellation {
+            active: &self.read_cancel,
+        }
+    }
+
     pub fn capacity(
         &self,
         file: Option<i64>,

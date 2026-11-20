@@ -3,7 +3,6 @@ use super::{EXTRACTION_VERSION, Store};
 use crate::{
     content::{self, Literal},
     policy,
-    retrieval::SqlCancellation,
     session::SourceSession,
     source::SourceRoot,
 };
@@ -89,7 +88,7 @@ impl Store {
         if !reusable_entry(root, entry) {
             return Ok(None);
         }
-        let _cancellation = SqlCancellation::new(&self.connection, cancel);
+        let _cancellation = self.cancel_read(cancel);
         let epoch = self.cache_epoch()?;
         let candidate = self.content_publication(root, entry, session, identity.object())?;
         let Some(publication) = candidate else {

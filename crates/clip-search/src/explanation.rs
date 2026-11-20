@@ -88,7 +88,7 @@ pub fn read(
     text: &str,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Explanations, String> {
-    let _cancellation = super::retrieval::SqlCancellation::new(&store.connection, cancel);
+    let _cancellation = store.cancel_read(cancel);
     let admitted = entries
         .iter()
         .map(|entry| &entry.path)

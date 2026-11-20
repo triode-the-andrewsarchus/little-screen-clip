@@ -18,7 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
-zbus = "5.19.0"
+zbus = { version = "6.3", default-features = false, features = ["proxy", "tokio"] }
 futures-util = "0.3.34"
 tempfile = "3.27"
 libc = "0.2"

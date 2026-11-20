@@ -32,8 +32,7 @@ tiny-skia = { workspace = true }
 fontdue = { workspace = true }
 syntect = { workspace = true }
 regex = { workspace = true }
-webp = "0.3.1"
-libwebp-sys = "0.9.6"
+webpx = { version = "0.4.1", default-features = false, features = ["std", "encode"] }
 tempfile = "3.27"
 libc = "0.2"
 filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }

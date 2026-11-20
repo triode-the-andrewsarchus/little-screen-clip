@@ -590,11 +590,13 @@ fn sqlite_name_prefilter_keeps_unicode_and_escaped_unix_filenames() {
 
 #[test]
 fn cancellation_interrupts_sql_without_a_result_row_and_releases_the_connection() {
-    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let connection = &store.connection;
     let cancel = Arc::new(AtomicBool::new(false));
     let started = std::time::Instant::now();
     let result = std::thread::scope(|scope| {
-        let _guard = SqlCancellation::new(&connection, &cancel);
+        let _guard = store.cancel_read(&cancel);
         scope.spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(20));
             cancel.store(true, AtomicOrdering::Relaxed);

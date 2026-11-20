@@ -20,12 +20,14 @@ fn helper_matches_image_decoder_for_png_jpeg_and_webp() {
     let rgb = image::DynamicImage::ImageRgba8(source.clone()).to_rgb8();
     rgb.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
         .unwrap();
-    let webp = webp::Encoder::from_rgba(source.as_raw(), source.width(), source.height())
-        .encode(80.0)
-        .to_vec();
-    let webp_lossless = webp::Encoder::from_rgba(source.as_raw(), source.width(), source.height())
-        .encode_lossless()
-        .to_vec();
+    let webp = webpx::Encoder::new_rgba(source.as_raw(), source.width(), source.height())
+        .quality(80.0)
+        .encode(webpx::Unstoppable)
+        .unwrap();
+    let webp_lossless = webpx::Encoder::new_rgba(source.as_raw(), source.width(), source.height())
+        .lossless(true)
+        .encode(webpx::Unstoppable)
+        .unwrap();
 
     for (name, encoded) in [
         ("png", png),

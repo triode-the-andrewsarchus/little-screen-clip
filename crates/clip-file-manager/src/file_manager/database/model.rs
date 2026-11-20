@@ -90,9 +90,9 @@ impl Document {
         if offset > 1_000_000 {
             return Err("Row browsing stops at the 1,000,000-row offset limit".into());
         }
-        let connection =
+        let mut connection =
             sqlite_snapshot::open(&self.bytes, MAX_VALUE_BYTES).map_err(|e| e.to_string())?;
-        sqlite_snapshot::authorize_reads(&connection);
+        sqlite_snapshot::authorize_reads(&mut connection).map_err(|error| error.to_string())?;
         let sql = format!(
             "SELECT {} FROM {} LIMIT {} OFFSET {}",
             columns
@@ -194,11 +194,11 @@ fn cell(value: ValueRef<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::DatabaseName;
+    use rusqlite::MAIN_DB;
     fn document(sql: &str) -> Document {
-        let connection = Connection::open_in_memory().unwrap();
+        let mut connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(sql).unwrap();
-        let bytes = connection.serialize(DatabaseName::Main).unwrap();
+        let bytes = connection.serialize(MAIN_DB).unwrap();
         Document::parse(bytes.to_vec()).unwrap()
     }
     #[test]

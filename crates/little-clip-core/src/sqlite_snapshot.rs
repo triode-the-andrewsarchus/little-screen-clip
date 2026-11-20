@@ -1,7 +1,7 @@
 //! Read-only SQLite snapshots for file previews.
 
 use rusqlite::{
-    Connection, DatabaseName,
+    Connection, MAIN_DB,
     config::DbConfig,
     hooks::{AuthAction, AuthContext, Authorization},
     limits::Limit,
@@ -47,7 +47,7 @@ pub fn open(bytes: &[u8], max_value_bytes: i32) -> rusqlite::Result<Connection> 
             steps += 1000;
             steps > 2_000_000 || Instant::now() >= deadline
         }),
-    );
+    )?;
     // https://www.sqlite.org/c3ref/deserialize.html advises a 20-byte allocation
     // margin for untrusted content. The safe stream loader allocates only len.
     let allocation_size = bytes
@@ -75,9 +75,9 @@ pub fn open(bytes: &[u8], max_value_bytes: i32) -> rusqlite::Result<Connection> 
     }
     // SAFETY: pointer is uniquely SQLite-allocated, len bytes plus an initialized
     // margin. OwnedData transfers it exactly once; FREEONCLOSE frees it on native
-    // failure too. DatabaseName::Main cannot fail schema-name conversion.
+    // failure too. MAIN_DB cannot fail schema-name conversion.
     let snapshot = unsafe { OwnedData::from_raw_nonnull(pointer, bytes.len()) };
-    connection.deserialize(DatabaseName::Main, snapshot, true)?;
+    connection.deserialize(MAIN_DB, snapshot, true)?;
     connection.execute_batch(
         "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-4096;",
     )?;
@@ -85,7 +85,7 @@ pub fn open(bytes: &[u8], max_value_bytes: i32) -> rusqlite::Result<Connection> 
 }
 
 /// Limits a connection to reads and selects that originate outside schema objects.
-pub fn authorize_reads(connection: &Connection) {
+pub fn authorize_reads(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.authorizer(Some(|context: AuthContext<'_>| {
         if context.accessor.is_some() {
             return Authorization::Deny;
@@ -94,5 +94,5 @@ pub fn authorize_reads(connection: &Connection) {
             AuthAction::Read { .. } | AuthAction::Select => Authorization::Allow,
             _ => Authorization::Deny,
         }
-    }));
+    }))
 }

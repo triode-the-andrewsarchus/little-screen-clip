@@ -27,7 +27,7 @@ chrono = "0.4"
 tempfile = "3.27"
 sha2 = "0.10"
 half = "2"
-rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions", "serialize"] }
+rusqlite = { version = "0.43", features = ["bundled", "fallible_uint", "backup", "limits", "hooks", "functions", "serialize"] }
 
 [dev-dependencies]
 little-clip-core = { path = "../little-clip-core", features = ["test-support"] }
