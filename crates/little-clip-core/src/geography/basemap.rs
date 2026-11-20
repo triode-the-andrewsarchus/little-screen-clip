@@ -2310,21 +2310,30 @@ impl GlobeCamera {
     /// Pans the camera by screen pixel delta `(dx, dy)`.
     pub fn pan_by(&mut self, dx: f32, dy: f32, width: f32, height: f32) {
         if self.orbit.active() {
-            let pose =
-                perspective::Perspective::new(self, [width, height], perspective::EARTH_RADIUS_M);
-            if let Some((lat, lon)) = pose.unproject(width * 0.5 - dx, height * 0.5 - dy) {
-                self.center_lat = lat.clamp(-85.0, 85.0);
-                self.center_lon = wrap_lon(lon);
-                return;
-            }
-            let (sin, cos) = self.orbit.bearing.to_radians().sin_cos();
-            let tilt_scale = self.orbit.tilt.to_radians().cos().max(0.2);
-            let x = f64::from(dx);
-            let y = f64::from(dy) / tilt_scale;
-            self.pan_in_geographic_axes(x * cos - y * sin, y * cos + x * sin, width, height);
+            self.pan_perspective_by([dx, dy], [width, height], perspective::EARTH_RADIUS_M);
+        } else {
+            self.pan_in_geographic_axes(f64::from(dx), f64::from(dy), width, height);
+        }
+    }
+
+    /// Pans a perspective view, including a nadir view of another body.
+    pub fn pan_perspective_by(
+        &mut self,
+        [dx, dy]: [f32; 2],
+        [width, height]: [f32; 2],
+        radius_m: f64,
+    ) {
+        let pose = perspective::Perspective::new(self, [width, height], radius_m);
+        if let Some((lat, lon)) = pose.unproject(width * 0.5 - dx, height * 0.5 - dy) {
+            self.center_lat = lat.clamp(-85.0, 85.0);
+            self.center_lon = wrap_lon(lon);
             return;
         }
-        self.pan_in_geographic_axes(f64::from(dx), f64::from(dy), width, height);
+        let (sin, cos) = self.orbit.bearing.to_radians().sin_cos();
+        let tilt_scale = self.orbit.tilt.to_radians().cos().max(0.2);
+        let x = f64::from(dx);
+        let y = f64::from(dy) / tilt_scale;
+        self.pan_in_geographic_axes(x * cos - y * sin, y * cos + x * sin, width, height);
     }
 
     fn pan_in_geographic_axes(&mut self, dx: f64, dy: f64, width: f32, height: f32) {

@@ -504,9 +504,11 @@ impl Viewer {
             );
 
             let size = [rect.width(), rect.height()];
+            let lunar_radius = self.moon_camera.map(|_| map_camera::MOON_RADIUS_M);
             map_camera::navigate(
                 self.moon_camera.as_mut().unwrap_or(&mut self.camera),
                 &response,
+                lunar_radius,
             );
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             let slot = ui.painter_at(rect).add(egui::Shape::Noop);
@@ -698,11 +700,7 @@ impl Viewer {
             self.contour_interval_m.filter(|_| !moon),
             self.local_elev_range,
             self.config.geography.units,
-            if moon {
-                map_camera::MOON_RADIUS_M
-            } else {
-                map_camera::EARTH_RADIUS_M
-            },
+            moon,
         );
         let Some((mut frame, result)) = prepared else {
             return;
@@ -1534,10 +1532,21 @@ fn paint_scale_and_contour_overlay(
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
     units: Units,
-    radius_m: f64,
+    moon: bool,
 ) -> egui::Rect {
-    let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
-    let meters_per_px = radius_m / scale_px;
+    use little_clip_core::geography::basemap::perspective::Perspective;
+
+    let size = [rect.width(), rect.height()];
+    let radius_m = if moon {
+        map_camera::MOON_RADIUS_M
+    } else {
+        map_camera::EARTH_RADIUS_M
+    };
+    let meters_per_px = (moon || camera.orbit.active())
+        .then(|| Perspective::new(camera, size, radius_m).meters_per_pixel())
+        .flatten()
+        .filter(|scale| *scale > 0.0)
+        .unwrap_or_else(|| radius_m / camera.scale_px(size[0], size[1]).max(1.0));
     let target_m = meters_per_px * 110.0;
     let (nice_m, scale_label) = units.scale_bar(target_m);
     let bar_w = (nice_m / meters_per_px) as f32;

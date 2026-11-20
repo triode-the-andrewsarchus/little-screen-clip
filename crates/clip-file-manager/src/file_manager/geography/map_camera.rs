@@ -6,13 +6,21 @@ use little_clip_core::palette::AppPalette;
 
 pub(super) const CONTROLS: &str = "Left-drag to pan. Scroll to zoom. Middle-drag up or down to tilt, and left or right to rotate.";
 
-pub(super) fn navigate(camera: &mut GlobeCamera, response: &egui::Response) {
+pub(super) fn navigate(
+    camera: &mut GlobeCamera,
+    response: &egui::Response,
+    perspective_radius_m: Option<f64>,
+) {
     let size = [response.rect.width(), response.rect.height()];
     let delta = response.drag_delta();
     if response.dragged_by(egui::PointerButton::Middle) {
         camera.orbit.drag(delta.x, delta.y);
     } else if response.dragged_by(egui::PointerButton::Primary) {
-        camera.pan_by(delta.x, delta.y, size[0], size[1]);
+        if let Some(radius_m) = perspective_radius_m {
+            camera.pan_perspective_by(delta.into(), size, radius_m);
+        } else {
+            camera.pan_by(delta.x, delta.y, size[0], size[1]);
+        }
     }
     if response.hovered() {
         let scroll = response.ctx.input(|i| i.smooth_scroll_delta.y);

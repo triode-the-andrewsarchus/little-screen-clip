@@ -89,13 +89,28 @@ impl Perspective {
         let delta = combine(pos, 1.0, self.eye, -1.0);
         let [x, y, z] = self.axes.map(|axis| dot(axis, delta));
         let depth = -z;
-        if depth <= 0.0 || dot(pos, self.eye) < radius * radius {
+        if depth <= 0.0 {
             return None;
+        }
+        // Elevated points can remain visible above the base sphere past the
+        // horizon, or rise higher than the viewer in a nearby valley.
+        if dot(pos, self.eye) < radius * radius {
+            let distance = dot(delta, delta).sqrt();
+            let ray = delta.map(|v| v / distance);
+            if sphere_distance(self.eye, ray, 1.0).is_some_and(|t| t < distance - 1e-9) {
+                return None;
+            }
         }
         Some([
             (self.size[0] * 0.5 + self.focal * x / depth) as f32,
             (self.size[1] * 0.5 - self.focal * y / depth) as f32,
         ])
+    }
+
+    /// Horizontal scale at the center of the orbit view.
+    pub fn meters_per_pixel(self) -> Option<f64> {
+        let (_, depth) = self.ground((self.size[0] * 0.5) as f32, (self.size[1] * 0.5) as f32)?;
+        Some(depth * self.radius_m / self.focal)
     }
 
     pub fn ground(self, x: f32, y: f32) -> Option<([f64; 3], f64)> {
@@ -184,6 +199,18 @@ mod tests {
         assert!(pose.unproject(600.0, 0.0).is_none());
         let raised = pose.project(40.0, 179.9, 3100.0).unwrap();
         assert!(raised[1] < 390.0);
+    }
+
+    #[test]
+    fn lunar_pan_and_scale_use_the_rendered_perspective() {
+        let mut camera = GlobeCamera::default();
+        let size = [900.0, 600.0];
+        let pose = Perspective::new(&camera, size, MOON_RADIUS_M);
+        let expected = pose.unproject(410.0, 325.0).unwrap();
+        camera.pan_perspective_by([40.0, -25.0], size, MOON_RADIUS_M);
+        assert!((camera.center_lat - expected.0).abs() < 1e-8);
+        assert!((camera.center_lon - expected.1).abs() < 1e-8);
+        assert!(pose.meters_per_pixel().unwrap() < MOON_RADIUS_M / camera.scale_px(900.0, 600.0));
     }
 
     #[test]
