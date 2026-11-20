@@ -758,10 +758,8 @@ fn extract_matching_from_zip(
         if cancelled.load(Ordering::Relaxed) {
             return Err("Extraction cancelled".into());
         }
-        let info = archive
-            .by_index_data(i)
-            .map_err(|error| error.to_string())?;
-        if info.is_dir() {
+        let mut entry = archive.by_index(i).map_err(|error| error.to_string())?;
+        if entry.is_dir() {
             continue;
         }
         let member_name = entry.name().map_err(|error| error.to_string())?;
