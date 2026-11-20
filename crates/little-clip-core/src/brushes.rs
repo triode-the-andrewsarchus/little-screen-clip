@@ -446,7 +446,7 @@ mod tests {
         assert!(matches!(
             &tip.tip,
             BrushTipKind::AlphaMask { width: 8, height: 4, alpha }
-                if alpha.as_ref() == &[200; 32]
+                if alpha.as_ref() == [200; 32]
         ));
     }
 
@@ -690,7 +690,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &lib.brushes[0].tip,
-            BrushTipKind::AlphaMask { alpha, .. } if alpha.as_ref() == &[255; 16]
+            BrushTipKind::AlphaMask { alpha, .. } if alpha.as_ref() == [255; 16]
         ));
     }
 

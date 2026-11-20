@@ -39,7 +39,7 @@ pub(super) fn render_inspect_frame_with_modifiers(
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
     let output = clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
             time: Some(time),

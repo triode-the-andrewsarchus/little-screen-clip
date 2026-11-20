@@ -826,7 +826,7 @@ mod tests {
         let palette = AppPalette::default();
         let mut rects = [egui::Rect::NOTHING; 2];
         let output = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     Pos2::ZERO,
@@ -1100,7 +1100,7 @@ endsolid test_cache
         let palette = AppPalette::default();
         let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
         let output = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

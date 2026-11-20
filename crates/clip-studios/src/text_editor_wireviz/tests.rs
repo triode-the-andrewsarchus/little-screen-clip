@@ -155,7 +155,7 @@ fn gesture_frame(
     hover: Option<Endpoint>,
 ) {
     let _ = clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(
                 egui::Pos2::ZERO,

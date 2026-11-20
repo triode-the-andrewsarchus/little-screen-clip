@@ -343,10 +343,8 @@ impl FileManager {
             .on_hover_text(tooltip);
         let popup = ui.make_persistent_id("folder_index_settings");
         let mut command = None;
-        if response.clicked() {
-            if root.is_none() {
-                command = Some(Command::Enroll(path.clone()));
-            }
+        if response.clicked() && root.is_none() {
+            command = Some(Command::Enroll(path.clone()));
         }
         egui::Popup::from_toggle_button_response(&response)
             .id(popup)

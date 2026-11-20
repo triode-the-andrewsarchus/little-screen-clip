@@ -73,10 +73,10 @@ impl DocumentUnwarpState {
 
     fn cancel(&mut self) {
         self.task = None;
-        if let Ok(options) = self.control.lock() {
-            if let Some(options) = options.as_ref() {
-                let _ = options.terminate();
-            }
+        if let Ok(options) = self.control.lock()
+            && let Some(options) = options.as_ref()
+        {
+            let _ = options.terminate();
         }
         self.request = None;
         self.retry_at = None;

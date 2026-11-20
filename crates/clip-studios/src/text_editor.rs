@@ -1278,7 +1278,7 @@ mod tests {
         close: &mut bool,
         input: egui::RawInput,
     ) -> egui::FullOutput {
-        clip_ui::test_support::run_frame(&context, input, |context| {
+        clip_ui::test_support::run_frame(context, input, |context| {
             context.root_ui(|ui| {
                 egui::CentralPanel::default()
                     .show(ui, |ui| session.ui(ui, &Default::default(), close))

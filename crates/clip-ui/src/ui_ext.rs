@@ -1480,7 +1480,7 @@ mod tests {
             configure_workbench_style(&configured);
             for ctx in [&defaults, &configured] {
                 ctx.set_pixels_per_point(scale);
-                let _ = crate::test_support::run_frame(&ctx, egui::RawInput::default(), |_| {});
+                let _ = crate::test_support::run_frame(ctx, egui::RawInput::default(), |_| {});
             }
             for font in [
                 FontId::proportional(BODY_FONT_SIZE),
@@ -1551,7 +1551,7 @@ mod tests {
         ) -> (egui::FullOutput, Rect) {
             let mut button_rect = Rect::NOTHING;
             let output = crate::test_support::run_frame(
-                &ctx,
+                ctx,
                 egui::RawInput {
                     time: Some(time),
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),

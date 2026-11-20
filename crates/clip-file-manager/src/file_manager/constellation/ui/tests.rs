@@ -1606,7 +1606,7 @@ pub(super) fn render_frame(
     size: Vec2,
 ) -> egui::FullOutput {
     clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
             ..Default::default()

@@ -365,7 +365,7 @@ mod tests {
         ];
         let mut changed = None;
         let output = crate::test_support::run_frame(
-            &ctx,
+            ctx,
             RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 400.0))),
                 events,

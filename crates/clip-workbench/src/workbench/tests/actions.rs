@@ -594,7 +594,7 @@ fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) -> usize 
     let mut closes = 0;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while app.daemon_mutation.is_some() {
-        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+        let output = clip_ui::test_support::run_frame(ctx, egui::RawInput::default(), |ctx| {
             app.poll_daemon_mutation(ctx)
         });
         closes += viewport_close_command_count(&output);

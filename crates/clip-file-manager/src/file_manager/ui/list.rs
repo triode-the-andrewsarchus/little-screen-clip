@@ -606,7 +606,7 @@ mod tests {
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 400.0))),
                 events,

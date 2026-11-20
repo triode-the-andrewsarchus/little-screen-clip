@@ -589,7 +589,7 @@ fn find_editor_enter_navigates_once_without_closing_the_preview() {
 
     let render = |ctx: &egui::Context, state: &mut TextPreviewState, events| {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

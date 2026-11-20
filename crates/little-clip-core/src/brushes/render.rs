@@ -587,12 +587,10 @@ mod tests {
         let colors = [[240, 0, 0], [0, 0, 240]];
         let hover = render_brush_hover_preview(&preset, 100, colors);
         let white = render_brush_preview(&preset, 300, 100, [242, 242, 245], true);
-        for (hover_row, white_row) in hover
-            .premultiplied_rgba
-            .chunks_exact(450 * 4)
-            .zip(white.premultiplied_rgba.chunks_exact(300 * 4))
-        {
-            assert_eq!(&hover_row[..300 * 4], white_row);
+        let (hover_rows, _) = hover.premultiplied_rgba.as_chunks::<{ 450 * 4 }>();
+        let (white_rows, _) = white.premultiplied_rgba.as_chunks::<{ 300 * 4 }>();
+        for (hover_row, white_row) in hover_rows.iter().zip(white_rows) {
+            assert_eq!(&hover_row[..300 * 4], white_row.as_slice());
         }
         let pixel = (50 * 450 + 375) * 4;
         let [red, green, blue, alpha] = hover.premultiplied_rgba[pixel..pixel + 4] else {

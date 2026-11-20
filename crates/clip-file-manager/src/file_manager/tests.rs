@@ -477,7 +477,7 @@ fn frame(
     let palette =
         crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
     clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,

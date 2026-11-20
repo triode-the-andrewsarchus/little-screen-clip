@@ -482,10 +482,8 @@ pub(crate) fn assert_bundled_cuda_execution(
                 name,
                 ort::ep::CUDA::default().with_tf32(false),
                 |builder| {
-                    builder
-                        .with_intra_threads(4)
-                        .and_then(|b| b.with_profiling(prefix))
-                        .map_err(|e| e.to_string())
+                    let builder = builder.with_intra_threads(4).map_err(|e| e.to_string())?;
+                    builder.with_profiling(prefix).map_err(|e| e.to_string())
                 },
                 |mut builder| builder.commit_from_memory(bytes).map_err(|e| e.to_string()),
             )

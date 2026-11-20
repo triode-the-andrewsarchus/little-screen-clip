@@ -84,7 +84,7 @@ fn clipboard_skips_a_corrupt_large_preview_for_a_decodable_smaller_one() {
         u16::from_le_bytes(raw[preview_ifd..preview_ifd + 2].try_into().unwrap()) as usize;
     let offset = raw.len() as u32;
     let entries = &mut raw[preview_ifd + 2..preview_ifd + 2 + entry_count * 12];
-    for entry in entries.chunks_exact_mut(12) {
+    for entry in entries.as_chunks_mut::<12>().0 {
         let value = match u16::from_le_bytes(entry[..2].try_into().unwrap()) {
             259 => 7, // JPEG compression
             273 => offset,

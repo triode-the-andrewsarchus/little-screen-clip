@@ -301,7 +301,7 @@ mod native_input_tests {
     ) -> Option<MirrorAction> {
         let mut action = None;
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
                 events,

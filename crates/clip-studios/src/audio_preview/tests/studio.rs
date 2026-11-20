@@ -403,7 +403,7 @@ fn pending_audio_folder_browse_requests_repaint_and_updates_destination() {
     let mut close_requested = false;
     let mut render = |state: &mut AudioPreviewState, ctx: &egui::Context| {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
                 ..Default::default()

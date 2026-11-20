@@ -151,7 +151,7 @@ pub(super) fn click_text_smart_copy_action(source_text: &str, button_label: &str
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

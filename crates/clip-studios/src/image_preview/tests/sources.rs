@@ -127,7 +127,7 @@ fn inline_image_previews_render_shared_pixels_with_independent_zoom_state() {
                   first_rect: &mut Rect,
                   second_rect: &mut Rect| {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(viewport),
                 events,

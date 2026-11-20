@@ -247,8 +247,8 @@ impl SrtmTile {
         let samples = hgt_samples(bytes.len())?;
         let count = bytes.len() / 2;
         let mut heights = Vec::with_capacity(count);
-        for pair in bytes.chunks_exact(2) {
-            heights.push(i16::from_be_bytes([pair[0], pair[1]]));
+        for pair in bytes.as_chunks::<2>().0 {
+            heights.push(i16::from_be_bytes(*pair));
         }
         Some(Self {
             lat_floor,
@@ -387,15 +387,17 @@ fn load_hgt_tile(directory: &AssetDirectory, name: &std::ffi::OsStr) -> Option<V
 
 fn hgt_samples(bytes: usize) -> Option<usize> {
     let samples = ((bytes / 2) as f64).sqrt() as usize;
-    (samples >= 2 && samples <= 3601 && samples * samples * 2 == bytes).then_some(samples)
+    ((2..=3601).contains(&samples) && samples * samples * 2 == bytes).then_some(samples)
 }
+
+type SampledHgtTile = (usize, Arc<Vec<u8>>);
 
 // A worker retains only its current degree tile. This avoids a global mutex,
 // Arc traffic and shape validation for every pixel. Two raster workers retain
 // at most 52 MB beyond the shared 128 MiB cache when their current tile is evicted.
 struct HgtSampler<'a> {
     store: &'a HgtStore,
-    last: Option<((i32, i32), Option<(usize, Arc<Vec<u8>>)>)>,
+    last: Option<((i32, i32), Option<SampledHgtTile>)>,
 }
 impl HgtSampler<'_> {
     fn sample(&mut self, lat: f64, lon: f64) -> Option<f32> {
@@ -557,7 +559,7 @@ impl GrwlSummaryIndex {
                 if rdr.read_exact(&mut field_buf).is_ok() && rec_len > 1 {
                     let mut offset = 1usize;
                     let mut w_span = None;
-                    for chunk in field_buf.chunks_exact(32) {
+                    for chunk in field_buf.as_chunks::<32>().0 {
                         if chunk[0] == 0x0D {
                             break;
                         }
@@ -836,7 +838,9 @@ fn mask_geokeys(decoder: &mut tiff::decoder::Decoder<BufReader<fs::File>>) -> Op
     }
     let key = |id| {
         keys[4..]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .find(|k| k[0] == id && k[1] == 0 && k[2] == 1)
             .map(|k| k[3])
     };
@@ -1219,7 +1223,7 @@ impl HydroRiversIndex {
                     let mut offset = 1usize;
                     let mut ord_span = None;
                     let mut dis_span = None;
-                    for chunk in field_buf.chunks_exact(32) {
+                    for chunk in field_buf.as_chunks::<32>().0 {
                         if chunk[0] == 0x0D {
                             break;
                         }
@@ -1573,8 +1577,7 @@ impl Ne2FullSampler {
             return None;
         }
         let (chunk_w, chunk_h) = decoder.chunk_dimensions();
-        if width < 8192
-            || width > 1_000_000
+        if !(8192..=1_000_000).contains(&width)
             || height == 0
             || height > 1_000_000
             || chunk_w != width
@@ -2334,7 +2337,7 @@ pub fn parse_cities_geojson(bytes: &[u8]) -> Result<Vec<CityPoint>, String> {
             pop_max,
         });
     }
-    cities.sort_by(|a, b| b.pop_max.cmp(&a.pop_max));
+    cities.sort_by_key(|city| std::cmp::Reverse(city.pop_max));
     Ok(cities)
 }
 

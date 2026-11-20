@@ -58,7 +58,7 @@ fn inline_text_previews_share_source_with_independent_scroll_state() {
                         time: f64,
                         rects: &mut [egui::Rect; 2]| {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

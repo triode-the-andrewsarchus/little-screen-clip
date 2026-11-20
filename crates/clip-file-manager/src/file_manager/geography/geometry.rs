@@ -487,7 +487,9 @@ fn triangulate(outer: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Result<Vec<[[f32;
         .map_err(|e| format!("Lake tessellation: {e:?}"))?;
     Ok(buffers
         .indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| {
             [
                 buffers.vertices[p[0] as usize],
@@ -576,7 +578,7 @@ mod tests {
             .batches
             .iter()
             .filter(|((_, l), _)| *l == Layer::GrwlLarge)
-            .flat_map(|(_, v)| v.chunks_exact(6))
+            .flat_map(|(_, v)| v.as_chunks::<6>().0)
             .collect();
         assert!(
             !fallback.is_empty(),
@@ -631,7 +633,7 @@ mod tests {
             .batches
             .iter()
             .filter(|((_, layer), _)| *layer == Layer::RiverLarge)
-            .flat_map(|(_, data)| data.chunks_exact(6))
+            .flat_map(|(_, data)| data.as_chunks::<6>().0)
             .collect();
         assert!(!remaining.is_empty());
         assert!(remaining.iter().all(|p| p[0] > 0.02));
@@ -665,7 +667,7 @@ mod tests {
             let records: Vec<_> = all
                 .batches
                 .values()
-                .flat_map(|v| v.chunks_exact(6))
+                .flat_map(|v| v.as_chunks::<6>().0)
                 .collect();
             let targets: BTreeSet<_> = records
                 .iter()
@@ -689,7 +691,7 @@ mod tests {
                 actual.extend(
                     tile.batches
                         .values()
-                        .flat_map(|v| v.chunks_exact(6))
+                        .flat_map(|v| v.as_chunks::<6>().0)
                         .map(|p| p.iter().map(|f| f.to_bits()).collect::<Vec<_>>()),
                 );
             }

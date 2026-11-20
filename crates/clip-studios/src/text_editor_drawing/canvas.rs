@@ -512,7 +512,7 @@ mod tests {
         mut paint: impl FnMut(&mut egui::Ui),
     ) {
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
                 events,

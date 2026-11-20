@@ -601,7 +601,7 @@ fn palette_search_focus_yields_to_audio_and_returns_on_activation() {
     ) -> egui::Id {
         let mut field_id = None;
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

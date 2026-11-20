@@ -80,11 +80,18 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
 const RECENT_BRUSH_ROWS: usize = 12;
 const RECENT_BRUSH_RASTERS: usize = 48;
 
+struct StrokeRaster {
+    fg_rgb: [u8; 3],
+    width: u32,
+    height: u32,
+    id: uuid::Uuid,
+}
+
 #[derive(Default)]
 pub(super) struct Previews {
     pub(in crate::file_manager) context: super::search::PreviewContext,
     cache: Cache,
-    strokes: BTreeMap<(uuid::Uuid, usize), ([u8; 3], u32, u32, uuid::Uuid)>,
+    strokes: BTreeMap<(uuid::Uuid, usize), StrokeRaster>,
     hover: HoverRaster,
     recent: VecDeque<uuid::Uuid>,
 }
@@ -120,7 +127,7 @@ impl Previews {
             .strokes
             .iter()
             .filter(|((source, _), _)| visible.contains(source))
-            .map(|(_, (_, _, _, raster))| *raster)
+            .map(|(_, raster)| raster.id)
             .collect();
         let recent_rasters: BTreeSet<_> = self
             .recent
@@ -128,7 +135,7 @@ impl Previews {
             .copied()
             .filter(|source| !visible.contains(source))
             .flat_map(|source| self.strokes.range((source, 0)..=(source, usize::MAX)))
-            .map(|(_, (_, _, _, raster))| *raster)
+            .map(|(_, raster)| raster.id)
             .filter(|&raster| {
                 self.cache
                     .get(raster)
@@ -138,8 +145,9 @@ impl Previews {
             .collect();
         self.cache
             .retain_with_ready(&visible_rasters, |id| recent_rasters.contains(&id));
-        self.strokes
-            .retain(|_, (_, _, _, id)| visible_rasters.contains(id) || recent_rasters.contains(id));
+        self.strokes.retain(|_, raster| {
+            visible_rasters.contains(&raster.id) || recent_rasters.contains(&raster.id)
+        });
         self.hover.retain(|source| visible.contains(&source));
         &self.recent
     }
@@ -212,10 +220,10 @@ impl Previews {
         let width = (body.width() / slots.len() as f32).min(preferred_width);
         let cells = super::ui::strip_cells(ui, body, slots, width, colors);
         let shown: BTreeSet<_> = cells.iter().map(|(ordinal, _)| ordinal - 1).collect();
-        self.strokes.retain(|(id, index), (_, _, _, raster)| {
+        self.strokes.retain(|(id, index), raster| {
             let keep = *id != source || shown.contains(index);
             if !keep {
-                self.cache.invalidate(*raster);
+                self.cache.invalidate(raster.id);
             }
             keep
         });
@@ -280,19 +288,24 @@ impl Previews {
         path: &Path,
         request: StrokeRequest,
     ) -> Option<&egui::TextureHandle> {
-        let requested = (request.fg_rgb, request.width, request.height);
+        let new_raster = || StrokeRaster {
+            fg_rgb: request.fg_rgb,
+            width: request.width,
+            height: request.height,
+            id: uuid::Uuid::new_v4(),
+        };
         let record = self
             .strokes
             .entry((source, request.index))
-            .or_insert_with(|| (requested.0, requested.1, requested.2, uuid::Uuid::new_v4()));
-        if record.0 != requested.0
-            || record.1.abs_diff(requested.1) > 1
-            || record.2.abs_diff(requested.2) > 1
+            .or_insert_with(new_raster);
+        if record.fg_rgb != request.fg_rgb
+            || record.width.abs_diff(request.width) > 1
+            || record.height.abs_diff(request.height) > 1
         {
-            self.cache.invalidate(record.3);
-            *record = (requested.0, requested.1, requested.2, uuid::Uuid::new_v4());
+            self.cache.invalidate(record.id);
+            *record = new_raster();
         }
-        let id = record.3;
+        let id = record.id;
         if self.cache.needs(id) {
             self.cache.request(
                 id,

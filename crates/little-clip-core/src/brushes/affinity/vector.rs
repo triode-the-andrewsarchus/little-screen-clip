@@ -151,7 +151,7 @@ impl<'a> Texture<'a> {
                 return Err("Cancelled");
             }
             match state {
-                0 | 1 | 2 => {
+                0..=2 => {
                     self.write_tile(&mut pixels, index, None, if state == 2 { 0 } else { 255 })
                 }
                 4 => {

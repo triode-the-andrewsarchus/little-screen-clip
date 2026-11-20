@@ -39,6 +39,12 @@ pub(super) struct Tiles {
     pub contour: Option<f32>,
 }
 
+pub(super) struct Appearance {
+    pub style: BasemapStyle,
+    pub contours: bool,
+    pub layers: Layers,
+}
+
 /// Geographic working set shared by one viewport or a collection of strips.
 #[derive(Default)]
 pub(super) struct Requests {
@@ -100,9 +106,7 @@ impl Tiles {
         rect: egui::Rect,
         assets: Option<&Arc<BasemapAssets>>,
         camera: GlobeCamera,
-        style: BasemapStyle,
-        contours: bool,
-        layers: Layers,
+        appearance: Appearance,
     ) -> Result<(), String> {
         let Some(assets) = assets else {
             return Ok(());
@@ -114,11 +118,11 @@ impl Tiles {
                 .collect(),
             &camera,
             size,
-            layers.rivers,
+            appearance.layers.rivers,
         );
         let raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
-        let mut frame = self.frame(wanted, camera, size, layers);
-        self.update_contours(&mut frame, style, contours);
+        let mut frame = self.frame(wanted, camera, size, appearance.layers);
+        self.update_contours(&mut frame, appearance.style, appearance.contours);
         gpu::paint(ui, rect, frame)?;
         raster_result
     }

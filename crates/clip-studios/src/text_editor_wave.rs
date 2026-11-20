@@ -403,7 +403,7 @@ mod tests {
     ) -> (egui::FullOutput, Option<String>) {
         let mut edit = None;
         let output = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 600.0))),
                 time: Some(time),

@@ -14,7 +14,7 @@ fn escape() -> Event {
 fn frame(viewers: &mut Viewers, ctx: &Context, events: Vec<Event>) -> (bool, egui::FullOutput) {
     let mut closed = false;
     let output = clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 800.0))),
             events,

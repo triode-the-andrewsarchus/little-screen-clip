@@ -236,7 +236,7 @@ fn press_number(
 ) {
     for pressed in [true, false] {
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 events: [egui::Event::ModifiersChanged(modifiers)]
                     .into_iter()

@@ -232,32 +232,38 @@ mod tests {
     #[test]
     fn natural_earth_detail_is_not_replaced_by_coarse_land_cover() {
         use crate::geography::basemap::{EquirectTexture, GlobalLandCoverGrid, LandCoverClass};
-        let mut assets = BasemapAssets::default();
-        assets.ne2 = Some(EquirectTexture {
-            width: 1,
-            height: 1,
-            rgb: std::sync::Arc::new(vec![45, 95, 155]),
-        });
-        assets.land_cover = Some(GlobalLandCoverGrid {
-            width: 1,
-            height: 1,
-            classes: vec![LandCoverClass::Forest as u8],
-        });
+        let mut assets = BasemapAssets {
+            ne2: Some(EquirectTexture {
+                width: 1,
+                height: 1,
+                rgb: std::sync::Arc::new(vec![45, 95, 155]),
+            }),
+            land_cover: Some(GlobalLandCoverGrid {
+                width: 1,
+                height: 1,
+                classes: vec![LandCoverClass::Forest as u8],
+            }),
+            ..BasemapAssets::default()
+        };
         let cancel = AtomicBool::new(false);
         let id = TileId::at(0, 0., 0.);
         let tile = SourceTile::prepare(&assets, id, &cancel).unwrap();
         assert!(
             tile.color
-                .chunks_exact(4)
-                .all(|pixel| pixel == [45, 95, 155, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|&pixel| pixel == [45, 95, 155, 255])
         );
         assets.ne2 = None;
         let tile = SourceTile::prepare(&assets, id, &cancel).unwrap();
         let [r, g, b] = LandCoverClass::Forest.rgb();
         assert!(
             tile.color
-                .chunks_exact(4)
-                .all(|pixel| pixel == [r, g, b, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|&pixel| pixel == [r, g, b, 255])
         );
     }
     #[test]

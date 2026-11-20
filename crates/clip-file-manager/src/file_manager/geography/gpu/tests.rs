@@ -168,7 +168,9 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         );
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p[1] as u16 > p[0] as u16 + 20 && p[1] as u16 > p[2] as u16 + 20),
             "Native callback did not draw the source tile"
         );

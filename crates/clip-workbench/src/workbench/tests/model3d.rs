@@ -8,7 +8,7 @@ fn model3d_toolbar_clicks_change_only_their_view_controls() {
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
         clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,

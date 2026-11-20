@@ -990,7 +990,7 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
         let mut wants_keyboard_before_render = false;
         let palette = AppPalette::default();
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 events,

@@ -35,7 +35,7 @@ enum Loaded {
     Mail(super::mail::Viewer),
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
-    Geography(super::geography::Viewer),
+    Geography(Box<super::geography::Viewer>),
     Toolpath(super::gcode::Viewer),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(Box<super::multisample::Viewer>),
@@ -758,9 +758,9 @@ fn load(
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
-        Kind::Document(Format::Geography) => {
-            super::geography::Viewer::load(path).map(Loaded::Geography)
-        }
+        Kind::Document(Format::Geography) => super::geography::Viewer::load(path)
+            .map(Box::new)
+            .map(Loaded::Geography),
         Kind::Document(Format::Database) => {
             super::database::Viewer::load(path).map(Loaded::Database)
         }
@@ -838,7 +838,7 @@ fn session(
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
-        Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
+        Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),

@@ -215,7 +215,7 @@ fn save_dialog_owns_image_shortcuts_until_dismissed() {
     ) -> bool {
         let mut close = false;
         let _ = clip_ui::test_support::run_frame(
-            &ctx,
+            ctx,
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
                 events: vec![egui::Event::Key {

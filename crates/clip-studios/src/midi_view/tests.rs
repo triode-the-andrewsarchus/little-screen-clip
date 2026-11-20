@@ -70,7 +70,7 @@ fn render_inline_midi_pair(
     let palette = AppPalette::default();
     let mut rects = [Rect::NOTHING; 2];
     let output = clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(480.0, 180.0))),
             events,

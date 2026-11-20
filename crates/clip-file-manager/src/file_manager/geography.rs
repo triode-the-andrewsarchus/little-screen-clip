@@ -300,13 +300,15 @@ impl Viewer {
                 rect,
                 self.assets.as_ref(),
                 self.camera,
-                self.style,
-                self.show_contours,
-                geometry::Layers {
-                    countries: self.show_country_borders,
-                    states: self.show_state_borders,
-                    rivers: self.show_rivers,
-                    roads: self.show_roads,
+                tiles::Appearance {
+                    style: self.style,
+                    contours: self.show_contours,
+                    layers: geometry::Layers {
+                        countries: self.show_country_borders,
+                        states: self.show_state_borders,
+                        rivers: self.show_rivers,
+                        roads: self.show_roads,
+                    },
                 },
             ) {
                 self.render_error = Some(error);

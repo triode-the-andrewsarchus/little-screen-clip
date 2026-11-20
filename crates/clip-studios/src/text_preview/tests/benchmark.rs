@@ -50,7 +50,7 @@ fn benchmark_large_text_preview_frames_across_width_dpi_appearance() {
             .get_mut(&input.viewport_id)
             .expect("root viewport exists")
             .native_pixels_per_point = Some(pixels_per_point);
-        let output = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+        let output = clip_ui::test_support::run_frame(ctx, input, |ctx| {
             ctx.root_ui(|ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let mut close = false;

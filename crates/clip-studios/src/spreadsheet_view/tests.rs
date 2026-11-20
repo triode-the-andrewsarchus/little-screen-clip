@@ -26,7 +26,7 @@ fn render_inline_pair(
     let palette = little_clip_core::palette::AppPalette::default();
     let mut rects = [egui::Rect::NOTHING; 2];
     let output = clip_ui::test_support::run_frame(
-        &ctx,
+        ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
