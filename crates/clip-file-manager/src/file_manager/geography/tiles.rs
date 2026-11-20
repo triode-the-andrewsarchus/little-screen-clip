@@ -235,7 +235,6 @@ impl Tiles {
             camera,
             style: BasemapStyle::Natural,
             contours: None,
-            range: [0.0, 1000.0],
             tiles: wanted
                 .raster
                 .iter()
@@ -284,7 +283,6 @@ impl Tiles {
                 choose_contour_interval_m((high - low).max(20.0), frame.camera.zoom)
             });
         frame.style = style;
-        frame.range = self.range;
         frame.contours = self.contour;
     }
 

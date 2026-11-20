@@ -222,6 +222,66 @@ def check_constellation_projection(root, width, height):
     GL.glDeleteProgram(figures)
 
 
+def check_natural_terrain_tone(raster, draw, width, height, textures):
+    uniform = lambda name: GL.glGetUniformLocation(raster, name)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    color = np.full((258, 258, 4), [181, 160, 124, 255], np.uint8)
+    color[:129, :, :3] = [119, 152, 105]
+    base = texture(GL.GL_RGBA8, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, color)
+    GL.glActiveTexture(GL.GL_TEXTURE1)
+    dem = np.empty((258, 258, 2), dtype=np.float32)
+    dem[:] = [320, 0]
+    heights = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT, dem)
+    GL.glUniform1f(uniform("u_side"), .25)
+
+    def frame(zoom, interval=0, rgb=False):
+        draw(lon=45, blend=0, zoom=zoom, interval=interval)
+        pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        color_pixels = np.frombuffer(pixels, np.uint8).reshape(height, width, 4)[:, :, :3]
+        return color_pixels if rgb else color_pixels @ [.299, .587, .114]
+
+    no_dem = frame(12.0)
+    for height_m in [320.0, 610.0]:
+        # Simulate arrival of a different terrain level at a static camera.
+        dem[:] = [height_m, 1.0]
+        GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RG, GL.GL_FLOAT, dem)
+        for zoom in [4.0, 6.0, 7.5, 9.0, 12.0, 60.0]:
+            measured = frame(zoom)
+            for row in [height // 4, 3 * height // 4]:
+                assert abs(measured[row, width // 2] - no_dem[row, width // 2]) <= 1, (height_m, zoom, row)
+
+    # A steep ridge with enough sub-pixel contours to look gray if every line
+    # is drawn at full opacity. Index contours must still be visible.
+    dem[:, :, 0] = 8000 + 1300 * np.abs(np.arange(258) - 64)
+    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RG, GL.GL_FLOAT, dem)
+    relief = frame(12.0)
+    assert np.mean(np.abs(relief - no_dem)) > 10.0, "Terrain relief disappeared"
+    coarse = frame(12.0, 100)
+    fine = frame(12.0, 50)
+    full_field_dim = np.mean(relief - fine)
+    step_dim = np.mean(coarse - fine)
+    assert full_field_dim < 8.0 and abs(step_dim) < 3.0, (full_field_dim, step_dim)
+    assert np.max(relief - fine) > 10.0, "Index contours disappeared"
+
+    # Drive a gradual change from green through yellow-green into brown at
+    # constant elevation. The derived palette should add intermediate colors.
+    dem[:] = [320, 1]
+    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RG, GL.GL_FLOAT, dem)
+    color[:, :, :3] = [143, 143, 106]
+    color[:, :, 0] = np.clip(143 + 3 * (np.arange(258) - 64), 30, 240)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, color)
+    row = frame(12.0, rgb=True)[height // 2].astype(int)
+    assert len(np.unique(row, axis=0)) > 30
+    assert np.abs(np.diff(row, axis=0)).max() <= 2, "Hard palette boundary in a continuous source"
+
+    for unit in (0, 1):
+        GL.glActiveTexture(GL.GL_TEXTURE0 + unit)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, textures[unit])
+    GL.glDeleteTextures([base, heights])
+    GL.glUniform1f(uniform("u_side"), 180)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/geography-gpu-acceptance"))
@@ -256,11 +316,10 @@ def main():
             GL.glBindTexture(GL.GL_TEXTURE_2D, textures[unit])
             GL.glUniform1i(uniform(name), unit)
         GL.glUniform2f(uniform("u_view"), width, height)
-        GL.glUniform2f(uniform("u_range"), 500, 2600)
         GL.glUniform1i(uniform("u_show_water"), 1)
         GL.glUniform1f(uniform("u_side"), 180)
 
-        def draw(style=0, lat=0, lon=0, blend=1, zoom=1):
+        def draw(style=0, lat=0, lon=0, blend=1, zoom=1, interval=None):
             GL.glUseProgram(raster)
             GL.glBindVertexArray(vao)
             GL.glClearColor(0.02, 0.03, 0.04, 1)
@@ -270,8 +329,7 @@ def main():
             GL.glUniform1f(uniform("u_zoom"), zoom)
             GL.glUniform1f(uniform("u_longitude"), lon)
             GL.glUniform1i(uniform("u_style"), style)
-            GL.glUniform1f(uniform("u_natural_detail"), max(0, min(1, (zoom - 5) / 4)))
-            GL.glUniform1f(uniform("u_contour"), 100 if zoom >= 3.5 else 0)
+            GL.glUniform1f(uniform("u_contour"), (100 if zoom >= 3.5 else 0) if interval is None else interval)
             for west in [-180, 0]:
                 relative = (west + 90 - lon + 180) % 360 - 180 - 90
                 for shift in [-360, 0, 360]:
@@ -293,6 +351,7 @@ def main():
             assert len(np.unique(np.asarray(image.convert("RGB")).reshape(-1, 3), axis=0)) > 10, f"Empty or constant map: {name}"
             images.append(pixels)
         assert len(set(images)) == len(images), "Camera/style changes did not affect rendering"
+        check_natural_terrain_tone(raster, draw, width, height, textures)
 
         # Flat water at zero elevation is common in coastal DEMs. Use a
         # diagonal bank to check that the transitions interpolate off-grid.
@@ -343,7 +402,8 @@ def main():
         center = width // 2
         core, outskirts = lit[center], lit[center + 16]
         assert min(core) > 220 and max(core) - min(core) < 32, core
-        assert outskirts[0] > outskirts[1] > outskirts[2], outskirts
+        warm_shift = outskirts - unlit[center + 16]
+        assert warm_shift[0] > warm_shift[1] > warm_shift[2], warm_shift
         assert 12 < outskirts[0] - unlit[center + 16, 0] < 95
         assert 0 < lit[center + 23, 0] - unlit[center + 23, 0] < 12
         assert np.array_equal(lit[center + 40], unlit[center + 40])
@@ -376,7 +436,7 @@ def main():
         check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 4,
-            "sky_sizing_checked": True,
+            "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
