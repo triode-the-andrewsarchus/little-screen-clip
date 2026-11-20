@@ -29,7 +29,7 @@ pub struct Plan {
     pub installed_bytes: u64,
     pub peak_bytes: u64,
     pub already_installed: usize,
-    pub budget_remaining: u64,
+    pub free_bytes: u64,
 }
 
 fn range(url: &str, start: u64, total: u64, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
@@ -286,10 +286,7 @@ pub fn plan(config: &AppConfig, bounds: [f64; 4], cancel: &AtomicBool) -> Result
         installed_bytes: 0,
         peak_bytes: 0,
         already_installed: 0,
-        budget_remaining: config
-            .geography
-            .max_assets_bytes
-            .saturating_sub(dir_size(&root.path())),
+        free_bytes: free_space(&root)?,
     };
     let mut unique = std::collections::BTreeSet::new();
     let mut retained = 0;
@@ -344,17 +341,12 @@ pub(super) fn download(session: &DownloadSession<'_>, plan: &Plan) -> Result<(),
             &format!("Downloading Viewfinder {}…", a.name),
         );
         let expanded = a.tiles.iter().map(|t| t.bytes).sum::<u64>();
-        if session.remaining() < a.download_bytes + expanded {
-            return Err(
-                "Viewfinder download exceeds the geography disk budget (including temporary ZIP)"
-                    .into(),
-            );
-        }
+        let available = require_space(&directory, a.download_bytes + expanded)?;
         let file = download_to_file(
             &directory.path(),
             &a.name,
             &format!("{HOST}{}", a.name),
-            session.remaining(),
+            available,
             session.cancelled,
             |f, m| session.report((i as f32 + f) / plan.archives.len() as f32, m),
         )?;

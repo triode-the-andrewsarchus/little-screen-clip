@@ -350,24 +350,20 @@ impl Progress {
     }
 }
 fn download(
-    root: &AssetDirectory,
+    directory: AssetDirectory,
     config: &AppConfig,
     tiles: &[Tile],
+    available: u64,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let directory = Arc::new(
-        AssetDirectory::create(&root.path().join("nasadem/terrain")).map_err(|e| e.to_string())?,
-    );
+    let directory = Arc::new(directory);
     let workers = BackgroundJobs::new(4, 8);
     let auth = (0..4)
         .map(|_| Auth::new(&config.geography.earthdata).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()?;
     let mut pending: Vec<Option<Pending>> = (0..4).map(|_| None).collect();
     let mut progress = Progress {
-        remaining: config
-            .geography
-            .max_assets_bytes
-            .saturating_sub(dir_size(&root.path())),
+        remaining: available,
         complete: 0,
         failures: Vec::new(),
         fatal: None,
@@ -408,8 +404,7 @@ fn download(
                 let reserved = HGT_BYTES + tile.estimated_zip_bytes * 2 + 65_536;
                 if reserved > progress.remaining {
                     progress.fatal = Some(
-                        "NASADEM exceeds geography.max_assets_bytes; completed tiles are retained"
-                            .into(),
+                        "NASADEM needs more free disk space; completed tiles are retained".into(),
                     );
                     break;
                 }
@@ -551,10 +546,7 @@ pub(crate) fn cli(args: &[std::ffi::OsString]) -> Result<(), String> {
         .collect();
     staging.sort_unstable_by(|a, b| b.cmp(a));
     let staging = staging.into_iter().take(4).sum::<u64>();
-    let remaining = config
-        .geography
-        .max_assets_bytes
-        .saturating_sub(dir_size(&root.path()));
+    let remaining = free_space(&directory)?;
     println!(
         "NASADEM: {} tiles; {} already installed; {} pending",
         tiles.len(),
@@ -562,12 +554,12 @@ pub(crate) fn cli(args: &[std::ffi::OsString]) -> Result<(), String> {
         pending.len()
     );
     println!(
-        "Estimated remaining transfer: {:.2} GB; uncompressed upper bound: {:.2} GB; budget available: {:.2} GB",
+        "Estimated remaining transfer: {:.2} GB; uncompressed upper bound: {:.2} GB; free disk space: {:.2} GB",
         estimated as f64 / 1e9,
         raw as f64 / 1e9,
         remaining as f64 / 1e9
     );
-    println!("Terrain is stored losslessly as .hgt.zst; budget estimates use uncompressed sizes.");
+    println!("Terrain is stored losslessly as .hgt.zst; disk estimates use uncompressed sizes.");
     println!(
         "Elevation destination: {}",
         config.geo_assets_dir().join("nasadem/terrain").display()
@@ -575,10 +567,8 @@ pub(crate) fn cli(args: &[std::ffi::OsString]) -> Result<(), String> {
     if plan_only || pending.is_empty() {
         return Ok(());
     }
-    if raw + staging > remaining {
-        return Err("Increase geography.max_assets_bytes to accommodate the full selected dataset (including temporary ZIP space)".into());
-    }
-    download(&root, &config, &pending, &CANCELLED)
+    let available = require_space(&directory, raw + staging)?;
+    download(directory, &config, &pending, available, &CANCELLED)
 }
 
 #[cfg(test)]

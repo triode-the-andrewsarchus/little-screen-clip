@@ -408,7 +408,7 @@ pub const DEFAULT_GEO_GEBCO_TERRAIN_URL: &str =
 pub const DEFAULT_GEO_LAND_COVER_URL: &str =
     "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content";
 
-/// Default maximum disk budget for offline geography datasets (< 20 GB).
+/// Default additional disk budget per Get all base maps run (18 GiB).
 pub const DEFAULT_GEO_MAX_ASSETS_BYTES: u64 = 18 * 1024 * 1024 * 1024;
 
 /// Stores optional NASA Earthdata download credentials.
@@ -444,7 +444,7 @@ pub struct GeographyConfig {
     pub terrain_override_dir: Option<PathBuf>,
     /// Prompt to download missing offline basemap assets when opening a geography file.
     pub prompt_on_open: bool,
-    /// Maximum total on-disk bytes allowed for downloaded geography datasets (default: 18 GiB < 20 GB).
+    /// Maximum additional on-disk bytes per Get all base maps run (default: 18 GiB).
     pub max_assets_bytes: u64,
     /// Optional URL override for the Natural Earth II global texture archive.
     pub ne2_texture_url: Option<String>,

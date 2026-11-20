@@ -178,8 +178,8 @@ roots = []
 units = "metric"
 # Ask to download offline basemap assets the first time a geography file is opened.
 prompt_on_open = true
-# Total on-disk budget for downloaded geography datasets in bytes (default: 18 GiB < 20 GB).
-# Optional Viewfinder 1″ terrain also counts against this budget.
+# Additional disk budget per Get all base maps run in bytes (default: 18 GiB).
+# Individual downloads use available disk space.
 # In Offline Assets, estimate/download the current 2D region before adding it.
 # The review shows compressed, unpacked and temporary space requirements.
 # Tiles are saved in assets_dir/terrain; Get all excludes these regional packs.
@@ -205,8 +205,7 @@ prompt_on_open = true
 # land_cover_url = "https://zenodo.org/api/records/21694233/files/land_cover_lccs_class_2020_v2_1_1.nc/content"
 
 # Optional NASADEM downloads use Earthdata Login (about 109 GB transferred,
-# 377 GB of elevation grids). Raise geography.max_assets_bytes above the selected
-# data size plus existing assets, e.g. 500000000000 for the complete dataset.
+# 377 GB of uncompressed elevation grids). Check free disk space before downloading.
 # Run scripts/download_nasadem.sh --plan to inspect the catalog and required space.
 # Run scripts/download_nasadem.sh to download, or --config FILE for another config.
 # Four transfers run at once. Ctrl+C stops safely; rerunning skips complete tiles.

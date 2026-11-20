@@ -66,7 +66,7 @@ impl DownloadPack {
             Self::Sky => "Sky and Earth Lighting",
             Self::NightLights => "Black Marble Night Lights (2016)",
             Self::DetailedTransportation => "Detailed Transportation",
-            Self::All => "All Offline Basemap Assets (< 20 GB)",
+            Self::All => "Base Offline Maps",
         }
     }
 }
@@ -77,7 +77,7 @@ pub struct DownloadProgress {
     pub message: String,
 }
 
-const PACKS: [DownloadPack; 9] = [
+const BASE_PACKS: [DownloadPack; 9] = [
     DownloadPack::QuickStart,
     DownloadPack::Borders,
     DownloadPack::RoadsAndLakes,
@@ -108,7 +108,7 @@ impl DownloadPack {
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
             Self::Sky | Self::NightLights | Self::DetailedTransportation => true, // Verified by their own loaders.
-            Self::All => PACKS.into_iter().all(|p| p.installed(status)),
+            Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
     fn files(self, c: &AppConfig) -> Vec<AssetFile<'_>> {
@@ -218,6 +218,7 @@ struct DownloadSession<'a> {
     cancelled: &'a AtomicBool,
     progress: &'a Mutex<DownloadProgress>,
     viewfinder: Option<&'a viewfinder::Plan>,
+    all_ceiling: Option<u64>,
 }
 struct DownloadOutcome {
     assets: Arc<BasemapAssets>,
@@ -276,11 +277,11 @@ impl DownloadSession<'_> {
             p.message = message.into();
         }
     }
-    fn remaining(&self) -> u64 {
-        self.config
-            .geography
-            .max_assets_bytes
-            .saturating_sub(dir_size(&self.root.path()))
+    fn remaining(&self) -> Result<u64, String> {
+        let available = free_space(self.root)?;
+        Ok(self.all_ceiling.map_or(available, |ceiling| {
+            available.min(ceiling.saturating_sub(dir_size(&self.root.path())))
+        }))
     }
     fn run(&self, pack: DownloadPack, base: f32, span: f32) -> Result<(), String> {
         if self.cancelled.load(Ordering::Relaxed) {
@@ -304,7 +305,7 @@ impl DownloadSession<'_> {
                         &self.root.path().join(file.folder),
                         file.name,
                         file.url,
-                        self.remaining(),
+                        self.remaining()?,
                         self.cancelled,
                         |f, m| self.report(offset + f * span / n, m),
                     )?;
@@ -332,14 +333,7 @@ impl DownloadSession<'_> {
             })
             .collect();
         let required: u64 = files.iter().map(|(_, sizes)| *sizes.end()).sum();
-        let used = dir_size(&self.root.path());
-        let needed = used.saturating_add(required);
-        if required > 0 && needed > self.config.geography.max_assets_bytes {
-            return Err(format!(
-                "This pack needs {:.1} MB for its remaining sources. Set [geography] max_assets_bytes to at least {needed} and reopen the viewer.",
-                required as f64 / 1e6,
-            ));
-        }
+        require_space(self.root, required)?;
         let count = files.len().max(1) as f32;
         for (i, (file, sizes)) in files.into_iter().enumerate() {
             let downloaded = download_to_file(
@@ -364,10 +358,7 @@ impl DownloadSession<'_> {
         if plan.source.is_some() {
             return Ok(());
         }
-        let used = dir_size(&root.path());
-        let mut other = used.saturating_sub(plan.bytes);
-        let budget = self.config.geography.max_assets_bytes;
-        transport_budget(root, used, plan.bytes, budget)?;
+        require_space(root, detail::free_space_for_import(plan.bytes))?;
         let mut db = detail::import::open(root)?;
         let manifest = detail::manifest();
         let mut processed = 0;
@@ -377,10 +368,8 @@ impl DownloadSession<'_> {
                 continue;
             }
             let already = detail::database_bytes(root);
-            if index % 16 == 0 {
-                other = dir_size(&root.path()).saturating_sub(already);
-            }
-            transport_budget(root, other.saturating_add(already), already, budget)?;
+            let available = require_space(root, detail::free_space_for_import(already))?;
+            let index_limit = already.saturating_add(available - detail::STAGING_BYTES);
             let url = format!("{}{}", manifest.base_url, object.key);
             let start = processed as f64 / detail::DOWNLOAD_BYTES as f64;
             let weight = object.bytes as f64 / detail::DOWNLOAD_BYTES as f64;
@@ -417,9 +406,7 @@ impl DownloadSession<'_> {
                 file.file.try_clone().map_err(|e| e.to_string())?,
                 object.kind,
                 index,
-                budget
-                    .saturating_sub(other)
-                    .saturating_sub(detail::STAGING_BYTES),
+                index_limit,
                 self.cancelled,
             )
             .map_err(|error| format!("Overture file {}: {error}", index + 1))?;
@@ -446,7 +433,7 @@ impl DownloadSession<'_> {
                 &self.root.path().join("gebco"),
                 name,
                 url,
-                self.remaining(),
+                self.remaining()?,
                 self.cancelled,
                 |f, m| self.report(base + f * span, m),
             )
@@ -487,10 +474,10 @@ impl DownloadSession<'_> {
                 base + 0.2 * span,
                 "Converting downloaded Copernicus land cover…",
             );
-            import_netcdf(self.root, &source, self.remaining(), self.cancelled)
+            import_netcdf(self.root, &source, self.remaining()?, self.cancelled)
         } else {
             let limit = self
-                .remaining()
+                .remaining()?
                 .checked_sub(CONVERSION_SPACE)
                 .ok_or("Insufficient disk budget for land-cover import")?;
             let downloaded = download_to_file(
@@ -515,7 +502,7 @@ impl DownloadSession<'_> {
 pub struct AssetDownloader {
     pub assets_dir: PathBuf,
     pub terrain_override_dir: Option<PathBuf>,
-    pub max_assets_bytes: u64,
+    pub all_limit_bytes: u64,
     pub disk_usage_bytes: u64,
     pub transport: detail::Status,
     pub status: AssetStatus,
@@ -535,7 +522,7 @@ impl AssetDownloader {
         Self {
             assets_dir,
             terrain_override_dir,
-            max_assets_bytes: config.geography.max_assets_bytes,
+            all_limit_bytes: config.geography.max_assets_bytes,
             disk_usage_bytes,
             transport: detail::Status::default(),
             status,
@@ -597,15 +584,19 @@ impl AssetDownloader {
         let job = Task::start_unbounded(asset_workers(), move |cancelled| {
             let root = AssetDirectory::create(&assets_dir).map_err(|e| e.to_string())?;
             let _owner = download_owner(&root)?;
+            let all_ceiling = (pack == DownloadPack::All)
+                .then(|| all_ceiling(&root, config.geography.max_assets_bytes))
+                .transpose()?;
             let session = DownloadSession {
                 root: &root,
                 config: &config,
                 cancelled,
                 progress: &progress,
                 viewfinder: plan.as_ref(),
+                all_ceiling,
             };
             let queue: Vec<_> = if pack == DownloadPack::All {
-                PACKS
+                BASE_PACKS
                     .into_iter()
                     .filter(|p| !p.installed(&previous))
                     .collect()
@@ -727,37 +718,29 @@ fn download_to_file(
     )
 }
 
-fn transport_budget(
-    root: &AssetDirectory,
-    used: u64,
-    index: u64,
-    budget: u64,
-) -> Result<(), String> {
-    let required = detail::Status {
-        source: None,
-        bytes: index,
+fn all_ceiling(root: &AssetDirectory, limit: u64) -> Result<u64, String> {
+    let installed = dir_size(&root.path());
+    if installed == u64::MAX {
+        return Err("Could not measure installed assets for the Get all budget".into());
     }
-    .required_budget(used);
-    if required > budget {
-        return Err(format!(
-            "Detailed Transportation needs {:.2} GiB more asset budget. Set [geography] max_assets_bytes to at least {required} and reopen the viewer.",
-            (required - budget) as f64 / (1u64 << 30) as f64,
-        ));
-    }
-    check_transport_space(root, required.saturating_sub(used))
+    Ok(installed.saturating_add(limit))
 }
 
-fn check_transport_space(root: &AssetDirectory, required: u64) -> Result<(), String> {
+fn free_space(root: &AssetDirectory) -> Result<u64, String> {
     let directory = fs::File::open(root.path()).map_err(|error| error.to_string())?;
     let stats = rustix::fs::fstatvfs(&directory).map_err(|error| error.to_string())?;
-    let available = stats.f_bavail.saturating_mul(stats.f_frsize);
+    Ok(stats.f_bavail.saturating_mul(stats.f_frsize))
+}
+
+fn require_space(root: &AssetDirectory, required: u64) -> Result<u64, String> {
+    let available = free_space(root)?;
     if available < required {
         return Err(format!(
-            "The geography filesystem needs {:.2} GiB more free space for the estimated import peak",
+            "The geography filesystem needs {:.2} GiB more free space",
             (required - available) as f64 / (1u64 << 30) as f64,
         ));
     }
-    Ok(())
+    Ok(available)
 }
 
 fn download_with_request(
@@ -779,7 +762,7 @@ fn download_with_request(
         return Err("Download cancelled".into());
     }
     let directory = AssetDirectory::create(dir).map_err(|e| e.to_string())?;
-    let stage = DownloadStage::new(&directory, transient).map_err(|e| e.to_string())?;
+    let (stage, max_bytes) = DownloadStage::prepare(&directory, transient, max_bytes)?;
     let output_file = stage.file();
     let (request, fd) = request
         .args([
@@ -879,13 +862,20 @@ enum DownloadStage {
 }
 
 impl DownloadStage {
-    fn new(directory: &AssetDirectory, transient: bool) -> std::io::Result<Self> {
-        if transient {
+    fn prepare(
+        directory: &AssetDirectory,
+        transient: bool,
+        limit: u64,
+    ) -> Result<(Self, u64), String> {
+        let limit = limit.min(free_space(directory)?);
+        let stage = if transient {
             // A force-quit must not leave orphaned raw Parquet downloads behind.
             tempfile::tempfile_in(directory.path()).map(Self::Anonymous)
         } else {
             directory.stage().map(Self::Named)
         }
+        .map_err(|error| error.to_string())?;
+        Ok((stage, limit))
     }
 
     fn file(&self) -> &fs::File {
@@ -1097,6 +1087,55 @@ mod tests {
         assert!(DownloadPack::TerrainGebco.installed(&status));
     }
 
+    #[test]
+    fn get_all_caps_additional_space_and_individual_packs_use_available_space() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("line.geojson");
+        let payload = br#"{"type":"FeatureCollection","features":[]}"#;
+        fs::write(&source, payload).unwrap();
+
+        let mut config = AppConfig::default();
+        config.geography.max_assets_bytes = payload.len() as u64;
+        let url = format!("file://{}", source.display());
+        config.geography.countries_url = Some(url.clone());
+        config.geography.states_url = Some(url);
+        let root = AssetDirectory::create(&temp.path().join("assets")).unwrap();
+        root.write(OsStr::new("existing-optional-pack"), &[0; 1024])
+            .unwrap();
+
+        let ceiling = all_ceiling(&root, config.geography.max_assets_bytes).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let progress = Mutex::new(DownloadProgress {
+            fraction: 0.0,
+            message: String::new(),
+        });
+        let mut session = DownloadSession {
+            root: &root,
+            config: &config,
+            cancelled: &cancelled,
+            progress: &progress,
+            viewfinder: None,
+            all_ceiling: Some(ceiling),
+        };
+        let countries = OsStr::new("ne_10m_admin_0_boundary_lines_land.geojson");
+        let states = OsStr::new("ne_10m_admin_1_states_provinces_lines.geojson");
+
+        assert_eq!(session.remaining().unwrap(), payload.len() as u64);
+        assert!(session.run(DownloadPack::Borders, 0.0, 1.0).is_err());
+        assert_eq!(
+            root.open_file(countries).unwrap().metadata().unwrap().len(),
+            payload.len() as u64
+        );
+        assert!(!root.path().join(states).exists());
+
+        session.all_ceiling = None;
+        session.run(DownloadPack::Borders, 0.0, 1.0).unwrap();
+        assert_eq!(
+            root.open_file(states).unwrap().metadata().unwrap().len(),
+            payload.len() as u64
+        );
+    }
+
     fn download_fixture(config: &AppConfig, queue: &[DownloadPack]) -> DownloadOutcome {
         let root = AssetDirectory::create(&config.geo_assets_dir()).unwrap();
         let cancelled = AtomicBool::new(false);
@@ -1110,6 +1149,7 @@ mod tests {
             cancelled: &cancelled,
             progress: &progress,
             viewfinder: None,
+            all_ceiling: None,
         }
         .download(queue, None)
         .unwrap()

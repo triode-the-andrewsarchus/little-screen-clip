@@ -202,11 +202,12 @@ impl Status {
         let source = (bytes > 0).then(|| Source::open(directory)).flatten();
         Self { source, bytes }
     }
+}
 
-    pub(crate) fn required_budget(&self, used: u64) -> u64 {
-        used.saturating_sub(self.bytes)
-            .saturating_add(ESTIMATED_PEAK.max(self.bytes.saturating_add(STAGING_BYTES)))
-    }
+pub(crate) fn free_space_for_import(index_bytes: u64) -> u64 {
+    ESTIMATED_PEAK
+        .saturating_sub(index_bytes)
+        .max(STAGING_BYTES)
 }
 
 #[derive(Clone)]

@@ -800,7 +800,7 @@ impl Viewer {
                         if ui
                             .add(
                                 clip_ui::buttons::ButtonRole::Secondary
-                                    .button("Get all", palette)
+                                    .button("Get all base maps", palette)
                                     .compact(),
                             )
                             .clicked()
@@ -824,9 +824,9 @@ impl Viewer {
                         let used_gb =
                             self.downloader.disk_usage_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                         let budget_gb =
-                            self.downloader.max_assets_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                            self.downloader.all_limit_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                         ui.label(format!(
-                            "Disk: {used_gb:.2}/{budget_gb:.1} GiB · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
+                            "Installed: {used_gb:.2} GiB · Get all limit: {budget_gb:.1} GiB per run · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
                             yes_no(st.has_ne2),
                             yes_no(st.has_cities),
                             yes_no(st.has_borders),
@@ -851,14 +851,13 @@ impl Viewer {
                             && ui
                                 .add(
                                     clip_ui::buttons::ButtonRole::Primary
-                                        .button("Get all", palette)
+                                        .button("Get all base maps", palette)
                                         .compact(),
                                 )
                                 .clicked()
                         {
                             self.downloader.start(DownloadPack::All, &self.config);
                         }
-                        self.optional_assets(ui, palette, colors);
                         if !st.has_ne2
                             && ui
                                 .add(
@@ -933,7 +932,7 @@ impl Viewer {
                             && ui
                                 .add(
                                     clip_ui::buttons::ButtonRole::Secondary
-                                        .button("Get GEBCO 15″ Terrain", palette)
+                                        .button("Get GEBCO 15″ Terrain (~3.26 GB)", palette)
                                         .compact(),
                                 )
                                 .clicked()
@@ -945,7 +944,7 @@ impl Viewer {
                             && ui
                                 .add(
                                     clip_ui::buttons::ButtonRole::Secondary
-                                        .button("Get Land Cover", palette)
+                                        .button("Get Land Cover (~337 MB)", palette)
                                         .compact(),
                                 )
                                 .on_hover_text("Importing land cover requires GDAL 3.7+ (gdalwarp) with NetCDF support. Other map layers download independently.")
@@ -957,7 +956,7 @@ impl Viewer {
                             && ui
                                 .add(
                                     clip_ui::buttons::ButtonRole::Secondary
-                                        .button("Get HydroRIVERS", palette)
+                                        .button("Get HydroRIVERS (~544 MB)", palette)
                                         .compact(),
                                 )
                                 .clicked()
@@ -965,6 +964,9 @@ impl Viewer {
                             self.downloader
                                 .start(DownloadPack::HydroRivers, &self.config);
                         }
+                        ui.separator();
+                        ui.strong("Additional packs");
+                        self.optional_assets(ui, palette, colors);
                     }
                     if let Some(err) = &self.downloader.last_error {
                         ui.colored_label(colors.warning, err);
@@ -1053,23 +1055,11 @@ impl Viewer {
         }
         let gib = (1u64 << 30) as f64;
         ui.label(format!(
-            "Detailed Transportation · global Overture {} · {:.2} GB download",
+            "Global Overture {} · estimated {:.0} GiB installed, {:.0} GiB peak during import",
             manifest.release,
-            detail::DOWNLOAD_BYTES as f64 / 1e9,
-        ));
-        ui.label(format!(
-            "Estimated disk use · {:.0} GiB installed · {:.0} GiB peak during import",
             detail::ESTIMATED_FINAL as f64 / gib,
             detail::ESTIMATED_PEAK as f64 / gib,
         ));
-        let required = status.required_budget(self.downloader.disk_usage_bytes);
-        let budget = self.downloader.max_assets_bytes;
-        if required > budget {
-            ui.label(format!(
-                "Needs {:.2} GiB more asset budget. In config.toml [geography], set max_assets_bytes = {required} or higher.",
-                (required - budget) as f64 / gib,
-            ));
-        }
         let label = if status.bytes == 0 {
             "Get Detailed Transportation"
         } else {
@@ -1077,9 +1067,15 @@ impl Viewer {
         };
         if ui
             .add_enabled(
-                required <= budget && self.assets_job.is_none(),
+                self.assets_job.is_none(),
                 clip_ui::buttons::ButtonRole::Secondary
-                    .button(label, palette)
+                    .button(
+                        format!(
+                            "{label} ({:.2} GB total)",
+                            detail::DOWNLOAD_BYTES as f64 / 1e9
+                        ),
+                        palette,
+                    )
                     .compact(),
             )
             .clicked()

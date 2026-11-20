@@ -78,10 +78,13 @@ impl Regional {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
-                let remaining = plan.budget_remaining;
+                let remaining = plan.free_bytes;
                 let allowed = plan.peak_bytes <= remaining;
                 if !allowed {
-                    ui.label(format!("Needs more than the remaining {} geography budget. Increase geography.max_assets_bytes or choose a smaller view.",bytes(remaining)));
+                    ui.label(format!(
+                        "This estimate exceeds the {} available on the geography filesystem.",
+                        bytes(remaining)
+                    ));
                 }
                 if ui
                     .add_enabled(
