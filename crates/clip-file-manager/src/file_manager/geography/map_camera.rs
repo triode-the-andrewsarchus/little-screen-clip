@@ -123,6 +123,12 @@ pub(super) struct Draped<'a> {
     size: [f32; 2],
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct Anchor {
+    pub pixel: [f32; 2],
+    surface_point: Option<[f64; 3]>,
+}
+
 impl<'a> Draped<'a> {
     pub fn new(
         camera: &GlobeCamera,
@@ -137,21 +143,36 @@ impl<'a> Draped<'a> {
     }
 
     pub fn project(self, lat: f64, lon: f64) -> Option<[f32; 2]> {
-        let Some(surface) = self.surface else {
-            return self.camera.project(lat, lon, 0.0);
-        };
-        if !surface.intersects_view(self.camera, lat, lon, 0.0) {
-            return None;
+        let anchor = self.anchor(lat, lon)?;
+        self.unobscured(anchor).then_some(anchor.pixel)
+    }
+
+    pub fn anchor(self, lat: f64, lon: f64) -> Option<Anchor> {
+        if let Some(surface) = self.surface {
+            if !surface.intersects_view(self.camera, lat, lon, 0.0) {
+                return None;
+            }
+            if let Some((pixel, point)) = surface.project(self.camera, lat, lon) {
+                let [x, y] = pixel;
+                // A small guard keeps strokes and labels that overlap the edge.
+                return ((-24.0..=self.size[0] + 24.0).contains(&x)
+                    && (-24.0..=self.size[1] + 24.0).contains(&y))
+                .then_some(Anchor {
+                    pixel,
+                    surface_point: Some(point),
+                });
+            }
         }
-        if let Some((pixel, point)) = surface.project(self.camera, lat, lon) {
-            let [x, y] = pixel;
-            // A small guard keeps strokes and labels that overlap the edge.
-            return ((-24.0..=self.size[0] + 24.0).contains(&x)
-                && (-24.0..=self.size[1] + 24.0).contains(&y)
-                && !surface.occluded(self.camera.eye, point))
-            .then_some(pixel);
-        }
-        self.camera.project(lat, lon, 0.0)
+        Some(Anchor {
+            pixel: self.camera.project(lat, lon, 0.0)?,
+            surface_point: None,
+        })
+    }
+
+    pub fn unobscured(self, anchor: Anchor) -> bool {
+        self.surface
+            .zip(anchor.surface_point)
+            .is_none_or(|(surface, point)| !surface.occluded(self.camera.eye, point))
     }
 
     pub fn intersects_leg(self, a: [f64; 2], b: [f64; 2]) -> bool {

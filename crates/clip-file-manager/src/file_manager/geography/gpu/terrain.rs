@@ -102,6 +102,17 @@ impl Surface {
         camera.intersects_sphere(unit(lat, lon), self.relief() + angular_radius, 24.0)
     }
 
+    pub(super) fn patch_visible(&self, camera: Perspective, patch: &Patch) -> bool {
+        let [west, north, side] = patch.region.bounds();
+        let center = unit(north - side * 0.5, west + side * 0.5);
+        // Bound the full geographic patch and its skirt before drawing its grid.
+        camera.intersects_sphere(
+            center,
+            side.to_radians() + self.relief() + 600.0 / EARTH_RADIUS_M,
+            0.0,
+        )
+    }
+
     fn sample(&self, patch: &Patch, tile: &SourceTile, lat: f64, lon: f64) -> [f64; 3] {
         let [west, north, _] = patch.region.bounds();
         let steps = patch.steps(self.zoom) as f64;

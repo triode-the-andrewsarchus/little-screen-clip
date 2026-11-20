@@ -372,7 +372,7 @@ pub(super) fn paint_labels(
         loop {
             let before = placed.len();
             for cell in &mut cells {
-                cell.find(|label| label.paint(&painter, rect, &mut placed, &mut names));
+                cell.find(|label| label.paint(&painter, rect, &mut placed, &mut names, draped));
                 if placed.len() == MAX_VIEW_LABELS {
                     return;
                 }
@@ -387,6 +387,7 @@ pub(super) fn paint_labels(
 struct VisibleLabel<'a> {
     label: &'a Label,
     center: egui::Pos2,
+    anchor: Option<super::map_camera::Anchor>,
 }
 
 fn label_cells<'a>(
@@ -396,37 +397,44 @@ fn label_cells<'a>(
     labels: impl Iterator<Item = &'a Label>,
 ) -> [Vec<VisibleLabel<'a>>; LABEL_COLUMNS * LABEL_ROWS] {
     let project = |[lon, lat]: [f32; 2]| {
-        let (lat, lon) = (f64::from(lat), f64::from(lon));
-        match draped {
-            Some(pose) => pose.project(lat, lon),
-            None => camera.project(lat, lon, rect.width(), rect.height()),
-        }
-        .map(|[x, y]| rect.min + egui::vec2(x, y))
+        camera
+            .project(f64::from(lat), f64::from(lon), rect.width(), rect.height())
+            .map(|[x, y]| rect.min + egui::vec2(x, y))
     };
     let inner = rect.shrink(12.0);
     let mut cells = std::array::from_fn(|_| Vec::new());
     for label in labels {
-        let center = if draped.is_some() {
+        let (center, anchor) = if let Some(draped) = draped {
             let [lon, lat] = label.a;
             let [end_lon, end_lat] = label.b;
             let delta = little_clip_core::geography::basemap::wrap_lon_delta(
                 f64::from(end_lon) - f64::from(lon),
             );
-            let Some(center) = project([lon + (delta * 0.5) as f32, lat.midpoint(end_lat)]) else {
+            let Some(anchor) = draped.anchor(
+                f64::from(lat).midpoint(f64::from(end_lat)),
+                f64::from(lon) + delta * 0.5,
+            ) else {
                 continue;
             };
-            center
+            (
+                rect.min + egui::vec2(anchor.pixel[0], anchor.pixel[1]),
+                Some(anchor),
+            )
         } else {
             let (Some(a), Some(b)) = (project(label.a), project(label.b)) else {
                 continue;
             };
-            a.lerp(b, 0.5)
+            (a.lerp(b, 0.5), None)
         };
         if inner.contains(center) {
             let x = ((center.x - rect.left()) * LABEL_COLUMNS as f32 / rect.width()) as usize;
             let y = ((center.y - rect.top()) * LABEL_ROWS as f32 / rect.height()) as usize;
             let index = y.min(LABEL_ROWS - 1) * LABEL_COLUMNS + x.min(LABEL_COLUMNS - 1);
-            cells[index].push(VisibleLabel { label, center });
+            cells[index].push(VisibleLabel {
+                label,
+                center,
+                anchor,
+            });
         }
     }
     cells
@@ -439,6 +447,7 @@ impl<'a> VisibleLabel<'a> {
         rect: egui::Rect,
         placed: &mut Vec<egui::Rect>,
         names: &mut BTreeSet<&'a str>,
+        draped: Option<super::map_camera::Draped<'_>>,
     ) -> bool {
         use egui::{Align2, Color32, FontId, vec2};
         if names.contains(self.label.text.as_str()) {
@@ -467,6 +476,13 @@ impl<'a> VisibleLabel<'a> {
         let bounds = align.anchor_size(self.center + offset, galley.size());
         let padded = bounds.expand2(vec2(4.0, 2.0));
         if !rect.contains_rect(padded) || placed.iter().any(|r| r.intersects(padded)) {
+            return false;
+        }
+        // Only spend a terrain ray on labels that can actually be placed.
+        if draped
+            .zip(self.anchor)
+            .is_some_and(|(view, anchor)| !view.unobscured(anchor))
+        {
             return false;
         }
         painter.rect_filled(padded, 2.0, Color32::from_black_alpha(background));

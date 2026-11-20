@@ -302,7 +302,7 @@ impl Renderer {
             for (unit, name) in ["u_color", "u_height", "u_water"].into_iter().enumerate() {
                 gl.uniform_1_i32(gl.get_uniform_location(p, name).as_ref(), unit as i32);
             }
-            self.paint_surface(gl, resources, frame, [width, height], perspective.is_some());
+            self.paint_surface(gl, resources, frame, [width, height], perspective);
             missing_vectors = self.paint_vectors(gl, frame, width, height, perspective)?;
             gl.disable(glow::DEPTH_TEST);
             gl.bind_vertex_array(None);
@@ -349,23 +349,24 @@ impl Renderer {
         resources: &Resources,
         frame: &Frame,
         [width, height]: [f32; 2],
-        raised: bool,
+        perspective: Option<Perspective>,
     ) {
         let camera = frame.camera;
         let p = resources.program;
         // SAFETY: caller has bound the owning GL context, raster program and grid.
         unsafe {
-            if raised {
+            if let Some(pose) = perspective {
                 gl.depth_mask(true);
                 gl.clear_depth_f64(1.0);
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LEQUAL);
-                for patch in frame
-                    .terrain
-                    .iter()
-                    .flat_map(|surface| surface.patches.values())
-                {
+                for patch in frame.terrain.iter().flat_map(|surface| {
+                    surface
+                        .patches
+                        .values()
+                        .filter(move |patch| surface.patch_visible(pose, patch))
+                }) {
                     let cached = &self.tiles[&(frame.source, patch.source)];
                     let [west, north, side] = patch.source.bounds();
                     let west = little_clip_core::geography::basemap::wrap_lon_delta(
