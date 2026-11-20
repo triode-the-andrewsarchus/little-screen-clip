@@ -10,7 +10,7 @@ use anise::{
     frames::Frame,
     time::{Epoch, Unit},
 };
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 use image::{ImageFormat, ImageReader};
 use little_clip_core::file_source::read_file_snapshot;
 use orientation::Orientation;
@@ -81,7 +81,6 @@ pub(super) struct Scene {
     pub lunar_sun: [f32; 3],
     pub lunar_earth: [f32; 3],
     pub solar_possible: bool,
-    pub modern_lights: bool,
     pub planets: [[f32; 3]; 7],
     pub rotation_source: RotationSource,
     pub assets: Arc<Assets>,
@@ -157,7 +156,6 @@ impl Assets {
             lunar_sun,
             lunar_earth,
             solar_possible: dot / (norm(sun) * norm(moon)) > 0.9993,
-            modern_lights: time.year() >= 2016,
             planets: PLANETS.map(|(_, planet)| from_earth(planet).unwrap_or([0.0; 3])),
             rotation_source,
             assets: self.clone(),

@@ -295,13 +295,10 @@ impl SkyRenderer {
             // A sampler must be assigned even when its layer is disabled.
             gl.uniform_1_i32(loc("u_night").as_ref(), 5);
             if let Some(scene) = scene {
-                let marble = frame.city_lights && scene.modern_lights;
-                if marble {
-                    self.prepare(gl, scene);
-                }
+                self.prepare(gl, scene);
                 gl.uniform_1_i32(
                     loc("u_black_marble").as_ref(),
-                    i32::from(marble && self.night.is_some()),
+                    i32::from(self.night.is_some()),
                 );
                 gl.uniform_1_i32(
                     loc("u_solar_possible").as_ref(),
@@ -318,7 +315,7 @@ impl SkyRenderer {
                 );
                 gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
                 gl.uniform_3_f32_slice(loc("u_moon").as_ref(), &scene.moon);
-                bind(gl, program, "u_night", 5, self.night.filter(|_| marble));
+                bind(gl, program, "u_night", 5, self.night);
                 gl.active_texture(glow::TEXTURE0);
             }
         }
@@ -335,7 +332,7 @@ impl SkyRenderer {
             let loc = |name| gl.get_uniform_location(program, name);
             let lighting = surface_lighting(frame);
             let scene = frame.sky.as_ref().filter(|_| lighting > 0.0);
-            let marble = scene.is_some_and(|scene| frame.city_lights && scene.modern_lights);
+            let marble = scene.is_some();
             gl.uniform_1_f32(loc("u_earth_lighting").as_ref(), lighting);
             gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
             gl.uniform_1_f32(

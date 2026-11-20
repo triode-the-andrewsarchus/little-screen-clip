@@ -143,7 +143,6 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         readable_sky: false,
         show_constellations: false,
         earth_lighting: false,
-        city_lights: false,
         layers: Layers {
             countries: true,
             states: true,
@@ -372,7 +371,6 @@ fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
         readable_sky: false,
         show_constellations: false,
         earth_lighting: false,
-        city_lights: false,
     };
     let detail_tile = Arc::new(detail::Tile {
         batches: vec![Batch {

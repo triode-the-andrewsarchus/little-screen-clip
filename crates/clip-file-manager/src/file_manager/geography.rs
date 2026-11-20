@@ -157,7 +157,6 @@ struct SkyState {
     readable: bool,
     constellations: bool,
     lighting: bool,
-    lights: bool,
     error: Option<String>,
 }
 
@@ -199,7 +198,6 @@ impl SkyState {
             readable: true,
             constellations: false,
             lighting: true,
-            lights: true,
             error: None,
         }
     }
@@ -678,7 +676,6 @@ impl Viewer {
             frame.readable_sky = self.sky.readable;
             frame.show_constellations = self.sky.constellations;
             frame.earth_lighting = self.sky.lighting;
-            frame.city_lights = self.sky.lights;
         }
         if hovered.is_none() {
             show_sky_object(ui, rect, &frame);
@@ -814,11 +811,6 @@ impl Viewer {
                 )
                 .on_hover_text("Enlarge the Sun and Moon up to 16×, with larger planet markers. Uses physical sizes during eclipses.");
                 ui.checkbox(&mut self.sky.lighting, "Day and night");
-                ui.add_enabled(
-                    self.sky.lighting && assets.night.is_some(),
-                    egui::Checkbox::new(&mut self.sky.lights, "Black Marble"),
-                )
-                .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
                 if assets.star_catalog().is_some() {
                     ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.constellations, "Constellations"))
                         .on_hover_text("Show Stellarium’s Modern constellation figures.");

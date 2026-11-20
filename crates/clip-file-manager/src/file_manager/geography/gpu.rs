@@ -97,7 +97,6 @@ pub(super) struct Frame {
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
-    pub city_lights: bool,
 }
 
 pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(), String> {
