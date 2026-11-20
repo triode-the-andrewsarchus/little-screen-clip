@@ -26,6 +26,9 @@ const COLS: u32 = 2 << LEVEL;
 const MAX_VISIBLE: usize = 64;
 const MAX_EDGES: usize = 270_000;
 const MAX_LABELS: usize = 1_000;
+const MAX_VIEW_LABELS: usize = 72;
+const LABEL_COLUMNS: usize = 6;
+const LABEL_ROWS: usize = 4;
 pub(super) const BRIDGE: u8 = 1;
 pub(super) const TUNNEL: u8 = 2;
 
@@ -265,20 +268,7 @@ impl Source {
 }
 
 fn retain_labels(labels: &mut Vec<Label>) {
-    let priority = |class| match class {
-        Class::City => 6,
-        Class::Town => 5,
-        Class::Neighborhood => 4,
-        Class::Rail | Class::WaterRoute => 3,
-        Class::Motorway | Class::Trunk | Class::Primary | Class::Secondary => 2,
-        _ => 1,
-    };
-    labels.sort_unstable_by(|a, b| {
-        let len = |l: &Label| (l.a[0] - l.b[0]).hypot(l.a[1] - l.b[1]);
-        priority(b.class)
-            .cmp(&priority(a.class))
-            .then_with(|| len(b).total_cmp(&len(a)))
-    });
+    labels.sort_unstable_by(Label::placement_order);
     labels.truncate(MAX_LABELS);
 }
 
@@ -303,6 +293,21 @@ pub(super) fn visible(camera: &GlobeCamera, [w, h]: [f32; 2], enabled: bool) -> 
 }
 
 impl Label {
+    fn placement_order(&self, other: &Self) -> std::cmp::Ordering {
+        let priority = |class| match class {
+            Class::City => 6,
+            Class::Town => 5,
+            Class::Neighborhood => 4,
+            Class::Rail | Class::WaterRoute => 3,
+            Class::Motorway | Class::Trunk | Class::Primary | Class::Secondary => 2,
+            _ => 1,
+        };
+        let len = |label: &Self| (label.a[0] - label.b[0]).hypot(label.a[1] - label.b[1]);
+        priority(other.class)
+            .cmp(&priority(self.class))
+            .then_with(|| len(other).total_cmp(&len(self)))
+    }
+
     fn min_zoom(&self) -> f64 {
         match self.class {
             Class::Neighborhood => 530.0,
@@ -342,24 +347,87 @@ pub(super) fn paint_labels(
     layers: LabelLayers,
     roads: bool,
 ) {
-    use egui::{Align2, Color32, FontId, Rect, vec2};
     let painter = ui.painter_at(rect);
-    let mut placed = Vec::<Rect>::new();
+    let mut placed = Vec::with_capacity(MAX_VIEW_LABELS);
     let mut names = BTreeSet::new();
-    let project = |[lon, lat]: [f32; 2]| {
-        camera
-            .project(f64::from(lat), f64::from(lon), rect.width(), rect.height())
-            .map(|[x, y]| rect.min + vec2(x, y))
-    };
-    for place in [true, false] {
+    for (settlements, _) in [(true, layers.cities), (false, layers.detailed)]
+        .into_iter()
+        .filter(|&(_, enabled)| enabled)
+    {
         let candidates = tiles
             .iter()
             .flat_map(|(_, tile)| tile.labels.iter().take(256))
             .filter(|label| {
-                label.class.is_place() == place
+                (label.class >= Class::Town) == settlements
                     && layers.shows(label.class, roads)
                     && camera.zoom >= label.min_zoom()
             });
+        let mut cells = label_cells(rect, camera, candidates).map(|mut cell| {
+            cell.sort_by(|a, b| a.label.placement_order(b.label));
+            cell.into_iter()
+        });
+        // Each populated part of the viewport gets a turn before a denser
+        // part can claim extra labels. Empty cells leave their share available.
+        loop {
+            let before = placed.len();
+            for cell in &mut cells {
+                cell.find(|label| label.paint(&painter, rect, &mut placed, &mut names));
+                if placed.len() == MAX_VIEW_LABELS {
+                    return;
+                }
+            }
+            if before == placed.len() {
+                break;
+            }
+        }
+    }
+}
+
+struct VisibleLabel<'a> {
+    label: &'a Label,
+    center: egui::Pos2,
+}
+
+fn label_cells<'a>(
+    rect: egui::Rect,
+    camera: GlobeCamera,
+    labels: impl Iterator<Item = &'a Label>,
+) -> [Vec<VisibleLabel<'a>>; LABEL_COLUMNS * LABEL_ROWS] {
+    let project = |[lon, lat]: [f32; 2]| {
+        camera
+            .project(f64::from(lat), f64::from(lon), rect.width(), rect.height())
+            .map(|[x, y]| rect.min + egui::vec2(x, y))
+    };
+    let inner = rect.shrink(12.0);
+    let mut cells = std::array::from_fn(|_| Vec::new());
+    for label in labels {
+        let (Some(a), Some(b)) = (project(label.a), project(label.b)) else {
+            continue;
+        };
+        let center = a.lerp(b, 0.5);
+        if inner.contains(center) {
+            let x = ((center.x - rect.left()) * LABEL_COLUMNS as f32 / rect.width()) as usize;
+            let y = ((center.y - rect.top()) * LABEL_ROWS as f32 / rect.height()) as usize;
+            let index = y.min(LABEL_ROWS - 1) * LABEL_COLUMNS + x.min(LABEL_COLUMNS - 1);
+            cells[index].push(VisibleLabel { label, center });
+        }
+    }
+    cells
+}
+
+impl<'a> VisibleLabel<'a> {
+    fn paint(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        placed: &mut Vec<egui::Rect>,
+        names: &mut BTreeSet<&'a str>,
+    ) -> bool {
+        use egui::{Align2, Color32, FontId, vec2};
+        if names.contains(self.label.text.as_str()) {
+            return false;
+        }
+        let place = self.label.class.is_place();
         let (color, size, align, offset, background) = if place {
             (
                 Color32::from_rgb(238, 236, 224),
@@ -377,41 +445,122 @@ pub(super) fn paint_labels(
                 130,
             )
         };
-        for label in candidates {
-            if names.contains(label.text.as_str()) {
-                continue;
-            }
-            let (Some(a), Some(b)) = (project(label.a), project(label.b)) else {
-                continue;
-            };
-            let center = a.lerp(b, 0.5);
-            if !rect.shrink(12.0).contains(center) {
-                continue;
-            }
-            let galley =
-                painter.layout_no_wrap(label.text.clone(), FontId::proportional(size), color);
-            let bounds = align.anchor_size(center + offset, galley.size());
-            let padded = bounds.expand2(vec2(4.0, 2.0));
-            if !rect.contains_rect(padded) || placed.iter().any(|r| r.intersects(padded)) {
-                continue;
-            }
-            painter.rect_filled(padded, 2.0, Color32::from_black_alpha(background));
-            painter.galley(bounds.min, galley, color);
-            if place {
-                painter.circle_filled(center, 2.0, color);
-            }
-            placed.push(padded);
-            names.insert(label.text.as_str());
-            if placed.len() >= 72 {
-                return;
-            }
+        let galley =
+            painter.layout_no_wrap(self.label.text.clone(), FontId::proportional(size), color);
+        let bounds = align.anchor_size(self.center + offset, galley.size());
+        let padded = bounds.expand2(vec2(4.0, 2.0));
+        if !rect.contains_rect(padded) || placed.iter().any(|r| r.intersects(padded)) {
+            return false;
         }
+        painter.rect_filled(padded, 2.0, Color32::from_black_alpha(background));
+        painter.galley(bounds.min, galley, color);
+        if place {
+            painter.circle_filled(self.center, 2.0, color);
+        }
+        placed.push(padded);
+        names.insert(self.label.text.as_str());
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_tiles_leave_room_for_names_in_the_rest_of_the_view() {
+        use egui::{Pos2, Rect, vec2};
+        use little_clip_core::geography::basemap::ProjectionMode;
+
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 960.0));
+        let camera = GlobeCamera {
+            center_lat: 0.0,
+            center_lon: 0.0,
+            zoom: 700.0,
+            mode: ProjectionMode::Map2D,
+        };
+        let label = |x, y, class, text| {
+            let (lat, lon) = camera.unproject(x, y, rect.width(), rect.height()).unwrap();
+            Label {
+                class,
+                text,
+                a: [lon as f32, lat as f32],
+                b: [lon as f32, lat as f32],
+            }
+        };
+        let west = (0..96)
+            .map(|i| {
+                label(
+                    55.0 + (i % 12) as f32 * 48.0,
+                    55.0 + (i / 12) as f32 * 55.0,
+                    Class::Neighborhood,
+                    format!("N{i}"),
+                )
+            })
+            .collect();
+        let east = [
+            (950.0, 200.0, Class::Town, "East Town"),
+            (1100.0, 455.0, Class::Rail, "East Railway"),
+            (1310.0, 705.0, Class::Primary, "East Road"),
+        ];
+        let tile = |x, labels| {
+            (
+                TileId {
+                    level: LEVEL,
+                    x,
+                    y: 0,
+                },
+                Arc::new(Tile {
+                    batches: Vec::new(),
+                    labels,
+                }),
+            )
+        };
+        let tiles = [
+            tile(0, west),
+            tile(
+                1,
+                east.iter()
+                    .map(|&(x, y, class, name)| label(x, y, class, name.into()))
+                    .collect(),
+            ),
+        ];
+        let ctx = egui::Context::default();
+        let output = clip_ui::test_support::run_frame(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ctx| {
+                ctx.root_ui(|ui| {
+                    paint_labels(
+                        ui,
+                        rect,
+                        camera,
+                        &tiles,
+                        LabelLayers {
+                            cities: true,
+                            detailed: true,
+                        },
+                        true,
+                    );
+                });
+            },
+        );
+        let names: BTreeSet<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names.len(), MAX_VIEW_LABELS);
+        for (_, _, _, name) in east {
+            assert!(names.contains(name), "Missing {name}");
+        }
+    }
 
     #[test]
     fn city_and_detailed_names_are_independent() {
