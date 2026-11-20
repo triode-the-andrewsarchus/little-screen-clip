@@ -1,4 +1,5 @@
 use crate::file_manager::geography::sky;
+use eframe::egui;
 use eframe::glow::{self, HasContext};
 use little_clip_core::geography::basemap::{BasemapStyle, GlobeCamera};
 use std::sync::{Arc, Weak};
@@ -11,6 +12,73 @@ pub(super) struct SkyRenderer {
     moon: Option<glow::Texture>,
     night: Option<glow::Texture>,
     failed: bool,
+}
+
+struct SkyProjection {
+    basis: [[f32; 3]; 3],
+    focal: f32,
+    radius: f32,
+    distance: f32,
+}
+
+impl SkyProjection {
+    fn new(camera: GlobeCamera, [width, height]: [f32; 2]) -> Self {
+        let (sin_lat, cos_lat) = (camera.center_lat as f32).to_radians().sin_cos();
+        let (sin_lon, cos_lon) = (camera.center_lon as f32).to_radians().sin_cos();
+        let focal = width.min(height) * 0.95;
+        let radius = camera.scale_px(width, height) as f32;
+        Self {
+            basis: [
+                [-sin_lon, cos_lon, 0.0],
+                [-cos_lon * sin_lat, -sin_lon * sin_lat, cos_lat],
+                [cos_lon * cos_lat, sin_lon * cos_lat, sin_lat],
+            ],
+            focal,
+            radius,
+            distance: 6378.137 * (1.0 + (focal / radius).powi(2)).sqrt(),
+        }
+    }
+
+    fn project(&self, position: [f32; 3]) -> Option<egui::Vec2> {
+        let [x, y, z] = self.basis.map(|axis| {
+            axis.into_iter()
+                .zip(position)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        });
+        let depth = self.distance - z;
+        if depth <= 0.0 {
+            return None;
+        }
+        let offset = egui::vec2(x, -y) * (self.focal / depth);
+        (offset.length_sq() > self.radius.powi(2)).then_some(offset)
+    }
+}
+
+pub(in super::super) fn sky_body_at(
+    frame: &super::Frame,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> Option<&'static str> {
+    if !frame.show_sky || frame.camera.globe_blend() < 1.0 {
+        return None;
+    }
+    let projection = SkyProjection::new(frame.camera, frame.size);
+    let center = rect.center();
+    if pointer.distance_sq(center) <= projection.radius.powi(2) {
+        return None;
+    }
+    frame
+        .sky
+        .as_ref()?
+        .bodies()
+        .filter_map(|(name, position)| {
+            let point = center + projection.project(position)?;
+            let distance = point.distance_sq(pointer);
+            (rect.contains(point) && distance <= 14.0_f32.powi(2)).then_some((name, distance))
+        })
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(name, _)| name)
 }
 
 impl SkyRenderer {
@@ -56,22 +124,7 @@ impl SkyRenderer {
             if self.stars.is_none() {
                 return Ok(());
             }
-            let (sin_lat, cos_lat) = (camera.center_lat as f32).to_radians().sin_cos();
-            let (sin_lon, cos_lon) = (camera.center_lon as f32).to_radians().sin_cos();
-            let basis = [
-                -sin_lon,
-                cos_lon,
-                0.0,
-                -cos_lon * sin_lat,
-                -sin_lon * sin_lat,
-                cos_lat,
-                cos_lon * cos_lat,
-                sin_lon * cos_lat,
-                sin_lat,
-            ];
-            let focal = width.min(height) * 0.95;
-            let radius = camera.scale_px(width, height) as f32;
-            let distance = 6378.137 * (1.0 + (focal / radius).powi(2)).sqrt();
+            let projection = SkyProjection::new(camera, frame.size);
 
             gl.use_program(Some(p));
             gl.uniform_matrix_3_f32_slice(
@@ -82,18 +135,22 @@ impl SkyRenderer {
             gl.uniform_matrix_3_f32_slice(
                 gl.get_uniform_location(p, "u_camera_basis").as_ref(),
                 false,
-                &basis,
+                projection.basis.as_flattened(),
             );
             gl.uniform_2_f32(
                 gl.get_uniform_location(p, "u_fov").as_ref(),
-                width / (2.0 * focal),
-                height / (2.0 * focal),
+                width / (2.0 * projection.focal),
+                height / (2.0 * projection.focal),
             );
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_camera_distance").as_ref(),
-                distance,
+                projection.distance,
             );
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
+            gl.uniform_1_i32(
+                gl.get_uniform_location(p, "u_readable_sky").as_ref(),
+                i32::from(frame.readable_sky),
+            );
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_atmosphere").as_ref(),
                 atmosphere(camera, frame.style),
@@ -338,6 +395,21 @@ unsafe fn upload(gl: &glow::Context, source: &sky::Texture) -> Result<glow::Text
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sky_projection_keeps_bodies_off_the_globe_and_behind_the_camera() {
+        let camera = GlobeCamera {
+            center_lat: 0.0,
+            center_lon: 0.0,
+            ..GlobeCamera::default()
+        };
+        let projection = SkyProjection::new(camera, [1000.0, 600.0]);
+        assert!(projection.project([1e8, 2e7, 0.0]).is_none());
+        assert!(projection.project([-1e8, 0.0, 0.0]).is_none());
+        let offset = projection.project([-1e8, 5e7, 2e7]).unwrap();
+        assert!((offset.x - 285.0).abs() < 0.1);
+        assert!((offset.y + 114.0).abs() < 0.1);
+    }
 
     #[test]
     fn atmosphere_only_shows_on_the_wide_natural_globe() {

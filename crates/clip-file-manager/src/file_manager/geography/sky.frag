@@ -7,6 +7,7 @@ uniform vec2 u_fov;          // Half extents at unit focal depth.
 uniform float u_camera_distance;
 uniform float u_opacity;
 uniform float u_atmosphere;
+uniform bool u_readable_sky;
 uniform sampler2D u_stars;
 uniform vec3 u_sun;
 uniform vec3 u_moon;
@@ -17,10 +18,26 @@ uniform vec3 u_lunar_sun;
 uniform vec3 u_lunar_earth;
 
 const float PI = 3.141592653589793;
+const float EARTH_RADIUS_KM = 6378.137;
+const float MOON_RADIUS_KM = 1737.4;
 const float planet_radius[7] = float[7](2439.7, 6051.8, 3389.5, 69911.0, 58232.0, 25362.0, 24622.0);
 const vec3 planet_color[7] = vec3[7](
     vec3(.67,.62,.57), vec3(1,.88,.66), vec3(.92,.46,.31), vec3(.93,.77,.62),
     vec3(.93,.82,.54), vec3(.58,.83,.84), vec3(.44,.58,.89));
+const float planet_emphasis[7] = float[7](.60, 1.0, .72, 1.0, .75, .40, .40);
+
+// Leave objects at their physical size as they cross Earth's limb.
+float limb_clearance(vec3 eye, vec3 toward_body) {
+    return length(eye + toward_body * max(0.0, -dot(eye, toward_body))) - EARTH_RADIUS_KM;
+}
+
+float disk_enlargement(vec3 sun, vec3 moon) {
+    vec3 a = normalize(sun), b = normalize(moon);
+    float separation = atan(length(cross(a,b)), dot(a,b));
+    float radii = SOLAR_RADIUS_KM / length(sun) + MOON_RADIUS_KM / length(moon);
+    // Ease back to physical sizes before any of the enlarged disks could overlap.
+    return smoothstep(2.0 * radii, 3.5 * radii, separation);
+}
 
 float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance) {
     distance = dot(ray, offset);
@@ -31,7 +48,7 @@ float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance)
 }
 
 vec3 lunar_surface(vec3 ray, vec3 offset) {
-    const float radius = 1737.4;
+    const float radius = MOON_RADIUS_KM;
     // The closest point to the sphere center is stable even when the body
     // spans only a few pixels. Find the near intersection for its phase.
     vec3 across = cross(ray, cross(ray, offset));
@@ -78,26 +95,42 @@ void main() {
         float coverage = disk(ray, offset, planet_radius[i], pixel, distance);
         if (distance <= 0.0 || distance >= nearest) continue;
         if (planet_radius[i] / length(offset) < .65 * pixel) {
-            float marker = 1.0 - smoothstep(.55, 1.7, length(cross(ray, normalize(offset))) / pixel);
-            rgb = mix(rgb, planet_color[i] * .87, .72 * marker);
+            vec3 direction = normalize(offset);
+            float point = length(cross(ray, direction)) / pixel;
+            float emphasis = u_readable_sky ? planet_emphasis[i] * smoothstep(0.0, 250.0, limb_clearance(eye, direction)) : 0.0;
+            float marker = 1.0 - smoothstep(.55 + .45 * emphasis, 1.7 + 1.4 * emphasis, point);
+            float halo = 1.0 - smoothstep(1.1, 5.5, point);
+            rgb += planet_color[i] * (.22 * emphasis * halo);
+            rgb = mix(rgb, planet_color[i] * (.87 + .13 * emphasis), (.72 + .23 * emphasis) * marker);
         }
         if (coverage > 0.0) {
             rgb = mix(rgb, planet_color[i], coverage);
             nearest = distance;
         }
     }
-    float sun = disk(ray, u_sun-eye, 695700.0, pixel, distance);
+    vec3 sun_offset = u_sun - eye, moon_offset = u_moon - eye;
+    vec3 sun_direction = normalize(sun_offset), moon_direction = normalize(moon_offset);
+    float enlargement = u_readable_sky ? disk_enlargement(sun_offset, moon_offset) : 0.0;
+    float sun_scale = 1.0 + enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, sun_direction));
+    float moon_scale = 1.0 + enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, moon_direction));
+    float sun = disk(ray, sun_offset, SOLAR_RADIUS_KM * sun_scale, pixel, distance);
+    if (distance > 0.0 && sun_scale > 1.0) {
+        float disk_radii = length(cross(ray, sun_direction)) / (SOLAR_RADIUS_KM * sun_scale / length(sun_offset));
+        float glow = 1.0 - smoothstep(1.0, 2.8, disk_radii);
+        rgb += vec3(1.0,.83,.55) * (.16 * (sun_scale - 1.0) * glow);
+    }
     if (sun > 0.0 && distance < nearest) {
         rgb = mix(rgb, vec3(1.0,.94,.81), sun);
         nearest = distance;
     }
-    float moon = disk(ray, u_moon-eye, 1737.4, pixel, distance);
+    float moon = disk(ray, moon_offset, MOON_RADIUS_KM * moon_scale, pixel, distance);
     if (moon > 0.0 && distance < nearest) {
-        rgb = mix(rgb, lunar_surface(ray, u_moon-eye), moon);
+        vec3 surface_ray = normalize(mix(moon_direction, ray, 1.0 / moon_scale));
+        rgb = mix(rgb, lunar_surface(surface_ray, moon_offset), moon);
     }
     if (u_atmosphere > 0.0) {
         vec3 tangent = cross(ray, cross(eye, ray));
-        float height = length(tangent) - 6378.137;
+        float height = length(tangent) - EARTH_RADIUS_KM;
         if (height >= 0.0 && height < 260.0) {
             float sunlight = dot(normalize(tangent), normalize(u_sun - tangent));
             // A soft falloff keeps the rim legible at globe scale.

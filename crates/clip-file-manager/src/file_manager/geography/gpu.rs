@@ -11,6 +11,7 @@ use little_clip_core::geography::basemap::{
     BasemapStyle, GlobeCamera,
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
+pub(super) use sky::sky_body_at;
 use std::{
     collections::{BTreeSet, HashMap},
     marker::PhantomData,
@@ -93,6 +94,7 @@ pub(super) struct Frame {
     pub details: Vec<(TileId, Arc<super::detail::Tile>)>,
     pub sky: Option<super::sky::Scene>,
     pub show_sky: bool,
+    pub readable_sky: bool,
     pub earth_lighting: bool,
     pub city_lights: bool,
 }

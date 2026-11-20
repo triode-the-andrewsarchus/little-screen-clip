@@ -152,6 +152,7 @@ struct SkyState {
     job: Option<Task<Option<Result<sky::Assets, String>>>>,
     last: Option<(DateTime<Utc>, Option<sky::Scene>)>,
     visible: bool,
+    readable: bool,
     lighting: bool,
     lights: bool,
     error: Option<String>,
@@ -164,6 +165,7 @@ impl SkyState {
             job: None,
             last: None,
             visible: true,
+            readable: true,
             lighting: true,
             lights: false,
             error: None,
@@ -219,12 +221,11 @@ impl SkyState {
     }
 }
 
-fn scene_time(
+fn recorded_scene_time(
     document: &Document,
     selected: usize,
     hovered: Option<&Sample>,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
+) -> Option<DateTime<Utc>> {
     hovered
         .and_then(|sample| sample.point.instant())
         .or(document.features[selected].last_instant)
@@ -236,7 +237,6 @@ fn scene_time(
                 .find_map(|feature| feature.last_instant)
         })
         .or(document.capture_time)
-        .unwrap_or(now)
 }
 
 impl Viewer {
@@ -531,22 +531,20 @@ impl Viewer {
         };
         let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
         if self.sky.assets.is_some() && (visible || self.sky.lighting) {
-            let now = Utc::now();
-            let now = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
-            let time = scene_time(
+            let recorded = recorded_scene_time(
                 &self.document,
                 self.selected,
                 hovered.and_then(|hit| self.sample(hit)),
-                now,
             );
-            if time == now {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_secs(1));
-            }
+            let time = recorded.unwrap_or_else(|| live_scene_time(ui.ctx()));
             frame.sky = self.sky.at(time);
             frame.show_sky = visible;
+            frame.readable_sky = self.sky.readable;
             frame.earth_lighting = self.sky.lighting;
             frame.city_lights = self.sky.lights;
+        }
+        if hovered.is_none() {
+            show_sky_body(ui, rect, &frame);
         }
         let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
         if self.render_error != error {
@@ -678,6 +676,10 @@ impl Viewer {
             if let Some(assets) = &self.sky.assets {
                 ui.menu_button("Sky & lighting", |ui| {
                     ui.checkbox(&mut self.sky.visible, "Sky and planets");
+                    ui.add_enabled(
+                        self.sky.visible,
+                        egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
+                    );
                     ui.checkbox(&mut self.sky.lighting, "Day and night");
                     ui.add_enabled(
                         self.sky.lighting && assets.night.is_some(),
@@ -1433,6 +1435,33 @@ fn paint_strip_map(
     Some(hit)
 }
 
+fn live_scene_time(ctx: &egui::Context) -> DateTime<Utc> {
+    let now = Utc::now();
+    ctx.request_repaint_after(std::time::Duration::from_nanos(
+        1_000_000_000 - u64::from(now.timestamp_subsec_nanos()),
+    ));
+    DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
+}
+
+fn show_sky_body(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
+    let name = ui
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|_| super::ui::preview_hovered(ui, rect))
+        .and_then(|pointer| gpu::sky_body_at(frame, rect, pointer));
+    if let Some(name) = name {
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::unique("sky-object-name"),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            ui.label(name);
+        });
+    }
+}
+
 fn show_position(ui: &egui::Ui, name: &str, sample: &Sample) {
     egui::Tooltip::always_open(
         ui.ctx().clone(),
@@ -1606,21 +1635,32 @@ mod tests {
             <trkpt lat="1" lon="3"><time>2022-11-08T10:59:00</time></trkpt>
             </trkseg></trk></gpx>"#;
         let mut document = Document::gpx(gpx.as_bytes()).unwrap();
-        let now = DateTime::from_timestamp(0, 0).unwrap();
         let times = &document.features[0].paths[0];
         let hovered = times[0].point.instant().unwrap();
         let last = times[1].point.instant().unwrap();
         assert_eq!(hovered.to_rfc3339(), "2024-04-08T18:17:00+00:00");
-        assert_eq!(scene_time(&document, 0, Some(&times[0]), now), hovered);
-        assert_eq!(scene_time(&document, 0, Some(&times[2]), now), last);
-        assert_eq!(scene_time(&document, 0, None, now), last);
+        assert_eq!(
+            recorded_scene_time(&document, 0, Some(&times[0])),
+            Some(hovered)
+        );
+        assert_eq!(
+            recorded_scene_time(&document, 0, Some(&times[2])),
+            Some(last)
+        );
+        assert_eq!(recorded_scene_time(&document, 0, None), Some(last));
         document.features[0].last_instant = None;
         assert_eq!(
-            scene_time(&document, 0, None, now).to_rfc3339(),
+            recorded_scene_time(&document, 0, None)
+                .unwrap()
+                .to_rfc3339(),
             "2019-01-01T06:00:00+00:00"
         );
         document.capture_time = None;
-        assert_eq!(scene_time(&document, 0, None, now), now);
+        assert_eq!(recorded_scene_time(&document, 0, None), None);
+        assert_eq!(
+            recorded_scene_time(&document, 0, Some(&document.features[0].paths[0][2])),
+            None
+        );
     }
 
     #[test]

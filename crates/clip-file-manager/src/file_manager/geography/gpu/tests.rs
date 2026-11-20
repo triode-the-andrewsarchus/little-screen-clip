@@ -140,6 +140,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         details: Vec::new(),
         sky: None,
         show_sky: false,
+        readable_sky: false,
         earth_lighting: false,
         city_lights: false,
         layers: Layers {
@@ -367,6 +368,7 @@ fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
         details: Vec::new(),
         sky: None,
         show_sky: false,
+        readable_sky: false,
         earth_lighting: false,
         city_lights: false,
     };

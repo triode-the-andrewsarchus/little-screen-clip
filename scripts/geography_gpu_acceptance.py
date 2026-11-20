@@ -58,6 +58,60 @@ def texture(internal, external, data_type, data):
     return tex
 
 
+def check_eclipse_horizon(raster, draw, center, row):
+    # The center of each body is on the geometric horizon at longitude 90°.
+    uniform = lambda name: GL.glGetUniformLocation(raster, name)
+    GL.glUniform1f(uniform("u_earth_lighting"), 1.0)
+    GL.glUniform1i(uniform("u_black_marble"), 0)
+    GL.glUniform3f(uniform("u_sun"), -150e6, 6378.137, 0.0)
+    GL.glUniform3f(uniform("u_moon"), -355e3, 6378.137, 0.0)
+    eclipse_rows = []
+    for enabled in [0, 1]:
+        GL.glUniform1i(uniform("u_solar_possible"), enabled)
+        draw(lon=90, blend=0, zoom=16)
+        pixels = GL.glReadPixels(center - 42, row, 84, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        eclipse_rows.append(np.frombuffer(pixels, dtype=np.uint8).reshape(84, 4)[:, :3].astype(int))
+    dimming = eclipse_rows[0] - eclipse_rows[1]
+    assert not dimming[0].any() and dimming[65:78].max() > 30
+    assert np.abs(np.diff(dimming, axis=0)).max() < 12, "Hard eclipse shadow edge at the horizon"
+    GL.glUniform1i(uniform("u_solar_possible"), 0)
+    GL.glUniform1f(uniform("u_earth_lighting"), 0.0)
+
+
+def check_sky_sizes(root, width, height):
+    sky = program(root, "sky")
+    GL.glUseProgram(sky)
+    uniform = lambda name: GL.glGetUniformLocation(sky, name)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    background = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, np.zeros((4, 4, 3), np.uint8))
+    identity = np.eye(3, dtype=np.float32)
+    for matrix in ["u_camera_basis", "u_inertial_from_fixed"]:
+        GL.glUniformMatrix3fv(uniform(matrix), 1, False, identity)
+    focal = .95 * height
+    eye = 6378.137 * (1 + (focal / (.43 * height)) ** 2) ** .5
+    GL.glUniform2f(uniform("u_fov"), width / (2 * focal), height / (2 * focal))
+    GL.glUniform1f(uniform("u_camera_distance"), eye)
+    GL.glUniform1f(uniform("u_opacity"), 1.0)
+    GL.glUniform3f(uniform("u_sun"), .55 * 150e6, .18 * 150e6, eye - 150e6)
+    GL.glUniform3f(uniform("u_lunar_sun"), 0.0, 0.0, 150e6)
+    GL.glUniform3f(uniform("u_lunar_earth"), 0.0, 1e7, 0.0)
+
+    def render_sky(readable, moon_x):
+        GL.glUniform1i(uniform("u_readable_sky"), readable)
+        GL.glUniform3f(uniform("u_moon"), moon_x * 384400.0, .18 * 384400.0, eye - 384400.0)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
+        pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        return np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
+
+    actual = render_sky(0, -.55)
+    readable = render_sky(1, -.55)
+    for x in [slice(0, width // 2), slice(width // 2, width)]:
+        assert np.count_nonzero(readable[:, x, 0] > 100) > 2.5 * np.count_nonzero(actual[:, x, 0] > 100)
+    assert np.array_equal(render_sky(0, .55), render_sky(1, .55)), "Solar conjunction changed optical disks"
+    GL.glDeleteTextures([background])
+    GL.glDeleteProgram(sky)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/geography-gpu-acceptance"))
@@ -195,23 +249,7 @@ def main():
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
 
-        # Center a solar eclipse on the geometric horizon. The shadow darkens
-        # gradually across the height of the visible solar disk.
-        GL.glUniform1f(uniform("u_earth_lighting"), 1.0)
-        GL.glUniform1i(uniform("u_black_marble"), 0)
-        GL.glUniform3f(uniform("u_sun"), -150e6, 6378.137, 0.0)
-        GL.glUniform3f(uniform("u_moon"), -355e3, 6378.137, 0.0)
-        eclipse_rows = []
-        for enabled in [0, 1]:
-            GL.glUniform1i(uniform("u_solar_possible"), enabled)
-            draw(lon=90, blend=0, zoom=32)
-            pixels = GL.glReadPixels(center - 42, height // 2, 84, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-            eclipse_rows.append(np.frombuffer(pixels, dtype=np.uint8).reshape(84, 4)[:, :3].astype(int))
-        dimming = eclipse_rows[0] - eclipse_rows[1]
-        assert not dimming[0].any() and dimming[55:62].max() > 30
-        assert np.abs(np.diff(dimming[6:65], axis=0)).max() < 12
-        GL.glUniform1i(uniform("u_solar_possible"), 0)
-        GL.glUniform1f(uniform("u_earth_lighting"), 0.0)
+        check_eclipse_horizon(raster, draw, center, height // 2)
         GL.glDeleteTextures([night_texture])
 
         vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
@@ -253,8 +291,10 @@ def main():
             GL.glFinish()
             if i >= 10:
                 timings.append((time.perf_counter() - start) * 1000)
+        check_sky_sizes(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
-        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 2,
+        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 3,
+            "sky_sizing_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}

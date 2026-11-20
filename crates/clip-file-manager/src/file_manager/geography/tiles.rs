@@ -256,6 +256,7 @@ impl Tiles {
             details: Vec::new(),
             sky: None,
             show_sky: false,
+            readable_sky: false,
             earth_lighting: false,
             city_lights: false,
         }

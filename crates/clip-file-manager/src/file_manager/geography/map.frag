@@ -38,12 +38,12 @@ vec3 light_surface(vec3 rgb, vec2 geo) {
     float shade = 0.0;
     if (u_solar_possible) {
         float solar_radius = SOLAR_RADIUS_KM / length(sunlight);
-        // At sunrise or sunset only part of the finite solar disk can light
-        // the surface. Keep the indirect twilight through this transition.
-        float above_horizon = smoothstep(-solar_radius, solar_radius, elevation);
-        if (above_horizon > 0.0) {
+        // Direct sunlight builds gradually as the solar disk rises, while
+        // the terrain still receives indirect twilight at grazing angles.
+        float direct_share = smoothstep(-solar_radius, 4.0 * solar_radius, elevation);
+        if (direct_share > 0.0) {
             float blocked = shadow(sunlight, u_moon-point, 1737.4).covered;
-            shade = pow(blocked, 1.35) * above_horizon;
+            shade = pow(blocked, 1.35) * direct_share;
         }
     }
     // Grade the same terrain into night so the relief and coastline line up

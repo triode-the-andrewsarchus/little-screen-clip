@@ -40,14 +40,14 @@ pub(crate) fn asset_size(name: &str) -> Option<std::ops::RangeInclusive<u64>> {
     Some(exact..=exact)
 }
 
-const PLANETS: [Frame; 7] = [
-    MERCURY_J2000,
-    VENUS_J2000,
-    MARS_BARYCENTER_J2000,
-    JUPITER_BARYCENTER_J2000,
-    SATURN_BARYCENTER_J2000,
-    URANUS_BARYCENTER_J2000,
-    NEPTUNE_BARYCENTER_J2000,
+const PLANETS: [(&str, Frame); 7] = [
+    ("Mercury", MERCURY_J2000),
+    ("Venus", VENUS_J2000),
+    ("Mars", MARS_BARYCENTER_J2000),
+    ("Jupiter", JUPITER_BARYCENTER_J2000),
+    ("Saturn", SATURN_BARYCENTER_J2000),
+    ("Uranus", URANUS_BARYCENTER_J2000),
+    ("Neptune", NEPTUNE_BARYCENTER_J2000),
 ];
 
 #[derive(Clone)]
@@ -78,6 +78,14 @@ pub(super) struct Scene {
     pub planets: [[f32; 3]; 7],
     pub rotation_source: RotationSource,
     pub assets: Arc<Assets>,
+}
+
+impl Scene {
+    pub(super) fn bodies(&self) -> impl Iterator<Item = (&'static str, [f32; 3])> {
+        [("Sun", self.sun), ("Moon", self.moon)]
+            .into_iter()
+            .chain(PLANETS.into_iter().map(|(name, _)| name).zip(self.planets))
+    }
 }
 
 impl Assets {
@@ -138,7 +146,7 @@ impl Assets {
             lunar_earth,
             solar_possible: dot / (norm(sun) * norm(moon)) > 0.9993,
             modern_lights: time.year() >= 2016,
-            planets: PLANETS.map(|planet| from_earth(planet).unwrap_or([0.0; 3])),
+            planets: PLANETS.map(|(_, planet)| from_earth(planet).unwrap_or([0.0; 3])),
             rotation_source,
             assets: self.clone(),
         })
