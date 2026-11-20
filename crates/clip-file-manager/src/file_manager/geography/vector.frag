@@ -8,7 +8,7 @@ uniform vec4 u_color;
 uniform bool u_dashed;
 uniform bool u_fallback_road;
 uniform bool u_detailed_road;
-uniform bool u_country_border;
+uniform float u_night_dimming;
 uniform float u_earth_lighting;
 uniform float u_road_night;
 uniform int u_covered_count;
@@ -31,13 +31,13 @@ void main() {
     float coverage=1.0-smoothstep(1.0-max(fwidth(v_edge),0.001),1.0,abs(v_edge));
     float alpha=u_color.a*coverage;
     vec3 color = u_color.rgb;
-    if ((u_country_border && u_earth_lighting > 0.0) || (u_detailed_road && u_road_night > 0.0)) {
+    if ((u_night_dimming > 0.0 && u_earth_lighting > 0.0) || (u_detailed_road && u_road_night > 0.0)) {
         vec2 angle = radians(vec2(lon-180.0, v_geo.y));
         vec3 normal = vec3(cos(angle.y) * vec2(cos(angle.x),sin(angle.x)),sin(angle.y));
         float elevation = dot(normal,normalize(u_sun));
-        if (u_country_border) {
+        if (u_night_dimming > 0.0) {
             float darkness = 1.0 - smoothstep(-.105, .0349, elevation);
-            alpha *= 1.0 - .60 * darkness * u_earth_lighting;
+            alpha *= 1.0 - u_night_dimming * darkness * u_earth_lighting;
         } else {
             float night = 1.0 - smoothstep(-.105, 0.0, elevation);
             vec3 observed = max(vec3(0.0), texture(u_night,vec2(lon/360.0, .5-v_geo.y/180.0)).rgb-vec3(.10,.11,.15));

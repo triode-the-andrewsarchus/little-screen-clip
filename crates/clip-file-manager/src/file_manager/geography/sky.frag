@@ -21,7 +21,7 @@ uniform vec3 u_lunar_earth;
 const float PI = 3.141592653589793;
 const float EARTH_RADIUS_KM = 6378.137;
 const float MOON_RADIUS_KM = 1737.4;
-const float READABLE_DISK_SCALE = 4.0;
+const float READABLE_DISK_SCALE = 16.0;
 const float planet_radius[7] = float[7](2439.7, 6051.8, 3389.5, 69911.0, 58232.0, 25362.0, 24622.0);
 const vec3 planet_color[7] = vec3[7](
     vec3(.67,.62,.57), vec3(1,.88,.66), vec3(.92,.46,.31), vec3(.93,.77,.62),
@@ -97,18 +97,18 @@ void main() {
     float nearest = 1e20;
     float distance;
     // A point marker provides a way to see a planet below pixel resolution.
-    // The optical disk keeps the physical angular radius.
     for (int i=0; i<7; ++i) {
         if (u_planets[i] == vec3(0.0)) continue;
         vec3 offset = u_planets[i] - eye;
-        float coverage = disk(ray, offset, planet_radius[i], pixel, distance);
+        vec3 direction = normalize(offset);
+        float marker_growth = u_readable_sky ? smoothstep(0.0, 250.0, limb_clearance(eye, direction)) : 0.0;
+        float radius = planet_radius[i] * mix(1.0, 4.0, marker_growth);
+        float coverage = disk(ray, offset, radius, pixel, distance);
         if (distance <= 0.0 || distance >= nearest) continue;
         if (planet_radius[i] / length(offset) < .65 * pixel) {
-            vec3 direction = normalize(offset);
             float point = length(cross(ray, direction)) / pixel;
-            float marker_growth = u_readable_sky ? smoothstep(0.0, 250.0, limb_clearance(eye, direction)) : 0.0;
             float emphasis = planet_emphasis[i] * marker_growth;
-            point /= 1.0 + marker_growth;
+            point /= mix(1.0, 8.0, marker_growth);
             float marker = 1.0 - smoothstep(.55 + .45 * emphasis, 1.7 + 1.4 * emphasis, point);
             float halo = 1.0 - smoothstep(1.1, 5.5, point);
             rgb += planet_color[i] * (.22 * emphasis * halo);

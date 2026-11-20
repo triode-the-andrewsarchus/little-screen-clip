@@ -89,7 +89,6 @@ pub(in super::super) fn sky_object_at(
     frame: &super::Frame,
     rect: egui::Rect,
     pointer: egui::Pos2,
-    identify_stars: bool,
 ) -> Option<SkyObject<'_>> {
     if !frame.show_sky || frame.camera.globe_blend() < 1.0 || !rect.contains(pointer) {
         return None;
@@ -109,12 +108,7 @@ pub(in super::super) fn sky_object_at(
         })
         .min_by(|(_, a), (_, b)| a.total_cmp(b))
         .map(|(name, _)| SkyObject::Body(name));
-    body.or_else(|| {
-        identify_stars
-            .then(|| find_star(scene, &projection, rect, pointer))
-            .flatten()
-            .map(SkyObject::Star)
-    })
+    body.or_else(|| find_star(scene, &projection, rect, pointer).map(SkyObject::Star))
 }
 
 fn find_star<'a>(

@@ -239,13 +239,12 @@ fn present(directory: Option<&AssetDirectory>, tile: &Tile) -> bool {
     })
 }
 
+pub fn region_fits([west, south, east, north]: [f64; 4]) -> bool {
+    (0.0 < east - west && east - west <= 18.0) && (0.0 < north - south && north - south <= 12.0)
+}
+
 pub fn plan(config: &AppConfig, bounds: [f64; 4], cancel: &AtomicBool) -> Result<Plan, String> {
-    if bounds.iter().any(|v| !v.is_finite())
-        || bounds[2] <= bounds[0]
-        || bounds[3] <= bounds[1]
-        || bounds[2] - bounds[0] > 18.0
-        || bounds[3] - bounds[1] > 12.0
-    {
+    if !region_fits(bounds) {
         return Err("Zoom into a region smaller than 18° × 12° to plan 1″ terrain".into());
     }
     let root = AssetDirectory::create(&config.geo_assets_dir()).map_err(|e| e.to_string())?;

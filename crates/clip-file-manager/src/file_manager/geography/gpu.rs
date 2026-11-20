@@ -828,9 +828,13 @@ unsafe fn vector_style_uniforms(gl: &glow::Context, program: glow::Program, laye
     // SAFETY: this runs with the vector program active on the renderer's context.
     unsafe {
         let loc = |name| gl.get_uniform_location(program, name);
-        gl.uniform_1_i32(
-            loc("u_country_border").as_ref(),
-            i32::from(matches!(layer, Layer::Country | Layer::CountryDisputed)),
+        gl.uniform_1_f32(
+            loc("u_night_dimming").as_ref(),
+            match layer {
+                Layer::Coast => 0.78,
+                Layer::Country | Layer::CountryDisputed => 0.60,
+                _ => 0.0,
+            },
         );
         gl.uniform_1_i32(
             loc("u_fallback_road").as_ref(),

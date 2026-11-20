@@ -8,12 +8,63 @@ pub(super) struct Regional {
     job: Option<Task<Result<Plan, String>>>,
     plan: Option<Plan>,
     error: Option<String>,
+    coverage: Option<([i32; 4], Coverage)>,
 }
+
+enum Coverage {
+    Checking(Task<bool>),
+    Checked(bool),
+}
+
 impl Regional {
+    pub fn invalidate_coverage(&mut self) {
+        self.coverage = None;
+    }
+
+    fn coverage(
+        &mut self,
+        ui: &egui::Ui,
+        assets: Option<&Arc<BasemapAssets>>,
+        [west, south, east, north]: [f64; 4],
+    ) -> Option<bool> {
+        let Some(assets) = assets else {
+            return Some(false);
+        };
+        let cells = [
+            west.floor() as i32,
+            south.floor() as i32,
+            east.ceil() as i32,
+            north.ceil() as i32,
+        ];
+        if self.coverage.as_ref().is_none_or(|(key, _)| *key != cells) {
+            let assets = assets.clone();
+            let job = Task::start(
+                asset_workers(),
+                std::time::Duration::from_secs(20),
+                move |cancel| assets.has_local_1_arcsecond_coverage(cells, cancel),
+            );
+            self.coverage = Some((cells, Coverage::Checking(job)));
+        }
+        let (_, state) = self.coverage.as_mut()?;
+        if let Coverage::Checking(job) = state {
+            if let Some(result) = job.poll() {
+                *state = Coverage::Checked(result.unwrap_or(false));
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(80));
+            }
+        }
+        match *state {
+            Coverage::Checked(covered) => Some(covered),
+            Coverage::Checking(_) => None,
+        }
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         camera: GlobeCamera,
+        assets: Option<&Arc<BasemapAssets>>,
         config: &AppConfig,
         downloader: &mut AssetDownloader,
     ) {
@@ -31,24 +82,24 @@ impl Regional {
             }
         }
         ui.separator();
-        ui.label(
-            "Optional 1″ terrain (about 30 m). Large regional downloads; excluded from Get all.",
-        );
         ui.hyperlink_to(
-            "Viewfinder coverage and source information",
+            "Viewfinder 1″ terrain (about 30 m)",
             "https://viewfinderpanoramas.org/dem1d.html",
         );
-        if ui
-            .add_enabled(
-                self.job.is_none() && downloader.active.is_none(),
-                egui::Button::new("Estimate 1″ terrain for this view…"),
-            )
-            .clicked()
+        if let Some(bounds) = bounds(camera, self.viewport).filter(|b| viewfinder::region_fits(*b))
         {
-            self.plan = None;
-            self.error = None;
-            match bounds(camera, self.viewport) {
-                Ok(bounds) => {
+            match self.coverage(ui, assets, bounds) {
+                Some(true) => {
+                    ui.label("1″ terrain is already installed for this view.");
+                }
+                Some(false)
+                    if self.job.is_none()
+                        && ui
+                            .button("Find 1″ terrain downloads for this view…")
+                            .clicked() =>
+                {
+                    self.plan = None;
+                    self.error = None;
                     let config = config.clone();
                     self.job = Some(Task::start(
                         asset_workers(),
@@ -56,18 +107,24 @@ impl Regional {
                         move |cancel| viewfinder::plan(&config, bounds, cancel),
                     ));
                 }
-                Err(error) => self.error = Some(error),
+                None => {
+                    ui.label("Checking installed 1″ terrain…");
+                }
+                _ => {}
             }
+        } else {
+            self.invalidate_coverage();
+            ui.label("Zoom in on a region in 2D Map to find 1″ terrain downloads.");
         }
         if let Some(plan) = &self.plan {
             let count = plan.archives.len();
             if count == 0 {
                 ui.label(format!(
-                    "All terrain archives for this view are already installed ({}).",
+                    "Viewfinder archives for the estimated region are already installed ({}).",
                     plan.already_installed
                 ));
             } else {
-                ui.label(format!("{} archives: {} download; {} uncompressed terrain; up to {} additional space during installation.",count,bytes(plan.download_bytes),bytes(plan.installed_bytes),bytes(plan.peak_bytes)));
+                ui.label(format!("{count} archives · {} download · {} uncompressed terrain · up to {} additional space during installation", bytes(plan.download_bytes), bytes(plan.installed_bytes), bytes(plan.peak_bytes)));
                 ui.label("Terrain is stored compressed; disk estimates use its uncompressed upper bound.");
                 ui.label("Archives include surrounding terrain beyond the current view. Sizes come from server ZIP metadata; estimates are cached.");
                 ui.label(format!(
@@ -113,9 +170,9 @@ fn bytes(n: u64) -> String {
         format!("{:.1} MB", n as f64 / 1e6)
     }
 }
-fn bounds(mut camera: GlobeCamera, size: [f32; 2]) -> Result<[f64; 4], String> {
+fn bounds(mut camera: GlobeCamera, size: [f32; 2]) -> Option<[f64; 4]> {
     if camera.globe_blend() > 0.0 || size.iter().any(|v| *v <= 0.0) {
-        return Err("Use 2D Map and zoom into the region you want to download".into());
+        return None;
     }
     camera.constrain_view(size[0], size[1]);
     let scale = camera.scale_px(size[0], size[1]);
@@ -123,10 +180,10 @@ fn bounds(mut camera: GlobeCamera, size: [f32; 2]) -> Result<[f64; 4], String> {
     let half_lon = (size[0] as f64
         / (2.0 * scale * camera.center_lat.to_radians().cos().abs().max(0.25)))
     .to_degrees();
-    Ok([
+    Some([
         camera.center_lon - half_lon,
-        camera.center_lat - half_lat,
+        (camera.center_lat - half_lat).max(-90.0),
         camera.center_lon + half_lon,
-        camera.center_lat + half_lat,
+        (camera.center_lat + half_lat).min(90.0),
     ])
 }

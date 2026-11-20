@@ -117,12 +117,12 @@ def check_sky_sizes(root, width, height):
     actual = render_sky(0, -.55)
     readable = render_sky(1, -.55)
     for x, threshold in [(slice(0, width // 2), 100), (slice(width // 2, width), 235)]:
-        assert np.count_nonzero(readable[:, x, 0] > threshold) > 10 * np.count_nonzero(actual[:, x, 0] > threshold)
+        assert np.count_nonzero(readable[:, x, 0] > threshold) > 100 * np.count_nonzero(actual[:, x, 0] > threshold)
     actual_marker = render_sky(0, -.55, marker=True)[:height // 2, :, 0]
     readable_marker = render_sky(1, -.55, marker=True)[:height // 2, :, 0]
     actual_pixels = np.count_nonzero(actual_marker > 100)
     readable_pixels = np.count_nonzero(readable_marker > 100)
-    assert readable_pixels >= 12 * actual_pixels > 0, (actual_pixels, readable_pixels)
+    assert readable_pixels >= 100 * actual_pixels > 0, (actual_pixels, readable_pixels)
     for moon_x in [.55, .525]:
         assert np.array_equal(render_sky(0, moon_x), render_sky(1, moon_x)), "Solar conjunction changed optical disks"
 
@@ -172,16 +172,17 @@ def check_vectors(vectors, width, height, output):
         assert np.count_nonzero(red) > 100, f"Vector instance failed: {name}"
         Image.fromarray(np.flipud(image)).save(output / f"{name}.png")
         if name == "vector-line":
-            GL.glUniform1i(vu("u_country_border"), 1)
             GL.glUniform1f(vu("u_earth_lighting"), 1)
-            for sun_x, expected in [(-1.0, .4), (1.0, 1.0)]:
-                GL.glUniform3f(vu("u_sun"), sun_x, 0, 0)
-                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-                GL.glDrawArraysInstanced(GL.GL_TRIANGLES, 0, count, 1)
-                border = np.frombuffer(GL.glReadPixels(0, 0, width, height, GL.GL_RGBA,
-                    GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
-                assert abs(int(border[:, :, 0].max()) - expected * int(image[:, :, 0].max())) <= 1
-            GL.glUniform1i(vu("u_country_border"), 0)
+            for dimming in [.60, .78]:  # Country boundaries and coastlines.
+                GL.glUniform1f(vu("u_night_dimming"), dimming)
+                for sun_x, expected in [(-1.0, 1.0 - dimming), (1.0, 1.0)]:
+                    GL.glUniform3f(vu("u_sun"), sun_x, 0, 0)
+                    GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+                    GL.glDrawArraysInstanced(GL.GL_TRIANGLES, 0, count, 1)
+                    border = np.frombuffer(GL.glReadPixels(0, 0, width, height, GL.GL_RGBA,
+                        GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+                    assert abs(int(border[:, :, 0].max()) - expected * int(image[:, :, 0].max())) <= 1
+            GL.glUniform1f(vu("u_night_dimming"), 0)
     GL.glDeleteBuffers(1, [vector_buffer])
     GL.glDeleteVertexArrays(1, [vector_vao])
 

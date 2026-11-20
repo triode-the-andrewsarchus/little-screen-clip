@@ -104,7 +104,7 @@ impl Tiles {
         rect: egui::Rect,
         assets: Option<&Arc<BasemapAssets>>,
         transport: Option<&detail::Source>,
-        show_city_names: bool,
+        labels: detail::LabelLayers,
         camera: GlobeCamera,
         style: BasemapStyle,
         contours: bool,
@@ -124,7 +124,7 @@ impl Tiles {
         let wanted_detail = detail::visible(
             &camera,
             size,
-            transport.is_some() && (layers.roads || show_city_names),
+            transport.is_some() && (layers.roads || labels.cities || labels.detailed),
         );
         if let Some(source) = transport.cloned() {
             let error = self.detail.update(

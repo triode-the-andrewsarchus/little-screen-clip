@@ -14,7 +14,10 @@ use std::{
     fs,
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 // Compact overview grids must fit the bounded in-memory representation.
@@ -1772,6 +1775,30 @@ impl BasemapAssets {
         }
     }
 
+    /// Checks the loaded HGT inventory for 1″ tiles across the given degree rectangle.
+    /// This opens tile headers and is intended for a background worker.
+    pub fn has_local_1_arcsecond_coverage(
+        &self,
+        [west, south, east, north]: [i32; 4],
+        cancel: &AtomicBool,
+    ) -> bool {
+        south < north
+            && west < east
+            && (south..north).all(|lat| {
+                (west..east).all(|lon| {
+                    let lon = (lon + 180).rem_euclid(360) - 180;
+                    !cancel.load(Ordering::Relaxed)
+                        && self
+                            .terrain_tiles
+                            .sources
+                            .get(&(lat, lon))
+                            .is_some_and(|(dir, name)| {
+                                hgt::present(dir, name, hgt::MAX_BYTES as u64)
+                            })
+                })
+            })
+    }
+
     /// Loads available offline basemap assets from `assets_dir` and optional `terrain_override_dir`.
     pub fn load(assets_dir: &Path, terrain_override_dir: Option<&Path>) -> Self {
         Self::load_with_cancel(
@@ -3337,6 +3364,38 @@ mod tests {
         )
         .unwrap();
         directory.write(name, &frame).unwrap();
+    }
+
+    #[test]
+    fn regional_coverage_requires_1_arcsecond_tiles_on_both_sides_of_the_dateline() {
+        let root = tempfile::tempdir().unwrap();
+        let regional = root.path().join("terrain");
+        let nasadem = root.path().join("nasadem/terrain");
+        fs::create_dir_all(&regional).unwrap();
+        fs::create_dir_all(&nasadem).unwrap();
+        fs::File::create(regional.join("N00E179.hgt"))
+            .unwrap()
+            .set_len(hgt::MAX_BYTES as u64)
+            .unwrap();
+        fs::File::create(nasadem.join("N00W180.hgt"))
+            .unwrap()
+            .set_len(1201 * 1201 * 2)
+            .unwrap();
+        let mut assets = BasemapAssets::default();
+        load_hgt_dir(&regional, &mut assets.terrain_tiles);
+        load_hgt_dir(&nasadem, &mut assets.terrain_tiles);
+        let cancel = AtomicBool::new(false);
+        assert!(assets.has_local_1_arcsecond_coverage([179, 0, 180, 1], &cancel));
+        assert!(!assets.has_local_1_arcsecond_coverage([179, 0, 181, 1], &cancel));
+        let directory = AssetDirectory::open(&nasadem).unwrap();
+        write_hgt_frame(
+            &directory,
+            std::ffi::OsStr::new("N00W180.hgt.zst"),
+            &vec![0; hgt::MAX_BYTES],
+        );
+        fs::remove_file(nasadem.join("N00W180.hgt")).unwrap();
+        assert!(assets.has_local_1_arcsecond_coverage([179, 0, 181, 1], &cancel));
+        assert!(!assets.has_local_1_arcsecond_coverage([179, 0, 182, 1], &cancel));
     }
 
     #[test]

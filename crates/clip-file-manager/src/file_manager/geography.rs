@@ -130,7 +130,7 @@ pub(super) struct Viewer {
     style: BasemapStyle,
     show_country_borders: bool,
     show_state_borders: bool,
-    show_city_names: bool,
+    labels: detail::LabelLayers,
     show_rivers: bool,
     show_roads: bool,
     show_contours: bool,
@@ -156,7 +156,6 @@ struct SkyState {
     visible: bool,
     readable: bool,
     constellations: bool,
-    identify_stars: bool,
     lighting: bool,
     lights: bool,
     error: Option<String>,
@@ -199,9 +198,8 @@ impl SkyState {
             visible: true,
             readable: true,
             constellations: false,
-            identify_stars: true,
             lighting: true,
-            lights: false,
+            lights: true,
             error: None,
         }
     }
@@ -357,7 +355,10 @@ impl Viewer {
             style: BasemapStyle::Natural,
             show_country_borders: true,
             show_state_borders: true,
-            show_city_names: true,
+            labels: detail::LabelLayers {
+                cities: true,
+                detailed: false,
+            },
             show_rivers: true,
             show_roads: true,
             show_contours: true,
@@ -426,6 +427,7 @@ impl Viewer {
         self.sky.poll(ctx);
         let active = self.downloader.active;
         if let Some(downloaded) = self.downloader.poll(ctx) {
+            self.terrain_download.invalidate_coverage();
             if matches!(
                 active,
                 Some(DownloadPack::Sky | DownloadPack::NightLights | DownloadPack::StarCatalog)
@@ -524,7 +526,7 @@ impl Viewer {
                 rect,
                 self.assets.as_ref(),
                 self.downloader.transport.source.as_ref(),
-                self.show_city_names,
+                self.labels,
                 self.camera,
                 tiles::Appearance {
                     style: self.style,
@@ -611,7 +613,7 @@ impl Viewer {
             ))
             .on_hover_text("Drag to rotate or pan. Scroll to zoom.");
             if self.downloader.transport.source.is_some()
-                && (self.show_roads || self.show_city_names)
+                && (self.show_roads || self.labels.cities || self.labels.detailed)
             {
                 ui.hyperlink_to(
                     &detail::manifest().attribution,
@@ -679,7 +681,7 @@ impl Viewer {
             frame.city_lights = self.sky.lights;
         }
         if hovered.is_none() {
-            show_sky_object(ui, rect, &frame, self.sky.identify_stars);
+            show_sky_object(ui, rect, &frame);
         }
         let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
         if self.render_error != error {
@@ -706,14 +708,14 @@ impl Viewer {
         let camera = &self.camera;
         let flat = camera.globe_blend() == 0.0;
         let period = camera.world_width_px(rect.width(), rect.height());
-        let cities = self.assets.as_deref().filter(|_| self.show_city_names);
+        let cities = self.assets.as_deref().filter(|_| self.labels.cities);
         detail::paint_labels(
             ui,
             rect,
             self.camera,
             detail_tiles,
+            self.labels,
             self.show_roads,
-            self.show_city_names,
         );
         for copy in camera.world_shifts(rect.width(), rect.height()) {
             if copy != 0
@@ -793,7 +795,9 @@ impl Viewer {
             ui.checkbox(&mut self.show_country_borders, "Countries")
                 .on_hover_text("Show country borders and coastline outlines.");
             ui.checkbox(&mut self.show_state_borders, "States");
-            ui.checkbox(&mut self.show_city_names, "City names");
+            ui.checkbox(&mut self.labels.cities, "City names");
+            ui.checkbox(&mut self.labels.detailed, "Detailed names")
+                .on_hover_text("Show neighborhood, road, rail, and ferry names at close zoom. Transportation names follow the Roads layer.");
             ui.checkbox(&mut self.show_rivers, "Rivers");
             ui.checkbox(&mut self.show_roads, "Roads");
             ui.add_enabled(
@@ -808,17 +812,16 @@ impl Viewer {
                     self.sky.visible,
                     egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
                 )
-                .on_hover_text("Show the Sun and Moon up to four times larger, with brighter planet markers.");
+                .on_hover_text("Enlarge the Sun and Moon up to 16×, with larger planet markers. Uses physical sizes during eclipses.");
                 ui.checkbox(&mut self.sky.lighting, "Day and night");
                 ui.add_enabled(
                     self.sky.lighting && assets.night.is_some(),
-                    egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
+                    egui::Checkbox::new(&mut self.sky.lights, "Black Marble"),
                 )
                 .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
                 if assets.star_catalog().is_some() {
                     ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.constellations, "Constellations"))
                         .on_hover_text("Show Stellarium’s Modern constellation figures.");
-                    ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.identify_stars, "Star hover"));
                 }
             }
             ui.separator();
@@ -1093,7 +1096,7 @@ impl Viewer {
                     }
                 });
                 if self.show_assets_panel && self.downloader.active.is_none() {
-                    self.terrain_download.ui(ui, self.camera, &self.config, &mut self.downloader);
+                    self.terrain_download.ui(ui, self.camera, self.assets.as_ref(), &self.config, &mut self.downloader);
                 }
             });
     }
@@ -1426,7 +1429,7 @@ fn paint_cities(
         );
         if detail_tiles
             .iter()
-            .any(|(id, tile)| *id == cell && tile.has_places())
+            .any(|(id, tile)| *id == cell && tile.has_settlements())
         {
             continue;
         }
@@ -1654,12 +1657,12 @@ fn live_scene_time(ctx: &egui::Context) -> DateTime<Utc> {
     DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
 }
 
-fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame, identify_stars: bool) {
+fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
     let target = ui
         .ctx()
         .pointer_hover_pos()
         .filter(|_| super::ui::preview_hovered(ui, rect))
-        .and_then(|pointer| gpu::sky_object_at(frame, rect, pointer, identify_stars));
+        .and_then(|pointer| gpu::sky_object_at(frame, rect, pointer));
     if let Some(target) = target {
         egui::Tooltip::always_open(
             ui.ctx().clone(),

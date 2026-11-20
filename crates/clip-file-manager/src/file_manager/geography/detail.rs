@@ -159,10 +159,10 @@ pub(super) struct Tile {
     pub labels: Vec<Label>,
 }
 impl Tile {
-    pub fn has_places(&self) -> bool {
+    pub fn has_settlements(&self) -> bool {
         self.labels
             .first()
-            .is_some_and(|label| label.class.is_place())
+            .is_some_and(|label| label.class >= Class::Town)
     }
 
     pub fn bytes(&self) -> usize {
@@ -303,8 +303,8 @@ pub(super) fn visible(camera: &GlobeCamera, [w, h]: [f32; 2], enabled: bool) -> 
 }
 
 impl Label {
-    fn show(&self, zoom: f64, place_pass: bool) -> bool {
-        let min_zoom = match self.class {
+    fn min_zoom(&self) -> f64 {
+        match self.class {
             Class::Neighborhood => 530.0,
             Class::Town
             | Class::City
@@ -314,8 +314,23 @@ impl Label {
             | Class::WaterRoute => MIN_ZOOM,
             Class::Primary | Class::Secondary | Class::Tertiary => 580.0,
             _ => 1200.0,
-        };
-        self.class.is_place() == place_pass && zoom >= min_zoom
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct LabelLayers {
+    pub cities: bool,
+    pub detailed: bool,
+}
+
+impl LabelLayers {
+    fn shows(self, class: Class, roads: bool) -> bool {
+        match class {
+            Class::City | Class::Town => self.cities,
+            Class::Neighborhood => self.detailed,
+            _ => self.detailed && roads,
+        }
     }
 }
 
@@ -324,8 +339,8 @@ pub(super) fn paint_labels(
     rect: egui::Rect,
     camera: GlobeCamera,
     tiles: &[(TileId, Arc<Tile>)],
+    layers: LabelLayers,
     roads: bool,
-    places: bool,
 ) {
     use egui::{Align2, Color32, FontId, Rect, vec2};
     let painter = ui.painter_at(rect);
@@ -336,14 +351,15 @@ pub(super) fn paint_labels(
             .project(f64::from(lat), f64::from(lon), rect.width(), rect.height())
             .map(|[x, y]| rect.min + vec2(x, y))
     };
-    for (place, _) in [(true, places), (false, roads)]
-        .into_iter()
-        .filter(|(_, enabled)| *enabled)
-    {
+    for place in [true, false] {
         let candidates = tiles
             .iter()
             .flat_map(|(_, tile)| tile.labels.iter().take(256))
-            .filter(|label| label.show(camera.zoom, place));
+            .filter(|label| {
+                label.class.is_place() == place
+                    && layers.shows(label.class, roads)
+                    && camera.zoom >= label.min_zoom()
+            });
         let (color, size, align, offset, background) = if place {
             (
                 Color32::from_rgb(238, 236, 224),
@@ -388,6 +404,26 @@ pub(super) fn paint_labels(
             names.insert(label.text.as_str());
             if placed.len() >= 72 {
                 return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn city_and_detailed_names_are_independent() {
+        for cities in [false, true] {
+            for detailed in [false, true] {
+                let layers = LabelLayers { cities, detailed };
+                assert_eq!(layers.shows(Class::City, true), cities);
+                assert_eq!(layers.shows(Class::Town, true), cities);
+                assert_eq!(layers.shows(Class::Neighborhood, false), detailed);
+                assert_eq!(layers.shows(Class::Primary, true), detailed);
+                assert_eq!(layers.shows(Class::Rail, true), detailed);
+                assert!(!layers.shows(Class::Primary, false));
             }
         }
     }
