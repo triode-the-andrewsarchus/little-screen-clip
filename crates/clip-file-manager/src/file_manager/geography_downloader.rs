@@ -373,15 +373,21 @@ impl DownloadSession<'_> {
             let url = format!("{}{}", manifest.base_url, object.key);
             let start = processed as f64 / detail::DOWNLOAD_BYTES as f64;
             let weight = object.bytes as f64 / detail::DOWNLOAD_BYTES as f64;
+            let part = format!("{} of {}", index + 1, manifest.sources.len());
             let file = download_with_request(
                 &root.path().join("overture-part.parquet"),
                 &url,
                 object.bytes,
                 self.cancelled,
-                |f, message| {
+                |bytes| {
+                    let fraction = bytes as f64 / object.bytes as f64;
                     self.report(
-                        base + span * (start + weight * 0.8 * f as f64) as f32,
-                        message,
+                        base + span * (start + weight * 0.8 * fraction) as f32,
+                        &format!(
+                            "Downloading file {part} · {:.0} / {:.0} MB",
+                            bytes as f64 / 1e6,
+                            object.bytes as f64 / 1e6,
+                        ),
                     )
                 },
                 CommandRequest::new("curl"),
@@ -394,12 +400,8 @@ impl DownloadSession<'_> {
                 ));
             }
             self.report(
-                base + span * (start + weight * 0.85) as f32,
-                &format!(
-                    "Indexing Overture file {} of {}…",
-                    index + 1,
-                    manifest.sources.len()
-                ),
+                base + span * (start + weight * 0.8) as f32,
+                &format!("Indexing file {part}…"),
             );
             detail::import::file(
                 &mut db,
@@ -412,6 +414,7 @@ impl DownloadSession<'_> {
             .map_err(|error| format!("Overture file {}: {error}", index + 1))?;
             processed += object.bytes;
         }
+        self.report(base + span, "Finalizing Overture index…");
         detail::import::finish(&db)
     }
 
@@ -712,7 +715,15 @@ fn download_to_file(
         url,
         max_bytes,
         cancelled,
-        on_progress,
+        |bytes| {
+            if bytes == 0 {
+                on_progress(0.02, &format!("Downloading {filename}…"));
+            } else {
+                let mb = bytes as f32 / (1024.0 * 1024.0);
+                let approx = (mb / (mb + 80.0)).clamp(0.03, 0.95);
+                on_progress(approx, &format!("Downloading {filename} ({mb:.1} MB)…"));
+            }
+        },
         CommandRequest::new("curl"),
         false,
     )
@@ -748,7 +759,7 @@ fn download_with_request(
     url: &str,
     max_bytes: u64,
     cancelled: &AtomicBool,
-    on_progress: impl Fn(f32, &str),
+    on_progress: impl Fn(u64),
     request: CommandRequest,
     transient: bool,
 ) -> Result<Downloaded, String> {
@@ -785,7 +796,7 @@ fn download_with_request(
         .inherit_handle(output_file)
         .map_err(|e| e.to_string())?;
 
-    on_progress(0.02, &format!("Downloading {filename}…"));
+    on_progress(0);
     let budget_exceeded = AtomicBool::new(false);
     let stalled = AtomicBool::new(false);
     let attempt_cancel = AtomicBool::new(false);
@@ -819,9 +830,7 @@ fn download_with_request(
                 attempt_cancel.store(true, Ordering::Relaxed);
                 return;
             }
-            let mb = bytes as f32 / (1024.0 * 1024.0);
-            let approx = (mb / (mb + 80.0)).clamp(0.03, 0.95);
-            on_progress(approx, &format!("Downloading {filename} ({mb:.1} MB)…"));
+            on_progress(bytes);
         })
         .map_err(|e| e.to_string())?;
     if budget_exceeded.load(Ordering::Relaxed) {
@@ -846,6 +855,7 @@ fn download_with_request(
     let (file, staging) = stage
         .finish(&directory, filename)
         .map_err(|e| e.to_string())?;
+    on_progress(downloaded_bytes);
     let path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
     Ok(Downloaded {
         expansion_budget: max_bytes - downloaded_bytes,
@@ -1085,6 +1095,31 @@ mod tests {
         assert!(!DownloadPack::TerrainGebco.installed(&status));
         status.has_full_gebco = true;
         assert!(DownloadPack::TerrainGebco.installed(&status));
+    }
+
+    #[test]
+    fn transient_transfer_reports_exact_bytes_without_publishing_a_raw_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("fixture.parquet");
+        let destination = temp.path().join("overture-part.parquet");
+        let bytes = 73 * 1024;
+        fs::write(&source, vec![0_u8; bytes]).unwrap();
+        let reported = Mutex::new(Vec::new());
+        let downloaded = download_with_request(
+            &destination,
+            &format!("file://{}", source.display()),
+            bytes as u64,
+            &AtomicBool::new(false),
+            |bytes| reported.lock().unwrap().push(bytes),
+            CommandRequest::new("curl"),
+            true,
+        )
+        .unwrap();
+        let reported = reported.into_inner().unwrap();
+        assert_eq!(reported.first(), Some(&0));
+        assert_eq!(reported.last(), Some(&(bytes as u64)));
+        assert_eq!(downloaded.file.metadata().unwrap().len(), bytes as u64);
+        assert!(!destination.exists());
     }
 
     #[test]

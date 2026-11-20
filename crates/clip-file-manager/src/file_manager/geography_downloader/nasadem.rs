@@ -264,7 +264,7 @@ fn download_tile(
         &tile.url(),
         maximum,
         cancel,
-        |_, _| {},
+        |_| {},
         auth.request()?,
         false,
     )?;

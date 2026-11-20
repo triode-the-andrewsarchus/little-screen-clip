@@ -767,8 +767,9 @@ impl Viewer {
                         ui.add(
                             egui::ProgressBar::new(prog.fraction)
                                 .desired_width(180.0)
-                                .text(prog.message),
+                                .text(format!("Overall {:.1}%", 100.0 * prog.fraction)),
                         );
+                        ui.label(prog.message);
                         if ui
                             .add(
                                 clip_ui::buttons::ButtonRole::Secondary
