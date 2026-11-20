@@ -39,12 +39,6 @@ pub(super) struct Tiles {
     pub contour: Option<f32>,
 }
 
-pub(super) struct Appearance {
-    pub style: BasemapStyle,
-    pub contours: bool,
-    pub layers: Layers,
-}
-
 /// Geographic working set shared by one viewport or a collection of strips.
 #[derive(Default)]
 pub(super) struct Requests {
@@ -100,17 +94,17 @@ impl Default for Tiles {
     }
 }
 impl Tiles {
-    pub fn update(
+    pub fn prepare_frame(
         &mut self,
         ui: &egui::Ui,
         rect: egui::Rect,
         assets: Option<&Arc<BasemapAssets>>,
         camera: GlobeCamera,
-        appearance: Appearance,
-    ) -> Result<(), String> {
-        let Some(assets) = assets else {
-            return Ok(());
-        };
+        style: BasemapStyle,
+        contours: bool,
+        layers: Layers,
+    ) -> Option<(gpu::Frame, Result<(), String>)> {
+        let assets = assets?;
         let size = [rect.width(), rect.height()];
         let wanted = Requests::new(
             visible_tiles(&camera, size[0], size[1], ui.ctx().pixels_per_point())
@@ -118,13 +112,12 @@ impl Tiles {
                 .collect(),
             &camera,
             size,
-            appearance.layers.rivers,
+            layers.rivers,
         );
         let raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
-        let mut frame = self.frame(wanted, camera, size, appearance.layers);
-        self.update_contours(&mut frame, appearance.style, appearance.contours);
-        gpu::paint(ui, rect, frame)?;
-        raster_result
+        let mut frame = self.frame(wanted, camera, size, layers);
+        self.update_contours(&mut frame, style, contours);
+        Some((frame, raster_result))
     }
 
     pub(super) fn prepare(
@@ -229,6 +222,10 @@ impl Tiles {
                 })
                 .collect(),
             layers,
+            sky: None,
+            show_sky: false,
+            earth_lighting: false,
+            city_lights: false,
         }
     }
 

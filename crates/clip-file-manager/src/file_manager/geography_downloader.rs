@@ -2,6 +2,8 @@
 pub(crate) mod nasadem;
 pub(super) mod viewfinder;
 
+use super::geography::sky;
+
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
     config::AppConfig,
@@ -42,6 +44,8 @@ pub enum DownloadPack {
     Viewfinder,
     LandCover,
     HydroRivers,
+    Sky,
+    NightLights,
     All,
 }
 
@@ -58,6 +62,8 @@ impl DownloadPack {
             Self::TerrainGebco => "GEBCO 2025 Terrain (15\" global DEM)",
             Self::LandCover => "Copernicus 300m Land Cover",
             Self::HydroRivers => "HydroRIVERS Global Network",
+            Self::Sky => "Sky and Earth Lighting",
+            Self::NightLights => "Black Marble Night Lights (2016)",
             Self::All => "All Offline Basemap Assets (< 20 GB)",
         }
     }
@@ -99,6 +105,7 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
+            Self::Sky | Self::NightLights => true, // Independently verified by the viewer.
             Self::All => PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -169,6 +176,35 @@ impl DownloadPack {
                 name: "hydrorivers.zip",
                 url: c.geo_hydrorivers_url(),
                 suffixes: &[".shp", ".dbf", ".shx"],
+            }],
+            Self::Sky => [
+                (
+                    sky::KERNEL,
+                    "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+                ),
+                (sky::EOP, "https://maia.usno.navy.mil/ser7/finals2000A.all"),
+                (
+                    sky::STARS,
+                    "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_4k.exr",
+                ),
+                (
+                    sky::MOON,
+                    "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_2k.tif",
+                ),
+            ]
+            .into_iter()
+            .map(|(name, url)| AssetFile {
+                folder: sky::DIRECTORY,
+                name,
+                url,
+                suffixes: &[],
+            })
+            .collect(),
+            Self::NightLights => vec![AssetFile {
+                folder: sky::DIRECTORY,
+                name: sky::NIGHT,
+                url: "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_01deg.jpg",
+                suffixes: &[],
             }],
             _ => vec![],
         }
@@ -245,6 +281,17 @@ impl DownloadSession<'_> {
     fn run(&self, pack: DownloadPack, base: f32, span: f32) -> Result<(), String> {
         if self.cancelled.load(Ordering::Relaxed) {
             return Err("Download cancelled".into());
+        }
+        let required = match pack {
+            DownloadPack::Sky => sky::PACK_BYTES,
+            DownloadPack::NightLights => sky::NIGHT_BYTES as u64,
+            _ => 0,
+        };
+        if required != 0 && required > self.remaining() {
+            return Err(format!(
+                "This pack needs {:.1} MB of free asset budget in geography.max_assets_bytes",
+                required as f64 / 1e6
+            ));
         }
         match pack {
             DownloadPack::TerrainGebco => self.terrain(base, span),

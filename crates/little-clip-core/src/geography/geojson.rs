@@ -1,5 +1,8 @@
 //! RFC 7946 geometry, with bounded attributes and no external resource resolution.
-use super::{Document, Kind, MAX_BYTES, MAX_PATHS, MAX_POINTS, Point, RawFeature, clip, prepare};
+use super::{
+    Document, Kind, MAX_BYTES, MAX_PATHS, MAX_POINTS, Point, RawFeature, clip, parse_instant,
+    prepare,
+};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -36,8 +39,13 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Document, String> {
             properties: Vec::new(),
         });
     }
-    drop(value);
-    prepare(title, reader.features, reader.notes.into_iter().collect())
+    let capture_time = value["datetime"]
+        .as_str()
+        .or_else(|| value["properties"]["datetime"].as_str())
+        .and_then(parse_instant);
+    let mut document = prepare(title, reader.features, reader.notes.into_iter().collect())?;
+    document.capture_time = capture_time;
+    Ok(document)
 }
 fn tag(value: &Value) -> Result<&str, String> {
     value

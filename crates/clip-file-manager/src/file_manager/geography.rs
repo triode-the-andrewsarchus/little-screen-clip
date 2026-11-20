@@ -4,6 +4,7 @@ pub(super) mod gpu;
 mod overlay;
 mod radiation;
 mod river_coverage;
+pub(super) mod sky;
 mod strips;
 mod terrain_download;
 mod tiles;
@@ -19,6 +20,7 @@ use crate::{
     shell::{StudioPanelLayout, StudioShell},
     ui_appearance::WorkbenchColors,
 };
+use chrono::{DateTime, Utc};
 use little_clip_core::{
     config::AppConfig,
     geography::{
@@ -141,6 +143,99 @@ pub(super) struct Viewer {
     tiles: tiles::Tiles,
     render_error: Option<String>,
     terrain_download: terrain_download::Regional,
+    sky: SkyState,
+}
+
+struct SkyState {
+    assets: Option<Arc<sky::Assets>>,
+    job: Option<Task<Option<Result<sky::Assets, String>>>>,
+    last: Option<(DateTime<Utc>, Option<sky::Scene>)>,
+    visible: bool,
+    lighting: bool,
+    lights: bool,
+    error: Option<String>,
+}
+
+impl SkyState {
+    fn new() -> Self {
+        Self {
+            assets: None,
+            job: None,
+            last: None,
+            visible: true,
+            lighting: true,
+            lights: false,
+            error: None,
+        }
+    }
+
+    fn reload(&mut self, root: &Path) {
+        let root = root.to_owned();
+        self.job = Some(Task::start_unbounded(asset_workers(), move |cancel| {
+            if cancel.load(Ordering::Relaxed)
+                || !root.join(sky::DIRECTORY).join(sky::KERNEL).is_file()
+            {
+                return None;
+            }
+            Some(sky::Assets::load(&root))
+        }));
+    }
+
+    fn poll(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.job else { return };
+        if let Some(result) = job.poll() {
+            self.job = None;
+            self.last = None;
+            match result {
+                Ok(Some(Ok(assets))) => {
+                    self.assets = Some(Arc::new(assets));
+                    self.error = None;
+                }
+                Ok(Some(Err(error))) => self.error = Some(error),
+                Ok(None) => {
+                    self.assets = None;
+                    self.error = None;
+                }
+                Err(little_clip_core::JobError::QueueFull) => {}
+                Err(error) => self.error = Some(error.to_string()),
+            }
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        }
+    }
+
+    fn at(&mut self, time: DateTime<Utc>) -> Option<sky::Scene> {
+        let assets = self.assets.as_ref()?;
+        if let Some((last, scene)) = &self.last
+            && *last == time
+        {
+            return scene.clone();
+        }
+        let scene = assets.at(time);
+        self.last = Some((time, scene.clone()));
+        scene
+    }
+}
+
+fn scene_time(
+    document: &Document,
+    selected: usize,
+    hovered: Option<&Sample>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    hovered
+        .and_then(|sample| sample.point.instant())
+        .or(document.features[selected].last_instant)
+        .or_else(|| {
+            document
+                .features
+                .iter()
+                .rev()
+                .find_map(|feature| feature.last_instant)
+        })
+        .or(document.capture_time)
+        .unwrap_or(now)
 }
 
 impl Viewer {
@@ -189,7 +284,9 @@ impl Viewer {
             tiles: tiles::Tiles::default(),
             render_error: None,
             terrain_download: terrain_download::Regional::default(),
+            sky: SkyState::new(),
         };
+        viewer.sky.reload(&viewer.downloader.assets_dir);
         viewer.fit_document();
         viewer.select(selected);
         Ok(viewer)
@@ -237,7 +334,12 @@ impl Viewer {
                 ctx.request_repaint();
             }
         }
+        self.sky.poll(ctx);
+        let active = self.downloader.active;
         if let Some(downloaded) = self.downloader.poll(ctx) {
+            if matches!(active, Some(DownloadPack::Sky | DownloadPack::NightLights)) {
+                self.sky.reload(&self.downloader.assets_dir);
+            }
             self.assets = Some(downloaded);
             ctx.request_repaint();
         }
@@ -295,7 +397,8 @@ impl Viewer {
             self.camera.constrain_view(rect.width(), rect.height());
             self.terrain_download.viewport = [rect.width(), rect.height()];
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
-            if let Err(error) = self.tiles.update(
+            let slot = ui.painter_at(rect).add(egui::Shape::Noop);
+            let prepared = self.tiles.prepare_frame(
                 ui,
                 rect,
                 self.assets.as_ref(),
@@ -310,9 +413,7 @@ impl Viewer {
                         roads: self.show_roads,
                     },
                 },
-            ) {
-                self.render_error = Some(error);
-            }
+            );
             self.contour_interval_m = self.tiles.contour;
             self.local_elev_range = self.tiles.range;
 
@@ -375,26 +476,50 @@ impl Viewer {
                 self.camera.zoom
             ));
 
-            if !profile_visible {
-                return;
+            let mut hovered = hit;
+            if profile_visible {
+                let feature = &self.document.features[self.selected];
+                let (profile, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
+                    egui::Sense::hover(),
+                );
+                let point = paint_profile(
+                    ui,
+                    profile,
+                    feature,
+                    self.selected,
+                    self.current,
+                    colors,
+                    self.config.geography.units,
+                );
+                if let Some(point) = point {
+                    hovered = Some(point);
+                    if Some(point) != self.current {
+                        self.current = Some(point);
+                        ui.ctx().request_repaint();
+                    }
+                }
             }
-            let feature = &self.document.features[self.selected];
-            let (profile, response) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
-                egui::Sense::hover(),
-            );
-            let point = paint_profile(
-                ui,
-                profile,
-                feature,
-                self.selected,
-                self.current,
-                colors,
-                self.config.geography.units,
-            );
-            if response.hovered() && point.is_some() && point != self.current {
-                self.current = point;
-                ui.ctx().request_repaint();
+            if let Some((mut frame, result)) = prepared {
+                if self.sky.assets.is_some() && (self.sky.visible || self.sky.lighting) {
+                    let now = Utc::now();
+                    let now = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
+                    let time = scene_time(
+                        &self.document,
+                        self.selected,
+                        hovered.and_then(|hit| self.sample(hit)),
+                        now,
+                    );
+                    if time == now {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs(1));
+                    }
+                    frame.sky = self.sky.at(time);
+                    frame.show_sky = self.sky.visible;
+                    frame.earth_lighting = self.sky.lighting;
+                    frame.city_lights = self.sky.lights;
+                }
+                self.render_error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
             }
         });
     }
@@ -499,6 +624,28 @@ impl Viewer {
             ui.checkbox(&mut self.show_city_names, "City names");
             ui.checkbox(&mut self.show_rivers, "Rivers");
             ui.checkbox(&mut self.show_roads, "Roads");
+            if let Some(assets) = &self.sky.assets {
+                ui.menu_button("Sky & lighting", |ui| {
+                    ui.checkbox(&mut self.sky.visible, "Sky and planets");
+                    ui.checkbox(&mut self.sky.lighting, "Day and night");
+                    ui.add_enabled(
+                        self.sky.lighting && assets.night.is_some(),
+                        egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
+                    )
+                    .on_hover_text("Modern night-light imagery, shown only after dark.");
+                    if let Some((time, scene)) = &self.sky.last {
+                        ui.label(time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+                        ui.label(match scene.as_ref().map(|s| s.rotation_source) {
+                            Some(sky::RotationSource::Observed) => "IERS observed Earth rotation",
+                            Some(sky::RotationSource::Predicted) => "IERS predicted Earth rotation",
+                            Some(sky::RotationSource::Modeled) => {
+                                "Modeled Earth rotation · geographic shadow paths are approximate"
+                            }
+                            None => "Outside the DE440 ephemeris coverage",
+                        });
+                    }
+                });
+            }
             ui.add_enabled(
                 terrain_available,
                 egui::Checkbox::new(&mut self.show_contours, "Contours"),
@@ -659,6 +806,19 @@ impl Viewer {
                                 .clicked()
                         {
                             self.downloader.start(DownloadPack::All, &self.config);
+                        }
+                        if self.sky.assets.is_none() && ui.add_enabled(
+                            self.sky.job.is_none(),
+                            clip_ui::buttons::ButtonRole::Secondary.button("Get Sky & Earth Lighting (~164 MB)", palette).compact(),
+                        ).clicked() {
+                            self.downloader.start(DownloadPack::Sky, &self.config);
+                        }
+                        if self.sky.assets.as_ref().is_some_and(|assets| assets.night.is_none())
+                            && ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Get Black Marble Night Lights (0.8 MB)", palette).compact()).clicked() {
+                            self.downloader.start(DownloadPack::NightLights, &self.config);
+                        }
+                        if let Some(error) = &self.sky.error {
+                            ui.colored_label(colors.warning, format!("Sky assets: {error}"));
                         }
                         if !st.has_ne2
                             && ui
@@ -1265,6 +1425,33 @@ pub(super) fn show_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_clock_uses_dated_hover_and_restores_source_order_track_default() {
+        let gpx = r#"<gpx xmlns="http://www.topografix.com/GPX/1/1">
+            <metadata><time>2019-01-01T08:00:00+02:00</time></metadata>
+            <trk><trkseg>
+            <trkpt lat="1" lon="1"><time>2024-04-08T13:17:00-05:00</time></trkpt>
+            <trkpt lat="1" lon="2"><time>2023-10-14T18:00:00Z</time></trkpt>
+            <trkpt lat="1" lon="3"><time>2022-11-08T10:59:00</time></trkpt>
+            </trkseg></trk></gpx>"#;
+        let mut document = Document::gpx(gpx.as_bytes()).unwrap();
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let times = &document.features[0].paths[0];
+        let hovered = times[0].point.instant().unwrap();
+        let last = times[1].point.instant().unwrap();
+        assert_eq!(hovered.to_rfc3339(), "2024-04-08T18:17:00+00:00");
+        assert_eq!(scene_time(&document, 0, Some(&times[0]), now), hovered);
+        assert_eq!(scene_time(&document, 0, Some(&times[2]), now), last);
+        assert_eq!(scene_time(&document, 0, None, now), last);
+        document.features[0].last_instant = None;
+        assert_eq!(
+            scene_time(&document, 0, None, now).to_rfc3339(),
+            "2019-01-01T06:00:00+00:00"
+        );
+        document.capture_time = None;
+        assert_eq!(scene_time(&document, 0, None, now), now);
+    }
 
     #[test]
     fn radiacode_preview_and_both_projections_draw_dose_colors() {

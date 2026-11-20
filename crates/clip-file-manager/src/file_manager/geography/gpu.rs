@@ -1,6 +1,7 @@
 //! GPU map resources owned by the desktop's current OpenGL context.
 //! Workers deliver source tiles; callbacks upload each tile once and draw it with
 //! camera uniforms. No framebuffer readback or per-camera CPU raster is involved.
+mod sky;
 use super::geometry::{Batch, Layer, Layers, RiverKey, Scene};
 use eframe::{
     egui_glow,
@@ -89,9 +90,22 @@ pub(super) struct Frame {
     pub scene: Option<Arc<Scene>>,
     pub rivers: Vec<(RiverKey, Arc<Scene>)>,
     pub layers: Layers,
+    pub sky: Option<super::sky::Scene>,
+    pub show_sky: bool,
+    pub earth_lighting: bool,
+    pub city_lights: bool,
 }
 
 pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(), String> {
+    paint_at(ui, rect, frame, None)
+}
+
+pub(super) fn paint_at(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    frame: Frame,
+    slot: Option<egui::layers::ShapeIdx>,
+) -> Result<(), String> {
     let handle = ui
         .ctx()
         .data(|d| d.get_temp::<Handle>(runtime_key()))
@@ -106,7 +120,7 @@ pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(),
         return Err(error);
     }
     let ctx = ui.ctx().clone();
-    ui.painter_at(rect).add(egui::PaintCallback {
+    let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
             if !handle.alive.load(Ordering::Acquire)
@@ -128,13 +142,20 @@ pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(),
                 }
             }
         })),
-    });
+    };
+    let painter = ui.painter_at(rect);
+    if let Some(slot) = slot {
+        painter.set(slot, callback);
+    } else {
+        painter.add(callback);
+    }
     Ok(())
 }
 
 #[derive(Default)]
 struct Renderer {
     resources: Option<Resources>,
+    sky: sky::SkyRenderer,
     tiles: HashMap<(u64, TileId), TextureTile>,
     bytes: usize,
     frame: u64,
@@ -200,8 +221,13 @@ impl Renderer {
             gl.disable(glow::STENCIL_TEST);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            gl.use_program(Some(resources.program));
             gl.bind_vertex_array(Some(resources.vao));
+            if let Some(sky) = frame.sky.as_ref().filter(|_| frame.show_sky) {
+                if let Err(error) = self.sky.paint(gl, sky, frame.camera, frame.size) {
+                    tracing::warn!(%error, "Sky renderer unavailable");
+                }
+            }
+            gl.use_program(Some(resources.program));
             let p = resources.program;
             let camera = frame.camera;
             let width = info.viewport.width();
@@ -305,6 +331,7 @@ impl Renderer {
     unsafe fn destroy(&mut self, gl: &glow::Context) {
         // SAFETY: caller retains the owning current context throughout teardown.
         unsafe {
+            self.sky.destroy(gl);
             for (_, batch) in self.vectors.drain() {
                 batch.destroy(gl);
             }

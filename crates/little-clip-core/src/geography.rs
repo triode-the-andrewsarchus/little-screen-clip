@@ -3,7 +3,7 @@ pub mod basemap;
 mod geojson;
 mod radiacode;
 pub mod units;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use roxmltree::{Document as Xml, Node};
 
 /// Maximum encoded geographic document size.
@@ -36,6 +36,18 @@ pub struct Point {
     pub time: String,
     /// Measurements supplied by a RadiaCode track.
     pub radiation: Option<RadiationReading>,
+}
+impl Point {
+    /// A supplied instant with an explicit offset. Local wall times remain display text.
+    pub fn instant(&self) -> Option<DateTime<Utc>> {
+        parse_instant(&self.time)
+    }
+}
+fn parse_instant(text: &str) -> Option<DateTime<Utc>> {
+    // RFC 3339 uses -00:00 to describe a known UTC instant with an unknown local offset.
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|time| time.to_utc())
 }
 /// Measurements at one recorded position.
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +88,8 @@ pub struct Feature {
     pub elevation: Option<[f64; 2]>,
     /// Dose-rate extrema in µSv/h over all readable positions.
     pub dose_rate: Option<[f64; 2]>,
+    /// Last dated position in source order, including positions omitted from drawing.
+    pub last_instant: Option<DateTime<Utc>>,
     /// Supplied text properties.
     pub properties: Vec<(String, String)>,
 }
@@ -83,6 +97,8 @@ pub struct Feature {
 pub struct Document {
     /// Supplied document name.
     pub title: String,
+    /// Explicitly dated file metadata when the source format supplies it.
+    pub capture_time: Option<DateTime<Utc>>,
     /// Features in source order.
     pub features: Vec<Feature>,
     /// Projected bounds [minimum x, minimum y, maximum x, maximum y].
@@ -172,7 +188,13 @@ impl Document {
         if total == 0 {
             return Err("No readable GPX positions".into());
         }
-        prepare(title, raw, notes)
+        let mut document = prepare(title, raw, notes)?;
+        document.capture_time = children(root, "metadata")
+            .next()
+            .and_then(|metadata| child_text(metadata, "time"))
+            .or_else(|| child_text(root, "time"))
+            .and_then(|time| parse_instant(&time));
+        Ok(document)
     }
 }
 fn gpx_xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
@@ -303,6 +325,7 @@ fn prepare(
         notes.push("No supplied positions; source attributes remain available.".into());
         return Ok(Document {
             title,
+            capture_time: None,
             features: raw
                 .into_iter()
                 .map(|feature| Feature {
@@ -313,6 +336,7 @@ fn prepare(
                     distance_m: 0.0,
                     elevation: None,
                     dose_rate: None,
+                    last_instant: None,
                     properties: feature.properties,
                 })
                 .collect(),
@@ -353,6 +377,7 @@ fn prepare(
     }
     Ok(Document {
         title,
+        capture_time: None,
         features,
         bounds,
         geographic_bounds: Some([
@@ -408,6 +433,12 @@ fn prepare_feature(
     bounds: &mut [f64; 4],
 ) -> Feature {
     let count: usize = feature.paths.iter().map(Vec::len).sum();
+    let last_instant = feature
+        .paths
+        .iter()
+        .rev()
+        .flat_map(|path| path.iter().rev())
+        .find_map(Point::instant);
     let stride = count.div_ceil((count * DRAW_POINTS / points).max(2)).max(1);
     let mut distance = 0.0;
     let mut elevation: Option<[f64; 2]> = None;
@@ -461,6 +492,7 @@ fn prepare_feature(
         distance_m: distance,
         elevation,
         dose_rate,
+        last_instant,
         properties: feature.properties,
     }
 }

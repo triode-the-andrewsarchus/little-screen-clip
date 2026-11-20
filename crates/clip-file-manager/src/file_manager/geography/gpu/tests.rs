@@ -137,6 +137,10 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         tiles: vec![tile],
         scene: None,
         rivers: Vec::new(),
+        sky: None,
+        show_sky: false,
+        earth_lighting: false,
+        city_lights: false,
         layers: Layers {
             countries: true,
             states: true,
