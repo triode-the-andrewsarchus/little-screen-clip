@@ -12,7 +12,7 @@ use little_clip_core::geography::basemap::{
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     marker::PhantomData,
     rc::Rc,
     sync::{
@@ -90,6 +90,7 @@ pub(super) struct Frame {
     pub scene: Option<Arc<Scene>>,
     pub rivers: Vec<(RiverKey, Arc<Scene>)>,
     pub layers: Layers,
+    pub details: Vec<(TileId, Arc<super::detail::Tile>)>,
     pub sky: Option<super::sky::Scene>,
     pub show_sky: bool,
     pub earth_lighting: bool,
@@ -222,11 +223,7 @@ impl Renderer {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.bind_vertex_array(Some(resources.vao));
-            if let Some(sky) = frame.sky.as_ref().filter(|_| frame.show_sky) {
-                if let Err(error) = self.sky.paint(gl, sky, frame.camera, frame.size) {
-                    tracing::warn!(%error, "Sky renderer unavailable");
-                }
-            }
+            self.sky.paint_frame(gl, frame);
             gl.use_program(Some(resources.program));
             let p = resources.program;
             self.sky.earth_uniforms(gl, p, frame);
@@ -622,6 +619,7 @@ impl VectorBatch {
 enum VectorKey {
     Base(usize),
     River(RiverKey, usize),
+    Detail(TileId, usize),
 }
 fn visible_batches(frame: &Frame) -> Vec<(VectorKey, &Batch)> {
     let mut batches = Vec::new();
@@ -650,29 +648,53 @@ fn visible_batches(frame: &Frame) -> Vec<(VectorKey, &Batch)> {
                 .map(|(i, b)| (VectorKey::River(*key, i), b)),
         );
     }
-    batches.retain(|(_, b)| {
-        b.layer
-            .appearance(frame.camera.zoom, frame.layers)
-            .is_some()
-    });
+    for (key, tile) in &frame.details {
+        batches.extend(
+            tile.batches
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (VectorKey::Detail(*key, i), b)),
+        );
+    }
+    batches.retain(|(_, b)| b.appearance(frame.camera.zoom, frame.layers).is_some());
     batches.sort_by_key(|(_, b)| b.layer);
     batches
 }
 
 impl Renderer {
-    unsafe fn paint_vectors(
+    fn covered_road_tiles(&self, frame: &Frame) -> BTreeSet<TileId> {
+        if !frame.layers.roads {
+            return BTreeSet::new();
+        }
+        frame
+            .details
+            .iter()
+            .filter_map(|(tile, prepared)| {
+                let mut roads = prepared
+                    .batches
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| b.layer.is_detailed_road());
+                let available = |(i, _)| {
+                    self.vectors
+                        .contains_key(&(frame.source, VectorKey::Detail(*tile, i)))
+                };
+                (roads.next().is_some_and(available) && roads.all(available)).then_some(*tile)
+            })
+            .collect()
+    }
+
+    unsafe fn upload_vectors(
         &mut self,
         gl: &glow::Context,
-        frame: &Frame,
-        width: f32,
-        height: f32,
-    ) -> Result<bool, String> {
-        let batches = visible_batches(frame);
+        source: u64,
+        batches: &[(VectorKey, &Batch)],
+    ) -> Result<(), String> {
         let mut uploads = 0;
-        // SAFETY: this method runs inside the owning current-context callback.
+        // SAFETY: the owning context is current through preparation and drawing.
         unsafe {
-            for &(id, source) in &batches {
-                let key = (frame.source, id);
+            for &(id, batch) in batches {
+                let key = (source, id);
                 if let Some(batch) = self.vectors.get_mut(&key) {
                     batch.used = self.frame;
                     continue;
@@ -680,7 +702,7 @@ impl Renderer {
                 if uploads >= 8 {
                     continue;
                 }
-                let data = &source.data;
+                let data = &batch.data;
                 while self.vector_bytes + data.len() * 4 > 192 * 1024 * 1024 {
                     let Some(old) = self
                         .vectors
@@ -700,6 +722,21 @@ impl Renderer {
                 self.vectors.insert(key, batch);
                 uploads += 1;
             }
+        }
+        Ok(())
+    }
+
+    unsafe fn paint_vectors(
+        &mut self,
+        gl: &glow::Context,
+        frame: &Frame,
+        width: f32,
+        height: f32,
+    ) -> Result<bool, String> {
+        let batches = visible_batches(frame);
+        // SAFETY: this method runs inside the owning current-context callback.
+        unsafe {
+            self.upload_vectors(gl, frame.source, &batches)?;
             let p = self
                 .resources
                 .as_ref()
@@ -718,13 +755,32 @@ impl Renderer {
                 gl.get_uniform_location(p, "u_blend").as_ref(),
                 frame.camera.globe_blend() as f32,
             );
+            let road_tiles = self.covered_road_tiles(frame);
+            let covered: Vec<_> = road_tiles
+                .iter()
+                .flat_map(|tile| [tile.x as i32, tile.y as i32])
+                .collect();
+            gl.uniform_1_i32(
+                gl.get_uniform_location(p, "u_covered_count").as_ref(),
+                (covered.len() / 2) as i32,
+            );
+            if !covered.is_empty() {
+                gl.uniform_2_i32_slice(
+                    gl.get_uniform_location(p, "u_covered[0]").as_ref(),
+                    &covered,
+                );
+            }
+            self.sky.road_uniforms(gl, p, frame);
             for &(id, source) in &batches {
                 let Some(batch) = self.vectors.get(&(frame.source, id)) else {
                     continue;
                 };
                 let layer = source.layer;
+                if layer.is_detailed_road() && !road_tiles.contains(&source.tile) {
+                    continue;
+                }
                 let Some((mut color, line_width, dash)) =
-                    layer.appearance(frame.camera.zoom, frame.layers)
+                    source.appearance(frame.camera.zoom, frame.layers)
                 else {
                     continue;
                 };
@@ -741,6 +797,7 @@ impl Renderer {
                 {
                     color = [0.0, 0.0, 0.0, 1.0];
                 }
+                road_style_uniforms(gl, p, layer);
                 gl.bind_vertex_array(Some(batch.vao));
                 gl.uniform_4_f32_slice(gl.get_uniform_location(p, "u_color").as_ref(), &color);
                 gl.uniform_1_f32(gl.get_uniform_location(p, "u_width").as_ref(), line_width);
@@ -765,6 +822,23 @@ impl Renderer {
         Ok(batches
             .iter()
             .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
+    }
+}
+
+unsafe fn road_style_uniforms(gl: &glow::Context, program: glow::Program, layer: Layer) {
+    // SAFETY: this runs with the vector program active on the renderer's context.
+    unsafe {
+        let loc = |name| gl.get_uniform_location(program, name);
+        gl.uniform_1_i32(
+            loc("u_fallback_road").as_ref(),
+            i32::from(matches!(layer, Layer::RoadMajor | Layer::RoadMinor)),
+        );
+        gl.uniform_1_i32(
+            loc("u_detailed_road").as_ref(),
+            i32::from(
+                matches!(layer, Layer::Detailed(stroke) if stroke.fill && stroke.class.is_road()),
+            ),
+        );
     }
 }
 

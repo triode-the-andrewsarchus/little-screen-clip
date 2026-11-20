@@ -137,6 +137,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         tiles: vec![tile],
         scene: None,
         rivers: Vec::new(),
+        details: Vec::new(),
         sky: None,
         show_sky: false,
         earth_lighting: false,
@@ -308,4 +309,124 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         );
         assert_eq!(gl.get_error(), glow::NO_ERROR);
     }
+}
+
+#[test]
+#[ignore = "requires surfaceless EGL OpenGL 3.3"]
+fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
+    use crate::file_manager::geography::detail::{self, Class, Stroke};
+    use little_clip_core::geography::basemap::ProjectionMode;
+    use std::collections::BTreeMap;
+
+    let context = Headless::new();
+    let gl = context.gl();
+    let mut renderer = Renderer::default();
+    let base_cell = TileId::at(4, 0.02, 0.06);
+    let detail_cell = TileId::at(detail::LEVEL, 0.02, 0.06);
+    let camera = GlobeCamera {
+        center_lat: 0.04,
+        center_lon: 0.0,
+        zoom: 420.0,
+        mode: ProjectionMode::Map2D,
+    };
+    assert!(
+        detail::visible(
+            &GlobeCamera {
+                zoom: 12.0,
+                ..camera
+            },
+            [512.0, 384.0],
+            true
+        )
+        .is_empty()
+    );
+    assert!(detail::visible(&camera, [512.0, 384.0], true).contains(&detail_cell));
+    let mut frame = Frame {
+        source: 1,
+        size: [512.0, 384.0],
+        camera,
+        style: BasemapStyle::Natural,
+        contours: None,
+        range: [0.0, 1.0],
+        tiles: Vec::new(),
+        scene: Some(Arc::new(Scene {
+            batches: vec![Batch {
+                tile: base_cell,
+                layer: Layer::RoadMajor,
+                data: vec![-0.12, 0.02, 0.12, 0.02, 0.0, 0.0],
+            }],
+            index: BTreeMap::from([(base_cell, vec![0])]),
+        })),
+        rivers: Vec::new(),
+        layers: Layers {
+            countries: true,
+            states: true,
+            rivers: true,
+            roads: true,
+        },
+        details: Vec::new(),
+        sky: None,
+        show_sky: false,
+        earth_lighting: false,
+        city_lights: false,
+    };
+    let detail_tile = Arc::new(detail::Tile {
+        batches: vec![Batch {
+            tile: detail_cell,
+            layer: Layer::Detailed(Stroke {
+                stack: 0,
+                fill: true,
+                class: Class::Residential,
+                flags: 0,
+            }),
+            data: vec![0.01, 0.06, 0.12, 0.06, 0.0, 0.0],
+        }],
+        labels: Vec::new(),
+    });
+    let info = egui::PaintCallbackInfo {
+        viewport: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512., 384.)),
+        clip_rect: egui::Rect::EVERYTHING,
+        pixels_per_point: 1.,
+        screen_size_px: [512, 384],
+    };
+    let rendered = |pixels: &[u8], lat, lon| {
+        let [x, y] = camera.project(lat, lon, 512.0, 384.0).unwrap();
+        let x = x as usize;
+        let y = 383 - y as usize;
+        (y - 1..=y + 1).any(|row| pixels[(row * 512 + x) * 4] > 45)
+    };
+    let mut draw = |frame: &Frame| {
+        let mut pixels = vec![0u8; 512 * 384 * 4];
+        // SAFETY: the test pbuffer belongs to this thread for the draw and read.
+        unsafe {
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            renderer.paint(&gl, &info, frame).unwrap();
+            gl.read_pixels(
+                0,
+                0,
+                512,
+                384,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
+        }
+        pixels
+    };
+    let before = draw(&frame);
+    assert!(rendered(&before, 0.02, -0.06) && rendered(&before, 0.02, 0.06));
+    frame.details.push((detail_cell, detail_tile));
+    let after = draw(&frame);
+    assert!(
+        rendered(&after, 0.02, -0.06),
+        "uncovered Natural Earth line remains"
+    );
+    assert!(
+        !rendered(&after, 0.02, 0.06),
+        "covered Natural Earth line is suppressed"
+    );
+    assert!(rendered(&after, 0.06, 0.06), "detailed street is drawn");
+    // SAFETY: the same context is still current.
+    unsafe { renderer.destroy(&gl) };
 }

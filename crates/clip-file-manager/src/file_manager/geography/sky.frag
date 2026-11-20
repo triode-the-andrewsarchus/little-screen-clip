@@ -26,7 +26,8 @@ float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance)
     distance = dot(ray, offset);
     float off_axis = length(cross(ray, offset)) / max(length(offset), 1.0);
     float angular = radius / max(length(offset), 1.0);
-    return distance > 0.0 ? 1.0 - smoothstep(max(0.0, angular - pixel*.5), angular + pixel*.5, off_axis) : 0.0;
+    float aperture = min(1.0, PI * (angular / pixel) * (angular / pixel));
+    return distance > 0.0 ? aperture * (1.0 - smoothstep(max(0.0, angular - pixel*.5), angular + pixel*.5, off_axis)) : 0.0;
 }
 
 vec3 lunar_surface(vec3 ray, vec3 offset) {

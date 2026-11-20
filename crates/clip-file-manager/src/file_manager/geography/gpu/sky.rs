@@ -10,10 +10,23 @@ pub(super) struct SkyRenderer {
     stars: Option<glow::Texture>,
     moon: Option<glow::Texture>,
     night: Option<glow::Texture>,
+    failed: bool,
 }
 
 impl SkyRenderer {
-    pub(super) unsafe fn paint(
+    pub(super) unsafe fn paint_frame(&mut self, gl: &glow::Context, frame: &super::Frame) {
+        if self.failed || !frame.show_sky {
+            return;
+        }
+        let Some(scene) = &frame.sky else { return };
+        // SAFETY: called during the owner's paint callback with its context current.
+        if let Err(error) = unsafe { self.paint(gl, scene, frame.camera, frame.size) } {
+            self.failed = true;
+            tracing::warn!(%error, "Sky renderer unavailable");
+        }
+    }
+
+    unsafe fn paint(
         &mut self,
         gl: &glow::Context,
         scene: &sky::Scene,
@@ -80,7 +93,10 @@ impl SkyRenderer {
                 distance,
             );
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
-            gl.uniform_1_f32(gl.get_uniform_location(p, "u_atmosphere").as_ref(), atmosphere(camera));
+            gl.uniform_1_f32(
+                gl.get_uniform_location(p, "u_atmosphere").as_ref(),
+                atmosphere(camera),
+            );
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_sun").as_ref(), &scene.sun);
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_moon").as_ref(), &scene.moon);
             gl.uniform_3_f32_slice(
@@ -134,12 +150,55 @@ impl SkyRenderer {
                     i32::from(scene.solar_possible),
                 );
                 gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
-                gl.uniform_1_f32(loc("u_atmosphere").as_ref(), if frame.show_sky { atmosphere(frame.camera) } else { 0.0 });
+                gl.uniform_1_f32(
+                    loc("u_atmosphere").as_ref(),
+                    if frame.show_sky {
+                        atmosphere(frame.camera)
+                    } else {
+                        0.0
+                    },
+                );
                 gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
                 gl.uniform_3_f32_slice(loc("u_moon").as_ref(), &scene.moon);
                 bind(gl, program, "u_night", 5, self.night.filter(|_| marble));
                 gl.active_texture(glow::TEXTURE0);
             }
+        }
+    }
+
+    pub(super) unsafe fn road_uniforms(
+        &mut self,
+        gl: &glow::Context,
+        program: glow::Program,
+        frame: &super::Frame,
+    ) {
+        // SAFETY: current context and active program are owned by the renderer.
+        unsafe {
+            let loc = |name| gl.get_uniform_location(program, name);
+            let scene = frame
+                .sky
+                .as_ref()
+                .filter(|scene| frame.earth_lighting && frame.city_lights && scene.modern_lights);
+            gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
+            gl.uniform_1_f32(
+                loc("u_detail_span").as_ref(),
+                super::super::detail::SIDE as f32,
+            );
+            gl.uniform_1_i32(
+                loc("u_road_night").as_ref(),
+                i32::from(scene.is_some() && self.night.is_some()),
+            );
+            bind(
+                gl,
+                program,
+                "u_night",
+                5,
+                self.night.filter(|_| scene.is_some()),
+            );
+            if let Some(scene) = scene {
+                gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
+            }
+            gl.active_texture(glow::TEXTURE0);
         }
     }
 
@@ -243,5 +302,24 @@ unsafe fn upload(gl: &glow::Context, source: &sky::Texture) -> Result<glow::Text
         gl.generate_mipmap(glow::TEXTURE_2D);
         gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         Ok(texture)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atmosphere_fades_before_the_close_globe_and_flat_map() {
+        use little_clip_core::geography::basemap::ProjectionMode;
+        let mut camera = GlobeCamera::default();
+        assert_eq!(atmosphere(camera), 1.0);
+        camera.zoom = 1.8;
+        assert!((0.01..0.99).contains(&atmosphere(camera)));
+        camera.mode = ProjectionMode::Map2D;
+        assert_eq!(atmosphere(camera), 0.0);
+        camera.mode = ProjectionMode::Globe3D;
+        camera.zoom = 2.15;
+        assert_eq!(atmosphere(camera), 0.0);
     }
 }

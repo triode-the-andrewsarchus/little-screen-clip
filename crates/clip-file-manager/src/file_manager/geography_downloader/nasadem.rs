@@ -266,6 +266,7 @@ fn download_tile(
         cancel,
         |_, _| {},
         auth.request()?,
+        false,
     )?;
     validate_zip(&file, tile)?;
     extract_matching_from_zip(&file, cancel, &[&tile.filename()])?;

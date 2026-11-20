@@ -25,7 +25,20 @@ pub(crate) const KERNEL_BYTES: usize = 119_799_808;
 const STARS_BYTES: usize = 35_997_085;
 const MOON_BYTES: usize = 3_339_438;
 pub(crate) const NIGHT_BYTES: usize = 779_638;
-pub(crate) const PACK_BYTES: u64 = (KERNEL_BYTES + STARS_BYTES + MOON_BYTES + 5_000_000) as u64;
+const EOP_LIMIT: usize = 5_000_000;
+pub(crate) const PACK_BYTES: u64 = (KERNEL_BYTES + STARS_BYTES + MOON_BYTES + EOP_LIMIT) as u64;
+
+pub(crate) fn asset_size(name: &str) -> Option<std::ops::RangeInclusive<u64>> {
+    let exact = match name {
+        KERNEL => KERNEL_BYTES,
+        STARS => STARS_BYTES,
+        MOON => MOON_BYTES,
+        NIGHT => NIGHT_BYTES,
+        EOP => return Some(1_000_000..=EOP_LIMIT as u64),
+        _ => return None,
+    } as u64;
+    Some(exact..=exact)
+}
 
 const PLANETS: [Frame; 7] = [
     MERCURY_J2000,
@@ -82,7 +95,7 @@ impl Assets {
             )
             .map_err(|error| error.to_string())?;
         let domain = almanac.spk_domain(301).map_err(|error| error.to_string())?;
-        let orientation = read_file_snapshot(&dir.join(EOP), 5_000_000)
+        let orientation = read_file_snapshot(&dir.join(EOP), EOP_LIMIT)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .map_or_else(Orientation::default, |text| Orientation::parse(&text));

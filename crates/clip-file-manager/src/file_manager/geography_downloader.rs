@@ -2,7 +2,7 @@
 pub(crate) mod nasadem;
 pub(super) mod viewfinder;
 
-use super::geography::sky;
+use super::geography::{detail, sky};
 
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
@@ -46,6 +46,7 @@ pub enum DownloadPack {
     HydroRivers,
     Sky,
     NightLights,
+    DetailedTransportation,
     All,
 }
 
@@ -64,6 +65,7 @@ impl DownloadPack {
             Self::HydroRivers => "HydroRIVERS Global Network",
             Self::Sky => "Sky and Earth Lighting",
             Self::NightLights => "Black Marble Night Lights (2016)",
+            Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "All Offline Basemap Assets (< 20 GB)",
         }
     }
@@ -105,7 +107,7 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
-            Self::Sky | Self::NightLights => true, // Independently verified by the viewer.
+            Self::Sky | Self::NightLights | Self::DetailedTransportation => true, // Verified by their own loaders.
             Self::All => PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -221,6 +223,7 @@ struct DownloadOutcome {
     assets: Arc<BasemapAssets>,
     disk_usage_bytes: u64,
     errors: Vec<String>,
+    transport: detail::Status,
 }
 impl DownloadSession<'_> {
     fn download(
@@ -258,6 +261,7 @@ impl DownloadSession<'_> {
         }
         Ok(DownloadOutcome {
             assets,
+            transport: detail::Status::load(self.root.display_path()),
             disk_usage_bytes: dir_size(&self.root.path()),
             errors: failures
                 .into_iter()
@@ -282,17 +286,6 @@ impl DownloadSession<'_> {
         if self.cancelled.load(Ordering::Relaxed) {
             return Err("Download cancelled".into());
         }
-        let required = match pack {
-            DownloadPack::Sky => sky::PACK_BYTES,
-            DownloadPack::NightLights => sky::NIGHT_BYTES as u64,
-            _ => 0,
-        };
-        if required != 0 && required > self.remaining() {
-            return Err(format!(
-                "This pack needs {:.1} MB of free asset budget in geography.max_assets_bytes",
-                required as f64 / 1e6
-            ));
-        }
         match pack {
             DownloadPack::TerrainGebco => self.terrain(base, span),
             DownloadPack::Viewfinder => viewfinder::download(
@@ -300,6 +293,8 @@ impl DownloadSession<'_> {
                 self.viewfinder.ok_or("Missing regional terrain plan")?,
             ),
             DownloadPack::LandCover => self.land_cover(base, span),
+            DownloadPack::DetailedTransportation => self.transportation(base, span),
+            DownloadPack::Sky | DownloadPack::NightLights => self.download_sky(pack, base, span),
             _ => {
                 let files = pack.files(self.config);
                 let n = files.len().max(1) as f32;
@@ -321,6 +316,118 @@ impl DownloadSession<'_> {
             }
         }
     }
+    fn download_sky(&self, pack: DownloadPack, base: f32, span: f32) -> Result<(), String> {
+        let root = self.root.path().join(sky::DIRECTORY);
+        let files: Vec<_> = pack
+            .files(self.config)
+            .into_iter()
+            .filter_map(|file| {
+                let sizes = sky::asset_size(file.name)?;
+                let present =
+                    little_clip_core::kernel_interface::open_content(&root.join(file.name), false)
+                        .ok()
+                        .and_then(|file| file.metadata().ok())
+                        .is_some_and(|meta| sizes.contains(&meta.len()));
+                (!present).then_some((file, sizes))
+            })
+            .collect();
+        let required: u64 = files.iter().map(|(_, sizes)| *sizes.end()).sum();
+        let used = dir_size(&self.root.path());
+        let needed = used.saturating_add(required);
+        if required > 0 && needed > self.config.geography.max_assets_bytes {
+            return Err(format!(
+                "This pack needs {:.1} MB for its remaining sources. Set [geography] max_assets_bytes to at least {needed} and reopen the viewer.",
+                required as f64 / 1e6,
+            ));
+        }
+        let count = files.len().max(1) as f32;
+        for (i, (file, sizes)) in files.into_iter().enumerate() {
+            let downloaded = download_to_file(
+                &root,
+                file.name,
+                file.url,
+                *sizes.end(),
+                self.cancelled,
+                |f, m| self.report(base + span * (i as f32 + f) / count, m),
+            )?;
+            let bytes = downloaded.file.metadata().map_err(|e| e.to_string())?.len();
+            if !sizes.contains(&bytes) {
+                return Err(format!("Unexpected source size for {}", file.name));
+            }
+        }
+        Ok(())
+    }
+
+    fn transportation(&self, base: f32, span: f32) -> Result<(), String> {
+        let root = self.root;
+        let plan = detail::Status::load(root.display_path());
+        if plan.source.is_some() {
+            return Ok(());
+        }
+        let used = dir_size(&root.path());
+        let mut other = used.saturating_sub(plan.bytes);
+        let budget = self.config.geography.max_assets_bytes;
+        transport_budget(root, used, plan.bytes, budget)?;
+        let mut db = detail::import::open(root)?;
+        let manifest = detail::manifest();
+        let mut processed = 0;
+        for (index, object) in manifest.sources.iter().enumerate() {
+            if detail::import::imported(&db, index)? {
+                processed += object.bytes;
+                continue;
+            }
+            let already = detail::database_bytes(root);
+            if index % 16 == 0 {
+                other = dir_size(&root.path()).saturating_sub(already);
+            }
+            transport_budget(root, other.saturating_add(already), already, budget)?;
+            let url = format!("{}{}", manifest.base_url, object.key);
+            let start = processed as f64 / detail::DOWNLOAD_BYTES as f64;
+            let weight = object.bytes as f64 / detail::DOWNLOAD_BYTES as f64;
+            let file = download_with_request(
+                &root.path().join("overture-part.parquet"),
+                &url,
+                object.bytes,
+                self.cancelled,
+                |f, message| {
+                    self.report(
+                        base + span * (start + weight * 0.8 * f as f64) as f32,
+                        message,
+                    )
+                },
+                CommandRequest::new("curl"),
+                true,
+            )?;
+            if file.file.metadata().map_err(|e| e.to_string())?.len() != object.bytes {
+                return Err(format!(
+                    "Overture object {} has an unexpected byte count",
+                    object.key
+                ));
+            }
+            self.report(
+                base + span * (start + weight * 0.85) as f32,
+                &format!(
+                    "Indexing Overture file {} of {}…",
+                    index + 1,
+                    manifest.sources.len()
+                ),
+            );
+            detail::import::file(
+                &mut db,
+                file.file.try_clone().map_err(|e| e.to_string())?,
+                object.kind,
+                index,
+                budget
+                    .saturating_sub(other)
+                    .saturating_sub(detail::STAGING_BYTES),
+                self.cancelled,
+            )
+            .map_err(|error| format!("Overture file {}: {error}", index + 1))?;
+            processed += object.bytes;
+        }
+        detail::import::finish(&db)
+    }
+
     fn terrain(&self, base: f32, span: f32) -> Result<(), String> {
         let mut error = "No GEBCO terrain mirror succeeded".to_string();
         for url in std::iter::once(self.config.geo_gebco_terrain_url())
@@ -410,6 +517,7 @@ pub struct AssetDownloader {
     pub terrain_override_dir: Option<PathBuf>,
     pub max_assets_bytes: u64,
     pub disk_usage_bytes: u64,
+    pub transport: detail::Status,
     pub status: AssetStatus,
     pub active: Option<DownloadPack>,
     pub last_error: Option<String>,
@@ -429,6 +537,7 @@ impl AssetDownloader {
             terrain_override_dir,
             max_assets_bytes: config.geography.max_assets_bytes,
             disk_usage_bytes,
+            transport: detail::Status::default(),
             status,
             active: None,
             last_error: None,
@@ -519,6 +628,7 @@ impl AssetDownloader {
         match result {
             Ok(Ok(outcome)) => {
                 self.disk_usage_bytes = outcome.disk_usage_bytes;
+                self.transport = outcome.transport;
                 self.status = outcome.assets.status();
                 self.last_error = (!outcome.errors.is_empty())
                     .then(|| format!("Unavailable map layers:\n{}", outcome.errors.join("\n")));
@@ -613,7 +723,41 @@ fn download_to_file(
         cancelled,
         on_progress,
         CommandRequest::new("curl"),
+        false,
     )
+}
+
+fn transport_budget(
+    root: &AssetDirectory,
+    used: u64,
+    index: u64,
+    budget: u64,
+) -> Result<(), String> {
+    let required = detail::Status {
+        source: None,
+        bytes: index,
+    }
+    .required_budget(used);
+    if required > budget {
+        return Err(format!(
+            "Detailed Transportation needs {:.2} GiB more asset budget. Set [geography] max_assets_bytes to at least {required} and reopen the viewer.",
+            (required - budget) as f64 / (1u64 << 30) as f64,
+        ));
+    }
+    check_transport_space(root, required.saturating_sub(used))
+}
+
+fn check_transport_space(root: &AssetDirectory, required: u64) -> Result<(), String> {
+    let directory = fs::File::open(root.path()).map_err(|error| error.to_string())?;
+    let stats = rustix::fs::fstatvfs(&directory).map_err(|error| error.to_string())?;
+    let available = stats.f_bavail.saturating_mul(stats.f_frsize);
+    if available < required {
+        return Err(format!(
+            "The geography filesystem needs {:.2} GiB more free space for the estimated import peak",
+            (required - available) as f64 / (1u64 << 30) as f64,
+        ));
+    }
+    Ok(())
 }
 
 fn download_with_request(
@@ -623,6 +767,7 @@ fn download_with_request(
     cancelled: &AtomicBool,
     on_progress: impl Fn(f32, &str),
     request: CommandRequest,
+    transient: bool,
 ) -> Result<Downloaded, String> {
     let dir = destination.parent().ok_or("Missing asset directory")?;
     let filename = destination
@@ -634,7 +779,8 @@ fn download_with_request(
         return Err("Download cancelled".into());
     }
     let directory = AssetDirectory::create(dir).map_err(|e| e.to_string())?;
-    let staged = directory.stage().map_err(|e| e.to_string())?;
+    let stage = DownloadStage::new(&directory, transient).map_err(|e| e.to_string())?;
+    let output_file = stage.file();
     let (request, fd) = request
         .args([
             "--disable",
@@ -653,7 +799,7 @@ fn download_with_request(
         .timeout(Duration::from_secs(3600))
         .own_process_group()
         .die_with_parent()
-        .inherit_handle(staged.as_file())
+        .inherit_handle(output_file)
         .map_err(|e| e.to_string())?;
 
     on_progress(0.02, &format!("Downloading {filename}…"));
@@ -671,7 +817,7 @@ fn download_with_request(
                 attempt_cancel.store(true, Ordering::Relaxed);
                 return;
             }
-            let bytes = staged.as_file().metadata().map_or(0, |m| m.len());
+            let bytes = output_file.metadata().map_or(0, |m| m.len());
             if bytes > max_bytes {
                 budget_exceeded.store(true, Ordering::Relaxed);
                 attempt_cancel.store(true, Ordering::Relaxed);
@@ -710,27 +856,13 @@ fn download_with_request(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("curl failed for {filename}: {}", stderr.trim()));
     }
-    let downloaded_bytes = staged
-        .as_file()
-        .metadata()
-        .map_err(|e| e.to_string())?
-        .len();
+    let downloaded_bytes = output_file.metadata().map_err(|e| e.to_string())?.len();
     if downloaded_bytes > max_bytes {
         return Err("Download exceeded the geography disk budget".into());
     }
-    let (file, staging) = if filename.to_ascii_lowercase().ends_with(".zip") {
-        (
-            staged.as_file().try_clone().map_err(|e| e.to_string())?,
-            Some(staged),
-        )
-    } else {
-        (
-            directory
-                .install(staged, std::ffi::OsStr::new(filename))
-                .map_err(|e| e.to_string())?,
-            None,
-        )
-    };
+    let (file, staging) = stage
+        .finish(&directory, filename)
+        .map_err(|e| e.to_string())?;
     let path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
     Ok(Downloaded {
         expansion_budget: max_bytes - downloaded_bytes,
@@ -739,6 +871,45 @@ fn download_with_request(
         directory,
         path,
     })
+}
+
+enum DownloadStage {
+    Named(tempfile::NamedTempFile),
+    Anonymous(fs::File),
+}
+
+impl DownloadStage {
+    fn new(directory: &AssetDirectory, transient: bool) -> std::io::Result<Self> {
+        if transient {
+            // A force-quit must not leave orphaned raw Parquet downloads behind.
+            tempfile::tempfile_in(directory.path()).map(Self::Anonymous)
+        } else {
+            directory.stage().map(Self::Named)
+        }
+    }
+
+    fn file(&self) -> &fs::File {
+        match self {
+            Self::Named(stage) => stage.as_file(),
+            Self::Anonymous(file) => file,
+        }
+    }
+
+    fn finish(
+        self,
+        directory: &AssetDirectory,
+        filename: &str,
+    ) -> std::io::Result<(fs::File, Option<tempfile::NamedTempFile>)> {
+        match self {
+            Self::Anonymous(file) => Ok((file, None)),
+            Self::Named(staged) if filename.to_ascii_lowercase().ends_with(".zip") => {
+                Ok((staged.as_file().try_clone()?, Some(staged)))
+            }
+            Self::Named(staged) => directory
+                .install(staged, std::ffi::OsStr::new(filename))
+                .map(|file| (file, None)),
+        }
+    }
 }
 
 // Declaration order keeps the parent descriptor alive through temporary cleanup.

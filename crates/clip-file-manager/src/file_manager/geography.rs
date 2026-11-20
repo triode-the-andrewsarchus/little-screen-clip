@@ -1,4 +1,5 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
+pub(super) mod detail;
 mod geometry;
 pub(super) mod gpu;
 mod overlay;
@@ -137,7 +138,7 @@ pub(super) struct Viewer {
     config: AppConfig,
     downloader: AssetDownloader,
     assets: Option<Arc<BasemapAssets>>,
-    assets_job: Option<Task<(Arc<BasemapAssets>, u64)>>,
+    assets_job: Option<Task<(Arc<BasemapAssets>, u64, detail::Status)>>,
     prompt_dismissed: bool,
     show_assets_panel: bool,
     tiles: tiles::Tiles,
@@ -257,7 +258,11 @@ impl Viewer {
                 override_dir.as_deref(),
                 cancel,
             ));
-            (assets, dir_size(&assets_dir))
+            (
+                assets,
+                dir_size(&assets_dir),
+                detail::Status::load(&assets_dir),
+            )
         });
 
         let mut viewer = Self {
@@ -321,7 +326,8 @@ impl Viewer {
             if let Some(result) = job.poll() {
                 self.assets_job = None;
                 match result {
-                    Ok((loaded, disk_usage)) => {
+                    Ok((loaded, disk_usage, transport)) => {
+                        self.downloader.transport = transport;
                         self.downloader.disk_usage_bytes = disk_usage;
                         self.downloader.status = loaded.status();
                         self.assets = Some(loaded);
@@ -402,6 +408,8 @@ impl Viewer {
                 ui,
                 rect,
                 self.assets.as_ref(),
+                self.downloader.transport.source.as_ref(),
+                self.show_city_names,
                 self.camera,
                 tiles::Appearance {
                     style: self.style,
@@ -417,7 +425,10 @@ impl Viewer {
             self.contour_interval_m = self.tiles.contour;
             self.local_elev_range = self.tiles.range;
 
-            let hit = self.paint_globe_map(ui, rect, colors);
+            let detail_tiles = prepared
+                .as_ref()
+                .map_or(&[][..], |(frame, _)| frame.details.as_slice());
+            let hit = self.paint_globe_map(ui, rect, colors, detail_tiles);
             if response.clicked()
                 && let Some(hit) = hit
             {
@@ -471,57 +482,77 @@ impl Viewer {
                 } else {
                     "Terrain unavailable"
                 };
-            ui.label(format!(
-                "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
-                self.camera.zoom
-            ));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!(
+                    "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
+                    self.camera.zoom
+                ));
+                if !detail_tiles.is_empty() {
+                    ui.hyperlink_to(&detail::manifest().attribution, "https://docs.overturemaps.org/attribution/");
+                }
+            });
 
-            let mut hovered = hit;
-            if profile_visible {
-                let feature = &self.document.features[self.selected];
-                let (profile, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
-                    egui::Sense::hover(),
-                );
-                let point = paint_profile(
-                    ui,
-                    profile,
-                    feature,
-                    self.selected,
-                    self.current,
-                    colors,
-                    self.config.geography.units,
-                );
-                if let Some(point) = point {
-                    hovered = Some(point);
-                    if Some(point) != self.current {
-                        self.current = Some(point);
-                        ui.ctx().request_repaint();
-                    }
-                }
-            }
-            if let Some((mut frame, result)) = prepared {
-                if self.sky.assets.is_some() && (self.sky.visible || self.sky.lighting) {
-                    let now = Utc::now();
-                    let now = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
-                    let time = scene_time(
-                        &self.document,
-                        self.selected,
-                        hovered.and_then(|hit| self.sample(hit)),
-                        now,
-                    );
-                    if time == now {
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs(1));
-                    }
-                    frame.sky = self.sky.at(time);
-                    frame.show_sky = self.sky.visible;
-                    frame.earth_lighting = self.sky.lighting;
-                    frame.city_lights = self.sky.lights;
-                }
-                self.render_error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
-            }
+            let hovered = profile_visible.then(|| self.profile_hover(ui, colors)).flatten().or(hit);
+            self.paint_frame(ui, rect, slot, prepared, hovered);
         });
+    }
+
+    fn profile_hover(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) -> Option<Hit> {
+        let (profile, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
+            egui::Sense::hover(),
+        );
+        let hit = paint_profile(
+            ui,
+            profile,
+            &self.document.features[self.selected],
+            self.selected,
+            self.current,
+            colors,
+            self.config.geography.units,
+        )?;
+        if Some(hit) != self.current {
+            self.current = Some(hit);
+            ui.ctx().request_repaint();
+        }
+        Some(hit)
+    }
+
+    fn paint_frame(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        slot: egui::layers::ShapeIdx,
+        prepared: Option<(gpu::Frame, Result<(), String>)>,
+        hovered: Option<Hit>,
+    ) {
+        let Some((mut frame, result)) = prepared else {
+            return;
+        };
+        let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
+        if self.sky.assets.is_some() && (visible || self.sky.lighting) {
+            let now = Utc::now();
+            let now = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
+            let time = scene_time(
+                &self.document,
+                self.selected,
+                hovered.and_then(|hit| self.sample(hit)),
+                now,
+            );
+            if time == now {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs(1));
+            }
+            frame.sky = self.sky.at(time);
+            frame.show_sky = visible;
+            frame.earth_lighting = self.sky.lighting;
+            frame.city_lights = self.sky.lights;
+        }
+        let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
+        if self.render_error != error {
+            self.render_error = error;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn paint_globe_map(
@@ -529,6 +560,10 @@ impl Viewer {
         ui: &mut egui::Ui,
         rect: egui::Rect,
         colors: WorkbenchColors,
+        detail_tiles: &[(
+            little_clip_core::geography::basemap::tiles::TileId,
+            Arc<detail::Tile>,
+        )],
     ) -> Option<Hit> {
         let painter = ui.painter_at(rect);
         let pointer = super::ui::preview_hovered(ui, rect)
@@ -539,6 +574,14 @@ impl Viewer {
         let flat = camera.globe_blend() == 0.0;
         let period = camera.world_width_px(rect.width(), rect.height());
         let cities = self.assets.as_deref().filter(|_| self.show_city_names);
+        detail::paint_labels(
+            ui,
+            rect,
+            self.camera,
+            detail_tiles,
+            self.show_roads,
+            self.show_city_names,
+        );
         for copy in camera.world_shifts(rect.width(), rect.height()) {
             if copy != 0
                 && (!flat || (copy.abs() as f64 - 0.5) * period > rect.width() as f64 * 0.5 + 160.0)
@@ -547,7 +590,15 @@ impl Viewer {
             }
             let offset = (copy as f64 * period) as f32;
             if let Some(assets) = cities {
-                paint_cities(ui, &painter, rect, camera, assets, offset, 56);
+                paint_cities(
+                    ui,
+                    &painter,
+                    rect,
+                    camera,
+                    assets,
+                    offset,
+                    (56, detail_tiles),
+                );
             }
             let projection = overlay::Projection {
                 camera,
@@ -632,7 +683,7 @@ impl Viewer {
                         self.sky.lighting && assets.night.is_some(),
                         egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
                     )
-                    .on_hover_text("Modern night-light imagery, shown only after dark.");
+                    .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
                     if let Some((time, scene)) = &self.sky.last {
                         ui.label(time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
                         ui.label(match scene.as_ref().map(|s| s.rotation_source) {
@@ -775,7 +826,7 @@ impl Viewer {
                         let budget_gb =
                             self.downloader.max_assets_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                         ui.label(format!(
-                            "Disk: {used_gb:.2}/{budget_gb:.1} GB · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
+                            "Disk: {used_gb:.2}/{budget_gb:.1} GiB · NE2: {} · Cities: {} · Borders: {} · Roads/Lakes: {} · GRWL: {} · Masks: {} · GSHHG: {} · GEBCO: {} · LandCover: {} · Local HGT: {}",
                             yes_no(st.has_ne2),
                             yes_no(st.has_cities),
                             yes_no(st.has_borders),
@@ -807,19 +858,7 @@ impl Viewer {
                         {
                             self.downloader.start(DownloadPack::All, &self.config);
                         }
-                        if self.sky.assets.is_none() && ui.add_enabled(
-                            self.sky.job.is_none(),
-                            clip_ui::buttons::ButtonRole::Secondary.button("Get Sky & Earth Lighting (~164 MB)", palette).compact(),
-                        ).clicked() {
-                            self.downloader.start(DownloadPack::Sky, &self.config);
-                        }
-                        if self.sky.assets.as_ref().is_some_and(|assets| assets.night.is_none())
-                            && ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Get Black Marble Night Lights (0.8 MB)", palette).compact()).clicked() {
-                            self.downloader.start(DownloadPack::NightLights, &self.config);
-                        }
-                        if let Some(error) = &self.sky.error {
-                            ui.colored_label(colors.warning, format!("Sky assets: {error}"));
-                        }
+                        self.optional_assets(ui, palette, colors);
                         if !st.has_ne2
                             && ui
                                 .add(
@@ -935,6 +974,123 @@ impl Viewer {
                     self.terrain_download.ui(ui, self.camera, &self.config, &mut self.downloader);
                 }
             });
+    }
+
+    fn optional_assets(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        colors: WorkbenchColors,
+    ) {
+        self.transport_assets(ui, palette);
+        if self.sky.assets.is_none()
+            && ui
+                .add_enabled(
+                    self.sky.job.is_none(),
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button(
+                            format!(
+                                "Get Sky & Earth Lighting (~{:.0} MB)",
+                                sky::PACK_BYTES as f64 / 1e6
+                            ),
+                            palette,
+                        )
+                        .compact(),
+                )
+                .clicked()
+        {
+            self.downloader.start(DownloadPack::Sky, &self.config);
+        }
+        if self
+            .sky
+            .assets
+            .as_ref()
+            .is_some_and(|assets| assets.night.is_none())
+            && ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Get Black Marble Night Lights (0.8 MB)", palette)
+                        .compact(),
+                )
+                .clicked()
+        {
+            self.downloader
+                .start(DownloadPack::NightLights, &self.config);
+        }
+        if self.sky.assets.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.hyperlink_to(
+                    "JPL DE440",
+                    "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+                );
+                ui.hyperlink_to("NASA star map", "https://svs.gsfc.nasa.gov/4851/");
+                ui.hyperlink_to("NASA Moon albedo", "https://svs.gsfc.nasa.gov/4720/");
+                ui.hyperlink_to(
+                    "NASA ΔT uncertainty",
+                    "https://eclipse.gsfc.nasa.gov/SEcat5/uncertainty.html",
+                );
+            });
+        }
+        if let Some(error) = &self.sky.error {
+            ui.colored_label(colors.warning, format!("Sky assets: {error}"));
+        }
+    }
+
+    fn transport_assets(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let status = &self.downloader.transport;
+        let manifest = detail::manifest();
+        if status.source.is_some() {
+            ui.label(format!(
+                "Detailed Transportation · {:.2} GiB installed · {}",
+                status.bytes as f64 / (1u64 << 30) as f64,
+                manifest.release
+            ));
+            ui.hyperlink_to(
+                &manifest.attribution,
+                "https://docs.overturemaps.org/attribution/",
+            );
+            return;
+        }
+        let gib = (1u64 << 30) as f64;
+        ui.label(format!(
+            "Detailed Transportation · global Overture {} · {:.2} GB download",
+            manifest.release,
+            detail::DOWNLOAD_BYTES as f64 / 1e9,
+        ));
+        ui.label(format!(
+            "Estimated disk use · {:.0} GiB installed · {:.0} GiB peak during import",
+            detail::ESTIMATED_FINAL as f64 / gib,
+            detail::ESTIMATED_PEAK as f64 / gib,
+        ));
+        let required = status.required_budget(self.downloader.disk_usage_bytes);
+        let budget = self.downloader.max_assets_bytes;
+        if required > budget {
+            ui.label(format!(
+                "Needs {:.2} GiB more asset budget. In config.toml [geography], set max_assets_bytes = {required} or higher.",
+                (required - budget) as f64 / gib,
+            ));
+        }
+        let label = if status.bytes == 0 {
+            "Get Detailed Transportation"
+        } else {
+            "Resume Detailed Transportation"
+        };
+        if ui
+            .add_enabled(
+                required <= budget && self.assets_job.is_none(),
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button(label, palette)
+                    .compact(),
+            )
+            .clicked()
+        {
+            self.downloader
+                .start(DownloadPack::DetailedTransportation, &self.config);
+        }
+        ui.hyperlink_to(
+            &manifest.attribution,
+            "https://docs.overturemaps.org/attribution/",
+        );
     }
 
     fn sample(&self, hit: Hit) -> Option<&Sample> {
@@ -1071,7 +1227,13 @@ fn paint_cities(
     camera: &GlobeCamera,
     assets: &BasemapAssets,
     offset: f32,
-    label_limit: usize,
+    (label_limit, detail_tiles): (
+        usize,
+        &[(
+            little_clip_core::geography::basemap::tiles::TileId,
+            Arc<detail::Tile>,
+        )],
+    ),
 ) {
     // Natural Earth Populated Places: >= 250k at globe zoom, revealing all towns on close zoom, biggest first
     let min_pop = if camera.zoom < 3.0 {
@@ -1091,6 +1253,17 @@ fn paint_cities(
         };
         let pos = egui::pos2(rect.left() + px + offset, rect.top() + py);
         if !rect.contains(pos) {
+            continue;
+        }
+        let cell = little_clip_core::geography::basemap::tiles::TileId::at(
+            detail::LEVEL,
+            city.lat,
+            city.lon,
+        );
+        if detail_tiles
+            .iter()
+            .any(|(id, tile)| *id == cell && tile.has_places())
+        {
             continue;
         }
         let font_size = if city.pop_max >= 1_000_000 {

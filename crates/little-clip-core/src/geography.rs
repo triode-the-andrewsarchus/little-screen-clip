@@ -189,14 +189,18 @@ impl Document {
             return Err("No readable GPX positions".into());
         }
         let mut document = prepare(title, raw, notes)?;
-        document.capture_time = children(root, "metadata")
-            .next()
-            .and_then(|metadata| child_text(metadata, "time"))
-            .or_else(|| child_text(root, "time"))
-            .and_then(|time| parse_instant(&time));
+        document.capture_time = gpx_capture_time(root);
         Ok(document)
     }
 }
+fn gpx_capture_time(root: Node<'_, '_>) -> Option<DateTime<Utc>> {
+    children(root, "metadata")
+        .next()
+        .and_then(|metadata| child_text(metadata, "time"))
+        .or_else(|| child_text(root, "time"))
+        .and_then(|time| parse_instant(&time))
+}
+
 fn gpx_xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
     if bytes.len() > MAX_BYTES {
         return Err("GPX exceeds the 16 MiB opening limit".into());

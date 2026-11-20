@@ -25,6 +25,7 @@ pub(super) enum Layer {
     GrwlLarge,
     RoadMinor,
     RoadMajor,
+    Detailed(super::detail::Stroke),
     State,
     StateDisputed,
     Country,
@@ -35,6 +36,15 @@ pub(super) struct Batch {
     pub layer: Layer,
     pub data: Vec<f32>,
 }
+impl Batch {
+    pub fn appearance(&self, zoom: f64, layers: Layers) -> Option<([f32; 4], f32, bool)> {
+        match self.layer {
+            Layer::Detailed(stroke) => layers.roads.then(|| stroke.appearance(zoom)),
+            layer => layer.appearance(zoom, layers),
+        }
+    }
+}
+
 pub(super) struct Scene {
     pub batches: Vec<Batch>,
     pub index: BTreeMap<TileId, Vec<usize>>,
@@ -47,6 +57,10 @@ pub(super) struct Layers {
     pub roads: bool,
 }
 impl Layer {
+    pub fn is_detailed_road(self) -> bool {
+        matches!(self, Self::Detailed(stroke) if stroke.class.is_road())
+    }
+
     pub fn appearance(self, zoom: f64, layers: Layers) -> Option<([f32; 4], f32, bool)> {
         let grid = if zoom < 3.0 {
             Self::Grid30

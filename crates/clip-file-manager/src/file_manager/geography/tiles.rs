@@ -1,5 +1,6 @@
 //! Viewer-owned, cancellable tile preparation with a fixed CPU memory budget.
 use super::{
+    detail,
     geometry::{Layers, RiverKey, Scene},
     gpu,
 };
@@ -20,6 +21,7 @@ use std::{
     time::Duration,
 };
 const CPU_BUDGET: usize = 96 * 1024 * 1024;
+const DETAIL_BUDGET: usize = 64 * 1024 * 1024;
 const RIVER_BUDGET: usize = 64 * 1024 * 1024;
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 fn workers() -> &'static BackgroundJobs {
@@ -32,6 +34,7 @@ pub(super) struct Tiles {
     assets: Option<Arc<BasemapAssets>>,
     raster: TileCache<TileId, SourceTile>,
     rivers: TileCache<RiverKey, Scene>,
+    detail: TileCache<TileId, detail::Tile>,
     scene_job: Option<Task<Result<Scene, String>>>,
     scene: Option<Arc<Scene>>,
     error: Option<String>,
@@ -85,6 +88,7 @@ impl Default for Tiles {
             assets: None,
             raster: TileCache::default(),
             rivers: TileCache::default(),
+            detail: TileCache::default(),
             scene_job: None,
             scene: None,
             error: None,
@@ -99,6 +103,8 @@ impl Tiles {
         ui: &egui::Ui,
         rect: egui::Rect,
         assets: Option<&Arc<BasemapAssets>>,
+        transport: Option<&detail::Source>,
+        show_city_names: bool,
         camera: GlobeCamera,
         style: BasemapStyle,
         contours: bool,
@@ -114,8 +120,33 @@ impl Tiles {
             size,
             layers.rivers,
         );
-        let raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
+        let mut raster_result = self.prepare(ui.ctx(), assets, &wanted, CPU_BUDGET, RIVER_BUDGET);
+        let wanted_detail = detail::visible(
+            &camera,
+            size,
+            transport.is_some() && (layers.roads || show_city_names),
+        );
+        if let Some(source) = transport.cloned() {
+            let error = self.detail.update(
+                &wanted_detail,
+                DETAIL_BUDGET,
+                detail::Tile::bytes,
+                move |key, cancel| source.prepare(key, cancel),
+            );
+            if !self.detail.pending.is_empty() {
+                ui.ctx().request_repaint_after(Duration::from_millis(16));
+            }
+            if let Some(error) = error {
+                raster_result = raster_result.and(Err(error));
+            }
+        } else {
+            self.detail.pending.clear();
+        }
         let mut frame = self.frame(wanted, camera, size, layers);
+        frame.details = wanted_detail
+            .into_iter()
+            .filter_map(|id| self.detail.ready.get(&id).map(|tile| (id, tile.clone())))
+            .collect();
         self.update_contours(&mut frame, style, contours);
         Some((frame, raster_result))
     }
@@ -222,6 +253,7 @@ impl Tiles {
                 })
                 .collect(),
             layers,
+            details: Vec::new(),
             sky: None,
             show_sky: false,
             earth_lighting: false,
@@ -256,6 +288,7 @@ impl Tiles {
     pub(super) fn suspend(&mut self) {
         self.raster.pending.clear();
         self.rivers.pending.clear();
+        self.detail.pending.clear();
         self.scene_job = None;
     }
 }

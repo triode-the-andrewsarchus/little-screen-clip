@@ -113,7 +113,15 @@ impl Strips {
             },
         );
         if gpu::paint(ui, rect, frame).is_ok() {
-            paint_cities(ui, &ui.painter_at(rect), rect, &camera, assets, 0.0, 2);
+            paint_cities(
+                ui,
+                &ui.painter_at(rect),
+                rect,
+                &camera,
+                assets,
+                0.0,
+                (2, &[]),
+            );
         }
     }
 }
