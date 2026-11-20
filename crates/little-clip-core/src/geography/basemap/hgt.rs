@@ -127,8 +127,13 @@ mod tests {
         encode(&mut raw.as_slice(), &mut encoded, 8, &cancel).unwrap();
         let decoded = decode(encoded.clone(), true).unwrap();
         assert_eq!(decoded, raw);
-        let unknown_size = zstd::encode_all(raw.as_slice(), 1).unwrap();
-        assert!(decode(unknown_size, true).is_err());
+        // The zstd convenience encoder now records the size of small inputs.
+        let mut unsized_frame = zstd::stream::write::Encoder::new(Vec::new(), 1).unwrap();
+        unsized_frame.include_contentsize(false).unwrap();
+        unsized_frame.write_all(&raw).unwrap();
+        let unsized_frame = unsized_frame.finish().unwrap();
+        assert_eq!(zstd::decompressed_size(&unsized_frame), None);
+        assert!(decode(unsized_frame, true).is_err());
         for end in [0, 1, encoded.len() - 1] {
             assert!(decode(encoded[..end].to_vec(), true).is_err());
         }
