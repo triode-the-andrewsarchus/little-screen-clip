@@ -164,11 +164,11 @@ def main():
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR_MIPMAP_LINEAR)
         GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
         GL.glUniform1i(uniform("u_night"), 5)
-        GL.glUniform1i(uniform("u_earth_lighting"), 1)
 
-        def lit_exposure(sun_x, lights, blend=0, zoom=3):
+        def lit_exposure(sun_x, lights, blend=0, zoom=3, exposure=1.0):
             GL.glUniform3f(uniform("u_sun"), sun_x, 0, 0)
             GL.glUniform1i(uniform("u_black_marble"), lights)
+            GL.glUniform1f(uniform("u_earth_lighting"), exposure)
             draw(blend=blend, zoom=zoom)
             return np.frombuffer(GL.glReadPixels(0, height // 2, width, 1, GL.GL_RGBA,
                 GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(width, 4)[:, :3].astype(int)
@@ -183,13 +183,17 @@ def main():
         assert 0 < lit[center + 23, 0] - unlit[center + 23, 0] < 12
         assert np.array_equal(lit[center + 40], unlit[center + 40])
         assert np.array_equal(lit_exposure(150e6, 0), lit_exposure(150e6, 1))
+        day_palette = lit_exposure(-150e6, 1, exposure=0.0)
+        assert np.array_equal(day_palette, lit_exposure(150e6, 1, exposure=0.0))
+        half = lit_exposure(-150e6, 1, exposure=0.5)
+        assert np.all(np.abs(half - (lit + day_palette) / 2) <= 1)
         assert np.all(lit_exposure(-150e6, 0, 1, 1)[center] < unlit[center])
         assert np.array_equal(lit_exposure(-150e6, 0, 1, 4)[center],
             lit_exposure(-150e6, 0, 0, 4)[center])
         faded = lit_exposure(-150e6, 1, zoom=6) - lit_exposure(-150e6, 0, zoom=6)
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
-        GL.glUniform1i(uniform("u_earth_lighting"), 0)
+        GL.glUniform1f(uniform("u_earth_lighting"), 0.0)
         GL.glDeleteTextures([night_texture])
 
         vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)

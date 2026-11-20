@@ -1,6 +1,6 @@
 use crate::file_manager::geography::sky;
 use eframe::glow::{self, HasContext};
-use little_clip_core::geography::basemap::GlobeCamera;
+use little_clip_core::geography::basemap::{BasemapStyle, GlobeCamera};
 use std::sync::{Arc, Weak};
 
 #[derive(Default)]
@@ -20,7 +20,7 @@ impl SkyRenderer {
         }
         let Some(scene) = &frame.sky else { return };
         // SAFETY: called during the owner's paint callback with its context current.
-        if let Err(error) = unsafe { self.paint(gl, scene, frame.camera, frame.size) } {
+        if let Err(error) = unsafe { self.paint(gl, scene, frame) } {
             self.failed = true;
             tracing::warn!(%error, "Sky renderer unavailable");
         }
@@ -30,9 +30,10 @@ impl SkyRenderer {
         &mut self,
         gl: &glow::Context,
         scene: &sky::Scene,
-        camera: GlobeCamera,
-        [width, height]: [f32; 2],
+        frame: &super::Frame,
     ) -> Result<(), String> {
+        let camera = frame.camera;
+        let [width, height] = frame.size;
         let opacity = camera.globe_blend() as f32;
         if opacity <= 0.0 {
             return Ok(());
@@ -95,7 +96,7 @@ impl SkyRenderer {
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
             gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_atmosphere").as_ref(),
-                atmosphere(camera),
+                atmosphere(camera, frame.style),
             );
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_sun").as_ref(), &scene.sun);
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_moon").as_ref(), &scene.moon);
@@ -132,8 +133,9 @@ impl SkyRenderer {
         // SAFETY: the paint callback owns this current context and program.
         unsafe {
             let loc = |name| gl.get_uniform_location(program, name);
-            let scene = frame.sky.as_ref().filter(|_| frame.earth_lighting);
-            gl.uniform_1_i32(loc("u_earth_lighting").as_ref(), i32::from(scene.is_some()));
+            let lighting = surface_lighting(frame);
+            let scene = frame.sky.as_ref().filter(|_| lighting > 0.0);
+            gl.uniform_1_f32(loc("u_earth_lighting").as_ref(), lighting);
             // A sampler must be assigned even when its layer is disabled.
             gl.uniform_1_i32(loc("u_night").as_ref(), 5);
             if let Some(scene) = scene {
@@ -153,7 +155,7 @@ impl SkyRenderer {
                 gl.uniform_1_f32(
                     loc("u_atmosphere").as_ref(),
                     if frame.show_sky {
-                        atmosphere(frame.camera)
+                        atmosphere(frame.camera, frame.style)
                     } else {
                         0.0
                     },
@@ -175,18 +177,23 @@ impl SkyRenderer {
         // SAFETY: current context and active program are owned by the renderer.
         unsafe {
             let loc = |name| gl.get_uniform_location(program, name);
+            let lighting = surface_lighting(frame);
             let scene = frame
                 .sky
                 .as_ref()
-                .filter(|scene| frame.earth_lighting && frame.city_lights && scene.modern_lights);
+                .filter(|scene| lighting > 0.0 && frame.city_lights && scene.modern_lights);
             gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
             gl.uniform_1_f32(
                 loc("u_detail_span").as_ref(),
                 super::super::detail::SIDE as f32,
             );
-            gl.uniform_1_i32(
+            gl.uniform_1_f32(
                 loc("u_road_night").as_ref(),
-                i32::from(scene.is_some() && self.night.is_some()),
+                if scene.is_some() && self.night.is_some() {
+                    lighting
+                } else {
+                    0.0
+                },
             );
             bind(
                 gl,
@@ -245,9 +252,32 @@ impl SkyRenderer {
     }
 }
 
-fn atmosphere(camera: GlobeCamera) -> f32 {
-    let amount = ((2.15 - camera.zoom) / 0.65).clamp(0.0, 1.0) as f32;
-    amount * amount * (3.0 - 2.0 * amount) * camera.globe_blend() as f32
+fn atmosphere(camera: GlobeCamera, style: BasemapStyle) -> f32 {
+    if style == BasemapStyle::Natural {
+        zoom_fade(camera.zoom, 1.5, 2.15) * camera.globe_blend() as f32
+    } else {
+        0.0
+    }
+}
+
+fn surface_lighting(frame: &super::Frame) -> f32 {
+    if frame.earth_lighting && frame.sky.is_some() {
+        surface_exposure(frame.style, frame.camera.zoom)
+    } else {
+        0.0
+    }
+}
+
+fn surface_exposure(style: BasemapStyle, zoom: f64) -> f32 {
+    match style {
+        BasemapStyle::Natural | BasemapStyle::Hypsometric => zoom_fade(zoom, 64.0, 768.0),
+        BasemapStyle::Oilslick | BasemapStyle::Hillshade => 0.0,
+    }
+}
+
+fn zoom_fade(zoom: f64, start: f64, end: f64) -> f32 {
+    let amount = ((end - zoom) / (end - start)).clamp(0.0, 1.0) as f32;
+    amount * amount * (3.0 - 2.0 * amount)
 }
 
 unsafe fn bind(
@@ -310,16 +340,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn atmosphere_fades_before_the_close_globe_and_flat_map() {
+    fn atmosphere_only_shows_on_the_wide_natural_globe() {
         use little_clip_core::geography::basemap::ProjectionMode;
         let mut camera = GlobeCamera::default();
-        assert_eq!(atmosphere(camera), 1.0);
+        for style in [
+            BasemapStyle::Hypsometric,
+            BasemapStyle::Oilslick,
+            BasemapStyle::Hillshade,
+        ] {
+            assert_eq!(atmosphere(camera, style), 0.0);
+        }
+        assert_eq!(atmosphere(camera, BasemapStyle::Natural), 1.0);
         camera.zoom = 1.8;
-        assert!((0.01..0.99).contains(&atmosphere(camera)));
+        assert!((0.01..0.99).contains(&atmosphere(camera, BasemapStyle::Natural)));
         camera.mode = ProjectionMode::Map2D;
-        assert_eq!(atmosphere(camera), 0.0);
+        assert_eq!(atmosphere(camera, BasemapStyle::Natural), 0.0);
         camera.mode = ProjectionMode::Globe3D;
         camera.zoom = 2.15;
-        assert_eq!(atmosphere(camera), 0.0);
+        assert_eq!(atmosphere(camera, BasemapStyle::Natural), 0.0);
+    }
+
+    #[test]
+    fn only_natural_and_hypsometric_have_night_lighting_and_it_fades_as_you_zoom_in() {
+        for style in [BasemapStyle::Natural, BasemapStyle::Hypsometric] {
+            assert_eq!(surface_exposure(style, 1.0), 1.0);
+            assert_eq!(surface_exposure(style, 416.0), 0.5);
+            assert_eq!(surface_exposure(style, 768.0), 0.0);
+        }
+        for style in [BasemapStyle::Oilslick, BasemapStyle::Hillshade] {
+            assert_eq!(surface_exposure(style, 1.0), 0.0);
+            assert_eq!(surface_exposure(style, 416.0), 0.0);
+        }
     }
 }

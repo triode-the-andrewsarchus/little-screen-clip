@@ -14,7 +14,7 @@ uniform float u_side;
 uniform float u_contour;
 uniform vec2 u_range;
 uniform float u_natural_detail;
-uniform bool u_earth_lighting;
+uniform float u_earth_lighting;
 uniform bool u_black_marble;
 uniform bool u_solar_possible;
 uniform float u_longitude;
@@ -166,6 +166,6 @@ void main() {
         float water = edge_coverage(texture(u_water,v_uv).r, .75, .04);
         rgb = mix(rgb, u_style == 2 ? vec3(0.0) : vec3(.149,.40,.675), water * (u_style == 2 ? 1.0 : .94));
     }
-    if (u_earth_lighting) rgb = light_surface(rgb, v_geo);
+    if (u_earth_lighting > 0.0) rgb = mix(rgb, light_surface(rgb, v_geo), u_earth_lighting);
     frag=vec4(rgb,1.0);
 }
