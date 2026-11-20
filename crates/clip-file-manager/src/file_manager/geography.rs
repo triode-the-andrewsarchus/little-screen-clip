@@ -129,6 +129,7 @@ pub(super) struct Viewer {
     current: Option<Hit>,
     camera: GlobeCamera,
     moon_camera: Option<GlobeCamera>,
+    middle_drag: map_camera::MiddleDrag,
     style: BasemapStyle,
     show_country_borders: bool,
     show_state_borders: bool,
@@ -353,6 +354,7 @@ impl Viewer {
             current: None,
             camera: GlobeCamera::default(),
             moon_camera: None,
+            middle_drag: Default::default(),
             style: BasemapStyle::Natural,
             show_country_borders: true,
             show_state_borders: true,
@@ -509,6 +511,7 @@ impl Viewer {
                 self.moon_camera.as_mut().unwrap_or(&mut self.camera),
                 &response,
                 lunar_radius,
+                &mut self.middle_drag,
             );
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             let slot = ui.painter_at(rect).add(egui::Shape::Noop);

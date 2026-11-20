@@ -6,16 +6,87 @@ use little_clip_core::palette::AppPalette;
 
 pub(super) const CONTROLS: &str = "Left-drag to pan. Scroll to zoom. Middle-drag up or down to tilt, and left or right to rotate.";
 
+#[derive(Default)]
+pub(super) struct MiddleDrag(Option<egui::Pos2>);
+
+impl MiddleDrag {
+    fn update(&mut self, response: &egui::Response) -> Option<egui::Vec2> {
+        let press = response.ctx.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Middle,
+                    pressed: true,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+        });
+        let press = press.filter(|&pos| {
+            response.enabled()
+                && response.interact_rect.contains(pos)
+                && response.ctx.layer_id_at(pos) == Some(response.layer_id)
+        });
+        response
+            .ctx
+            .input(|input| self.motion(press, &input.events))
+    }
+
+    fn motion(&mut self, press: Option<egui::Pos2>, events: &[egui::Event]) -> Option<egui::Vec2> {
+        if self.0.is_none() && press.is_none() {
+            return None;
+        }
+        // A slow render can receive the final move and release together.
+        // Keep the release position even when egui has ended widget dragging.
+        use egui::{Event, PointerButton::Middle};
+        let mut delta = egui::Vec2::ZERO;
+        for event in events {
+            match event {
+                Event::PointerButton {
+                    pos,
+                    button: Middle,
+                    pressed: true,
+                    ..
+                } => {
+                    self.0 = press.filter(|origin| origin == pos);
+                }
+                Event::PointerButton {
+                    pos,
+                    button: Middle,
+                    pressed: false,
+                    ..
+                } => {
+                    if let Some(previous) = self.0.take() {
+                        delta += *pos - previous;
+                    }
+                }
+                Event::PointerMoved(pos) => {
+                    if let Some(previous) = self.0.as_mut() {
+                        delta += *pos - std::mem::replace(previous, *pos);
+                    }
+                }
+                Event::PointerGone | Event::WindowFocused(false) => self.0 = None,
+                _ => {}
+            }
+        }
+        Some(delta)
+    }
+}
+
 pub(super) fn navigate(
     camera: &mut GlobeCamera,
     response: &egui::Response,
     perspective_radius_m: Option<f64>,
+    middle: &mut MiddleDrag,
 ) {
     let size = [response.rect.width(), response.rect.height()];
-    let delta = response.drag_delta();
-    if response.dragged_by(egui::PointerButton::Middle) {
-        camera.orbit.drag(delta.x, delta.y);
+    if let Some(delta) = middle.update(response) {
+        if delta != egui::Vec2::ZERO {
+            camera.orbit.drag(delta.x, delta.y);
+            response.ctx.request_repaint();
+        }
     } else if response.dragged_by(egui::PointerButton::Primary) {
+        let delta = response.drag_delta();
         if let Some(radius_m) = perspective_radius_m {
             camera.pan_perspective_by(delta.into(), size, radius_m);
         } else {
@@ -119,4 +190,36 @@ pub(super) fn lunar_toolbar(
         }
     });
     earth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn middle_drag_keeps_motion_before_a_coalesced_release() {
+        let mut drag = MiddleDrag::default();
+        let point = egui::pos2(100.0, 200.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Middle,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let begin = button(point, true);
+        let release = egui::pos2(165.0, 90.0);
+        assert_eq!(drag.motion(Some(point), &[begin]), Some(egui::Vec2::ZERO));
+        assert_eq!(
+            drag.motion(
+                None,
+                &[
+                    egui::Event::PointerMoved(egui::pos2(130.0, 150.0)),
+                    button(release, false),
+                    egui::Event::PointerMoved(egui::pos2(0.0, 0.0)),
+                ],
+            ),
+            Some(release - point)
+        );
+        assert!(drag.0.is_none());
+    }
 }
