@@ -112,7 +112,7 @@ impl HalationPipeline {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Halation X Pipeline Layout"),
-                    bind_group_layouts: &[&layout_x],
+                    bind_group_layouts: &[Some(&layout_x)],
                     immediate_size: 0,
                 });
 
@@ -121,7 +121,7 @@ impl HalationPipeline {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Halation Y Pipeline Layout"),
-                    bind_group_layouts: &[&layout_y],
+                    bind_group_layouts: &[Some(&layout_y)],
                     immediate_size: 0,
                 });
 

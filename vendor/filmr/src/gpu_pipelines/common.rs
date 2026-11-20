@@ -49,44 +49,35 @@ pub async fn read_gpu_buffer(
             label: Some("Readback Copy Encoder"),
         });
     encoder.copy_buffer_to_buffer(&gpu_buffer.buffer, 0, &staging_buffer, 0, size);
-    let _submission_index = context.queue.submit(Some(encoder.finish()));
+    let submission = context.queue.submit(Some(encoder.finish()));
 
     let buffer_slice = staging_buffer.slice(..);
 
-    let (sender, mut receiver) = oneshot::channel();
+    let (sender, receiver) = oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         let _ = sender.send(v);
     });
 
-    // Wait for the copy to finish and the map callback to fire
-    // We use PollType::Wait to block until the submission is done.
-    // Note: We need to loop because sometimes the callback fires on the *next* poll after completion?
-    // But let's try strict wait first.
-    loop {
-        if context.device.poll(wgpu::PollType::Poll).is_err() {
-            return None;
-        }
-        let received = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(_) => return None,
-        };
-        if let Some(result) = received {
-            if result.is_ok() {
-                let data = buffer_slice.get_mapped_range();
-                let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-
-                drop(data);
-                staging_buffer.unmap();
-
-                return image::ImageBuffer::from_raw(gpu_buffer.width, gpu_buffer.height, result);
-            }
-            return None;
-        }
-        // If we have the submission index, we could use Wait, but Poll works in a loop too.
-        // Using Poll allows us to check the receiver.
-        // If we use Wait, we block.
-        // Let's stick to the loop with Poll for robustness as verified before,
-        // but now we are polling for the STAGING buffer which is correct.
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        context
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(std::time::Duration::from_secs(30)),
+            })
+            .ok()?;
+        let mut receiver = receiver;
+        receiver.try_recv().ok()??.ok()?;
     }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = submission;
+        receiver.await.ok()?.ok()?;
+    }
+    let data = buffer_slice.get_mapped_range().ok()?;
+    let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+    drop(data);
+    staging_buffer.unmap();
+    image::ImageBuffer::from_raw(gpu_buffer.width, gpu_buffer.height, result)
 }

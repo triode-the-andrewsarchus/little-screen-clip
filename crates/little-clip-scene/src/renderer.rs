@@ -23,10 +23,8 @@ impl Gpu {
     }
 
     async fn create() -> Result<Self, String> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
-            ..Default::default()
-        });
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -150,7 +148,7 @@ impl SplatRenderer {
             as u64;
         let limits = gpu.device.limits();
         if bytes > limits.max_buffer_size
-            || bytes > u64::from(limits.max_storage_buffer_binding_size)
+            || bytes > limits.max_storage_buffer_binding_size
             || scene.len() > u32::MAX as usize
         {
             return Err(SceneError::Gpu("Scene exceeds GPU buffer limits".into()));
@@ -257,7 +255,11 @@ impl SplatRenderer {
         rx.recv_timeout(Duration::from_secs(1))
             .map_err(|e| SceneError::Gpu(e.to_string()))?
             .map_err(|e| SceneError::Gpu(e.to_string()))?;
-        let mapped = target.staging.slice(..).get_mapped_range();
+        let mapped = target
+            .staging
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|error| SceneError::Gpu(error.to_string()))?;
         let mut pixels = Vec::with_capacity(row_bytes as usize * height as usize);
         for row in mapped.chunks_exact(padded_row_bytes as usize) {
             pixels.extend_from_slice(&row[..row_bytes as usize]);

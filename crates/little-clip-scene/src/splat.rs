@@ -1,7 +1,12 @@
+use bytemuck::Zeroable;
+use ply_rs_bw::{
+    parser::{Parser, Reader},
+    ply::{ElementDef, PropertyAccess, PropertyAccessResult, PropertyType, ScalarType},
+};
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 use wgpu_3dgs_viewer::core::glam::{Quat, U8Vec4, Vec3};
-use wgpu_3dgs_viewer::core::{Gaussian, PlyGaussians, PlyHeader};
+use wgpu_3dgs_viewer::core::{Gaussian, PlyGaussianPod};
 
 use crate::SceneError;
 
@@ -131,9 +136,11 @@ fn load_ply(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
 }
 
 fn read_ply(input: impl Read + Seek, byte_budget: u64) -> Result<Vec<Gaussian>, SceneError> {
-    let mut reader = BufReader::new(input.take(byte_budget + 1));
-    let parser = ply_rs::parser::Parser::<ply_rs::ply::DefaultElement>::new();
-    let header = parser.read_header(&mut reader)?;
+    let mut reader = Reader::new(BufReader::new(input.take(byte_budget + 1)));
+    let parser = Parser::<ParsedGaussian>::new();
+    let header = parser
+        .read_header(&mut reader)
+        .map_err(std::io::Error::from)?;
     let vertex = header
         .elements
         .get("vertex")
@@ -149,21 +156,19 @@ fn read_ply(input: impl Read + Seek, byte_budget: u64) -> Result<Vec<Gaussian>, 
         ));
     }
     if header.elements.contains_key("chunk") {
-        return load_compressed_ply(reader.into_inner().into_inner(), byte_budget);
+        return load_compressed_ply(reader.into_inner().into_inner().into_inner(), byte_budget);
     }
     let coefficients = validate_gaussian_ply_vertex(vertex)?;
-    // The upstream 0.6 reader's fast-path detection compares a zipped prefix
-    // without checking property count. A degree-zero binary PLY must use the
-    // general reader or it is read as a full degree-three record.
-    let pods = PlyGaussians::read_gaussians(&mut reader, PlyHeader::Custom(header))?
-        .collect::<Result<Vec<_>, _>>()?;
-    if reader.get_ref().limit() == 0 {
+    let pods = parser
+        .read_payload_for_element(&mut reader, vertex, &header)
+        .map_err(std::io::Error::from)?;
+    if reader.get_ref().get_ref().limit() == 0 {
         return Err(SceneError::Invalid("PLY exceeds its import budget".into()));
     }
     let per_channel = coefficients / 3;
     Ok(pods
         .into_iter()
-        .map(|mut pod| {
+        .map(|ParsedGaussian(mut pod)| {
             // PLY channel arrays have degree-dependent lengths; upstream's
             // intermediate representation always uses 15 coefficients per channel.
             let source = pod.sh;
@@ -179,7 +184,20 @@ fn read_ply(input: impl Read + Seek, byte_budget: u64) -> Result<Vec<Gaussian>, 
         .collect())
 }
 
-fn validate_gaussian_ply_vertex(vertex: &ply_rs::ply::ElementDef) -> Result<usize, SceneError> {
+struct ParsedGaussian(PlyGaussianPod);
+
+impl PropertyAccess for ParsedGaussian {
+    fn new() -> Self {
+        Self(PlyGaussianPod::zeroed())
+    }
+
+    fn set_float(&mut self, name: &str, value: f32) -> PropertyAccessResult {
+        self.0.set_value(name, value);
+        PropertyAccessResult::Set
+    }
+}
+
+fn validate_gaussian_ply_vertex(vertex: &ElementDef) -> Result<usize, SceneError> {
     if !vertex.properties.contains_key("f_dc_0") {
         return Err(SceneError::Invalid(
             "PLY contains mesh or point-cloud data; only Gaussian PLY is supported".into(),
@@ -189,7 +207,7 @@ fn validate_gaussian_ply_vertex(vertex: &ply_rs::ply::ElementDef) -> Result<usiz
         "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2",
         "rot_0", "rot_1", "rot_2", "rot_3",
     ] {
-        let expected = ply_rs::ply::PropertyType::Scalar(ply_rs::ply::ScalarType::Float);
+        let expected = PropertyType::Scalar(ScalarType::Float);
         if !vertex
             .properties
             .get(name)

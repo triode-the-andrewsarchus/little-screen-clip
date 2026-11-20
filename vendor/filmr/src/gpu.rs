@@ -61,7 +61,7 @@ impl GpuContext {
             .and_then(|n| n.checked_mul(12));
         size.is_some_and(|size| {
             size > 0
-                && size <= u64::from(limits.max_storage_buffer_binding_size)
+                && size <= limits.max_storage_buffer_binding_size
                 && size <= limits.max_buffer_size
                 && width.div_ceil(16) <= limits.max_compute_workgroups_per_dimension
                 && height.div_ceil(16) <= limits.max_compute_workgroups_per_dimension
@@ -70,10 +70,8 @@ impl GpuContext {
 
     pub async fn new() -> Option<Self> {
         info!("Initializing WGPU context");
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
-            ..Default::default()
-        });
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -93,7 +91,7 @@ impl GpuContext {
                 required_limits: adapter.limits(),
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
-                trace: Default::default(),
+                ..Default::default()
             })
             .await
             .ok()?;

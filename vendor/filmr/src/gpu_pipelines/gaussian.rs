@@ -63,7 +63,7 @@ impl GaussianPipeline {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Blur Pipeline Layout"),
-                    bind_group_layouts: &[&layout],
+                    bind_group_layouts: &[Some(&layout)],
                     immediate_size: 0,
                 });
 

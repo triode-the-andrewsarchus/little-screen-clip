@@ -148,9 +148,10 @@ fn decode_sogs<T: SplatReceiver>(bytes: &[u8], splats: &mut T, _pathname: Option
     // Find meta.json entry and its prefix
     let mut meta_name: Option<String> = None;
     for i in 0..zip.len() {
-        let name = zip.by_index(i)?.name().to_string();
+        let entry = zip.by_index_data(i)?;
+        let name = entry.name()?;
         if name.ends_with("meta.json") {
-            meta_name = Some(name);
+            meta_name = Some(name.into_owned());
             break;
         }
     }

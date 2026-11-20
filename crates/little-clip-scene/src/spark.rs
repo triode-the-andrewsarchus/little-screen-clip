@@ -2,7 +2,7 @@
 use spark_lib::{gsplat::GsplatArray, tsplat::Tsplat};
 use wgpu_3dgs_viewer::core::{
     Gaussian,
-    glam::{U8Vec4, Vec3},
+    glam::{Quat, U8Vec4, Vec3, Vec4},
 };
 
 pub(crate) fn gaussians(decoded: &GsplatArray) -> Vec<Gaussian> {
@@ -11,8 +11,8 @@ pub(crate) fn gaussians(decoded: &GsplatArray) -> Vec<Gaussian> {
         .iter()
         .enumerate()
         .map(|(index, splat)| {
-            let color = (splat.rgb().to_vec3().extend(splat.opacity()) * 255.0)
-                .clamp(Vec3::ZERO.extend(0.0), Vec3::splat(255.0).extend(255.0));
+            let color = Vec3::from_array(splat.rgb().to_vec3().to_array()).extend(splat.opacity());
+            let color = (color * 255.0).clamp(Vec4::ZERO, Vec4::splat(255.0));
             let mut sh = [Vec3::ZERO; 15];
             let bands = [
                 decoded.sh1.get(index).map(|band| band.to_array().to_vec()),
@@ -27,9 +27,9 @@ pub(crate) fn gaussians(decoded: &GsplatArray) -> Vec<Gaussian> {
                 }
             }
             Gaussian {
-                pos: splat.center().to_vec3(),
-                rot: splat.quaternion().normalize(),
-                scale: splat.scales().to_vec3(),
+                pos: Vec3::from_array(splat.center().to_vec3().to_array()),
+                rot: Quat::from_array(splat.quaternion().to_array()).normalize(),
+                scale: Vec3::from_array(splat.scales().to_vec3().to_array()),
                 color: U8Vec4::from_array(color.to_array().map(|value| value.round() as u8)),
                 sh,
             }

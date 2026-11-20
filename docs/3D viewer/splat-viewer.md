@@ -35,13 +35,15 @@ GLB; the existing Scenix mesh route does not prove Gaussian GLB support.
 ## Current implementation and evidence
 
 `crates/little-clip-scene` contains a shared native offscreen adapter around
-wgpu-3dgs-viewer. Dedicated splat extensions are connected to clipboard cards,
+wgpu-3dgs-viewer 0.8 and wgpu 30. The Film Look compute pipelines use the same
+wgpu release. Dedicated splat extensions are connected to clipboard cards,
 the workbench mirror, the read-only workbench viewer, and `--scene <PATH>` CLI
 startup. GLB is classified on the worker: Gaussian data uses the splat renderer and
 ordinary mesh data uses the existing mesh viewer. Little-screen GLB meshes also
 use a finite cached orbit, reusing the existing card projection/shading code.
 
-- Standard Gaussian PLY and SPZ v1–v3 load through existing upstream readers.
+- Standard Gaussian PLY uses the maintained `ply-rs-bw` parser. SPZ v1–v3
+  use the upstream SPZ reader.
   SPZ v4 uses bounded ZSTD streams with the upstream v3 attribute decoder;
   positions, opacity, scales, rotations and SH retain their packed representation.
   Legacy headers are validated before decoding, and gzip checksums are checked.
@@ -65,9 +67,8 @@ use a finite cached orbit, reusing the existing card projection/shading code.
   Gaussian arrays store some attributes as float16; tests allow the resulting
   quantization error while verifying all SH bands and color/opacity mappings.
 - PLY property validation and degree-dependent SH channel mapping surround the
-  upstream reader. Its 0.6 fast path checks a zipped property prefix without
-  checking the full property count, which can misread lower-degree binary PLY.
-  The adapter uses its general reader to avoid that defect.
+  typed PLY payload reader. The header is validated before reading vertices,
+  and each vertex is decoded using its declared properties and byte order.
 - Scene validation rejects empty scenes, non-finite attributes and degenerate
   scales/quaternions. GPU buffers and viewport sizes are checked against device
   limits.
