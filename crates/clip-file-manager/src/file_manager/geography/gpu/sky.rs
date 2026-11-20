@@ -103,6 +103,17 @@ impl SkyProjection {
         }
     }
 
+    fn earth_at(&self, offset: egui::Vec2) -> bool {
+        // Earth is behind the Moon anywhere the two disks overlap.
+        self.exposed(offset)
+            && sphere_distance(
+                self.eye.map(f64::from),
+                self.inertial_ray(self.basis, offset).map(f64::from),
+                6378.137,
+            )
+            .is_some()
+    }
+
     fn project(&self, position: [f32; 3]) -> Option<egui::Vec2> {
         let relative = subtract(position, self.eye);
         let [x, y, z] = self.basis.map(|axis| dot(axis, relative));
@@ -209,6 +220,19 @@ pub(in super::super) fn moon_at(
     dot(ray, moon) > 0.0 && dot(across, across) <= radius * radius
 }
 
+pub(in super::super) fn earth_at(
+    frame: &super::Frame,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> bool {
+    frame.moon_view
+        && frame.show_sky
+        && rect.contains(pointer)
+        && frame.sky.as_ref().is_some_and(|scene| {
+            SkyProjection::for_frame(frame, scene).earth_at(pointer - rect.center())
+        })
+}
+
 pub(in super::super) enum SkyObject<'a> {
     Body(&'static str),
     Star(&'a Star),
@@ -231,9 +255,11 @@ pub(in super::super) fn sky_object_at(
     if moon_at(frame, rect, pointer) {
         return Some(SkyObject::Body("Moon"));
     }
+    if frame.moon_view && projection.earth_at(pointer - center) {
+        return Some(SkyObject::Body("Earth"));
+    }
     let body = scene
         .bodies()
-        .chain(frame.moon_view.then_some(("Earth", [0.0; 3])))
         .filter(|(name, _)| *name != "Moon")
         .filter_map(|(name, position)| {
             let point = center + projection.project(position)?;
@@ -711,6 +737,24 @@ unsafe fn upload(gl: &glow::Context, source: &sky::Texture) -> Result<glow::Text
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn earth_disk_can_be_picked_only_where_it_is_visible_from_the_moon() {
+        let mut projection = SkyProjection {
+            basis: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            focal: 600.0,
+            radius: 0.0,
+            distance: 0.0,
+            eye: [0.0, 0.0, 384_400.0],
+            sphere_eye: Some([0.0, 0.0, -2.0]),
+        };
+        assert!(projection.earth_at(egui::vec2(8.0, 0.0)));
+        assert!(!projection.earth_at(egui::vec2(12.0, 0.0)));
+
+        projection.sphere_eye = Some([1.0, 0.0, 2.0]);
+        assert!(projection.earth_at(egui::vec2(8.0, 0.0)));
+        assert!(!projection.earth_at(egui::vec2(-8.0, 0.0)));
+    }
 
     #[test]
     fn sky_projection_keeps_bodies_off_the_globe_and_behind_the_camera() {

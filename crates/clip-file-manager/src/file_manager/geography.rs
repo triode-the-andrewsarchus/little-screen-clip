@@ -726,11 +726,15 @@ impl Viewer {
             show_sky_object(ui, rect, &frame);
             if response.clicked()
                 && let Some(pointer) = response.interact_pointer_pos()
-                && gpu::moon_at(&frame, rect, pointer)
             {
-                self.moon_camera = Some(map_camera::lunar_camera());
-                self.tiles.suspend();
-                ui.ctx().request_repaint();
+                if gpu::earth_at(&frame, rect, pointer) {
+                    self.moon_camera = None;
+                    ui.ctx().request_repaint();
+                } else if gpu::moon_at(&frame, rect, pointer) {
+                    self.moon_camera = Some(map_camera::lunar_camera());
+                    self.tiles.suspend();
+                    ui.ctx().request_repaint();
+                }
             }
         }
         let error = gpu::paint_at(ui, rect, frame, Some(slot)).and(result).err();
@@ -1733,8 +1737,14 @@ fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
         .show(|ui| match target {
             gpu::SkyObject::Body(name) => {
                 ui.label(name);
-                if name == "Moon" {
-                    ui.label("Click to explore");
+                match name {
+                    "Earth" => {
+                        ui.label("Click to return");
+                    }
+                    "Moon" => {
+                        ui.label("Click to explore");
+                    }
+                    _ => {}
                 }
             }
             gpu::SkyObject::Star(star) => {
