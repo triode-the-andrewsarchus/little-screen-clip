@@ -5,7 +5,12 @@ mod svg;
 pub mod verification;
 mod video;
 use super::policy::{self, Root};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
+#[cfg(not(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
+use base64::engine::general_purpose::STANDARD;
 use little_clip_core::file_inventory::{self as filesystem, Directory, Entry};
 use little_clip_core::process::CommandRequest;
 use serde::{Deserialize, Serialize};
@@ -16,6 +21,15 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+// Media thumbnails can be much larger than the surrounding JSON protocol.
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon")
+))]
+static STANDARD: std::sync::LazyLock<base64::engine::simd::Simd> = std::sync::LazyLock::new(|| {
+    base64::engine::simd::Simd::standard(base64::engine::general_purpose::PAD)
+});
 
 // Decoder admission, independent of extension classification. In particular,
 // disguised HLS/concat/playlist inputs cannot fetch URLs or unrelated files.

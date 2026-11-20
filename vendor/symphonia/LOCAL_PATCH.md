@@ -17,6 +17,13 @@ The workspace pins this facade version and its locally patched CAF, PCM and
 Opus adapter dependencies so a registry release cannot silently bypass the
 compatibility fixes.
 
+The November 2026 dependency review checked Symphonia 0.6.1 and Rodio 0.23.0.
+Rodio still requires the 0.5 registry. Stock Symphonia 0.6.1 also decodes an
+FFmpeg-generated ALAC CAF sequentially but returns `caf: invalid packet index`
+when seeking to the beginning after EOF. The 0.3.0 Opus adapter still clears
+pre-skip after the first packet and resets only its decoder state on seek. A
+shared upgrade needs to preserve the CAF and Opus behavior covered below.
+
 Both core analysis/list previews and Rodio playback call this registry, so
 registration cannot drift between the two paths. No format reader or existing
 codec implementation is replaced by this facade change. The workspace enables
