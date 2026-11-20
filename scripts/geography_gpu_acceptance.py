@@ -129,6 +129,31 @@ def main():
             images.append(pixels)
         assert len(set(images)) == len(images), "Camera/style changes did not affect rendering"
 
+        # Flat water at zero elevation is common in coastal DEMs. Use a
+        # diagonal bank to check that the transitions interpolate off-grid.
+        coastal = color.copy()
+        coastal[:, :, :3] = [120, 160, 95]
+        slope = x + y > 258
+        shoreline = np.stack([350.0 * slope, np.ones_like(x)], axis=-1).astype(np.float32)
+        river_bank = np.where(slope, 128, 255).astype(np.uint8)
+        gl_inputs = [(GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), (GL.GL_RG, GL.GL_FLOAT), (GL.GL_RED, GL.GL_UNSIGNED_BYTE)]
+        for label, height_data, mask_data in [
+            ("coastal-edge", shoreline, water), ("river-mask-edge", elevation, river_bank)
+        ]:
+            for unit, data in enumerate([coastal, height_data, mask_data]):
+                GL.glActiveTexture(GL.GL_TEXTURE0 + unit)
+                GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, *gl_inputs[unit], data)
+            draw(lat=0, lon=90, blend=0, zoom=30)
+            pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            image = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
+            assert np.count_nonzero((image[:, :, 1] > image[:, :, 2]) & (image[:, :, 2] > 85)) > 100
+            blended = (image[:, :, 1] > 85) & (abs(image[:, :, 1].astype(int) - image[:, :, 2]) < 12)
+            assert np.count_nonzero(blended) > 30, label
+            Image.fromarray(np.flipud(image)).save(args.output / f"{label}.png")
+        for unit, data in enumerate([color, elevation, water]):
+            GL.glActiveTexture(GL.GL_TEXTURE0 + unit)
+            GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, *gl_inputs[unit], data)
+
         # A white center, a dimmer suburb, and the JPEG's blue background.
         GL.glActiveTexture(GL.GL_TEXTURE5)
         longitude = np.abs((np.arange(720) + 0.5) / 2 - 180)

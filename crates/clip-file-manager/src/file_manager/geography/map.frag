@@ -80,7 +80,6 @@ vec3 hsl(float hue,float s,float l) {
     return l+(rgb-0.5)*(1.0-abs(2.0*l-1.0))*s;
 }
 vec3 elevation_color(float h) {
-    if(h<=0.0) return u_style==2?vec3(0.0):vec3(0.094,0.227,0.40);
     if(u_style==2) {
         float phase=fract(h/500.0);
         return hsl(mod(24.0+h/1850.0*360.0,360.0),0.86,0.14+0.76*(1.0-abs(2.0*phase-1.0)));
@@ -89,6 +88,23 @@ vec3 elevation_color(float h) {
     const vec3 colors[7]=vec3[7](vec3(96,146,88),vec3(148,174,108),vec3(204,194,132),vec3(194,146,96),vec3(168,114,88),vec3(196,184,178),vec3(240,244,248));
     for(int i=1;i<7;i++) if(h<=stops[i]) return mix(colors[i-1],colors[i],clamp((h-stops[i-1])/(stops[i]-stops[i-1]),0.0,1.0))/255.0;
     return colors[6]/255.0;
+}
+float edge_coverage(float value, float border, float min_width) {
+    float width = clamp(.5 * fwidth(value), min_width, .5);
+    return smoothstep(border - width, border + width, value);
+}
+float land_coverage(vec2 uv) {
+    ivec2 last = textureSize(u_height, 0) - 1;
+    vec2 grid = uv * vec2(last + 1) - .5;
+    ivec2 p = ivec2(floor(grid));
+    vec2 t = fract(grid);
+    // Interpolate the shoreline between samples. The actual elevations can
+    // sit at exactly zero for an entire bay and jump abruptly on land.
+    float nw = float(texelFetch(u_height, clamp(p, ivec2(0), last), 0).r > 0.0);
+    float ne = float(texelFetch(u_height, clamp(p + ivec2(1,0), ivec2(0), last), 0).r > 0.0);
+    float sw = float(texelFetch(u_height, clamp(p + ivec2(0,1), ivec2(0), last), 0).r > 0.0);
+    float se = float(texelFetch(u_height, clamp(p + ivec2(1), ivec2(0), last), 0).r > 0.0);
+    return edge_coverage(mix(mix(nw, ne, t.x), mix(sw, se, t.x), t.y), .5, .04);
 }
 // The original close-zoom Natural palette, evaluated on the GPU. Classifying
 // the source colours removes enlarged shading and water smudges baked into NE2.
@@ -106,6 +122,7 @@ void main() {
     vec4 base=texture(u_color,v_uv);
     vec2 dem=texture(u_height,v_uv).rg;
     float h=dem.r, shade=1.0;
+    float land = u_style != 0 || u_natural_detail > 0.0 ? land_coverage(v_uv) : float(h > 0.0);
     if(dem.g>0.99) {
         vec2 step_uv=vec2(1.0/258.0,0.0);
         float west=texture(u_height,v_uv-step_uv).r, east=texture(u_height,v_uv+step_uv).r;
@@ -119,24 +136,36 @@ void main() {
         float checker=mod(floor(v_geo.x/15.0)+floor(v_geo.y/15.0),2.0);
         rgb=mix(vec3(0.18,0.24,0.29),vec3(0.22,0.28,0.33),checker);
     }
-    if(u_style!=0 && dem.g>0.99) {
-        rgb=elevation_color(h);
-        if(u_style==3) rgb=h<=0.0?vec3(0.11,0.20,0.32):vec3((48.0+170.0*shade)/255.0);
-        else if(h>0.0) rgb*=u_style==2?0.66+0.34*shade:0.64+0.36*shade;
-    } else if(dem.g>0.99 && h>0.0) {
-        rgb=mix(rgb,biome_color(rgb,h,v_geo.y),u_natural_detail);
-        float local_norm=clamp((h-u_range.x)/max(u_range.y-u_range.x,1.0),0.0,1.0);
-        float gradient=1.0-0.14*u_natural_detail+0.24*u_natural_detail*local_norm;
-        rgb*=(0.76+0.36*(shade-0.5))*gradient;
+    if (dem.g > .99) {
+        const vec3 water_blue = vec3(.149,.40,.675);
+        vec3 water;
+        if (u_style == 0) {
+            water = mix(rgb, water_blue, u_natural_detail);
+            rgb = mix(rgb, biome_color(rgb,h,v_geo.y), u_natural_detail);
+            float local_norm = clamp((h-u_range.x)/max(u_range.y-u_range.x,1.0),0.0,1.0);
+            float gradient = 1.0-0.14*u_natural_detail+0.24*u_natural_detail*local_norm;
+            rgb *= (0.76+0.36*(shade-0.5))*gradient;
+        } else if (u_style == 3) {
+            water = vec3(.11,.20,.32);
+            rgb = vec3((48.0+170.0*shade)/255.0);
+        } else {
+            water = u_style == 2 ? vec3(0.0) : vec3(.094,.227,.40);
+            rgb = elevation_color(max(h,0.0));
+            rgb *= u_style == 2 ? .66+.34*shade : .64+.36*shade;
+        }
+        rgb = mix(water, rgb, land);
     }
     if(u_contour>0.0 && dem.g>0.99 && h>0.0) {
         float phase=fract(h/u_contour);
         float distance_m=min(phase,1.0-phase)*u_contour;
         float coverage=1.0-smoothstep(0.0,max(fwidth(h),0.25),distance_m);
         float major=mod(round(h/u_contour),5.0)==0.0?0.58:0.30;
-        rgb=mix(rgb,vec3(0.10,0.09,0.08),coverage*major);
+        rgb=mix(rgb,vec3(0.10,0.09,0.08),coverage*major*land);
     }
-    if(u_show_water && texture(u_water,v_uv).r>0.75) rgb=u_style==2?vec3(0.0):mix(rgb,vec3(0.149,0.40,0.675),0.94);
+    if (u_show_water) {
+        float water = edge_coverage(texture(u_water,v_uv).r, .75, .04);
+        rgb = mix(rgb, u_style == 2 ? vec3(0.0) : vec3(.149,.40,.675), water * (u_style == 2 ? 1.0 : .94));
+    }
     if (u_earth_lighting) rgb = light_surface(rgb, v_geo);
     frag=vec4(rgb,1.0);
 }

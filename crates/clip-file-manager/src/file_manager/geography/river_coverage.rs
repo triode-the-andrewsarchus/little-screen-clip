@@ -1,6 +1,6 @@
 //! Local matching between river products that do not share feature identifiers.
 use little_clip_core::geography::basemap::{
-    GrwlMaskStore, tiles::TileId, wrap_lon, wrap_lon_delta,
+    GrwlMaskStore, LakePolygon, tiles::TileId, wrap_lon, wrap_lon_delta,
 };
 use std::collections::BTreeMap;
 
@@ -15,19 +15,27 @@ struct Segment {
 
 /// A bounded local corridor index. Matching directions prevents a crossing
 /// tributary from being mistaken for the main channel at their intersection.
-pub(super) struct Coverage {
+pub(super) struct Coverage<'a> {
     origin: [f64; 2],
     cos_lat: f64,
     extent: [f64; 2],
     segments: Vec<Segment>,
     cells: BTreeMap<(i32, i32), Vec<usize>>,
     memberships: usize,
+    lakes: Vec<&'a LakePolygon>,
 }
-impl Coverage {
-    pub fn new(tile: TileId) -> Self {
+impl<'a> Coverage<'a> {
+    pub fn new(tile: TileId, lakes: &'a [LakePolygon]) -> Self {
         let [west, north, side] = tile.bounds();
         let lat = north - side * 0.5;
         let cos_lat = lat.to_radians().cos().abs().max(0.15);
+        let lakes = lakes
+            .iter()
+            .filter(|lake| {
+                let [w, s, e, n] = lake.bounds.map(f64::from);
+                w <= west + side && e >= west && s <= north && n >= north - side
+            })
+            .collect();
         Self {
             origin: [west + side * 0.5, lat],
             cos_lat,
@@ -38,6 +46,7 @@ impl Coverage {
             segments: Vec::new(),
             cells: BTreeMap::new(),
             memberships: 0,
+            lakes,
         }
     }
     fn project(&self, point: [f32; 2]) -> [f64; 2] {
@@ -86,6 +95,15 @@ impl Coverage {
         let a = self.project(a);
         let b = self.project(b);
         let mid = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+        let lon = wrap_lon(self.origin[0] + mid[0] / (METERS * self.cos_lat)) as f32;
+        let lat = (self.origin[1] + mid[1] / METERS) as f32;
+        self.lakes
+            .iter()
+            .any(|lake| lake_contains(lake, [lon, lat]))
+            || self.corridor_covers(a, b, mid)
+    }
+
+    fn corridor_covers(&self, a: [f64; 2], b: [f64; 2], mid: [f64; 2]) -> bool {
         let cell = (
             (mid[0] / CELL).floor() as i32,
             (mid[1] / CELL).floor() as i32,
@@ -100,6 +118,23 @@ impl Coverage {
             })
         })
     }
+}
+
+fn lake_contains(lake: &LakePolygon, [lon, lat]: [f32; 2]) -> bool {
+    let [w, s, e, n] = lake.bounds;
+    let inside = |ring: &[[f32; 2]]| {
+        ring.iter()
+            .zip(ring.iter().cycle().skip(1))
+            .fold(false, |inside, (a, b)| {
+                inside
+                    ^ ((a[1] > lat) != (b[1] > lat)
+                        && lon < a[0] + (lat - a[1]) * (b[0] - a[0]) / (b[1] - a[1]))
+            })
+    };
+    (w..=e).contains(&lon)
+        && (s..=n).contains(&lat)
+        && inside(&lake.points)
+        && !lake.holes.iter().any(|ring| inside(ring))
 }
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
@@ -174,7 +209,7 @@ mod tests {
 
     #[test]
     fn nearby_parallel_reaches_match_but_crossings_and_other_tributaries_survive() {
-        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.), &[]);
         coverage.insert(&[[0., 0.], [0.05, 0.]], 200.).unwrap();
         assert!(coverage.covers([0.01, 0.002], [0.012, 0.002]));
         assert!(coverage.covers([0.012, 0.002], [0.01, 0.002]));
@@ -185,7 +220,7 @@ mod tests {
 
     #[test]
     fn fallback_resumes_beyond_the_end_of_better_coverage() {
-        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.), &[]);
         coverage.insert(&[[0., 0.], [0.02, 0.]], 100.).unwrap();
         let pieces: Vec<_> = spans(&[[0., 0.], [0.1, 0.]])
             .filter(|p| !coverage.covers(p[0], p[1]))
@@ -196,8 +231,34 @@ mod tests {
     }
 
     #[test]
+    fn lake_water_hides_fallback_routes_at_the_shore_but_keeps_island_channels() {
+        let lakes = [LakePolygon {
+            bounds: [0.01, 0., 0.05, 0.04],
+            points: vec![[0.01, 0.], [0.05, 0.], [0.05, 0.04], [0.01, 0.04]],
+            holes: vec![vec![
+                [0.025, 0.01],
+                [0.035, 0.01],
+                [0.035, 0.03],
+                [0.025, 0.03],
+            ]],
+        }];
+        let coverage = Coverage::new(TileId::at(5, 0.02, 0.02), &lakes);
+        let xs: Vec<_> = spans(&[[0., 0.02], [0.06, 0.02]])
+            .filter(|p| !coverage.covers(p[0], p[1]))
+            .map(|p| (p[0][0] + p[1][0]) * 0.5)
+            .collect();
+        assert!(xs.iter().any(|&x| x < 0.01));
+        assert!(xs.iter().any(|x| (0.025..0.035).contains(x)));
+        assert!(xs.iter().any(|&x| x > 0.05));
+        assert!(
+            xs.iter()
+                .all(|x| !(0.01..0.025).contains(x) && !(0.035..0.05).contains(x))
+        );
+    }
+
+    #[test]
     fn matching_and_clipping_take_the_short_path_across_the_dateline() {
-        let mut coverage = Coverage::new(TileId::at(5, 0., 179.99));
+        let mut coverage = Coverage::new(TileId::at(5, 0., 179.99), &[]);
         coverage
             .insert(&[[179.98, 0.], [-179.98, 0.]], 100.)
             .unwrap();

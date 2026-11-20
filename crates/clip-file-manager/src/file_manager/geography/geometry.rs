@@ -201,7 +201,7 @@ impl Builder {
         points: &[[f32; 2]],
         width: f32,
         cancel: &AtomicBool,
-        higher: Option<&Coverage>,
+        higher: Option<&Coverage<'_>>,
         mask: Option<&GrwlMaskStore>,
     ) -> Result<(), String> {
         if cancel.load(Ordering::Relaxed) {
@@ -380,20 +380,9 @@ impl RiverKey {
     }
     pub fn prepare(self, assets: &BasemapAssets, cancel: &AtomicBool) -> Result<Scene, String> {
         let [west, north, side] = self.tile.bounds();
-        let min_order = if self.detail < 2 {
-            6
-        } else if self.detail < 4 {
-            4
-        } else {
-            3
-        };
-        let min_width = if self.detail == 0 {
-            f32::INFINITY
-        } else if self.detail < 3 {
-            90.0
-        } else {
-            20.0
-        };
+        // Minimum HydroRIVERS stream order and GRWL width for each zoom band.
+        const DETAIL: [(u8, f32); 5] = [(6, f32::INFINITY), (6, 90.), (4, 90.), (4, 20.), (3, 20.)];
+        let (min_order, min_width) = DETAIL[self.detail as usize];
         let mut b = Builder {
             batches: BTreeMap::new(),
             floats: 0,
@@ -403,7 +392,7 @@ impl RiverKey {
         // A mask narrower than a couple of raster texels can disappear during
         // resampling. Keep its centerline until the raster can resolve the river.
         let mask_width = 1.5 * 111_320. * 180. / (256. * (1u32 << self.mask_level) as f64);
-        let mut coverage = Coverage::new(self.tile);
+        let mut coverage = Coverage::new(self.tile, &assets.lakes);
         if let Some(grwl) = &assets.grwl_summary {
             for seg in grwl.query_bbox(
                 west,
@@ -456,7 +445,9 @@ impl RiverKey {
                     width,
                     cancel,
                     Some(&coverage),
-                    mask.filter(|_| width as f64 >= mask_width),
+                    // At fine tile levels, observed mask matches are stronger
+                    // evidence than the width estimated from discharge.
+                    mask.filter(|_| self.mask_level >= 10 || width as f64 >= mask_width),
                 )?;
             }
         }
@@ -542,7 +533,7 @@ mod tests {
         .unwrap();
         let mask = GrwlMaskStore::load_or_index(Path::new(root.path())).unwrap();
         let points = [[0.002, 0.0155], [0.010, 0.0155], [0.030, 0.0155]];
-        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.), &[]);
         coverage.insert(&points, 200.).unwrap();
         let cancel = AtomicBool::new(false);
         let mut b = Builder {
@@ -603,7 +594,7 @@ mod tests {
 
     #[test]
     fn centerline_fallback_keeps_unmatched_tributaries_and_partial_coverage() {
-        let mut coverage = Coverage::new(TileId::at(5, 0., 0.));
+        let mut coverage = Coverage::new(TileId::at(5, 0., 0.), &[]);
         coverage.insert(&[[0., 0.], [0.02, 0.]], 100.).unwrap();
         let cancel = AtomicBool::new(false);
         let mut b = Builder {
