@@ -58,22 +58,31 @@ def texture(internal, external, data_type, data):
     return tex
 
 
-def check_eclipse_horizon(raster, draw, center, row):
-    # The center of each body is on the geometric horizon at longitude 90°.
+def check_eclipse_horizon(raster, draw, center, row, color_texture):
+    # Use a uniform ocean to isolate the lighting at the first test GPX point.
+    # WGS84 vectors are from DE440 at 2024-04-08 16:40 UTC; NASA puts the
+    # centerline at 7.515° S, 156.4° W, with the Sun 2° above the horizon.
     uniform = lambda name: GL.glGetUniformLocation(raster, name)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    ocean = texture(GL.GL_RGBA8, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+        np.full((2, 2, 4), [37, 104, 171, 255], np.uint8))
     GL.glUniform1f(uniform("u_earth_lighting"), 1.0)
     GL.glUniform1i(uniform("u_black_marble"), 0)
-    GL.glUniform3f(uniform("u_sun"), -150e6, 6378.137, 0.0)
-    GL.glUniform3f(uniform("u_moon"), -355e3, 6378.137, 0.0)
+    GL.glUniform3f(uniform("u_sun"), 51799050, -139190000, 19727226)
+    GL.glUniform3f(uniform("u_moon"), 118469.32, -336412.8, 46492.25)
     eclipse_rows = []
     for enabled in [0, 1]:
         GL.glUniform1i(uniform("u_solar_possible"), enabled)
-        draw(lon=90, blend=0, zoom=16)
-        pixels = GL.glReadPixels(center - 42, row, 84, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-        eclipse_rows.append(np.frombuffer(pixels, dtype=np.uint8).reshape(84, 4)[:, :3].astype(int))
-    dimming = eclipse_rows[0] - eclipse_rows[1]
-    assert not dimming[0].any() and dimming[65:78].max() > 30
+        draw(lat=-7.515, lon=-158.4, blend=0, zoom=4)
+        pixels = GL.glReadPixels(center - 35, row, 71, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        eclipse_rows.append(np.frombuffer(pixels, dtype=np.uint8).reshape(71, 4)[:, 2].astype(int))
+    day, eclipsed = eclipse_rows
+    dimming = day - eclipsed
+    assert dimming[0] == 0 and dimming[-1] > 30
     assert np.abs(np.diff(dimming, axis=0)).max() < 12, "Hard eclipse shadow edge at the horizon"
+    assert eclipsed[:-1].max() <= eclipsed[-1] + 2, "Bright band on the twilight side of totality"
+    GL.glBindTexture(GL.GL_TEXTURE_2D, color_texture)
+    GL.glDeleteTextures([ocean])
     GL.glUniform1i(uniform("u_solar_possible"), 0)
     GL.glUniform1f(uniform("u_earth_lighting"), 0.0)
 
@@ -96,18 +105,26 @@ def check_sky_sizes(root, width, height):
     GL.glUniform3f(uniform("u_lunar_sun"), 0.0, 0.0, 150e6)
     GL.glUniform3f(uniform("u_lunar_earth"), 0.0, 1e7, 0.0)
 
-    def render_sky(readable, moon_x):
+    def render_sky(readable, moon_x, marker=False):
         GL.glUniform1i(uniform("u_readable_sky"), readable)
         GL.glUniform3f(uniform("u_moon"), moon_x * 384400.0, .18 * 384400.0, eye - 384400.0)
+        venus = (.45 * 150e6, -.35 * 150e6, eye - 150e6) if marker else (0, 0, 0)
+        GL.glUniform3f(uniform("u_planets[1]"), *venus)
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
         pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
         return np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
 
     actual = render_sky(0, -.55)
     readable = render_sky(1, -.55)
-    for x in [slice(0, width // 2), slice(width // 2, width)]:
-        assert np.count_nonzero(readable[:, x, 0] > 100) > 2.5 * np.count_nonzero(actual[:, x, 0] > 100)
-    assert np.array_equal(render_sky(0, .55), render_sky(1, .55)), "Solar conjunction changed optical disks"
+    for x, threshold in [(slice(0, width // 2), 100), (slice(width // 2, width), 235)]:
+        assert np.count_nonzero(readable[:, x, 0] > threshold) > 10 * np.count_nonzero(actual[:, x, 0] > threshold)
+    actual_marker = render_sky(0, -.55, marker=True)[:height // 2, :, 0]
+    readable_marker = render_sky(1, -.55, marker=True)[:height // 2, :, 0]
+    actual_pixels = np.count_nonzero(actual_marker > 100)
+    readable_pixels = np.count_nonzero(readable_marker > 100)
+    assert readable_pixels >= 12 * actual_pixels > 0, (actual_pixels, readable_pixels)
+    for moon_x in [.55, .525]:
+        assert np.array_equal(render_sky(0, moon_x), render_sky(1, moon_x)), "Solar conjunction changed optical disks"
     GL.glDeleteTextures([background])
     GL.glDeleteProgram(sky)
 
@@ -249,7 +266,7 @@ def main():
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
 
-        check_eclipse_horizon(raster, draw, center, height // 2)
+        check_eclipse_horizon(raster, draw, center, height // 2, textures[0])
         GL.glDeleteTextures([night_texture])
 
         vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)

@@ -20,6 +20,7 @@ uniform vec3 u_lunar_earth;
 const float PI = 3.141592653589793;
 const float EARTH_RADIUS_KM = 6378.137;
 const float MOON_RADIUS_KM = 1737.4;
+const float READABLE_DISK_SCALE = 4.0;
 const float planet_radius[7] = float[7](2439.7, 6051.8, 3389.5, 69911.0, 58232.0, 25362.0, 24622.0);
 const vec3 planet_color[7] = vec3[7](
     vec3(.67,.62,.57), vec3(1,.88,.66), vec3(.92,.46,.31), vec3(.93,.77,.62),
@@ -36,7 +37,7 @@ float disk_enlargement(vec3 sun, vec3 moon) {
     float separation = atan(length(cross(a,b)), dot(a,b));
     float radii = SOLAR_RADIUS_KM / length(sun) + MOON_RADIUS_KM / length(moon);
     // Ease back to physical sizes before any of the enlarged disks could overlap.
-    return smoothstep(2.0 * radii, 3.5 * radii, separation);
+    return smoothstep(READABLE_DISK_SCALE * radii, (READABLE_DISK_SCALE + 1.5) * radii, separation);
 }
 
 float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance) {
@@ -97,7 +98,9 @@ void main() {
         if (planet_radius[i] / length(offset) < .65 * pixel) {
             vec3 direction = normalize(offset);
             float point = length(cross(ray, direction)) / pixel;
-            float emphasis = u_readable_sky ? planet_emphasis[i] * smoothstep(0.0, 250.0, limb_clearance(eye, direction)) : 0.0;
+            float marker_growth = u_readable_sky ? smoothstep(0.0, 250.0, limb_clearance(eye, direction)) : 0.0;
+            float emphasis = planet_emphasis[i] * marker_growth;
+            point /= 1.0 + marker_growth;
             float marker = 1.0 - smoothstep(.55 + .45 * emphasis, 1.7 + 1.4 * emphasis, point);
             float halo = 1.0 - smoothstep(1.1, 5.5, point);
             rgb += planet_color[i] * (.22 * emphasis * halo);
@@ -111,13 +114,15 @@ void main() {
     vec3 sun_offset = u_sun - eye, moon_offset = u_moon - eye;
     vec3 sun_direction = normalize(sun_offset), moon_direction = normalize(moon_offset);
     float enlargement = u_readable_sky ? disk_enlargement(sun_offset, moon_offset) : 0.0;
-    float sun_scale = 1.0 + enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, sun_direction));
-    float moon_scale = 1.0 + enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, moon_direction));
+    float sun_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, sun_direction));
+    float moon_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, moon_direction));
+    float sun_scale = mix(1.0, READABLE_DISK_SCALE, sun_growth);
+    float moon_scale = mix(1.0, READABLE_DISK_SCALE, moon_growth);
     float sun = disk(ray, sun_offset, SOLAR_RADIUS_KM * sun_scale, pixel, distance);
     if (distance > 0.0 && sun_scale > 1.0) {
         float disk_radii = length(cross(ray, sun_direction)) / (SOLAR_RADIUS_KM * sun_scale / length(sun_offset));
         float glow = 1.0 - smoothstep(1.0, 2.8, disk_radii);
-        rgb += vec3(1.0,.83,.55) * (.16 * (sun_scale - 1.0) * glow);
+        rgb += vec3(1.0,.83,.55) * (.16 * sun_growth * glow);
     }
     if (sun > 0.0 && distance < nearest) {
         rgb = mix(rgb, vec3(1.0,.94,.81), sun);
