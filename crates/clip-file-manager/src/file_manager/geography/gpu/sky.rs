@@ -147,6 +147,10 @@ impl SkyRenderer {
                 projection.distance,
             );
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
+            gl.uniform_1_f32(
+                gl.get_uniform_location(p, "u_star_trail").as_ref(),
+                frame.star_trail,
+            );
             gl.uniform_1_i32(
                 gl.get_uniform_location(p, "u_readable_sky").as_ref(),
                 i32::from(frame.readable_sky),
@@ -225,7 +229,7 @@ impl SkyRenderer {
         }
     }
 
-    pub(super) unsafe fn road_uniforms(
+    pub(super) unsafe fn vector_uniforms(
         &mut self,
         gl: &glow::Context,
         program: glow::Program,
@@ -235,10 +239,9 @@ impl SkyRenderer {
         unsafe {
             let loc = |name| gl.get_uniform_location(program, name);
             let lighting = surface_lighting(frame);
-            let scene = frame
-                .sky
-                .as_ref()
-                .filter(|scene| lighting > 0.0 && frame.city_lights && scene.modern_lights);
+            let scene = frame.sky.as_ref().filter(|_| lighting > 0.0);
+            let marble = scene.is_some_and(|scene| frame.city_lights && scene.modern_lights);
+            gl.uniform_1_f32(loc("u_earth_lighting").as_ref(), lighting);
             gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
             gl.uniform_1_f32(
                 loc("u_detail_span").as_ref(),
@@ -246,19 +249,13 @@ impl SkyRenderer {
             );
             gl.uniform_1_f32(
                 loc("u_road_night").as_ref(),
-                if scene.is_some() && self.night.is_some() {
+                if marble && self.night.is_some() {
                     lighting
                 } else {
                     0.0
                 },
             );
-            bind(
-                gl,
-                program,
-                "u_night",
-                5,
-                self.night.filter(|_| scene.is_some()),
-            );
+            bind(gl, program, "u_night", 5, self.night.filter(|_| marble));
             if let Some(scene) = scene {
                 gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
             }

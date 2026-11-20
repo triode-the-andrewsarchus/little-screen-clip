@@ -1,9 +1,10 @@
 //! Prepared document paths and their projection onto the interactive map.
 use super::{
-    Hit,
+    Hit, interpolate_instant,
     radiation::{DoseScale, dose_rate},
 };
 use crate::ui_appearance::WorkbenchColors;
+use chrono::{DateTime, Utc};
 use egui::{Painter, Pos2, Rect, Shape, Stroke, pos2};
 use little_clip_core::geography::{
     Document, Kind, Point, Sample,
@@ -33,6 +34,8 @@ impl From<&Point> for Position {
 struct Vertex {
     position: Position,
     sample: usize,
+    source_point: bool,
+    time: Option<DateTime<Utc>>,
     dose_rate: Option<f64>,
 }
 
@@ -42,12 +45,13 @@ struct Path {
     feature: usize,
     index: usize,
     connected: bool,
+    interpolate_time: bool,
     vertices: Vec<Vertex>,
     dose_scale: Option<DoseScale>,
 }
 
 impl Overlay {
-    pub(super) fn prepare(document: &Document) -> Self {
+    pub(super) fn prepare(document: &Document, interpolate_time: bool) -> Self {
         let distance: f64 = document
             .features
             .iter()
@@ -64,7 +68,8 @@ impl Overlay {
                     feature,
                     index,
                     connected: path.len() > 1 && matches!(source.kind, Kind::Line | Kind::Polygon),
-                    vertices: vertices(path, source.kind == Kind::Line, step),
+                    interpolate_time,
+                    vertices: vertices(path, source.kind == Kind::Line, step, interpolate_time),
                     dose_scale: source.dose_rate.map(DoseScale),
                 });
             }
@@ -79,7 +84,7 @@ impl Overlay {
         selected: Option<usize>,
         colors: WorkbenchColors,
         pointer: Option<Pos2>,
-    ) -> Option<(Hit, f32)> {
+    ) -> Option<Pick> {
         let mut hit = HitTest {
             pointer,
             best: None,
@@ -99,11 +104,17 @@ impl Overlay {
     }
 }
 
-fn vertices(path: &[Sample], arc: bool, step: f64) -> Vec<Vertex> {
+fn vertices(path: &[Sample], arc: bool, step: f64, interpolate_time: bool) -> Vec<Vertex> {
     let mut vertices = Vec::with_capacity(path.len());
+    let mut previous_time: Option<DateTime<Utc>> = None;
     for (index, sample) in path.iter().enumerate() {
         let position = Position::from(&sample.point);
         let rate = dose_rate(&sample.point);
+        let time = if interpolate_time {
+            sample.point.instant()
+        } else {
+            None
+        };
         if arc && let Some(previous) = index.checked_sub(1).map(|index| &path[index]) {
             let steps = ((sample.distance_m - previous.distance_m) / step).ceil() as usize;
             if steps > 1 {
@@ -116,6 +127,10 @@ fn vertices(path: &[Sample], arc: bool, step: f64) -> Vec<Vertex> {
                     vertices.push(Vertex {
                         position: great_circle(start, position, t),
                         sample: if t <= 0.5 { index - 1 } else { index },
+                        source_point: false,
+                        time: previous_time
+                            .zip(time)
+                            .map(|(from, to)| interpolate_instant(from, to, t)),
                         dose_rate: rate,
                     });
                 }
@@ -124,8 +139,11 @@ fn vertices(path: &[Sample], arc: bool, step: f64) -> Vec<Vertex> {
         vertices.push(Vertex {
             position,
             sample: index,
+            source_point: true,
+            time,
             dose_rate: rate,
         });
+        previous_time = time;
     }
     vertices
 }
@@ -176,7 +194,7 @@ impl Projection<'_> {
         ))
     }
 
-    fn line(self, a: Position, b: Position, mut draw: impl FnMut([Pos2; 2])) {
+    fn line(self, a: Position, b: Position, mut draw: impl FnMut([Pos2; 2], [f64; 2])) {
         // Unwrap the leg as a pair, then split it at the camera's map seam.
         let delta = wrap_lon_delta(b.lon - a.lon);
         let a = Position {
@@ -187,8 +205,8 @@ impl Projection<'_> {
             lon: a.lon + delta,
             ..b
         };
-        if let Some(edge) = self.clipped_line([a, b]) {
-            draw(edge);
+        if let Some((edge, fractions)) = self.clipped_line([a, b]) {
+            draw(edge, fractions);
         }
         let shift = if b.lon < -180.0 {
             360.0
@@ -201,49 +219,61 @@ impl Projection<'_> {
             lon: p.lon + shift,
             ..p
         });
-        if let Some(edge) = self.clipped_line(shifted) {
-            draw(edge);
+        if let Some((edge, fractions)) = self.clipped_line(shifted) {
+            draw(edge, fractions);
         }
     }
 
-    fn clipped_line(self, [a, b]: [Position; 2]) -> Option<[Pos2; 2]> {
-        let [a, b] = [a.clip_longitude(b), b.clip_longitude(a)];
+    fn clipped_line(self, [a, b]: [Position; 2]) -> Option<([Pos2; 2], [f64; 2])> {
+        let [(a, start), (b, tail)] = [a.clip_longitude(b), b.clip_longitude(a)];
+        let end = 1.0 - tail;
         match (self.point(a), self.point(b)) {
-            (Some(a), Some(b)) => Some([a, b]),
-            (Some(visible), None) => Some([visible, self.limb(a, b, visible)]),
-            (None, Some(visible)) => Some([self.limb(b, a, visible), visible]),
+            (Some(a), Some(b)) => Some(([a, b], [start, end])),
+            (Some(visible), None) => {
+                let (limb, t) = self.limb(a, b, visible);
+                Some(([visible, limb], [start, start + t * (end - start)]))
+            }
+            (None, Some(visible)) => {
+                let (limb, t) = self.limb(b, a, visible);
+                Some(([limb, visible], [end - t * (end - start), end]))
+            }
             (None, None) => None,
         }
     }
 
-    fn limb(self, mut front: Position, mut back: Position, mut projected: Pos2) -> Pos2 {
+    fn limb(self, front: Position, back: Position, mut projected: Pos2) -> (Pos2, f64) {
+        let (mut low, mut high) = (0.0_f64, 1.0_f64);
         for _ in 0..10 {
+            let t = low.midpoint(high);
             let middle = Position {
-                lat: (front.lat + back.lat) * 0.5,
-                lon: (front.lon + back.lon) * 0.5,
+                lat: front.lat + (back.lat - front.lat) * t,
+                lon: front.lon + (back.lon - front.lon) * t,
             };
             if let Some(position) = self.point(middle) {
-                front = middle;
+                low = t;
                 projected = position;
             } else {
-                back = middle;
+                high = t;
             }
         }
-        projected
+        (projected, low)
     }
 }
 
 impl Position {
-    fn clip_longitude(self, other: Self) -> Self {
+    fn clip_longitude(self, other: Self) -> (Self, f64) {
         let lon = self.lon.clamp(-180.0, 180.0);
         if lon == self.lon {
-            return self;
+            return (self, 0.0);
         }
         let t = (lon - self.lon) / (other.lon - self.lon);
-        Self {
-            lat: self.lat + (other.lat - self.lat) * t,
-            lon,
-        }
+        (
+            Self {
+                lat: self.lat + (other.lat - self.lat) * t,
+                lon,
+            },
+            t,
+        )
     }
 }
 
@@ -269,7 +299,7 @@ impl Path {
                     && projection.rect.contains(point)
                 {
                     path.point(point, 4.5, vertex.dose_rate);
-                    hit.point(sample_hit(vertex), point);
+                    hit.point(sample_hit(vertex), vertex.time, point, false);
                 }
             }
             return;
@@ -277,10 +307,18 @@ impl Path {
         let clip = projection.rect.expand(stroke.width + OUTLINE);
         for pair in self.vertices.windows(2) {
             let [a, b] = [pair[0], pair[1]];
-            projection.line(a.position, b.position, |edge| {
+            projection.line(a.position, b.position, |edge, fractions| {
                 if Rect::from_two_pos(edge[0], edge[1]).intersects(clip) {
                     path.line(edge, [a.dose_rate, b.dose_rate]);
-                    hit.line([sample_hit(a), sample_hit(b)], edge);
+                    let samples = [sample_hit(a), sample_hit(b)];
+                    if self.interpolate_time {
+                        for (i, vertex) in [a, b].into_iter().enumerate() {
+                            if vertex.source_point && fractions[i] == i as f64 {
+                                hit.point(samples[i], vertex.time, edge[i], true);
+                            }
+                        }
+                    }
+                    hit.line(samples, [a.time, b.time], edge, fractions);
                 }
             });
         }
@@ -368,26 +406,72 @@ impl<'a> PathPainter<'a> {
 
 struct HitTest {
     pointer: Option<Pos2>,
-    best: Option<(Hit, f32)>,
+    best: Option<Pick>,
+}
+
+pub(super) const SNAP_RADIUS: f32 = 6.0;
+
+#[derive(Clone, Copy)]
+pub(super) struct Pick {
+    pub sample: Hit,
+    pub time: Option<DateTime<Utc>>,
+    distance: f32,
+    snapped: bool,
+}
+
+impl Pick {
+    pub(super) fn precedes(self, other: Option<Self>) -> bool {
+        self.distance < 64.0
+            && other.is_none_or(|other| {
+                self.snapped > other.snapped
+                    || (self.snapped == other.snapped && self.distance < other.distance)
+            })
+    }
 }
 
 impl HitTest {
-    fn point(&mut self, sample: Hit, point: Pos2) {
+    fn point(&mut self, sample: Hit, time: Option<DateTime<Utc>>, point: Pos2, snap: bool) {
         if let Some(pointer) = self.pointer {
-            self.consider(sample, point.distance_sq(pointer));
+            let distance = point.distance_sq(pointer);
+            if !snap || distance <= SNAP_RADIUS * SNAP_RADIUS {
+                self.consider(Pick {
+                    sample,
+                    time,
+                    distance,
+                    snapped: snap,
+                });
+            }
         }
     }
 
-    fn line(&mut self, samples: [Hit; 2], [a, b]: [Pos2; 2]) {
+    fn line(
+        &mut self,
+        samples: [Hit; 2],
+        times: [Option<DateTime<Utc>>; 2],
+        [a, b]: [Pos2; 2],
+        [start, end]: [f64; 2],
+    ) {
         if let Some(pointer) = self.pointer {
             let (t, distance) = crate::ui_ext::segment_hit(pointer, a, b);
-            self.consider(samples[usize::from(t > 0.5)], distance);
+            let t = start + (end - start) * f64::from(t);
+            let mut pick = Pick {
+                sample: samples[usize::from(t > 0.5)],
+                time: None,
+                distance,
+                snapped: false,
+            };
+            if pick.precedes(self.best) {
+                if let [Some(from), Some(to)] = times {
+                    pick.time = Some(interpolate_instant(from, to, t));
+                }
+                self.best = Some(pick);
+            }
         }
     }
 
-    fn consider(&mut self, sample: Hit, distance: f32) {
-        if distance < self.best.map_or(64.0, |(_, nearest)| nearest) {
-            self.best = Some((sample, distance));
+    fn consider(&mut self, pick: Pick) {
+        if pick.precedes(self.best) {
+            self.best = Some(pick);
         }
     }
 }
@@ -403,13 +487,15 @@ mod tests {
             br#"{"type":"LineString","coordinates":[[-160,60],[-90,40],[-30,0],[30,0],[90,40],[160,60]]}"#,
         )
         .unwrap();
-        Overlay::prepare(&document)
+        Overlay::prepare(&document, false)
     }
 
     fn project_path(projection: Projection<'_>, vertices: &[Vertex]) -> Vec<[Pos2; 2]> {
         let mut lines = Vec::new();
         for pair in vertices.windows(2) {
-            projection.line(pair[0].position, pair[1].position, |edge| lines.push(edge));
+            projection.line(pair[0].position, pair[1].position, |edge, _| {
+                lines.push(edge)
+            });
         }
         lines
     }
@@ -503,7 +589,7 @@ mod tests {
                 lat: 0.0,
                 lon: 91.0,
             },
-            |edge| lines.push(edge),
+            |edge, _| lines.push(edge),
         );
         projection.line(
             Position {
@@ -514,10 +600,78 @@ mod tests {
                 lat: 0.0,
                 lon: 93.0,
             },
-            |edge| lines.push(edge),
+            |edge, _| lines.push(edge),
         );
         assert_eq!(lines.len(), 1);
         let limb = rect.center().x + camera.scale_px(rect.width(), rect.height()) as f32;
         assert!((lines[0][1].x - limb).abs() < 1e-3);
+    }
+
+    #[test]
+    fn dated_path_interpolates_at_the_dateline_and_snaps_only_to_real_points() {
+        let gpx = br#"<gpx xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+            <trkpt lat="0" lon="176"><time>2024-04-08T16:00:00Z</time></trkpt>
+            <trkpt lat="0" lon="-176"><time>2024-04-08T18:00:00Z</time></trkpt>
+            <trkpt lat="0" lon="-170"/>
+            </trkseg></trk></gpx>"#;
+        let document = Document::gpx(gpx).unwrap();
+        let overlay = Overlay::prepare(&document, true);
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0));
+        let camera = GlobeCamera {
+            center_lat: 0.0,
+            center_lon: 180.0,
+            zoom: 10.0,
+            mode: ProjectionMode::Map2D,
+            ..GlobeCamera::default()
+        };
+        let projection = Projection {
+            camera: &camera,
+            rect,
+            offset: 0.0,
+        };
+        let ctx = egui::Context::default();
+        clip_ui::test_support::run_frame(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let colors = WorkbenchColors::from_palette(&crate::ui_appearance::palette(
+                    little_clip_core::config::WorkbenchAppearance::Dark,
+                ));
+                let pick = |lon: f64, dx: f32| {
+                    let point = projection
+                        .point(Position {
+                            lat: 0.0,
+                            lon: wrap_lon_delta(lon - camera.center_lon),
+                        })
+                        .unwrap();
+                    overlay
+                        .paint_copy(
+                            &painter,
+                            projection,
+                            Some(0),
+                            colors,
+                            Some(point + vec2(dx, 0.0)),
+                        )
+                        .unwrap()
+                };
+                let middle = pick(180.0, 0.0);
+                assert!(!middle.snapped);
+                assert_eq!(
+                    middle.time.unwrap().to_rfc3339(),
+                    "2024-04-08T17:00:00+00:00"
+                );
+                let point = pick(176.0, 4.0);
+                assert!(point.snapped && point.sample.point == 0);
+                assert_eq!(
+                    point.time.unwrap().to_rfc3339(),
+                    "2024-04-08T16:00:00+00:00"
+                );
+                assert!(pick(-174.0, 0.0).time.is_none());
+            },
+        );
     }
 }

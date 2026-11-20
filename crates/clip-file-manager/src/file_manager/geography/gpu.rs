@@ -93,6 +93,7 @@ pub(super) struct Frame {
     pub layers: Layers,
     pub details: Vec<(TileId, Arc<super::detail::Tile>)>,
     pub sky: Option<super::sky::Scene>,
+    pub star_trail: f32,
     pub show_sky: bool,
     pub readable_sky: bool,
     pub earth_lighting: bool,
@@ -776,7 +777,7 @@ impl Renderer {
                     &covered,
                 );
             }
-            self.sky.road_uniforms(gl, p, frame);
+            self.sky.vector_uniforms(gl, p, frame);
             for &(id, source) in &batches {
                 let Some(batch) = self.vectors.get(&(frame.source, id)) else {
                     continue;
@@ -803,7 +804,7 @@ impl Renderer {
                 {
                     color = [0.0, 0.0, 0.0, 1.0];
                 }
-                road_style_uniforms(gl, p, layer);
+                vector_style_uniforms(gl, p, layer);
                 gl.bind_vertex_array(Some(batch.vao));
                 gl.uniform_4_f32_slice(gl.get_uniform_location(p, "u_color").as_ref(), &color);
                 gl.uniform_1_f32(gl.get_uniform_location(p, "u_width").as_ref(), line_width);
@@ -831,10 +832,14 @@ impl Renderer {
     }
 }
 
-unsafe fn road_style_uniforms(gl: &glow::Context, program: glow::Program, layer: Layer) {
+unsafe fn vector_style_uniforms(gl: &glow::Context, program: glow::Program, layer: Layer) {
     // SAFETY: this runs with the vector program active on the renderer's context.
     unsafe {
         let loc = |name| gl.get_uniform_location(program, name);
+        gl.uniform_1_i32(
+            loc("u_country_border").as_ref(),
+            i32::from(matches!(layer, Layer::Country | Layer::CountryDisputed)),
+        );
         gl.uniform_1_i32(
             loc("u_fallback_road").as_ref(),
             i32::from(matches!(layer, Layer::RoadMajor | Layer::RoadMinor)),

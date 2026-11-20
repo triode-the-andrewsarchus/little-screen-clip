@@ -255,6 +255,7 @@ impl Tiles {
             layers,
             details: Vec::new(),
             sky: None,
+            star_trail: 0.0,
             show_sky: false,
             readable_sky: false,
             earth_lighting: false,

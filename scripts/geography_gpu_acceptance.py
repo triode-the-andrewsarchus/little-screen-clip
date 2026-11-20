@@ -125,8 +125,65 @@ def check_sky_sizes(root, width, height):
     assert readable_pixels >= 12 * actual_pixels > 0, (actual_pixels, readable_pixels)
     for moon_x in [.55, .525]:
         assert np.array_equal(render_sky(0, moon_x), render_sky(1, moon_x)), "Solar conjunction changed optical disks"
+
+    # A dark star map with a narrow bright feature. The transient trail can add
+    # a faint shoulder at the feature's edge while retaining the peak itself.
+    stars = np.full((4, 4096, 3), 5, dtype=np.uint8)
+    stars[:, 1990:2020] = 255
+    star_texture = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, stars)
+    sharp = render_sky(0, -.55)
+    GL.glUniform1f(uniform("u_star_trail"), 6 / 4096)
+    trail = render_sky(0, -.55)
+    lift = trail[:, :, 0].astype(int) - sharp[:, :, 0].astype(int)
+    assert 3 < lift.max() < 70 and np.count_nonzero(lift) > 10
+    assert np.all(lift[sharp[:, :, 0] > 100] == 0)
+    GL.glDeleteTextures([star_texture])
     GL.glDeleteTextures([background])
     GL.glDeleteProgram(sky)
+
+
+def check_vectors(vectors, width, height, output):
+    vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
+    GL.glBindVertexArray(vector_vao)
+    GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vector_buffer)
+    for index, size, offset in [(0, 4, 0), (1, 2, 16)]:
+        GL.glEnableVertexAttribArray(index)
+        GL.glVertexAttribPointer(index, size, GL.GL_FLOAT, False, 24, ctypes.c_void_p(offset))
+        GL.glVertexAttribDivisor(index, 1)
+    GL.glUseProgram(vectors)
+    vu = lambda name: GL.glGetUniformLocation(vectors, name)
+    GL.glUniform4f(vu("u_camera"), 0, 0, 300, 0)
+    GL.glUniform2f(vu("u_view"), width, height)
+    GL.glUniform1f(vu("u_blend"), 0)
+    GL.glUniform4f(vu("u_color"), 1, 0, 0, 1)
+    GL.glUniform1i(vu("u_dashed"), 0)
+    GL.glUniform1f(vu("u_shift"), 0)
+    for name, instance, stroke, count in [
+        ("vector-line", [-5, 0, 5, 0, 1, 0], 4, 6),
+        ("vector-triangle", [-5, -5, 5, -5, 0, 5], 0, 3)]:
+        data = np.array(instance, dtype=np.float32)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data, GL.GL_STATIC_DRAW)
+        GL.glUniform1f(vu("u_width"), stroke)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDrawArraysInstanced(GL.GL_TRIANGLES, 0, count, 1)
+        pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+        image = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
+        red = (image[:, :, 0] > 240) & (image[:, :, 1] < 20)
+        assert np.count_nonzero(red) > 100, f"Vector instance failed: {name}"
+        Image.fromarray(np.flipud(image)).save(output / f"{name}.png")
+        if name == "vector-line":
+            GL.glUniform1i(vu("u_country_border"), 1)
+            GL.glUniform1f(vu("u_earth_lighting"), 1)
+            for sun_x, expected in [(-1.0, .4), (1.0, 1.0)]:
+                GL.glUniform3f(vu("u_sun"), sun_x, 0, 0)
+                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+                GL.glDrawArraysInstanced(GL.GL_TRIANGLES, 0, count, 1)
+                border = np.frombuffer(GL.glReadPixels(0, 0, width, height, GL.GL_RGBA,
+                    GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+                assert abs(int(border[:, :, 0].max()) - expected * int(image[:, :, 0].max())) <= 1
+            GL.glUniform1i(vu("u_country_border"), 0)
+    GL.glDeleteBuffers(1, [vector_buffer])
+    GL.glDeleteVertexArrays(1, [vector_vao])
 
 
 def main():
@@ -269,36 +326,7 @@ def main():
         check_eclipse_horizon(raster, draw, center, height // 2, textures[0])
         GL.glDeleteTextures([night_texture])
 
-        vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
-        GL.glBindVertexArray(vector_vao)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vector_buffer)
-        for index, size, offset in [(0, 4, 0), (1, 2, 16)]:
-            GL.glEnableVertexAttribArray(index)
-            GL.glVertexAttribPointer(index, size, GL.GL_FLOAT, False, 24, ctypes.c_void_p(offset))
-            GL.glVertexAttribDivisor(index, 1)
-        GL.glUseProgram(vectors)
-        vu = lambda name: GL.glGetUniformLocation(vectors, name)
-        GL.glUniform4f(vu("u_camera"), 0, 0, 300, 0)
-        GL.glUniform2f(vu("u_view"), width, height)
-        GL.glUniform1f(vu("u_blend"), 0)
-        GL.glUniform4f(vu("u_color"), 1, 0, 0, 1)
-        GL.glUniform1i(vu("u_dashed"), 0)
-        GL.glUniform1f(vu("u_shift"), 0)
-        for name, instance, stroke, count in [
-            ("vector-line", [-5, 0, 5, 0, 1, 0], 4, 6),
-            ("vector-triangle", [-5, -5, 5, -5, 0, 5], 0, 3)]:
-            data = np.array(instance, dtype=np.float32)
-            GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data, GL.GL_STATIC_DRAW)
-            GL.glUniform1f(vu("u_width"), stroke)
-            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-            GL.glDrawArraysInstanced(GL.GL_TRIANGLES, 0, count, 1)
-            pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
-            image = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 4)
-            red = (image[:, :, 0] > 240) & (image[:, :, 1] < 20)
-            assert np.count_nonzero(red) > 100, f"Vector instance failed: {name}"
-            Image.fromarray(np.flipud(image)).save(args.output / f"{name}.png")
-        GL.glDeleteBuffers(1, [vector_buffer])
-        GL.glDeleteVertexArrays(1, [vector_vao])
+        check_vectors(vectors, width, height, args.output)
         # Measure warm GPU drawing with all source textures resident. Readback is
         # used only above for assertions and is excluded from these timings.
         timings = []

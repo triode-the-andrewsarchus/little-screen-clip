@@ -8,6 +8,8 @@ uniform vec4 u_color;
 uniform bool u_dashed;
 uniform bool u_fallback_road;
 uniform bool u_detailed_road;
+uniform bool u_country_border;
+uniform float u_earth_lighting;
 uniform float u_road_night;
 uniform int u_covered_count;
 uniform ivec2 u_covered[64];
@@ -29,14 +31,20 @@ void main() {
     float coverage=1.0-smoothstep(1.0-max(fwidth(v_edge),0.001),1.0,abs(v_edge));
     float alpha=u_color.a*coverage;
     vec3 color = u_color.rgb;
-    if (u_detailed_road && u_road_night > 0.0) {
+    if ((u_country_border && u_earth_lighting > 0.0) || (u_detailed_road && u_road_night > 0.0)) {
         vec2 angle = radians(vec2(lon-180.0, v_geo.y));
         vec3 normal = vec3(cos(angle.y) * vec2(cos(angle.x),sin(angle.x)),sin(angle.y));
-        float night = 1.0 - smoothstep(-.105, 0.0, dot(normal,normalize(u_sun)));
-        vec3 observed = max(vec3(0.0), texture(u_night,vec2(lon/360.0, .5-v_geo.y/180.0)).rgb-vec3(.10,.11,.15));
-        float intensity = smoothstep(.02,.45,dot(observed,vec3(.5,.4,.1))) * night * u_road_night;
-        color = mix(color, vec3(1.0,.78,.45), .34 * intensity);
-        alpha = min(coverage,alpha*(1.0+.08*intensity));
+        float elevation = dot(normal,normalize(u_sun));
+        if (u_country_border) {
+            float darkness = 1.0 - smoothstep(-.105, .0349, elevation);
+            alpha *= 1.0 - .60 * darkness * u_earth_lighting;
+        } else {
+            float night = 1.0 - smoothstep(-.105, 0.0, elevation);
+            vec3 observed = max(vec3(0.0), texture(u_night,vec2(lon/360.0, .5-v_geo.y/180.0)).rgb-vec3(.10,.11,.15));
+            float intensity = smoothstep(.02,.45,dot(observed,vec3(.5,.4,.1))) * night * u_road_night;
+            color = mix(color, vec3(1.0,.78,.45), .34 * intensity);
+            alpha = min(coverage,alpha*(1.0+.08*intensity));
+        }
     }
     frag=vec4(color*alpha,alpha);
 }

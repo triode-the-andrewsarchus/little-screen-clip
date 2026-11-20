@@ -21,7 +21,7 @@ use crate::{
     shell::{StudioPanelLayout, StudioShell},
     ui_appearance::WorkbenchColors,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use little_clip_core::{
     config::AppConfig,
     geography::{
@@ -104,7 +104,7 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
             document.title = String::new();
             document.notes.clear();
             data.geography = Some(Arc::new(Preview {
-                overlay: overlay::Overlay::prepare(&document),
+                overlay: overlay::Overlay::prepare(&document, false),
                 document,
             }));
         }
@@ -123,6 +123,7 @@ struct Hit {
 pub(super) struct Viewer {
     document: Document,
     overlay: overlay::Overlay,
+    interpolate_gpx: bool,
     selected: usize,
     current: Option<Hit>,
     camera: GlobeCamera,
@@ -151,11 +152,39 @@ struct SkyState {
     assets: Option<Arc<sky::Assets>>,
     job: Option<Task<Option<Result<sky::Assets, String>>>>,
     last: Option<(DateTime<Utc>, Option<sky::Scene>)>,
+    transition: Option<SceneTransition>,
     visible: bool,
     readable: bool,
     lighting: bool,
     lights: bool,
     error: Option<String>,
+}
+
+const SCENE_TRANSITION_SECONDS: f64 = 0.1;
+
+struct SceneTransition {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    started_at: f64,
+}
+
+impl SceneTransition {
+    fn at(&self, now: f64) -> DateTime<Utc> {
+        let t = ((now - self.started_at) / SCENE_TRANSITION_SECONDS).clamp(0.0, 1.0);
+        interpolate_instant(self.from, self.to, t * t * (3.0 - 2.0 * t))
+    }
+}
+
+fn interpolate_instant(from: DateTime<Utc>, to: DateTime<Utc>, fraction: f64) -> DateTime<Utc> {
+    if fraction >= 1.0 {
+        return to;
+    }
+    let delta = to - from;
+    if let Some(nanos) = delta.num_nanoseconds() {
+        from + TimeDelta::nanoseconds((nanos as f64 * fraction).round() as i64)
+    } else {
+        from + TimeDelta::milliseconds((delta.num_milliseconds() as f64 * fraction).round() as i64)
+    }
 }
 
 impl SkyState {
@@ -164,6 +193,7 @@ impl SkyState {
             assets: None,
             job: None,
             last: None,
+            transition: None,
             visible: true,
             readable: true,
             lighting: true,
@@ -189,6 +219,7 @@ impl SkyState {
         if let Some(result) = job.poll() {
             self.job = None;
             self.last = None;
+            self.transition = None;
             match result {
                 Ok(Some(Ok(assets))) => {
                     self.assets = Some(Arc::new(assets));
@@ -219,15 +250,59 @@ impl SkyState {
         self.last = Some((time, scene.clone()));
         scene
     }
+
+    fn scene_time(
+        &mut self,
+        recorded: Option<DateTime<Utc>>,
+        ctx: &egui::Context,
+    ) -> (DateTime<Utc>, f32) {
+        let Some(target) = recorded else {
+            self.transition = None;
+            return (live_scene_time(ctx), 0.0);
+        };
+        let Some((previous, _)) = self.last else {
+            return (target, 0.0);
+        };
+        let now = ctx.input(|input| input.time);
+        let current_target = self
+            .transition
+            .as_ref()
+            .map_or(previous, |active| active.to);
+        if target != current_target {
+            let from = self
+                .transition
+                .as_ref()
+                .map_or(previous, |active| active.at(now));
+            self.transition = Some(SceneTransition {
+                from,
+                to: target,
+                started_at: now,
+            });
+        }
+        let Some(active) = &self.transition else {
+            return (target, 0.0);
+        };
+        if now >= active.started_at + SCENE_TRANSITION_SECONDS {
+            self.transition = None;
+            return (target, 0.0);
+        }
+        let time = active.at(now);
+        ctx.request_repaint();
+        // Blur by the right ascension the stars have travelled since the
+        // previous frame, capped at six texels of the 4K star map.
+        let turns = (time - previous).num_milliseconds() as f64 / 86_164_090.0;
+        let short_turn = turns - turns.round();
+        let trail = short_turn.clamp(-6.0 / 4096.0, 6.0 / 4096.0) as f32;
+        (time, trail)
+    }
 }
 
 fn recorded_scene_time(
     document: &Document,
     selected: usize,
-    hovered: Option<&Sample>,
+    hovered: Option<DateTime<Utc>>,
 ) -> Option<DateTime<Utc>> {
     hovered
-        .and_then(|sample| sample.point.instant())
         .or(document.features[selected].last_instant)
         .or_else(|| {
             document
@@ -265,9 +340,13 @@ impl Viewer {
             )
         });
 
+        let interpolate_gpx = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gpx"));
         let mut viewer = Self {
-            overlay: overlay::Overlay::prepare(&document),
+            overlay: overlay::Overlay::prepare(&document, interpolate_gpx),
             document,
+            interpolate_gpx,
             selected,
             current: None,
             camera: GlobeCamera::default(),
@@ -371,15 +450,43 @@ impl Viewer {
             let feature = &self.document.features[self.selected];
             let profile_visible =
                 feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
-            let dose_scale = feature.dose_rate.map(radiation::DoseScale);
-            let legend_h = 26.0
-                * (u8::from(self.style == BasemapStyle::Oilslick) + u8::from(dose_scale.is_some()))
-                    as f32;
-            let map_height =
-                (ui.available_height() - legend_h - if profile_visible { 190.0 } else { 26.0 })
-                    .max(80.0);
+            let mut available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+            available.max.y -= ui.spacing().item_spacing.y;
+            if !available.is_positive() {
+                return;
+            }
+            // Measure the bottom rows in their actual layout so wrapped labels,
+            // legends and errors never compete with the map for the same space.
+            let mut footer = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("map-footer")
+                    .max_rect(available)
+                    .layout(egui::Layout::bottom_up(egui::Align::Min)),
+            );
+            let profile = profile_visible.then(|| {
+                footer
+                    .allocate_exact_size(
+                        egui::vec2(available.width(), 160.0_f32.min(available.height() * 0.4)),
+                        egui::Sense::hover(),
+                    )
+                    .0
+            });
+            self.map_status(&mut footer);
+            if let Some(error) = &self.render_error {
+                footer.colored_label(colors.warning, error);
+            }
+            if self.style == BasemapStyle::Oilslick {
+                paint_oilslick_legend(&mut footer, colors, self.config.geography.units);
+            }
+            if let Some(scale) = feature.dose_rate.map(radiation::DoseScale) {
+                scale.legend(&mut footer);
+            }
+            let map_height = footer.available_height();
+            if map_height < 1.0 {
+                return;
+            }
             let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), map_height),
+                egui::vec2(available.width(), map_height),
                 egui::Sense::click_and_drag(),
             );
 
@@ -397,6 +504,7 @@ impl Viewer {
                     let factor = (scroll * 0.004).exp() as f64;
                     self.camera.zoom =
                         (self.camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
+                    ui.ctx().request_repaint();
                 }
             }
 
@@ -432,8 +540,8 @@ impl Viewer {
             if response.clicked()
                 && let Some(hit) = hit
             {
-                self.selected = hit.feature;
-                self.current = Some(hit);
+                self.selected = hit.sample.feature;
+                self.current = Some(hit.sample);
             }
             if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
                 && let Some([px, py]) = self.camera.project(
@@ -458,51 +566,61 @@ impl Viewer {
                 }
             }
 
-            if let Some(scale) = dose_scale {
-                scale.legend(ui);
-            }
-            if self.style == BasemapStyle::Oilslick {
-                paint_oilslick_legend(ui, colors, self.config.geography.units);
-            }
-
-            if let Some(error) = &self.render_error {
-                ui.colored_label(colors.warning, error);
-            }
-            let blend = self.camera.globe_blend();
-            let proj_label = if blend > 0.9 {
-                "3D Globe"
-            } else if blend < 0.1 {
-                "2D Map"
-            } else {
-                "3D → 2D Transition"
-            };
-            let dem_source =
-                if self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0 {
-                    "DEM loaded"
-                } else {
-                    "Terrain unavailable"
-                };
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "Offline {proj_label} ({:.2}×) · {dem_source} · drag to rotate/pan, scroll to zoom",
-                    self.camera.zoom
-                ));
-                if !detail_tiles.is_empty() {
-                    ui.hyperlink_to(&detail::manifest().attribution, "https://docs.overturemaps.org/attribution/");
-                }
-            });
-
-            let hovered = profile_visible.then(|| self.profile_hover(ui, colors)).flatten().or(hit);
+            let hovered = profile
+                .and_then(|profile| self.profile_hover(ui, profile, colors))
+                .or_else(|| {
+                    hit.map(|pick| {
+                        if self.interpolate_gpx {
+                            pick.time
+                        } else {
+                            self.sample(pick.sample)
+                                .and_then(|sample| sample.point.instant())
+                        }
+                    })
+                });
             self.paint_frame(ui, rect, slot, prepared, hovered);
         });
     }
 
-    fn profile_hover(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) -> Option<Hit> {
-        let (profile, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
-            egui::Sense::hover(),
-        );
-        let hit = paint_profile(
+    fn map_status(&self, ui: &mut egui::Ui) {
+        let blend = self.camera.globe_blend();
+        let projection = if blend > 0.9 {
+            "3D Globe"
+        } else if blend < 0.1 {
+            "2D Map"
+        } else {
+            "3D → 2D Transition"
+        };
+        let terrain =
+            if self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0 {
+                "DEM loaded"
+            } else {
+                "Terrain unavailable"
+            };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "Offline {projection} ({:.2}×) · {terrain}",
+                self.camera.zoom
+            ))
+            .on_hover_text("Drag to rotate or pan. Scroll to zoom.");
+            if self.downloader.transport.source.is_some()
+                && (self.show_roads || self.show_city_names)
+            {
+                ui.hyperlink_to(
+                    &detail::manifest().attribution,
+                    "https://docs.overturemaps.org/attribution/",
+                );
+            }
+        });
+    }
+
+    fn profile_hover(
+        &mut self,
+        ui: &egui::Ui,
+        profile: egui::Rect,
+        colors: WorkbenchColors,
+    ) -> Option<Option<DateTime<Utc>>> {
+        let (hit, time) = paint_profile(
             ui,
             profile,
             &self.document.features[self.selected],
@@ -510,12 +628,13 @@ impl Viewer {
             self.current,
             colors,
             self.config.geography.units,
+            self.interpolate_gpx,
         )?;
         if Some(hit) != self.current {
             self.current = Some(hit);
             ui.ctx().request_repaint();
         }
-        Some(hit)
+        Some(time)
     }
 
     fn paint_frame(
@@ -524,20 +643,28 @@ impl Viewer {
         rect: egui::Rect,
         slot: egui::layers::ShapeIdx,
         prepared: Option<(gpu::Frame, Result<(), String>)>,
-        hovered: Option<Hit>,
+        hovered: Option<Option<DateTime<Utc>>>,
     ) {
+        let painter = ui.painter_at(rect);
+        let scale_badge = paint_scale_and_contour_overlay(
+            ui,
+            &painter,
+            rect,
+            &self.camera,
+            self.contour_interval_m,
+            self.local_elev_range,
+            self.config.geography.units,
+        );
         let Some((mut frame, result)) = prepared else {
             return;
         };
         let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
         if self.sky.assets.is_some() && (visible || self.sky.lighting) {
-            let recorded = recorded_scene_time(
-                &self.document,
-                self.selected,
-                hovered.and_then(|hit| self.sample(hit)),
-            );
-            let time = recorded.unwrap_or_else(|| live_scene_time(ui.ctx()));
+            let recorded = recorded_scene_time(&self.document, self.selected, hovered.flatten());
+            let (time, star_trail) = self.sky.scene_time(recorded, ui.ctx());
             frame.sky = self.sky.at(time);
+            frame.star_trail = star_trail;
+            paint_scene_clock(ui, &painter, rect, scale_badge, time, frame.sky.as_ref());
             frame.show_sky = visible;
             frame.readable_sky = self.sky.readable;
             frame.earth_lighting = self.sky.lighting;
@@ -562,12 +689,12 @@ impl Viewer {
             little_clip_core::geography::basemap::tiles::TileId,
             Arc<detail::Tile>,
         )],
-    ) -> Option<Hit> {
+    ) -> Option<overlay::Pick> {
         let painter = ui.painter_at(rect);
         let pointer = super::ui::preview_hovered(ui, rect)
             .then(|| ui.input(|i| i.pointer.hover_pos()))
             .flatten();
-        let mut hit: Option<(Hit, f32)> = None;
+        let mut hit = None;
         let camera = &self.camera;
         let flat = camera.globe_blend() == 0.0;
         let period = camera.world_width_px(rect.width(), rect.height());
@@ -606,26 +733,16 @@ impl Viewer {
             if let Some(candidate) =
                 self.overlay
                     .paint_copy(&painter, projection, Some(self.selected), colors, pointer)
-                && hit.is_none_or(|(_, distance)| candidate.1 < distance)
+                && candidate.precedes(hit)
             {
                 hit = Some(candidate);
             }
         }
-        let hit = hit.map(|(hit, _)| hit);
         if let Some(hit) = hit
-            && let Some(sample) = self.sample(hit)
+            && let Some(sample) = self.sample(hit.sample)
         {
-            show_position(ui, &self.document.features[hit.feature].name, sample);
+            show_position(ui, &self.document.features[hit.sample.feature].name, sample);
         }
-        paint_scale_and_contour_overlay(
-            ui,
-            &painter,
-            rect,
-            camera,
-            self.contour_interval_m,
-            self.local_elev_range,
-            self.config.geography.units,
-        );
         hit
     }
 
@@ -633,7 +750,6 @@ impl Viewer {
         let terrain_available =
             self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0;
         ui.horizontal_wrapped(|ui| {
-            ui.label("View:");
             for (label, mode) in [
                 ("Auto 3D→2D", ProjectionMode::Auto),
                 ("3D Globe", ProjectionMode::Globe3D),
@@ -647,7 +763,6 @@ impl Viewer {
                 }
             }
             ui.separator();
-            ui.label("Shading:");
             for (label, style) in [
                 ("Natural", BasemapStyle::Natural),
                 ("Hypsometric", BasemapStyle::Hypsometric),
@@ -673,37 +788,26 @@ impl Viewer {
             ui.checkbox(&mut self.show_city_names, "City names");
             ui.checkbox(&mut self.show_rivers, "Rivers");
             ui.checkbox(&mut self.show_roads, "Roads");
-            if let Some(assets) = &self.sky.assets {
-                ui.menu_button("Sky & lighting", |ui| {
-                    ui.checkbox(&mut self.sky.visible, "Sky and planets");
-                    ui.add_enabled(
-                        self.sky.visible,
-                        egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
-                    );
-                    ui.checkbox(&mut self.sky.lighting, "Day and night");
-                    ui.add_enabled(
-                        self.sky.lighting && assets.night.is_some(),
-                        egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
-                    )
-                    .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
-                    if let Some((time, scene)) = &self.sky.last {
-                        ui.label(time.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-                        ui.label(match scene.as_ref().map(|s| s.rotation_source) {
-                            Some(sky::RotationSource::Observed) => "IERS observed Earth rotation",
-                            Some(sky::RotationSource::Predicted) => "IERS predicted Earth rotation",
-                            Some(sky::RotationSource::Modeled) => {
-                                "Modeled Earth rotation · geographic shadow paths are approximate"
-                            }
-                            None => "Outside the DE440 ephemeris coverage",
-                        });
-                    }
-                });
-            }
             ui.add_enabled(
                 terrain_available,
                 egui::Checkbox::new(&mut self.show_contours, "Contours"),
             )
             .on_disabled_hover_text("Contours require GEBCO elevation or local HGT terrain.");
+            if let Some(assets) = &self.sky.assets {
+                ui.separator();
+                ui.checkbox(&mut self.sky.visible, "Sky and planets");
+                ui.add_enabled(
+                    self.sky.visible,
+                    egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
+                )
+                .on_hover_text("Show the Sun and Moon up to four times larger, with brighter planet markers.");
+                ui.checkbox(&mut self.sky.lighting, "Day and night");
+                ui.add_enabled(
+                    self.sky.lighting && assets.night.is_some(),
+                    egui::Checkbox::new(&mut self.sky.lights, "Black Marble (2016)"),
+                )
+                .on_hover_text("Modern 2016 imagery, shown after dark. Road tint follows nearby observed brightness.");
+            }
             ui.separator();
             if ui
                 .add(
@@ -1307,7 +1411,7 @@ fn paint_scale_and_contour_overlay(
     contour_interval_m: Option<f32>,
     local_elev_range: [f32; 2],
     units: Units,
-) {
+) -> egui::Rect {
     let scale_px = camera.scale_px(rect.width(), rect.height()).max(1.0);
     let meters_per_px = 6_371_000.0 / scale_px;
     let target_m = meters_per_px * 110.0;
@@ -1323,13 +1427,7 @@ fn paint_scale_and_contour_overlay(
             units.elevation_range(local_elev_range[0] as f64, local_elev_range[1] as f64)
         ));
     }
-    let galley = ui.fonts_mut(|f| {
-        f.layout_no_wrap(
-            text,
-            egui::FontId::proportional(11.5),
-            egui::Color32::from_rgb(244, 246, 250),
-        )
-    });
+    let galley = map_badge_text(ui, text);
     let box_w = (bar_w + galley.size().x + 26.0).min(rect.width() - 20.0);
     let box_rect = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 10.0, rect.bottom() - 32.0),
@@ -1363,6 +1461,57 @@ fn paint_scale_and_contour_overlay(
         galley,
         egui::Color32::from_rgb(244, 246, 250),
     );
+    box_rect
+}
+
+fn map_badge_text(ui: &egui::Ui, text: String) -> Arc<egui::Galley> {
+    ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(
+            text,
+            egui::FontId::proportional(11.5),
+            egui::Color32::from_rgb(244, 246, 250),
+        )
+    })
+}
+
+fn paint_scene_clock(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    scale: egui::Rect,
+    time: DateTime<Utc>,
+    scene: Option<&sky::Scene>,
+) {
+    let galley = map_badge_text(ui, time.format("%Y-%m-%d %H:%M:%S").to_string());
+    let size = egui::vec2(galley.size().x + 16.0, 22.0);
+    let mut badge =
+        egui::Align2::RIGHT_BOTTOM.anchor_size(rect.right_bottom() - egui::vec2(10.0, 10.0), size);
+    if badge.left() < scale.right() + 6.0 {
+        badge = badge.translate(egui::vec2(0.0, -26.0));
+    }
+    if !rect.contains_rect(badge) {
+        return;
+    }
+    painter.rect_filled(badge, 4.0, egui::Color32::from_black_alpha(165));
+    painter.galley(
+        badge.center() - galley.size() * 0.5,
+        galley,
+        egui::Color32::from_rgb(244, 246, 250),
+    );
+    let description = match scene.map(|s| s.rotation_source) {
+        Some(sky::RotationSource::Observed) => "UTC · IERS observed Earth rotation",
+        Some(sky::RotationSource::Predicted) => "UTC · IERS predicted Earth rotation",
+        Some(sky::RotationSource::Modeled) => {
+            "UTC · Modeled Earth rotation · geographic shadow paths are approximate"
+        }
+        None => "UTC · Outside the DE440 ephemeris coverage",
+    };
+    ui.interact(
+        badge,
+        ui.scope_id().with("scene-clock"),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(description);
 }
 
 fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors, units: Units) {
@@ -1427,9 +1576,10 @@ fn paint_strip_map(
         rect,
         offset: 0.0,
     };
-    let (hit, _) = preview
+    let hit = preview
         .overlay
-        .paint_copy(&painter, projection, None, colors, pointer)?;
+        .paint_copy(&painter, projection, None, colors, pointer)?
+        .sample;
     let sample = &preview.document.features[hit.feature].paths[hit.path][hit.point];
     show_position(ui, &preview.document.features[hit.feature].name, sample);
     Some(hit)
@@ -1477,14 +1627,15 @@ fn show_position(ui: &egui::Ui, name: &str, sample: &Sample) {
 }
 
 fn paint_profile(
-    ui: &mut egui::Ui,
+    ui: &egui::Ui,
     rect: egui::Rect,
     feature: &Feature,
     feature_index: usize,
     current: Option<Hit>,
     colors: WorkbenchColors,
     units: Units,
-) -> Option<Hit> {
+    interpolate_gpx: bool,
+) -> Option<(Hit, Option<DateTime<Utc>>)> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, colors.recessed);
     let Some([low, high]) = feature.elevation else {
@@ -1560,7 +1711,42 @@ fn paint_profile(
             }
         }
     }
-    hit
+    let hit = hit?;
+    let path = &feature.paths[hit.path];
+    let time = match pointer {
+        Some(pointer) if interpolate_gpx && nearest > overlay::SNAP_RADIUS => {
+            let position = f64::from((pointer.x - plot.left()) / plot.width());
+            profile_segment_time(path, hit.point, position * feature.distance_m.max(1.0))
+        }
+        _ => path[hit.point].point.instant(),
+    };
+    Some((hit, time))
+}
+
+fn profile_segment_time(path: &[Sample], nearest: usize, position: f64) -> Option<DateTime<Utc>> {
+    let sample = &path[nearest];
+    let (from, to) = if position < sample.distance_m {
+        (path.get(nearest.checked_sub(1)?)?, sample)
+    } else {
+        (sample, path.get(nearest + 1)?)
+    };
+    let span = to.distance_m - from.distance_m;
+    if to.profile_break
+        || from.point.elevation.is_none()
+        || to.point.elevation.is_none()
+        || span <= 0.0
+    {
+        return None;
+    }
+    let t = (position - from.distance_m) / span;
+    if !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    Some(interpolate_instant(
+        from.point.instant()?,
+        to.point.instant()?,
+        t,
+    ))
 }
 
 pub(super) fn show_list(
@@ -1640,11 +1826,11 @@ mod tests {
         let last = times[1].point.instant().unwrap();
         assert_eq!(hovered.to_rfc3339(), "2024-04-08T18:17:00+00:00");
         assert_eq!(
-            recorded_scene_time(&document, 0, Some(&times[0])),
+            recorded_scene_time(&document, 0, times[0].point.instant()),
             Some(hovered)
         );
         assert_eq!(
-            recorded_scene_time(&document, 0, Some(&times[2])),
+            recorded_scene_time(&document, 0, times[2].point.instant()),
             Some(last)
         );
         assert_eq!(recorded_scene_time(&document, 0, None), Some(last));
@@ -1658,9 +1844,54 @@ mod tests {
         document.capture_time = None;
         assert_eq!(recorded_scene_time(&document, 0, None), None);
         assert_eq!(
-            recorded_scene_time(&document, 0, Some(&document.features[0].paths[0][2])),
+            recorded_scene_time(
+                &document,
+                0,
+                document.features[0].paths[0][2].point.instant()
+            ),
             None
         );
+    }
+
+    #[test]
+    fn scene_transition_eases_through_real_instants_in_both_directions() {
+        let from = "2024-04-08T16:40:00Z".parse::<DateTime<Utc>>().unwrap();
+        let to = from + TimeDelta::hours(1);
+        for (from, to) in [(from, to), (to, from)] {
+            let transition = SceneTransition {
+                from,
+                to,
+                started_at: 10.0,
+            };
+            assert_eq!(transition.at(10.0), from);
+            assert_eq!(transition.at(10.025), from + (to - from) * 5 / 32);
+            assert_eq!(transition.at(10.050), from + (to - from) / 2);
+            assert_eq!(transition.at(10.101), to);
+        }
+    }
+
+    #[test]
+    fn elevation_scrub_interpolates_only_inside_a_contiguous_dated_segment() {
+        let gpx = br#"<gpx xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+            <trkpt lat="0" lon="0"><ele>10</ele><time>2024-04-08T16:00:00Z</time></trkpt>
+            <trkpt lat="0" lon="1"><ele>30</ele><time>2024-04-08T18:00:00Z</time></trkpt>
+            <trkpt lat="0" lon="2"><ele>20</ele></trkpt>
+            </trkseg></trk></gpx>"#;
+        let mut document = Document::gpx(gpx).unwrap();
+        let path = &mut document.features[0].paths[0];
+        let middle = path[0].distance_m.midpoint(path[1].distance_m);
+        for nearest in [0, 1] {
+            assert_eq!(
+                profile_segment_time(path, nearest, middle)
+                    .unwrap()
+                    .to_rfc3339(),
+                "2024-04-08T17:00:00+00:00"
+            );
+        }
+        let undated = path[1].distance_m.midpoint(path[2].distance_m);
+        assert!(profile_segment_time(path, 1, undated).is_none());
+        path[1].profile_break = true;
+        assert!(profile_segment_time(path, 1, middle).is_none());
     }
 
     #[test]
