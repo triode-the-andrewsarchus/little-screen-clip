@@ -103,6 +103,7 @@ def main():
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
             GL.glUniform4f(uniform("u_camera"), lat, lon, min(width, height) * 0.43 * zoom, blend)
             GL.glUniform1f(uniform("u_blend"), blend)
+            GL.glUniform1f(uniform("u_zoom"), zoom)
             GL.glUniform1i(uniform("u_style"), style)
             GL.glUniform1f(uniform("u_natural_detail"), max(0, min(1, (zoom - 5) / 4)))
             GL.glUniform1f(uniform("u_contour"), 100 if zoom >= 3.5 else 0)
@@ -127,6 +128,42 @@ def main():
             assert len(np.unique(np.asarray(image.convert("RGB")).reshape(-1, 3), axis=0)) > 10, f"Empty or constant map: {name}"
             images.append(pixels)
         assert len(set(images)) == len(images), "Camera/style changes did not affect rendering"
+
+        # A white center, a dimmer suburb, and the JPEG's blue background.
+        GL.glActiveTexture(GL.GL_TEXTURE5)
+        longitude = np.abs((np.arange(720) + 0.5) / 2 - 180)
+        night_source = np.tile([49, 49, 79], (360, 720, 1)).astype(np.uint8)
+        night_source[:, longitude < 2.5] = [102, 102, 102]
+        night_source[:, longitude < 1] = [255, 255, 255]
+        night_texture = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, night_source)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR_MIPMAP_LINEAR)
+        GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+        GL.glUniform1i(uniform("u_night"), 5)
+        GL.glUniform1i(uniform("u_earth_lighting"), 1)
+
+        def lit_exposure(sun_x, lights, blend=0, zoom=3):
+            GL.glUniform3f(uniform("u_sun"), sun_x, 0, 0)
+            GL.glUniform1i(uniform("u_black_marble"), lights)
+            draw(blend=blend, zoom=zoom)
+            return np.frombuffer(GL.glReadPixels(0, height // 2, width, 1, GL.GL_RGBA,
+                GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(width, 4)[:, :3].astype(int)
+
+        unlit = lit_exposure(-150e6, 0)
+        lit = lit_exposure(-150e6, 1)
+        center = width // 2
+        core, outskirts = lit[center], lit[center + 16]
+        assert min(core) > 220 and max(core) - min(core) < 32, core
+        assert outskirts[0] > outskirts[1] > outskirts[2], outskirts
+        assert 12 < outskirts[0] - unlit[center + 16, 0] < 95
+        assert 0 < lit[center + 23, 0] - unlit[center + 23, 0] < 12
+        assert np.array_equal(lit[center + 40], unlit[center + 40])
+        assert np.array_equal(lit_exposure(150e6, 0), lit_exposure(150e6, 1))
+        assert np.all(lit_exposure(-150e6, 0, 1, 1)[center] < unlit[center])
+        assert np.array_equal(lit_exposure(-150e6, 0, 1, 4)[center],
+            lit_exposure(-150e6, 0, 0, 4)[center])
+        GL.glUniform1i(uniform("u_earth_lighting"), 0)
+        GL.glDeleteTextures([night_texture])
+
         vector_vao, vector_buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
         GL.glBindVertexArray(vector_vao)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vector_buffer)
@@ -168,7 +205,8 @@ def main():
                 timings.append((time.perf_counter() - start) * 1000)
         assert GL.glGetError() == GL.GL_NO_ERROR
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 2,
-            "raster_scenarios": len(images), "vector_scenarios": 2, "warm_frame_median_ms": statistics.median(timings),
+            "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
+            "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2))

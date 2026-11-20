@@ -242,6 +242,10 @@ impl Renderer {
                 gl.get_uniform_location(p, "u_blend").as_ref(),
                 camera.globe_blend() as f32,
             );
+            gl.uniform_1_f32(
+                gl.get_uniform_location(p, "u_zoom").as_ref(),
+                camera.zoom as f32,
+            );
             gl.uniform_1_i32(
                 gl.get_uniform_location(p, "u_style").as_ref(),
                 match frame.style {

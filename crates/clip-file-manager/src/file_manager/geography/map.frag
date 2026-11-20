@@ -9,6 +9,7 @@ uniform sampler2D u_water;
 uniform int u_style;
 uniform bool u_show_water;
 uniform float u_blend;
+uniform float u_zoom;
 uniform float u_side;
 uniform float u_contour;
 uniform vec2 u_range;
@@ -21,6 +22,10 @@ uniform float u_atmosphere;
 uniform vec3 u_sun;
 uniform vec3 u_moon;
 uniform sampler2D u_night;
+float night_signal(vec3 sample_rgb) {
+    // Black Marble includes a blue background in the distributed JPEG.
+    return dot(max(sample_rgb - vec3(.10,.11,.15), vec3(0.0)), vec3(.5,.4,.1));
+}
 vec3 light_surface(vec3 rgb, vec2 geo) {
     vec2 angles = radians(geo + vec2(u_longitude, 0.0));
     vec3 normal = vec3(cos(angles.y) * vec2(cos(angles.x), sin(angles.x)), sin(angles.y));
@@ -34,13 +39,32 @@ vec3 light_surface(vec3 rgb, vec2 geo) {
     if (u_solar_possible && elevation > 0.0) {
         shade = shadow(sunlight, u_moon-point, 1737.4).covered;
     }
-    // Apply daylight to the composited cartography. Leave the existing relief
-    // normals and shading intact and retain contrast on the night side.
-    rgb *= mix(vec3(.36,.40,.49), vec3(1.0), day * (1.0 - .82 * pow(shade, 1.35)));
-    if (u_black_marble && elevation < 0.0) {
+    // Grade the same terrain into night so the relief and coastline line up
+    // through the terminator. Keep the brighter grade for navigating up close.
+    vec3 night_surface = rgb * vec3(.36,.40,.49);
+    if (u_style == 0) {
+        float overview = u_blend * (1.0 - smoothstep(1.35, 3.75, u_zoom));
+        float luma = dot(rgb, vec3(.299,.587,.114));
+        vec3 dark_surface = rgb * vec3(.06,.075,.10) + luma * luma * vec3(.055,.080,.15);
+        night_surface = mix(night_surface, dark_surface, overview);
+    }
+    rgb = mix(night_surface, rgb, day * (1.0 - .82 * pow(shade, 1.35)));
+    if (u_black_marble) {
         vec2 uv = vec2(angles.x / 6.28318530718 + .5, .5 - angles.y / 3.14159265359);
-        vec3 observed = max(vec3(0.0), texture(u_night, uv).rgb - vec3(.10,.11,.15));
-        rgb += vec3(1.0,.72,.38) * min(.36, dot(observed, vec3(.5,.4,.1))) * (1.0-day);
+        vec2 dx = dFdx(uv), dy = dFdy(uv);
+        // Use the existing mip chain to pick up light around the detailed core.
+        // Keep that footprint at least four texels wide even at close zoom.
+        vec2 glow_extent = max(2.0 * (abs(dx) + abs(dy)), 4.0 / vec2(textureSize(u_night, 0)));
+        if (elevation < 0.0) {
+            float local = night_signal(textureGrad(u_night, uv, dx, dy).rgb);
+            float nearby = night_signal(textureGrad(u_night, uv,
+                vec2(glow_extent.x, 0.0), vec2(0.0, glow_extent.y)).rgb);
+            float night = 1.0 - smoothstep(-.105, 0.0, elevation);
+            vec3 warm = vec3(1.0, .76, .36);
+            vec3 core_color = mix(warm, vec3(1.0, .98, .92), smoothstep(.24, .74, local));
+            rgb = mix(rgb, warm, .14 * smoothstep(.10, .40, nearby) * night);
+            rgb = mix(rgb, core_color, .97 * smoothstep(.10, .80, local) * night);
+        }
     }
     float rim = (1.0 - smoothstep(0.0, .23, max(0.0, v_front))) * u_atmosphere;
     rgb = mix(rgb, atmosphere_color(elevation), .38 * rim);

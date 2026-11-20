@@ -98,10 +98,13 @@ void main() {
     if (u_atmosphere > 0.0) {
         vec3 tangent = cross(ray, cross(eye, ray));
         float height = length(tangent) - 6378.137;
-        if (height >= 0.0 && height < 220.0) {
+        if (height >= 0.0 && height < 260.0) {
             float sunlight = dot(normalize(tangent), normalize(u_sun - tangent));
-            float optical_depth = exp(-height / 26.0) * (1.0 - smoothstep(115.0, 220.0, height));
-            rgb += u_atmosphere * optical_depth * atmosphere_color(sunlight) * .67;
+            // A soft falloff keeps the rim legible at globe scale.
+            float optical_depth = exp(-height / 64.0) * (1.0 - smoothstep(125.0, 260.0, height));
+            vec3 scatter = atmosphere_color(sunlight);
+            float glow = u_atmosphere * optical_depth;
+            rgb = mix(rgb, scatter, glow * max(scatter.r, scatter.b) * .55) + glow * scatter * .72;
         }
     }
     frag = vec4(rgb * u_opacity, u_opacity);
