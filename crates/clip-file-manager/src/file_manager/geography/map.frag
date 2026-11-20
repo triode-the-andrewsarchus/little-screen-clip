@@ -13,6 +13,39 @@ uniform float u_side;
 uniform float u_contour;
 uniform vec2 u_range;
 uniform float u_natural_detail;
+uniform bool u_earth_lighting;
+uniform bool u_black_marble;
+uniform bool u_solar_possible;
+uniform float u_longitude;
+uniform float u_atmosphere;
+uniform vec3 u_sun;
+uniform vec3 u_moon;
+uniform sampler2D u_night;
+vec3 light_surface(vec3 rgb, vec2 geo) {
+    vec2 angles = radians(geo + vec2(u_longitude, 0.0));
+    vec3 normal = vec3(cos(angles.y) * vec2(cos(angles.x), sin(angles.x)), sin(angles.y));
+    const float e2 = 0.00669437999014;
+    float n = 6378.137 * inversesqrt(1.0 - e2 * normal.z * normal.z);
+    vec3 point = n * normal * vec3(1.0, 1.0, 1.0-e2);
+    vec3 sunlight = u_sun - point;
+    float elevation = dot(normal, normalize(sunlight));
+    float day = smoothstep(-0.105, 0.0349, elevation);
+    float shade = 0.0;
+    if (u_solar_possible && elevation > 0.0) {
+        shade = shadow(sunlight, u_moon-point, 1737.4).covered;
+    }
+    // Apply daylight to the composited cartography. Leave the existing relief
+    // normals and shading intact and retain contrast on the night side.
+    rgb *= mix(vec3(.36,.40,.49), vec3(1.0), day * (1.0 - .82 * pow(shade, 1.35)));
+    if (u_black_marble && elevation < 0.0) {
+        vec2 uv = vec2(angles.x / 6.28318530718 + .5, .5 - angles.y / 3.14159265359);
+        vec3 observed = max(vec3(0.0), texture(u_night, uv).rgb - vec3(.10,.11,.15));
+        rgb += vec3(1.0,.72,.38) * min(.36, dot(observed, vec3(.5,.4,.1))) * (1.0-day);
+    }
+    float rim = (1.0 - smoothstep(0.0, .23, max(0.0, v_front))) * u_atmosphere;
+    rgb = mix(rgb, atmosphere_color(elevation), .38 * rim);
+    return rgb;
+}
 vec3 hsl(float hue,float s,float l) {
     vec3 rgb=clamp(abs(mod(hue/60.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0,0.0,1.0);
     return l+(rgb-0.5)*(1.0-abs(2.0*l-1.0))*s;
@@ -75,5 +108,6 @@ void main() {
         rgb=mix(rgb,vec3(0.10,0.09,0.08),coverage*major);
     }
     if(u_show_water && texture(u_water,v_uv).r>0.75) rgb=u_style==2?vec3(0.0):mix(rgb,vec3(0.149,0.40,0.675),0.94);
+    if (u_earth_lighting) rgb = light_surface(rgb, v_geo);
     frag=vec4(rgb,1.0);
 }

@@ -229,6 +229,7 @@ impl Renderer {
             }
             gl.use_program(Some(resources.program));
             let p = resources.program;
+            self.sky.earth_uniforms(gl, p, frame);
             let camera = frame.camera;
             let width = info.viewport.width();
             let height = info.viewport.height();
@@ -354,7 +355,11 @@ impl Resources {
     unsafe fn new(gl: &glow::Context) -> Result<Self, String> {
         // SAFETY: initialization runs only from the current-context paint callback.
         unsafe {
-            let program = program(gl, include_str!("map.vert"), include_str!("map.frag"))?;
+            let program = program(
+                gl,
+                include_str!("map.vert"),
+                &with_shadow(include_str!("map.frag")),
+            )?;
             let vector_program =
                 match self::program(gl, include_str!("vector.vert"), include_str!("vector.frag")) {
                     Ok(p) => p,
@@ -517,6 +522,15 @@ pub(super) fn float_bytes(values: &[f32]) -> &[u8] {
     // SAFETY: all bit patterns of initialized f32s are valid bytes; the borrowed
     // slice retains the original storage's lifetime and covers exactly its size.
     unsafe { std::slice::from_raw_parts(values.as_ptr().cast(), std::mem::size_of_val(values)) }
+}
+
+fn with_shadow(shader: &str) -> String {
+    let (version, body) = shader.split_once('\n').unwrap_or(("", shader));
+    format!(
+        "{version}\n{}\n{}\n{body}",
+        include_str!("eclipse.glsl"),
+        include_str!("atmosphere.glsl"),
+    )
 }
 
 pub(super) unsafe fn program(

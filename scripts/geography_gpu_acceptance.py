@@ -39,8 +39,12 @@ def context(width, height):
 
 
 def program(root, name):
+    fragment = (root / f"{name}.frag").read_text()
+    if name in ("map", "sky"):
+        version, body = fragment.split("\n", 1)
+        fragment = f"{version}\n{(root / 'eclipse.glsl').read_text()}\n{(root / 'atmosphere.glsl').read_text()}\n{body}"
     return compileProgram(compileShader((root / f"{name}.vert").read_text(), GL.GL_VERTEX_SHADER),
-        compileShader((root / f"{name}.frag").read_text(), GL.GL_FRAGMENT_SHADER))
+        compileShader(fragment, GL.GL_FRAGMENT_SHADER))
 
 
 def texture(internal, external, data_type, data):
