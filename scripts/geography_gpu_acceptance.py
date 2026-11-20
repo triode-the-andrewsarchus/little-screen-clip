@@ -121,8 +121,9 @@ def check_sky_sizes(root, width, height):
     GL.glUniform3f(uniform("u_lunar_sun"), 0.0, 0.0, 150e6)
     GL.glUniform3f(uniform("u_lunar_earth"), 0.0, 1e7, 0.0)
 
-    def render_sky(readable, moon_x, marker=False):
+    def render_sky(readable, moon_x, marker=False, body_zoom=1.0):
         GL.glUniform1i(uniform("u_readable_sky"), readable)
+        GL.glUniform1f(uniform("u_readable_disk_zoom"), body_zoom)
         GL.glUniform3f(uniform("u_moon"), moon_x * 384400.0, .18 * 384400.0, eye - 384400.0)
         venus = (.45 * 150e6, -.35 * 150e6, eye - 150e6) if marker else (0, 0, 0)
         GL.glUniform3f(uniform("u_planets[1]"), *venus)
@@ -134,6 +135,11 @@ def check_sky_sizes(root, width, height):
     readable = render_sky(1, -.55)
     for x, threshold in [(slice(0, width // 2), 100), (slice(width // 2, width), 235)]:
         assert np.count_nonzero(readable[:, x, 0] > threshold) > 100 * np.count_nonzero(actual[:, x, 0] > threshold)
+    distant = render_sky(1, -.55, body_zoom=.14)
+    for x, threshold in [(slice(0, width // 2), 100), (slice(width // 2, width), 235)]:
+        count = lambda pixels: np.count_nonzero(pixels[:, x, 0] > threshold)
+        assert count(actual) < count(distant) < count(readable) / 5
+    assert np.array_equal(actual, render_sky(0, -.55, body_zoom=.14))
     actual_marker = render_sky(0, -.55, marker=True)[:height // 2, :, 0]
     readable_marker = render_sky(1, -.55, marker=True)[:height // 2, :, 0]
     actual_pixels = np.count_nonzero(actual_marker > 100)
@@ -191,9 +197,35 @@ def check_moon_view(root, width, height):
     dark = center(face, [1.7, 0, 0], 1.0)
     near = center(face, [1.02, 0, 0], 0.0)
     rotated = center(side, [0, 1.02, 0], 0.0)
-    assert dark[0] < near[0] / 3
+    assert near[0] * .15 < dark[0] < near[0] / 3, (dark, near)
     assert near[0] > 190 and rotated[2] > 190, (near, rotated)
-    GL.glDeleteTextures([albedo])
+
+    # The Earth uses the cached map tiles and sits behind the separately
+    # composited Moon when the three centers align on this viewing ray.
+    GL.glUniform1i(loc("u_sky_eye_override"), 1)
+    GL.glUniform1i(loc("u_moon_only"), 0)
+    GL.glUniform1f(loc("u_opacity"), 1)
+    GL.glUniform2i(loc("u_earth_tiles"), 1, 1)
+    GL.glUniform1i(loc("u_earth_west"), 0)
+    GL.glUniform1i(loc("u_earth_east"), 0)
+    GL.glUniform1i(loc("u_stars"), 3)
+    GL.glUniform3f(loc("u_sky_eye"), -387400.0, 0, 0)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    earth = texture(GL.GL_RGBA8, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
+                    np.full((2, 2, 4), [38, 180, 72, 255], dtype=np.uint8))
+    GL.glActiveTexture(GL.GL_TEXTURE3)
+    stars = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, np.zeros((2, 2, 3), dtype=np.uint8))
+    toward_earth = [[0, -1, 0], [0, 0, 1], [-1, 0, 0]]
+    visible = center(toward_earth, [1.7, 0, 0], 0.0)
+    assert visible[1] > 150, visible
+    GL.glUniform1i(loc("u_moon_only"), 1)
+    GL.glUniform3f(loc("u_moon_eye"), -1.7, 0, 0)
+    GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
+    covered = np.frombuffer(GL.glReadPixels(width // 2, height // 2, 1, 1,
+        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8)[:3]
+    assert covered[1] < 130, covered
+
+    GL.glDeleteTextures([albedo, earth, stars])
     GL.glDeleteProgram(sky)
 
 

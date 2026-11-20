@@ -197,7 +197,10 @@ pub(in super::super) fn moon_at(
             let t = x.clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
         };
-        1.0 + 15.0 * smooth((separation / radii - 16.0) / 1.5) * smooth(above_limb / 600.0)
+        1.0 + 15.0
+            * readable_disk_zoom(frame.camera.zoom)
+            * smooth((separation / radii - 16.0) / 1.5)
+            * smooth(above_limb / 600.0)
     } else {
         1.0
     };
@@ -230,6 +233,7 @@ pub(in super::super) fn sky_object_at(
     }
     let body = scene
         .bodies()
+        .chain(frame.moon_view.then_some(("Earth", [0.0; 3])))
         .filter(|(name, _)| *name != "Moon")
         .filter_map(|(name, position)| {
             let point = center + projection.project(position)?;
@@ -273,13 +277,18 @@ fn find_star<'a>(
 }
 
 impl SkyRenderer {
-    pub(super) unsafe fn paint_frame(&mut self, gl: &glow::Context, frame: &super::Frame) {
+    pub(super) unsafe fn paint_frame(
+        &mut self,
+        gl: &glow::Context,
+        frame: &super::Frame,
+        earth: [Option<glow::Texture>; 2],
+    ) {
         if self.failed || (!frame.show_sky && !frame.moon_view) {
             return;
         }
         let Some(scene) = &frame.sky else { return };
         // SAFETY: called during the owner's paint callback with its context current.
-        if let Err(error) = unsafe { self.paint(gl, scene, frame) } {
+        if let Err(error) = unsafe { self.paint(gl, scene, frame, earth) } {
             self.failed = true;
             tracing::warn!(%error, "Sky renderer unavailable");
         }
@@ -290,6 +299,7 @@ impl SkyRenderer {
         gl: &glow::Context,
         scene: &sky::Scene,
         frame: &super::Frame,
+        earth: [Option<glow::Texture>; 2],
     ) -> Result<(), String> {
         let camera = frame.camera;
         let opacity = if frame.moon_view {
@@ -367,6 +377,14 @@ impl SkyRenderer {
                 i32::from(frame.readable_sky),
             );
             gl.uniform_1_f32(
+                loc("u_readable_disk_zoom").as_ref(),
+                if frame.moon_view {
+                    1.0
+                } else {
+                    readable_disk_zoom(camera.zoom)
+                },
+            );
+            gl.uniform_1_f32(
                 gl.get_uniform_location(p, "u_atmosphere").as_ref(),
                 if frame.moon_view {
                     0.0
@@ -394,6 +412,9 @@ impl SkyRenderer {
             );
             bind(gl, p, "u_lunar_albedo", 4, self.moon);
             bind(gl, p, "u_stars", 3, self.stars);
+            if frame.moon_view {
+                self.bind_earth(gl, p, frame.earth_lighting, earth);
+            }
             if frame.show_sky {
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
                 if frame.show_constellations {
@@ -410,6 +431,32 @@ impl SkyRenderer {
             gl.active_texture(glow::TEXTURE0);
         }
         Ok(())
+    }
+
+    unsafe fn bind_earth(
+        &self,
+        gl: &glow::Context,
+        program: glow::Program,
+        lighting: bool,
+        [west, east]: [Option<glow::Texture>; 2],
+    ) {
+        // SAFETY: the sky program is active and all textures share this context.
+        unsafe {
+            let uniform = |name| gl.get_uniform_location(program, name);
+            gl.uniform_2_i32(
+                uniform("u_earth_tiles").as_ref(),
+                i32::from(west.is_some()),
+                i32::from(east.is_some()),
+            );
+            gl.uniform_1_i32(uniform("u_light_earth_disk").as_ref(), i32::from(lighting));
+            gl.uniform_1_i32(
+                uniform("u_earth_night_available").as_ref(),
+                i32::from(self.night.is_some()),
+            );
+            bind(gl, program, "u_earth_west", 0, west);
+            bind(gl, program, "u_earth_east", 1, east);
+            bind(gl, program, "u_earth_night", 5, self.night);
+        }
     }
 
     unsafe fn paint_figures(
@@ -571,6 +618,11 @@ impl SkyRenderer {
         }
         self.figures_failed = false;
     }
+}
+
+fn readable_disk_zoom(zoom: f64) -> f32 {
+    // Reduce only the artificial enlargement as Earth gets smaller on screen.
+    zoom.clamp(0.0, 1.0) as f32
 }
 
 fn atmosphere(camera: GlobeCamera, style: BasemapStyle) -> f32 {

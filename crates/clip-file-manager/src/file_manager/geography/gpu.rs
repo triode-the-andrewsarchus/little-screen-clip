@@ -239,7 +239,16 @@ impl Renderer {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.bind_vertex_array(Some(resources.vao));
-            self.sky.paint_frame(gl, frame);
+            let earth = [0, 1].map(|x| {
+                if !frame.moon_view {
+                    return None;
+                }
+                let id = TileId { level: 0, x, y: 0 };
+                self.tiles
+                    .get(&(frame.source, id))
+                    .map(|tile| tile.textures[0])
+            });
+            self.sky.paint_frame(gl, frame, earth);
             if frame.moon_view {
                 gl.bind_vertex_array(None);
                 gl.active_texture(glow::TEXTURE0);

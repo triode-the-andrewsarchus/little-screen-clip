@@ -513,13 +513,10 @@ impl Viewer {
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             let slot = ui.painter_at(rect).add(egui::Shape::Noop);
             if let Some(camera) = self.moon_camera {
-                let frame = self.tiles.frame(
-                    tiles::Requests::default(),
-                    camera,
-                    size,
-                    geometry::Layers::default(),
-                );
-                self.paint_frame(ui, &response, slot, Some((frame, Ok(()))), None);
+                let frame = self
+                    .tiles
+                    .moon_frame(ui.ctx(), self.assets.as_ref(), camera, size);
+                self.paint_frame(ui, &response, slot, Some(frame), None);
                 return;
             }
             let prepared = self.prepare_earth_frame(ui, rect);

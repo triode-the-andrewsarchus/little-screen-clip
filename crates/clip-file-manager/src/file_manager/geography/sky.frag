@@ -11,10 +11,17 @@ uniform bool u_moon_view;
 uniform bool u_moon_only;
 uniform vec3 u_moon_eye;
 uniform float u_moon_phase;
+uniform sampler2D u_earth_west;
+uniform sampler2D u_earth_east;
+uniform sampler2D u_earth_night;
+uniform ivec2 u_earth_tiles;
+uniform bool u_light_earth_disk;
+uniform bool u_earth_night_available;
 uniform float u_opacity;
 uniform float u_atmosphere;
 uniform float u_star_trail; // Offset in right ascension during a clock transition.
 uniform bool u_readable_sky;
+uniform float u_readable_disk_zoom;
 uniform sampler2D u_stars;
 uniform vec3 u_sun;
 uniform vec3 u_moon;
@@ -78,7 +85,9 @@ vec3 lunar_color(vec3 normal, float phase) {
         .5 - asin(clamp(dot(normal,north),-1.0,1.0))/PI);
     vec3 albedo = u_has_lunar_albedo ? texture(u_lunar_albedo, uv).rgb : vec3(.6,.59,.57);
     vec3 lighting = vec3(earthshine) + (vec3(direct) + copper) * pow(diffuse,.67);
-    return albedo * mix(vec3(1.0), min(lighting * 1.55, vec3(1.3)), phase);
+    // In the lunar viewer keep the terrain readable through all phases.
+    float minimum_light = u_moon_only ? .22 : 0.0;
+    return albedo * mix(vec3(1.0), clamp(lighting * 1.55, minimum_light, 1.3), phase);
 }
 
 vec3 lunar_surface(vec3 ray, vec3 offset) {
@@ -86,6 +95,31 @@ vec3 lunar_surface(vec3 ray, vec3 offset) {
     float chord = sqrt(max(0.0, MOON_RADIUS_KM * MOON_RADIUS_KM - dot(across, across)));
     return lunar_color(normalize(across - ray * chord), 1.0);
 }
+vec3 earth_surface(vec3 ray, vec3 offset) {
+    vec3 across = cross(ray, cross(ray, offset));
+    float chord = sqrt(max(0.0, EARTH_RADIUS_KM * EARTH_RADIUS_KM - dot(across, across)));
+    vec3 normal = normalize(across - ray * chord);
+    vec2 uv = vec2(fract(.5 + atan(normal.y, normal.x) / (2.0 * PI)),
+        .5 - asin(clamp(normal.z, -1.0, 1.0)) / PI);
+    vec2 tile_uv = (vec2(fract(uv.x * 2.0), uv.y) * 256.0 + 1.0) / 258.0;
+    vec3 ocean = vec3(.15, .32, .52);
+    vec4 sample_rgb = vec4(ocean, 0.0);
+    if (uv.x < .5 && u_earth_tiles.x != 0) sample_rgb = texture(u_earth_west, tile_uv);
+    if (uv.x >= .5 && u_earth_tiles.y != 0) sample_rgb = texture(u_earth_east, tile_uv);
+    vec3 surface = mix(ocean, sample_rgb.rgb, sample_rgb.a);
+    if (!u_light_earth_disk) return surface;
+    float sunlight = dot(normal, normalize(u_sun - normal * EARTH_RADIUS_KM));
+    float day = smoothstep(-.10, .08, sunlight);
+    vec3 color = mix(surface * vec3(.15, .19, .28), surface, day);
+    if (u_earth_night_available) {
+        vec3 observed = max(textureLod(u_earth_night, uv, 2.0).rgb - vec3(.10, .11, .15), 0.0);
+        float lights = smoothstep(.08, .62, dot(observed, vec3(.5, .4, .1)));
+        color = mix(color, vec3(1.0, .80, .46), lights * (1.0 - day));
+    }
+    float rim = 1.0 - smoothstep(0.0, .23, max(0.0, dot(normal, -ray)));
+    return mix(color, atmosphere_color(sunlight), .38 * rim);
+}
+
 void main() {
     vec3 eye = u_sky_eye_override ? u_sky_eye : u_camera_basis[2] * u_camera_distance;
     vec3 ray = u_camera_basis * normalize(vec3(v_ndc * u_fov, -1.0));
@@ -140,8 +174,8 @@ void main() {
     float enlargement = u_readable_sky ? (u_moon_view ? 1.0 : disk_enlargement(sun_offset, moon_offset)) : 0.0;
     float sun_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, sun_direction));
     float moon_growth = enlargement * smoothstep(0.0, 600.0, limb_clearance(eye, moon_direction));
-    float sun_scale = mix(1.0, READABLE_DISK_SCALE, sun_growth);
-    float moon_scale = mix(1.0, READABLE_DISK_SCALE, moon_growth);
+    float sun_scale = mix(1.0, READABLE_DISK_SCALE, sun_growth * u_readable_disk_zoom);
+    float moon_scale = mix(1.0, READABLE_DISK_SCALE, moon_growth * u_readable_disk_zoom);
     float sun = disk(ray, sun_offset, SOLAR_RADIUS_KM * sun_scale, pixel, distance);
     if (distance > 0.0 && sun_scale > 1.0) {
         float disk_radii = length(cross(ray, sun_direction)) / (SOLAR_RADIUS_KM * sun_scale / length(sun_offset));
@@ -156,6 +190,12 @@ void main() {
     if (!u_moon_view && moon > 0.0 && distance < nearest) {
         vec3 surface_ray = normalize(mix(moon_direction, ray, 1.0 / moon_scale));
         rgb = mix(rgb, lunar_surface(surface_ray, moon_offset), moon);
+    }
+    if (u_moon_view) {
+        float earth = disk(ray, -eye, EARTH_RADIUS_KM, pixel, distance);
+        if (earth > 0.0 && distance < nearest) {
+            rgb = mix(rgb, earth_surface(ray, -eye), earth);
+        }
     }
     if (u_atmosphere > 0.0) {
         vec3 tangent = cross(ray, cross(eye, ray));

@@ -156,6 +156,23 @@ impl Tiles {
         Some((frame, raster_result))
     }
 
+    pub(super) fn moon_frame(
+        &mut self,
+        ctx: &egui::Context,
+        assets: Option<&Arc<BasemapAssets>>,
+        camera: GlobeCamera,
+        size: [f32; 2],
+    ) -> (gpu::Frame, Result<(), String>) {
+        let wanted = Requests {
+            raster: (0..2).map(|x| TileId { level: 0, x, y: 0 }).collect(),
+            ..Requests::default()
+        };
+        let ready = assets.map_or(Ok(()), |assets| {
+            self.prepare(ctx, assets, &wanted, CPU_BUDGET, RIVER_BUDGET)
+        });
+        (self.frame(wanted, camera, size, Layers::default()), ready)
+    }
+
     pub(super) fn prepare(
         &mut self,
         ctx: &egui::Context,
