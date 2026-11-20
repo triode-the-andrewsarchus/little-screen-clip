@@ -113,34 +113,38 @@ float land_coverage(vec2 uv) {
 }
 // Continuous tints derived from the imagery. The channel gaps distinguish
 // green vegetation, yellow-green open ground, and warmer bare soil and sand.
-vec3 biome_color(vec3 rgb, float h, float lat) {
+vec3 biome_color(vec3 rgb, float h, float lat, float close) {
     float luma = dot(rgb, LUMA);
     float warm = rgb.r - rgb.g;
     float green = smoothstep(.005, .072, -warm) * smoothstep(.025, .10, rgb.g - rgb.b);
     float bare = smoothstep(.008, .080, warm) * smoothstep(.045, .125, rgb.r - rgb.b);
-    vec3 open = mix(vec3(140,151,110), vec3(167,154,113), smoothstep(-.035, .047, warm));
-    vec3 vegetation = mix(vec3(69,105,74), vec3(134,161,100), smoothstep(.30, .63, luma));
-    vec3 earth = mix(vec3(151,117,89), vec3(217,184,139), smoothstep(.43, .86, luma));
+    // Narrow the variation inside each tint as the imagery magnifies. Keep
+    // the vegetation and soil weights continuous through mixed terrain.
+    float settle = .75 * close;
+    vec3 open = mix(vec3(140,151,110), vec3(167,154,113), mix(smoothstep(-.035, .047, warm), .48, settle));
+    vec3 vegetation = mix(vec3(69,105,74), vec3(134,161,100), mix(smoothstep(.30, .63, luma), .78, settle));
+    vec3 earth = mix(vec3(151,117,89), vec3(217,184,139), mix(smoothstep(.43, .86, luma), .76, settle));
     vec3 ground = mix(mix(open, earth, bare), vegetation, green) / 255.0;
     float snow = smoothstep(.72, .87, luma) * max(smoothstep(2400.0, 4000.0, h),
                                                      smoothstep(57.0, 68.0, abs(lat)));
-    return mix(mix(ground, rgb, .24), vec3(236,242,248) / 255.0, snow);
+    return mix(mix(ground, rgb, mix(.24, .06, close)), vec3(236,242,248) / 255.0, snow);
 }
 
-vec3 natural_land(vec3 source, float h, float lat, float shade, float detail) {
+vec3 natural_land(vec3 source, float h, float lat, float shade, float detail, float close) {
     vec3 overview = source * NATURAL_LAND_EXPOSURE;
     if (detail == 0.0) return overview;
-    vec3 palette = biome_color(source, h, lat);
-    float source_luma = dot(overview, LUMA);
+    vec3 palette = biome_color(source, h, lat, close);
     float palette_luma = dot(palette, LUMA);
     // Match the imagery's brightness as the palette comes in. Mixing towards
     // black or white keeps the matched color inside the display gamut.
-    vec3 matched = source_luma < palette_luma
-        ? palette * (source_luma / palette_luma)
-        : mix(palette, vec3(1.0), (source_luma - palette_luma) / (1.0 - palette_luma));
-    // Flat terrain is neutral. Finer elevation adds relief around that level.
+    float luma = mix(dot(overview, LUMA), palette_luma, .78 * close);
+    vec3 matched = luma < palette_luma
+        ? palette * (luma / palette_luma)
+        : mix(palette, vec3(1.0), (luma - palette_luma) / (1.0 - palette_luma));
+    // Flat terrain is neutral. Nearby slopes get more contrast from the DEM.
     const float flat_shade = .70710678;
-    return mix(overview, matched * (1.0 + .30 * (shade - flat_shade)), detail);
+    float relief = 1.0 + mix(.30, .54, close) * (shade - flat_shade);
+    return mix(overview, matched * relief, detail);
 }
 
 float contour_coverage(float height, float interval, float footprint) {
@@ -149,11 +153,11 @@ float contour_coverage(float height, float interval, float footprint) {
     return 1.0 - smoothstep(0.0, footprint, distance_m);
 }
 
-float contour_visibility(float spacing) {
-    return smoothstep(2.0, 4.0, spacing) * min(1.0, spacing / 10.0);
+float contour_visibility(float spacing, float full_spacing) {
+    return smoothstep(2.0, 4.0, spacing) * min(1.0, spacing / full_spacing);
 }
 
-float contour_ink(float height) {
+float contour_ink(float height, float close) {
     float footprint = max(fwidth(height), .25);
     float minor = contour_coverage(height, u_contour, footprint);
     if (u_style != 0) {
@@ -163,8 +167,8 @@ float contour_ink(float height) {
     // gray. Index contours have their own spacing and stay visible longer.
     float index_interval = 5.0 * u_contour;
     float index = contour_coverage(height, index_interval, footprint);
-    return max(.30 * minor * contour_visibility(u_contour / footprint),
-               .58 * index * contour_visibility(index_interval / footprint));
+    return max(.30 * minor * contour_visibility(u_contour / footprint, mix(10.0, 6.0, close)),
+               .58 * index * contour_visibility(index_interval / footprint, 10.0));
 }
 
 void main() {
@@ -173,6 +177,7 @@ void main() {
     vec2 dem=texture(u_height,v_uv).rg;
     float h=dem.r, shade=1.0;
     float detail = smoothstep(5.0, 9.0, u_zoom);
+    float close = smoothstep(36.0, 148.0, u_zoom);
     float land = u_style != 0 || detail > 0.0 ? land_coverage(v_uv) : float(h > 0.0);
     if(dem.g>0.99) {
         vec2 step_uv=vec2(1.0/258.0,0.0);
@@ -192,7 +197,7 @@ void main() {
         vec3 water;
         if (u_style == 0) {
             water = mix(rgb, water_blue, detail);
-            rgb = natural_land(rgb, h, v_geo.y, shade, detail);
+            rgb = natural_land(rgb, h, v_geo.y, shade, detail, close);
         } else if (u_style == 3) {
             water = vec3(.11,.20,.32);
             rgb = vec3((48.0+170.0*shade)/255.0);
@@ -208,7 +213,7 @@ void main() {
         rgb *= mix(NATURAL_LAND_EXPOSURE, 1.0, water_hint);
     }
     if (u_contour > 0.0) {
-        float ink = contour_ink(h);
+        float ink = contour_ink(h, close);
         if (dem.g > .99 && h > 0.0) rgb = mix(rgb, vec3(.10,.09,.08), ink * land);
     }
     if (u_show_water) {

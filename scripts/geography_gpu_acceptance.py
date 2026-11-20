@@ -234,8 +234,8 @@ def check_natural_terrain_tone(raster, draw, width, height, textures):
     heights = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT, dem)
     GL.glUniform1f(uniform("u_side"), .25)
 
-    def frame(zoom, interval=0, rgb=False):
-        draw(lon=45, blend=0, zoom=zoom, interval=interval)
+    def frame(zoom, interval=0, rgb=False, scale_zoom=None):
+        draw(lon=45, blend=0, zoom=zoom, interval=interval, scale_zoom=scale_zoom)
         pixels = GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
         color_pixels = np.frombuffer(pixels, np.uint8).reshape(height, width, 4)[:, :, :3]
         return color_pixels if rgb else color_pixels @ [.299, .587, .114]
@@ -245,7 +245,7 @@ def check_natural_terrain_tone(raster, draw, width, height, textures):
         # Simulate arrival of a different terrain level at a static camera.
         dem[:] = [height_m, 1.0]
         GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RG, GL.GL_FLOAT, dem)
-        for zoom in [4.0, 6.0, 7.5, 9.0, 12.0, 60.0]:
+        for zoom in [4.0, 6.0, 7.5, 9.0, 14.0, 28.0]:
             measured = frame(zoom)
             for row in [height // 4, 3 * height // 4]:
                 assert abs(measured[row, width // 2] - no_dem[row, width // 2]) <= 1, (height_m, zoom, row)
@@ -274,6 +274,27 @@ def check_natural_terrain_tone(raster, draw, width, height, textures):
     row = frame(12.0, rgb=True)[height // 2].astype(int)
     assert len(np.unique(row, axis=0)) > 30
     assert np.abs(np.diff(row, axis=0)).max() <= 2, "Hard palette boundary in a continuous source"
+
+    # Keep a common footprint to isolate the style from the change in camera scale.
+    color[:, :, :3] = [173, 145, 109]
+    color[:129, :, :3] = [118, 149, 99]
+    tint = np.clip((np.arange(258) - 64) * 4, -38, 38)
+    color[:, :, :3] = color[:, :, :3] + tint[None, :, None]
+    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, color)
+    mid, close = [frame(zoom, rgb=True, scale_zoom=16.0).astype(int) for zoom in (28.0, 128.0)]
+    for row in (height // 4, height * 3 // 4):
+        mid_span = np.ptp(mid[row] @ [.299, .587, .114])
+        close_span = np.ptp(close[row] @ [.299, .587, .114])
+        assert mid_span > 15 and close_span < .65 * mid_span, (mid_span, close_span)
+    assert close[height * 3 // 4, width // 2, 1] > close[height * 3 // 4, width // 2, 0]
+    assert close[height // 4, width // 2, 0] > close[height // 4, width // 2, 1]
+
+    GL.glActiveTexture(GL.GL_TEXTURE1)
+    dem[:, :, 0] = 340 + 18 * np.abs(np.arange(258) - 64)
+    GL.glTexSubImage2D(GL.GL_TEXTURE_2D, 0, 0, 0, 258, 258, GL.GL_RG, GL.GL_FLOAT, dem)
+    mid_relief = frame(28.0, scale_zoom=16.0) - (mid @ [.299, .587, .114])
+    close_relief = frame(128.0, scale_zoom=16.0) - (close @ [.299, .587, .114])
+    assert np.mean(np.abs(close_relief)) > 1.45 * np.mean(np.abs(mid_relief))
 
     for unit in (0, 1):
         GL.glActiveTexture(GL.GL_TEXTURE0 + unit)
@@ -319,12 +340,12 @@ def main():
         GL.glUniform1i(uniform("u_show_water"), 1)
         GL.glUniform1f(uniform("u_side"), 180)
 
-        def draw(style=0, lat=0, lon=0, blend=1, zoom=1, interval=None):
+        def draw(style=0, lat=0, lon=0, blend=1, zoom=1, interval=None, scale_zoom=None):
             GL.glUseProgram(raster)
             GL.glBindVertexArray(vao)
             GL.glClearColor(0.02, 0.03, 0.04, 1)
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-            GL.glUniform4f(uniform("u_camera"), lat, lon, min(width, height) * 0.43 * zoom, blend)
+            GL.glUniform4f(uniform("u_camera"), lat, lon, min(width, height) * 0.43 * (zoom if scale_zoom is None else scale_zoom), blend)
             GL.glUniform1f(uniform("u_blend"), blend)
             GL.glUniform1f(uniform("u_zoom"), zoom)
             GL.glUniform1f(uniform("u_longitude"), lon)
