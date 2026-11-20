@@ -87,11 +87,6 @@ impl Perspective {
         let radius = 1.0 + height_m.max(0.0) / self.radius_m;
         let pos = unit(lat, lon).map(|x| x * radius);
         let delta = combine(pos, 1.0, self.eye, -1.0);
-        let [x, y, z] = self.axes.map(|axis| dot(axis, delta));
-        let depth = -z;
-        if depth <= 0.0 {
-            return None;
-        }
         // Elevated points can remain visible above the base sphere past the
         // horizon, or rise higher than the viewer in a nearby valley.
         if dot(pos, self.eye) < radius * radius {
@@ -100,6 +95,17 @@ impl Perspective {
             if sphere_distance(self.eye, ray, 1.0).is_some_and(|t| t < distance - 1e-9) {
                 return None;
             }
+        }
+        self.project_position(pos)
+    }
+
+    /// Projects a Cartesian point from an already resolved surface mesh.
+    pub fn project_position(self, point: [f64; 3]) -> Option<[f32; 2]> {
+        let relative = combine(point, 1.0, self.eye, -1.0);
+        let [x, y, z] = self.axes.map(|axis| dot(axis, relative));
+        let depth = -z;
+        if depth <= 0.0 {
+            return None;
         }
         Some([
             (self.size[0] * 0.5 + self.focal * x / depth) as f32,
@@ -138,7 +144,7 @@ pub fn sphere_distance(eye: [f64; 3], ray: [f64; 3], radius: f64) -> Option<f64>
     (along > 0.0 && remainder >= 0.0).then(|| along - remainder.sqrt())
 }
 
-fn unit(lat: f64, lon: f64) -> [f64; 3] {
+pub fn unit(lat: f64, lon: f64) -> [f64; 3] {
     let (sp, cp) = lat.to_radians().sin_cos();
     let (sl, cl) = lon.to_radians().sin_cos();
     [cp * cl, cp * sl, sp]

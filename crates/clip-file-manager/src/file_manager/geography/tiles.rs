@@ -256,6 +256,7 @@ impl Tiles {
             style: BasemapStyle::Natural,
             contours: None,
             tiles,
+            terrain: None,
             scene: self.scene.clone(),
             rivers: wanted
                 .rivers

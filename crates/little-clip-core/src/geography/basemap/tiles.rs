@@ -71,24 +71,39 @@ impl SourceTile {
     /// Samples the same padded DEM texture coordinates used for terrain geometry.
     pub fn height_at(&self, lat: f64, lon: f64) -> Option<f64> {
         let [west, north, side] = self.id.bounds();
-        let x = ((lon - west).rem_euclid(360.0) / side) * EDGE as f64 + 0.5;
-        let y = ((north - lat) / side) * EDGE as f64 + 0.5;
+        self.height_uv([
+            ((lon - west).rem_euclid(360.0) / side),
+            (north - lat) / side,
+        ])
+    }
+
+    /// Bilinear texel and validity sampling in normalized tile coordinates.
+    pub fn height_uv(&self, uv: [f64; 2]) -> Option<f64> {
+        let [x, y] = uv.map(|v| v * EDGE as f64 + 0.5);
         if !(0.0..PADDED_EDGE as f64 - 1.0).contains(&x)
             || !(0.0..PADDED_EDGE as f64 - 1.0).contains(&y)
         {
             return None;
         }
         let [ix, iy] = [x as usize, y as usize];
-        let elevation = |x, y| {
+        let texel = |x, y| {
             let i = (y * PADDED_EDGE + x) * 2;
             let pair = self.elevation.get(i..i + 2)?;
-            (pair[1] > 0.99).then_some(f64::from(pair[0]))
+            Some([f64::from(pair[0]), f64::from(pair[1])])
         };
-        let mix = |a: f64, b, t| a + (b - a) * t;
         let [dx, dy] = [x.fract(), y.fract()];
-        let top = mix(elevation(ix, iy)?, elevation(ix + 1, iy)?, dx);
-        let bottom = mix(elevation(ix, iy + 1)?, elevation(ix + 1, iy + 1)?, dx);
-        Some(mix(top, bottom, dy))
+        let [a, b, c, d] = [
+            texel(ix, iy)?,
+            texel(ix + 1, iy)?,
+            texel(ix, iy + 1)?,
+            texel(ix + 1, iy + 1)?,
+        ];
+        let sample = |i| {
+            let top = a[i] + (b[i] - a[i]) * dx;
+            let bottom = c[i] + (d[i] - c[i]) * dx;
+            top + (bottom - top) * dy
+        };
+        (sample(1) > 0.99).then(|| sample(0))
     }
 
     pub fn prepare(assets: &BasemapAssets, id: TileId, cancel: &AtomicBool) -> Option<Self> {

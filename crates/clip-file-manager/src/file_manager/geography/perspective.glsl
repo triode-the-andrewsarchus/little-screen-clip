@@ -11,8 +11,13 @@ vec3 sphere_normal(vec2 geo) {
     return vec3(cos(angle.y) * vec2(cos(angle.x), sin(angle.x)), sin(angle.y));
 }
 
-vec4 terrain_clip(vec3 normal, float height) {
-    vec3 p = transpose(u_view_axes) * (normal * (1.0 + height / EARTH_RADIUS_M) - u_eye);
+vec4 surface_clip(vec3 surface) {
+    vec3 p = transpose(u_view_axes) * (surface - u_eye);
     float depth = -p.z;
     return vec4(p.xy / u_half_fov, depth - 2.0 * u_near, depth);
+}
+
+
+vec4 terrain_clip(vec3 normal, float height) {
+    return surface_clip(normal * (1.0 + height / EARTH_RADIUS_M));
 }

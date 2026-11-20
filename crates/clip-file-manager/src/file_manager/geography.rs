@@ -524,17 +524,18 @@ impl Viewer {
             }
             let prepared = self.prepare_earth_frame(ui, rect);
 
-            let detail_tiles = prepared
-                .as_ref()
-                .map_or(&[][..], |(frame, _)| frame.details.as_slice());
-            let hit = self.paint_globe_map(ui, rect, colors, detail_tiles);
+            let frame = prepared.as_ref().map(|(frame, _)| frame);
+            let detail_tiles = frame.map_or(&[][..], |frame| frame.details.as_slice());
+            let surface = frame.and_then(|frame| frame.terrain.as_deref());
+            let draped = map_camera::Draped::new(&self.camera, surface, size);
+            let hit = self.paint_globe_map(ui, rect, colors, detail_tiles, draped);
             if response.clicked()
                 && let Some(hit) = hit
             {
                 self.selected = hit.sample.feature;
                 self.current = Some(hit.sample);
             }
-            self.paint_selected_position(ui, rect, colors);
+            self.paint_selected_position(ui, rect, colors, draped);
 
             let hovered = profile
                 .and_then(|profile| self.profile_hover(ui, profile, colors))
@@ -583,16 +584,22 @@ impl Viewer {
                 ui.ctx().request_repaint();
             }
             frame.camera = self.camera;
+            gpu::prepare_surface(ui.ctx(), frame);
         }
         self.contour_interval_m = self.tiles.contour;
         self.local_elev_range = self.tiles.range;
         prepared
     }
 
-    fn paint_selected_position(&self, ui: &egui::Ui, rect: egui::Rect, colors: WorkbenchColors) {
-        let size = [rect.width(), rect.height()];
+    fn paint_selected_position(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        colors: WorkbenchColors,
+        draped: Option<map_camera::Draped<'_>>,
+    ) {
         if let Some(sample) = self.current.and_then(|hit| self.sample(hit))
-            && let Some([px, py]) = match map_camera::Draped::new(&self.camera, &self.tiles, size) {
+            && let Some([px, py]) = match draped {
                 Some(pose) => pose.project(sample.point.lat, sample.point.lon),
                 None => self.camera.project(
                     sample.point.lat,
@@ -745,6 +752,7 @@ impl Viewer {
             little_clip_core::geography::basemap::tiles::TileId,
             Arc<detail::Tile>,
         )],
+        draped: Option<map_camera::Draped<'_>>,
     ) -> Option<overlay::Pick> {
         let painter = ui.painter_at(rect);
         let pointer = super::ui::preview_hovered(ui, rect)
@@ -752,7 +760,6 @@ impl Viewer {
             .flatten();
         let mut hit = None;
         let camera = &self.camera;
-        let draped = map_camera::Draped::new(camera, &self.tiles, [rect.width(), rect.height()]);
         let flat = camera.globe_blend() == 0.0;
         let period = camera.world_width_px(rect.width(), rect.height());
         let cities = self.assets.as_deref().filter(|_| self.labels.cities);

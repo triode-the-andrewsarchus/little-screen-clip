@@ -209,6 +209,10 @@ impl Projection<'_> {
             lon: a.lon + delta,
             ..b
         };
+        if let Some(draped) = self.draped {
+            self.draped_line(a, b, draped.mesh_step(), draw);
+            return;
+        }
         if let Some((edge, fractions)) = self.clipped_line([a, b]) {
             draw(edge, fractions);
         }
@@ -228,18 +232,51 @@ impl Projection<'_> {
         }
     }
 
+    fn draped_line(
+        self,
+        a: Position,
+        b: Position,
+        mesh_step: f64,
+        mut draw: impl FnMut([Pos2; 2], [f64; 2]),
+    ) {
+        let mut prior = (a, self.point(a), 0.0);
+        for t in terrain_edges(a, b, mesh_step) {
+            let next = a.lerp(b, t);
+            let endpoint = self.point(next);
+            let (start, screen, from) = prior;
+            if let Some((points, fractions)) =
+                self.visible_segment([start, next], [screen, endpoint])
+            {
+                draw(
+                    points,
+                    fractions.map(|fraction| from + (t - from) * fraction),
+                );
+            }
+            prior = (next, endpoint, t);
+        }
+    }
+
     fn clipped_line(self, [a, b]: [Position; 2]) -> Option<([Pos2; 2], [f64; 2])> {
         let [(a, start), (b, tail)] = [a.clip_longitude(b), b.clip_longitude(a)];
         let end = 1.0 - tail;
-        match (self.point(a), self.point(b)) {
-            (Some(a), Some(b)) => Some(([a, b], [start, end])),
+        self.visible_segment([a, b], [self.point(a), self.point(b)])
+            .map(|(points, fractions)| (points, fractions.map(|t| start + t * (end - start))))
+    }
+
+    fn visible_segment(
+        self,
+        [a, b]: [Position; 2],
+        [pa, pb]: [Option<Pos2>; 2],
+    ) -> Option<([Pos2; 2], [f64; 2])> {
+        match (pa, pb) {
+            (Some(a), Some(b)) => Some(([a, b], [0.0, 1.0])),
             (Some(visible), None) => {
                 let (limb, t) = self.limb(a, b, visible);
-                Some(([visible, limb], [start, start + t * (end - start)]))
+                Some(([visible, limb], [0.0, t]))
             }
             (None, Some(visible)) => {
                 let (limb, t) = self.limb(b, a, visible);
-                Some(([limb, visible], [end - t * (end - start), end]))
+                Some(([limb, visible], [1.0 - t, 1.0]))
             }
             (None, None) => None,
         }
@@ -249,10 +286,7 @@ impl Projection<'_> {
         let (mut low, mut high) = (0.0_f64, 1.0_f64);
         for _ in 0..10 {
             let t = low.midpoint(high);
-            let middle = Position {
-                lat: front.lat + (back.lat - front.lat) * t,
-                lon: front.lon + (back.lon - front.lon) * t,
-            };
+            let middle = front.lerp(back, t);
             if let Some(position) = self.point(middle) {
                 low = t;
                 projected = position;
@@ -264,7 +298,45 @@ impl Projection<'_> {
     }
 }
 
+fn terrain_edges(a: Position, b: Position, mesh_step: f64) -> impl Iterator<Item = f64> {
+    // The vertical, horizontal and diagonal edges of a terrain triangle all
+    // lie on this dyadic lattice. Half-cells add samples for ridge visibility.
+    let start = [a.lon, -a.lat, a.lon - a.lat];
+    let end = [b.lon, -b.lat, b.lon - b.lat];
+    let extent: f64 = (0..3).map(|i| (end[i] - start[i]).abs()).sum();
+    let scale = (extent / (mesh_step * 512.0)).log2().ceil().max(0.0).exp2();
+    let step = mesh_step * 0.5 * scale;
+    let directions: [f64; 3] = std::array::from_fn(|i| (end[i] - start[i]) / step);
+    let spacing = directions.map(|d| 1.0 / d.abs().max(1e-12));
+    let mut crossing: [f64; 3] = std::array::from_fn(|i| {
+        let origin = start[i] / step;
+        let distance = if directions[i] < 0.0 {
+            origin - (origin - 1e-8).ceil() + 1.0
+        } else {
+            (origin + 1e-8).floor() + 1.0 - origin
+        };
+        distance * spacing[i]
+    });
+    std::iter::from_fn(move || {
+        let next = crossing.iter().copied().fold(1.0, f64::min);
+        for (t, step) in crossing.iter_mut().zip(spacing) {
+            if *t <= next + 1e-10 {
+                *t += step;
+            }
+        }
+        (next < 1.0 - 1e-10).then_some(next)
+    })
+    .chain([1.0])
+}
+
 impl Position {
+    fn lerp(self, other: Self, t: f64) -> Self {
+        Self {
+            lat: self.lat + (other.lat - self.lat) * t,
+            lon: self.lon + (other.lon - self.lon) * t,
+        }
+    }
+
     fn clip_longitude(self, other: Self) -> (Self, f64) {
         let lon = self.lon.clamp(-180.0, 180.0);
         if lon == self.lon {
@@ -313,7 +385,12 @@ impl Path {
             let [a, b] = [pair[0], pair[1]];
             projection.line(a.position, b.position, |edge, fractions| {
                 if Rect::from_two_pos(edge[0], edge[1]).intersects(clip) {
-                    path.line(edge, [a.dose_rate, b.dose_rate]);
+                    let mut doses = [a.dose_rate, b.dose_rate];
+                    if let (Some(from), Some(to), Some(_)) = (doses[0], doses[1], projection.draped)
+                    {
+                        doses = fractions.map(|t| Some(from + (to - from) * t));
+                    }
+                    path.line(edge, doses);
                     let samples = [sample_hit(a), sample_hit(b)];
                     if self.interpolate_time {
                         for (i, vertex) in [a, b].into_iter().enumerate() {
@@ -612,6 +689,124 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let limb = rect.center().x + camera.scale_px(rect.width(), rect.height()) as f32;
         assert!((lines[0][1].x - limb).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_terrain_ridge_hides_the_track_and_marker_from_painting_and_picking() {
+        use crate::file_manager::geography::{gpu::Surface, map_camera::Draped};
+        use little_clip_core::geography::basemap::{
+            perspective::{EARTH_RADIUS_M, Orbit, Perspective},
+            tiles::{EDGE, PADDED_EDGE, SourceTile, TileId},
+        };
+        use std::sync::Arc;
+
+        let id = TileId {
+            level: 8,
+            x: 256,
+            y: 127,
+        };
+        let [_, north, side] = id.bounds();
+        let tile = Arc::new(SourceTile {
+            id,
+            color: Vec::new(),
+            elevation: (0..PADDED_EDGE)
+                .flat_map(|y| {
+                    let lat = north - (y as f64 - 0.5) * side / EDGE as f64;
+                    let meters = if (0.28..=0.31).contains(&lat) {
+                        3500.0
+                    } else {
+                        180.0
+                    };
+                    [meters, 1.0].repeat(PADDED_EDGE)
+                })
+                .collect(),
+            water: Vec::new(),
+            elevation_range: Some([180.0, 3500.0]),
+        });
+        let camera = GlobeCamera {
+            center_lat: 0.35,
+            center_lon: 0.35,
+            zoom: 900.0,
+            mode: ProjectionMode::Map2D,
+            orbit: Orbit {
+                tilt: 77.0,
+                ..Default::default()
+            },
+        };
+        let size = [900.0, 600.0];
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(size[0], size[1]));
+        let surface = Surface::new([tile].into_iter(), camera.zoom);
+        let perspective = Perspective::new(&camera, size, EARTH_RADIUS_M);
+        let ([x, y], _) = surface.project(perspective, 0.48, 0.35).unwrap();
+        let hidden_pointer = pos2(x, y);
+        assert!(rect.contains(hidden_pointer));
+
+        let document = Document::gpx(
+            br#"<gpx xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="0.48" lon="0.35"/><trk><trkseg>
+            <trkpt lat="0.48" lon="0.32"><time>2024-04-08T16:00:00Z</time></trkpt>
+            <trkpt lat="0.48" lon="0.38"><time>2024-04-08T16:01:00Z</time></trkpt>
+            </trkseg></trk></gpx>"#,
+        )
+        .unwrap();
+        let overlay = Overlay::prepare(&document, true);
+        let tilted = Projection {
+            camera: &camera,
+            rect,
+            offset: 0.0,
+            draped: Draped::new(&camera, Some(&surface), size),
+        };
+        assert!(
+            tilted.draped.unwrap().project(0.48, 0.35).is_none(),
+            "A label anchor behind the ridge must be hidden"
+        );
+        assert!(
+            tilted.draped.unwrap().project(0.30, 0.35).is_some(),
+            "The foreground ridge must remain visible"
+        );
+        assert!(
+            project_path(
+                tilted,
+                &overlay.0.iter().find(|p| p.connected).unwrap().vertices
+            )
+            .is_empty()
+        );
+
+        let flat_camera = GlobeCamera {
+            orbit: Orbit::default(),
+            center_lat: 0.48,
+            ..camera
+        };
+        let flat = Projection {
+            camera: &flat_camera,
+            draped: None,
+            ..tilted
+        };
+        let ctx = egui::Context::default();
+        clip_ui::test_support::run_frame(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let colors = WorkbenchColors::from_palette(&crate::ui_appearance::palette(
+                    little_clip_core::config::WorkbenchAppearance::Dark,
+                ));
+                assert!(
+                    overlay
+                        .paint_copy(&painter, tilted, None, colors, Some(hidden_pointer))
+                        .is_none()
+                );
+                let [x, y] = flat_camera.project(0.48, 0.36, size[0], size[1]).unwrap();
+                assert!(
+                    overlay
+                        .paint_copy(&painter, flat, None, colors, Some(pos2(x, y)))
+                        .and_then(|pick| pick.time)
+                        .is_some()
+                );
+            },
+        );
     }
 
     #[test]

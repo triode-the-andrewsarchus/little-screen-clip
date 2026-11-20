@@ -134,6 +134,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         style: BasemapStyle::Natural,
         contours: None,
         tiles: vec![tile],
+        terrain: None,
         scene: None,
         rivers: Vec::new(),
         details: Vec::new(),
@@ -351,6 +352,7 @@ fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
         style: BasemapStyle::Natural,
         contours: None,
         tiles: Vec::new(),
+        terrain: None,
         scene: Some(Arc::new(Scene {
             batches: vec![Batch {
                 tile: base_cell,

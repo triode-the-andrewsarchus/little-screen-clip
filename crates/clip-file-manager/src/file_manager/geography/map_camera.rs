@@ -118,32 +118,41 @@ pub(super) fn follow_ground(camera: &mut GlobeCamera, tiles: &super::tiles::Tile
 
 #[derive(Clone, Copy)]
 pub(super) struct Draped<'a> {
-    tiles: &'a super::tiles::Tiles,
+    surface: Option<&'a super::gpu::Surface>,
     camera: Perspective,
-    reference_height: f64,
+    size: [f32; 2],
 }
 
 impl<'a> Draped<'a> {
     pub fn new(
         camera: &GlobeCamera,
-        tiles: &'a super::tiles::Tiles,
+        surface: Option<&'a super::gpu::Surface>,
         size: [f32; 2],
     ) -> Option<Self> {
         camera.orbit.active().then(|| Self {
-            tiles,
+            surface,
             camera: Perspective::new(camera, size, EARTH_RADIUS_M),
-            reference_height: camera.orbit.target_height_m,
+            size,
         })
     }
 
     pub fn project(self, lat: f64, lon: f64) -> Option<[f32; 2]> {
-        self.camera.project(
-            lat,
-            lon,
-            self.tiles
-                .height_at(lat, lon)
-                .unwrap_or(self.reference_height),
-        )
+        let Some(surface) = self.surface else {
+            return self.camera.project(lat, lon, 0.0);
+        };
+        if let Some((pixel, point)) = surface.project(self.camera, lat, lon) {
+            let [x, y] = pixel;
+            // A small guard keeps strokes and labels that overlap the edge.
+            return ((-24.0..=self.size[0] + 24.0).contains(&x)
+                && (-24.0..=self.size[1] + 24.0).contains(&y)
+                && !surface.occluded(self.camera.eye, point))
+            .then_some(pixel);
+        }
+        self.camera.project(lat, lon, 0.0)
+    }
+
+    pub fn mesh_step(self) -> f64 {
+        self.surface.map_or(1.0, |surface| surface.mesh_step_deg)
     }
 }
 

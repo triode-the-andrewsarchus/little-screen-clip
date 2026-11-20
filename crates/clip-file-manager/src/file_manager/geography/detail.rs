@@ -406,10 +406,22 @@ fn label_cells<'a>(
     let inner = rect.shrink(12.0);
     let mut cells = std::array::from_fn(|_| Vec::new());
     for label in labels {
-        let (Some(a), Some(b)) = (project(label.a), project(label.b)) else {
-            continue;
+        let center = if draped.is_some() {
+            let [lon, lat] = label.a;
+            let [end_lon, end_lat] = label.b;
+            let delta = little_clip_core::geography::basemap::wrap_lon_delta(
+                f64::from(end_lon) - f64::from(lon),
+            );
+            let Some(center) = project([lon + (delta * 0.5) as f32, lat.midpoint(end_lat)]) else {
+                continue;
+            };
+            center
+        } else {
+            let (Some(a), Some(b)) = (project(label.a), project(label.b)) else {
+                continue;
+            };
+            a.lerp(b, 0.5)
         };
-        let center = a.lerp(b, 0.5);
         if inner.contains(center) {
             let x = ((center.x - rect.left()) * LABEL_COLUMNS as f32 / rect.width()) as usize;
             let y = ((center.y - rect.top()) * LABEL_ROWS as f32 / rect.height()) as usize;

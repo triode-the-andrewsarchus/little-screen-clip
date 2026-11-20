@@ -23,6 +23,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+pub(super) use terrain::Surface;
 
 const GPU_BUDGET: usize = 128 * 1024 * 1024;
 fn runtime_key() -> egui::Id {
@@ -89,6 +90,7 @@ pub(super) struct Frame {
     pub style: BasemapStyle,
     pub contours: Option<f32>,
     pub tiles: Vec<Arc<SourceTile>>,
+    pub terrain: Option<Arc<Surface>>,
     pub scene: Option<Arc<Scene>>,
     pub rivers: Vec<(RiverKey, Arc<Scene>)>,
     pub layers: Layers,
@@ -100,6 +102,23 @@ pub(super) struct Frame {
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
+}
+
+pub(super) fn prepare_surface(ctx: &egui::Context, frame: &mut Frame) {
+    if frame.camera.orbit.active() {
+        let runtime = ctx.data(|data| data.get_temp::<Handle>(runtime_key()));
+        let renderer = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.renderer.lock().ok());
+        let resident = frame.tiles.iter().filter(|tile| {
+            renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.tiles.contains_key(&(frame.source, tile.id)))
+        });
+        // Keep one snapshot for GPU geometry and immediate UI hit tests. New
+        // uploads become visible together on the following repaint.
+        frame.terrain = Some(Arc::new(Surface::new(resident.cloned(), frame.camera.zoom)));
+    }
 }
 
 pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(), String> {
@@ -173,6 +192,7 @@ struct Renderer {
 struct Resources {
     program: glow::Program,
     vector_program: glow::Program,
+    terrain_vector_program: glow::Program,
     vao: glow::VertexArray,
     grid: glow::Buffer,
     vertices: i32,
@@ -203,19 +223,7 @@ impl Renderer {
                 );
             }
             self.frame = self.frame.wrapping_add(1);
-            let mut uploads = 0;
-            for tile in &frame.tiles {
-                let key = (frame.source, tile.id);
-                if let Some(cached) = self.tiles.get_mut(&key) {
-                    cached.used = self.frame;
-                } else if uploads < 4 {
-                    self.evict(gl, tile.bytes());
-                    let cached = TextureTile::upload(gl, tile, self.frame)?;
-                    self.bytes += cached.bytes;
-                    self.tiles.insert(key, cached);
-                    uploads += 1;
-                }
-            }
+            self.upload_tiles(gl, frame)?;
             let resources = self.resources.as_ref().ok_or("Map resources unavailable")?;
             let viewport = info.viewport_in_pixels();
             gl.viewport(
@@ -294,8 +302,37 @@ impl Renderer {
             .tiles
             .iter()
             .any(|tile| !self.tiles.contains_key(&(frame.source, tile.id)));
-        Ok(missing_tiles || missing_vectors)
+        let terrain_pending = frame
+            .terrain
+            .as_ref()
+            .is_some_and(|surface| surface.sources.len() < frame.tiles.len());
+        Ok(missing_tiles || missing_vectors || terrain_pending)
     }
+    unsafe fn upload_tiles(&mut self, gl: &glow::Context, frame: &Frame) -> Result<(), String> {
+        // Mark current terrain textures before evicting anything. The overlays
+        // and surface draw share the UI's snapshot of resident tiles.
+        // SAFETY: all textures belong to the callback's current GL context.
+        unsafe {
+            for tile in &frame.tiles {
+                if let Some(cached) = self.tiles.get_mut(&(frame.source, tile.id)) {
+                    cached.used = self.frame;
+                }
+            }
+            let mut uploads = 0;
+            for tile in &frame.tiles {
+                let key = (frame.source, tile.id);
+                if !self.tiles.contains_key(&key) && uploads < 4 {
+                    self.evict(gl, tile.bytes());
+                    let cached = TextureTile::upload(gl, tile, self.frame)?;
+                    self.bytes += cached.bytes;
+                    self.tiles.insert(key, cached);
+                    uploads += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
     unsafe fn paint_surface(
         &self,
         gl: &glow::Context,
@@ -314,7 +351,11 @@ impl Renderer {
                 gl.clear(glow::DEPTH_BUFFER_BIT);
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LEQUAL);
-                for patch in terrain::patches(frame, &self.tiles) {
+                for patch in frame
+                    .terrain
+                    .iter()
+                    .flat_map(|surface| surface.patches.values())
+                {
                     let cached = &self.tiles[&(frame.source, patch.source)];
                     let [west, north, side] = patch.source.bounds();
                     let west = little_clip_core::geography::basemap::wrap_lon_delta(
@@ -333,7 +374,7 @@ impl Renderer {
                         gl.get_uniform_location(p, "u_patch").as_ref(),
                         &patch.uv(),
                     );
-                    let fine = camera.zoom >= 64.0 && patch.source.level >= 8;
+                    let fine = patch.steps(camera.zoom) == 128;
                     let grid = &resources.relief_grid[usize::from(fine)];
                     gl.draw_arrays(glow::TRIANGLES, grid.start, grid.end - grid.start);
                 }
@@ -398,6 +439,7 @@ impl Renderer {
             if let Some(resources) = self.resources.take() {
                 gl.delete_program(resources.program);
                 gl.delete_program(resources.vector_program);
+                gl.delete_program(resources.terrain_vector_program);
                 gl.delete_vertex_array(resources.vao);
                 gl.delete_buffer(resources.grid);
             }
@@ -427,11 +469,30 @@ impl Resources {
                     return Err(error);
                 }
             };
+            let terrain_vector_program = match link_program(
+                gl,
+                [
+                    (glow::VERTEX_SHADER, include_str!("terrain_vector.vert")),
+                    (
+                        glow::GEOMETRY_SHADER,
+                        &with_projection(include_str!("terrain_vector.geom")),
+                    ),
+                    (glow::FRAGMENT_SHADER, include_str!("vector.frag")),
+                ],
+            ) {
+                Ok(p) => p,
+                Err(error) => {
+                    gl.delete_program(program);
+                    gl.delete_program(vector_program);
+                    return Err(error);
+                }
+            };
             let vao = match gl.create_vertex_array() {
                 Ok(vao) => vao,
                 Err(error) => {
                     gl.delete_program(program);
                     gl.delete_program(vector_program);
+                    gl.delete_program(terrain_vector_program);
                     return Err(error);
                 }
             };
@@ -440,6 +501,7 @@ impl Resources {
                 Err(error) => {
                     gl.delete_program(program);
                     gl.delete_program(vector_program);
+                    gl.delete_program(terrain_vector_program);
                     gl.delete_vertex_array(vao);
                     return Err(error);
                 }
@@ -465,6 +527,7 @@ impl Resources {
             Ok(Self {
                 program,
                 vector_program,
+                terrain_vector_program,
                 vao,
                 grid,
                 vertices: legacy.end,
@@ -611,14 +674,27 @@ pub(super) unsafe fn program(
     vertex: &str,
     fragment: &str,
 ) -> Result<glow::Program, String> {
+    // SAFETY: caller retains the owning current GL context.
+    unsafe {
+        link_program(
+            gl,
+            [
+                (glow::VERTEX_SHADER, vertex),
+                (glow::FRAGMENT_SHADER, fragment),
+            ],
+        )
+    }
+}
+
+unsafe fn link_program<'a>(
+    gl: &glow::Context,
+    shaders: impl IntoIterator<Item = (u32, &'a str)>,
+) -> Result<glow::Program, String> {
     // SAFETY: compilation runs on the caller's current context. Every shader is
     // deleted after linking, including compile/link failure paths.
     unsafe {
         let program = gl.create_program()?;
-        for (kind, source) in [
-            (glow::VERTEX_SHADER, vertex),
-            (glow::FRAGMENT_SHADER, fragment),
-        ] {
+        for (kind, source) in shaders {
             let shader = match gl.create_shader(kind) {
                 Ok(shader) => shader,
                 Err(error) => {
@@ -650,12 +726,24 @@ pub(super) unsafe fn program(
 struct VectorBatch {
     vao: glow::VertexArray,
     buffer: glow::Buffer,
+    max_span: f32,
     count: i32,
     bytes: usize,
     used: u64,
 }
 impl VectorBatch {
-    unsafe fn upload(gl: &glow::Context, data: &[f32], used: u64) -> Result<Self, String> {
+    unsafe fn upload(gl: &glow::Context, batch: &Batch, used: u64) -> Result<Self, String> {
+        let data = &batch.data;
+        let max_span = if batch.layer == Layer::Lake {
+            0.0
+        } else {
+            data.chunks_exact(6)
+                .map(|line| {
+                    let dx = (line[2] - line[0] + 180.0).rem_euclid(360.0) - 180.0;
+                    dx.abs().max((line[3] - line[1]).abs())
+                })
+                .fold(0.0, f32::max)
+        };
         // SAFETY: the instance buffer contains six initialized floats per record.
         unsafe {
             let vao = gl.create_vertex_array()?;
@@ -677,12 +765,38 @@ impl VectorBatch {
             Ok(Self {
                 vao,
                 buffer,
+                max_span,
                 count: (data.len() / 6) as i32,
                 bytes: data.len() * 4,
                 used,
             })
         }
     }
+    unsafe fn draw(&self, gl: &glow::Context, program: glow::Program, frame: &Frame, layer: Layer) {
+        // SAFETY: the caller has bound this batch's VAO and active program.
+        unsafe {
+            if let Some(surface) = &frame.terrain {
+                // Each input point covers at most seven cells in either axis.
+                let step = surface.mesh_step_deg as f32;
+                let chunks = (self.max_span / (7.0 * step)).ceil().max(1.0) as i32;
+                gl.draw_arrays_instanced(glow::POINTS, 0, chunks, self.count);
+            } else {
+                for copy in frame.camera.world_shifts(frame.size[0], frame.size[1]) {
+                    gl.uniform_1_f32(
+                        gl.get_uniform_location(program, "u_shift").as_ref(),
+                        copy as f32 * 360.0,
+                    );
+                    gl.draw_arrays_instanced(
+                        glow::TRIANGLES,
+                        0,
+                        if layer == Layer::Lake { 3 } else { 6 },
+                        self.count,
+                    );
+                }
+            }
+        }
+    }
+
     unsafe fn destroy(self, gl: &glow::Context) {
         // SAFETY: caller retains the owning current context.
         unsafe {
@@ -793,7 +907,7 @@ impl Renderer {
                         batch.destroy(gl);
                     }
                 }
-                let batch = VectorBatch::upload(gl, data, self.frame)?;
+                let batch = VectorBatch::upload(gl, batch, self.frame)?;
                 self.vector_bytes += batch.bytes;
                 self.vectors.insert(key, batch);
                 uploads += 1;
@@ -811,19 +925,24 @@ impl Renderer {
         perspective: Option<Perspective>,
     ) -> Result<bool, String> {
         let batches = visible_batches(frame);
-        let missing_heights;
         // SAFETY: this method runs inside the owning current-context callback.
         unsafe {
             self.upload_vectors(gl, frame.source, &batches)?;
-            let p = self
-                .resources
-                .as_ref()
-                .ok_or("Map resources unavailable")?
-                .vector_program;
+            let resources = self.resources.as_ref().ok_or("Map resources unavailable")?;
+            let p = if frame.terrain.is_some() {
+                resources.terrain_vector_program
+            } else {
+                resources.vector_program
+            };
             gl.use_program(Some(p));
             terrain::uniforms(gl, p, perspective);
-            missing_heights = self.heights.bind(gl, p, frame, perspective.is_some())?;
-            if perspective.is_some() {
+            if let Some(surface) = &frame.terrain {
+                if surface.patches.is_empty() {
+                    return Ok(false);
+                }
+                if self.heights.bind(gl, p, frame.source, surface)? {
+                    return Ok(true);
+                }
                 gl.depth_mask(false);
             }
             gl.uniform_4_f32(
@@ -888,27 +1007,15 @@ impl Renderer {
                     gl.get_uniform_location(p, "u_dashed").as_ref(),
                     i32::from(dash),
                 );
-                for copy in frame.camera.world_shifts(width, height) {
-                    gl.uniform_1_f32(
-                        gl.get_uniform_location(p, "u_shift").as_ref(),
-                        copy as f32 * 360.0,
-                    );
-                    gl.draw_arrays_instanced(
-                        glow::TRIANGLES,
-                        0,
-                        if layer == Layer::Lake { 3 } else { 6 },
-                        batch.count,
-                    );
-                }
+                batch.draw(gl, p, frame, layer);
             }
             if perspective.is_some() {
                 gl.depth_mask(true);
             }
         }
-        Ok(missing_heights
-            || batches
-                .iter()
-                .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
+        Ok(batches
+            .iter()
+            .any(|(id, _)| !self.vectors.contains_key(&(frame.source, *id))))
     }
 }
 

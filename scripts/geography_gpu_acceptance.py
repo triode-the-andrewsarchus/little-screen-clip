@@ -40,21 +40,27 @@ def context(width, height):
 
 
 def program(root, name):
+    def perspective(source):
+        version, body = source.split("\n", 1)
+        return f"{version}\n{(root / 'perspective.glsl').read_text()}\n{body}"
+
     vertex = (root / f"{name}.vert").read_text()
-    if name in ("map", "vector"):
-        version, body = vertex.split("\n", 1)
-        vertex = f"{version}\n{(root / 'perspective.glsl').read_text()}\n{body}"
-    fragment = (root / f"{name}.frag").read_text()
+    if name == "map":
+        vertex = perspective(vertex)
+    fragment_name = "vector" if name == "terrain_vector" else name
+    fragment = (root / f"{fragment_name}.frag").read_text()
     if name in ("map", "sky"):
         version, body = fragment.split("\n", 1)
         fragment = f"{version}\n{(root / 'eclipse.glsl').read_text()}\n{(root / 'atmosphere.glsl').read_text()}\n{body}"
-    linked = compileProgram(compileShader(vertex, GL.GL_VERTEX_SHADER),
-        compileShader(fragment, GL.GL_FRAGMENT_SHADER), validate=False)
-    if name == "vector":
-        GL.glUseProgram(linked)
-        GL.glUniform1i(GL.glGetUniformLocation(linked, "u_terrain_dem"), 6)
-        GL.glUniform1i(GL.glGetUniformLocation(linked, "u_terrain_pages"), 7)
-    return linked
+    shaders = [
+        compileShader(vertex, GL.GL_VERTEX_SHADER),
+        compileShader(fragment, GL.GL_FRAGMENT_SHADER),
+    ]
+    if name == "terrain_vector":
+        shaders.append(compileShader(
+            perspective((root / "terrain_vector.geom").read_text()), GL.GL_GEOMETRY_SHADER
+        ))
+    return compileProgram(*shaders, validate=False)
 
 
 def texture(internal, external, data_type, data):
@@ -233,6 +239,110 @@ def check_raised_terrain(raster, vao, vertex_count, width, height, height_textur
     assert np.count_nonzero(silhouette) > 300, "Elevation should change the perspective silhouette"
     GL.glBindTexture(GL.GL_TEXTURE_2D, height_texture)
     GL.glUniform1i(loc("u_perspective"), 0)
+
+
+def check_draped_vectors(root, raster, terrain_vao, vertex_count, width, height, height_texture, output):
+    draped = program(root, "terrain_vector")
+    side = 180.0 / 256.0
+    center = side * 0.5
+    lat = lon = np.deg2rad(center)
+    normal = np.array([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+    east = np.array([-np.sin(lon), np.cos(lon), 0])
+    north = np.cross(normal, east)
+    tilt = np.deg2rad(77)
+    s, c = np.sin(tilt), np.cos(tilt)
+    axes = np.array([east, north * c + normal * s, normal * c - north * s], dtype=np.float32)
+    eye = normal + axes[2] * .0025
+
+    def apply_pose(shader):
+        loc = lambda name: GL.glGetUniformLocation(shader, name)
+        GL.glUseProgram(shader)
+        GL.glUniformMatrix3fv(loc("u_view_axes"), 1, False, axes)
+        GL.glUniform3f(loc("u_eye"), *eye)
+        GL.glUniform2f(loc("u_view"), width, height)
+        GL.glUniform2f(loc("u_half_fov"), width / (1.9 * height), 1 / 1.9)
+        GL.glUniform1f(loc("u_near"), .00004)
+        GL.glUniform1i(loc("u_perspective"), 1)
+        GL.glUniform4f(loc("u_camera"), center, center, 12000, 1)
+        return loc
+
+    v, u = np.mgrid[0:258, 0:258]
+    meters = 180.0 + 2600.0 * np.exp(-(((u - 128.5) / 25) ** 2 + ((v - 128.5) / 25) ** 2))
+    dem_data = np.stack([meters, np.ones_like(meters)], axis=-1).astype(np.float32)
+    GL.glActiveTexture(GL.GL_TEXTURE1)
+    dem = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT, dem_data)
+    GL.glActiveTexture(GL.GL_TEXTURE6)
+    dem_atlas = GL.glGenTextures(1)
+    GL.glBindTexture(GL.GL_TEXTURE_2D_ARRAY, dem_atlas)
+    GL.glTexImage3D(GL.GL_TEXTURE_2D_ARRAY, 0, GL.GL_RG32F, 258, 258, 1, 0, GL.GL_RG, GL.GL_FLOAT, dem_data)
+    for setting in [GL.GL_TEXTURE_MIN_FILTER, GL.GL_TEXTURE_MAG_FILTER]:
+        GL.glTexParameteri(GL.GL_TEXTURE_2D_ARRAY, setting, GL.GL_LINEAR)
+    GL.glActiveTexture(GL.GL_TEXTURE7)
+    key = ((8 << 24) | (127 << 12) | 256) + 1
+    pages = np.zeros((1, 512, 4), dtype=np.uint32)
+    pages[0, ((key * 2654435761) & 0xffffffff) >> 23] = [key, 1, 8, 32]
+    page_table = texture(GL.GL_RGBA32UI, GL.GL_RGBA_INTEGER, GL.GL_UNSIGNED_INT, pages)
+    for setting in [GL.GL_TEXTURE_MIN_FILTER, GL.GL_TEXTURE_MAG_FILTER]:
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, setting, GL.GL_NEAREST)
+
+    loc = apply_pose(raster)
+    GL.glUniform3f(loc("u_patch"), 0, 0, 1)
+    GL.glUniform4f(loc("u_tile"), -center, side, side, 0)
+    GL.glUniform1f(loc("u_side"), side)
+    GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+    GL.glEnable(GL.GL_DEPTH_TEST)
+    GL.glBindVertexArray(terrain_vao)
+    GL.glDrawArrays(GL.GL_TRIANGLES, 0, vertex_count)
+    GL.glDepthMask(GL.GL_FALSE)
+
+    vao, buffer = GL.glGenVertexArrays(1), GL.glGenBuffers(1)
+    GL.glBindVertexArray(vao)
+    GL.glBindBuffer(GL.GL_ARRAY_BUFFER, buffer)
+    for index, size, offset in [(0, 4, 0), (1, 2, 16)]:
+        GL.glEnableVertexAttribArray(index)
+        GL.glVertexAttribPointer(index, size, GL.GL_FLOAT, False, 24, ctypes.c_void_p(offset))
+        GL.glVertexAttribDivisor(index, 1)
+
+    loc = apply_pose(draped)
+    GL.glUniform1i(loc("u_terrain_dem"), 6)
+    GL.glUniform1i(loc("u_terrain_pages"), 7)
+    GL.glUniform1i(loc("u_dem_level"), 8)
+    GL.glUniform1f(loc("u_drape_step"), side / 32.0)
+    GL.glUniform1f(loc("u_width"), 3)
+    GL.glUniform4f(loc("u_color"), 1, 0, 0, 1)
+
+    def line(record):
+        data = np.array(record, dtype=np.float32)
+        GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data, GL.GL_STATIC_DRAW)
+        GL.glDrawArraysInstanced(GL.GL_POINTS, 0, 4, 1)
+        return np.frombuffer(GL.glReadPixels(0, 0, width, height, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE),
+            dtype=np.uint8).reshape(height, width, 4)
+
+    hidden = line([center - .018, .54, center + .018, .54, 0, 0])
+    assert not np.any(hidden[:, :, 0] > 240), "The ridge must hide a line on its far side"
+    image = line([.10, center, side - .10, center, 0, 0])
+    crest = normal * (1 + 2780.0 / 6371000.0)
+    offset = axes @ (crest - eye)
+    crest_y = height / 2 + height * .95 * offset[1] / -offset[2]
+    Image.fromarray(np.flipud(image)).save(output / "draped-vector.png")
+    assert np.any(image[int(crest_y)-3:int(crest_y)+4, width//2-8:width//2+9, 0] > 240), (
+        "The line must rise with the mesh between its low endpoints", crest_y
+    )
+
+    assert np.count_nonzero((image[:, 20:-20, 0] > 190).any(axis=0)) > width - 46, (
+        "The draped line must stay continuous across the rise and descent"
+    )
+
+    GL.glDepthMask(GL.GL_TRUE)
+    GL.glDisable(GL.GL_DEPTH_TEST)
+    GL.glDeleteBuffers(1, [buffer])
+    GL.glDeleteVertexArrays(1, [vao])
+    GL.glDeleteTextures([dem, dem_atlas, page_table])
+    GL.glDeleteProgram(draped)
+    GL.glActiveTexture(GL.GL_TEXTURE1)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, height_texture)
+    GL.glUseProgram(raster)
+    GL.glUniform1i(GL.glGetUniformLocation(raster, "u_perspective"), 0)
 
 
 def check_vectors(vectors, width, height, output):
@@ -551,16 +661,17 @@ def main():
         GL.glDeleteTextures([night_texture])
 
         check_raised_terrain(raster, vao, len(grid), width, height, textures[1], args.output)
+        check_draped_vectors(root, raster, vao, len(grid), width, height, textures[1], args.output)
         check_vectors(vectors, width, height, args.output)
         timings = warm_frame_timings(draw)
         check_sky_sizes(root, width, height)
         check_moon_view(root, width, height)
         check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
-        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 4,
+        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 5,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
-            "raised_terrain_checked": True, "moon_view_checked": True,
+            "raised_terrain_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

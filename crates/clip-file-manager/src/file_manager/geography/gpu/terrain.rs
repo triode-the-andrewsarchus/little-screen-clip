@@ -1,52 +1,171 @@
 //! Depth-tested terrain patches and their shared projection uniforms.
-use super::{Frame, TextureTile};
 use eframe::glow::{self, HasContext};
-use little_clip_core::geography::basemap::{perspective::Perspective, tiles::TileId};
-use std::collections::{BTreeSet, HashMap};
+use little_clip_core::geography::basemap::{
+    perspective::{EARTH_RADIUS_M, Perspective, coordinates, sphere_distance, unit},
+    tiles::{SourceTile, TileId},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
+#[derive(Clone, Copy)]
 pub(super) struct Patch {
     pub source: TileId,
     pub region: TileId,
 }
 
-pub(super) fn patches(frame: &Frame, textures: &HashMap<(u64, TileId), TextureTile>) -> Vec<Patch> {
-    let visible: BTreeSet<_> = frame
-        .tiles
-        .iter()
-        .map(|tile| tile.id)
-        .filter(|id| textures.contains_key(&(frame.source, *id)))
-        .collect();
-    let mut divisions = BTreeSet::new();
-    for &tile in &visible {
-        let mut parent = tile.parent();
-        while let Some(id) = parent {
-            if !divisions.insert(id) {
-                break;
+pub(in super::super) struct Surface {
+    pub(super) sources: BTreeMap<TileId, Arc<SourceTile>>,
+    pub(super) patches: BTreeMap<TileId, Patch>,
+    pub(super) zoom: f64,
+    pub(in super::super) mesh_step_deg: f64,
+    max_radius: f64,
+    max_level: u8,
+}
+
+impl Surface {
+    pub(in super::super) fn new(tiles: impl Iterator<Item = Arc<SourceTile>>, zoom: f64) -> Self {
+        let sources: BTreeMap<_, _> = tiles.map(|tile| (tile.id, tile)).collect();
+        let mut divisions = BTreeSet::new();
+        for &tile in sources.keys() {
+            let mut parent = tile.parent();
+            while let Some(id) = parent {
+                if !divisions.insert(id) {
+                    break;
+                }
+                parent = id.parent();
             }
-            parent = id.parent();
+        }
+        let mut patches = BTreeMap::new();
+        for x in 0..2 {
+            cover(
+                TileId { level: 0, x, y: 0 },
+                None,
+                &sources,
+                &divisions,
+                &mut patches,
+            );
+        }
+        let mesh_step_deg = patches
+            .values()
+            .map(|p| p.mesh_step(zoom))
+            .fold(180.0, f64::min);
+        let max_radius = 1.0
+            + f64::from(
+                sources
+                    .values()
+                    .filter_map(|tile| tile.elevation_range.map(|range| range[1]))
+                    .fold(0.0, f32::max),
+            ) / EARTH_RADIUS_M;
+        let max_level = patches.keys().map(|p| p.level).max().unwrap_or(0);
+        Self {
+            sources,
+            patches,
+            zoom,
+            mesh_step_deg,
+            max_radius,
+            max_level,
         }
     }
-    let mut output = Vec::new();
-    for x in 0..2 {
-        cover(
-            TileId { level: 0, x, y: 0 },
-            None,
-            &visible,
-            &divisions,
-            &mut output,
-        );
+
+    fn sample(&self, lat: f64, lon: f64) -> Option<([f64; 3], f64)> {
+        let mut id = TileId::at(self.max_level, lat, lon);
+        let patch = loop {
+            if let Some(patch) = self.patches.get(&id) {
+                break patch;
+            }
+            id = id.parent()?;
+        };
+        let tile = &self.sources[&patch.source];
+        let [west, north, _] = patch.region.bounds();
+        let steps = patch.steps(self.zoom) as f64;
+        let step = patch.mesh_step(self.zoom);
+        let grid = [(lon - west).rem_euclid(360.0) / step, (north - lat) / step]
+            .map(|v| v.clamp(0.0, steps));
+        let [x, y] = grid.map(|v| v.floor().min(steps - 1.0));
+        let (u, v) = (grid[0] - x, grid[1] - y);
+        let vertices = if u + v <= 1.0 {
+            [(x, y, 1.0 - u - v), (x + 1.0, y, u), (x, y + 1.0, v)]
+        } else {
+            [
+                (x, y + 1.0, 1.0 - u),
+                (x + 1.0, y, 1.0 - v),
+                (x + 1.0, y + 1.0, u + v - 1.0),
+            ]
+        };
+        let mut point = [0.0; 3];
+        let [source_west, source_north, source_side] = tile.id.bounds();
+        for (x, y, weight) in vertices {
+            let (lat, lon) = (north - step * y, west + step * x);
+            let uv = [
+                (lon - source_west) / source_side,
+                (source_north - lat) / source_side,
+            ];
+            let meters = tile.height_uv(uv).unwrap_or(0.0).max(0.0);
+            let normal = unit(lat, lon);
+            for axis in 0..3 {
+                point[axis] += normal[axis] * (1.0 + meters / EARTH_RADIUS_M) * weight;
+            }
+        }
+        Some((point, step))
     }
-    output
+
+    pub(in super::super) fn project(
+        &self,
+        camera: Perspective,
+        lat: f64,
+        lon: f64,
+    ) -> Option<([f32; 2], [f64; 3])> {
+        let (point, _) = self.sample(lat, lon)?;
+        Some((camera.project_position(point)?, point))
+    }
+
+    pub(in super::super) fn occluded(&self, eye: [f64; 3], target: [f64; 3]) -> bool {
+        let delta: [f64; 3] = std::array::from_fn(|i| target[i] - eye[i]);
+        let distance = length(delta);
+        let ray = delta.map(|v| v / distance);
+        let mut traveled = if length(eye) <= self.max_radius {
+            0.0
+        } else if let Some(entry) = sphere_distance(eye, ray, self.max_radius) {
+            entry
+        } else {
+            return false;
+        };
+        let clearance = 1.5 / EARTH_RADIUS_M;
+        let minimum_step = (distance - traveled) / 768.0;
+        while traveled < distance - clearance {
+            let position = std::array::from_fn(|axis| eye[axis] + ray[axis] * traveled);
+            let (lat, lon) = coordinates(position);
+            let step = if let Some((point, step)) = self.sample(lat, lon) {
+                if length(position) + clearance < length(point) {
+                    return true;
+                }
+                step
+            } else {
+                self.mesh_step_deg
+            };
+            // Sample within the local mesh cells, with a cap on work along
+            // very shallow rays. Longitude cells narrow toward the poles.
+            let step = step.to_radians() * 0.4 * lat.to_radians().cos().max(0.025);
+            traveled += step.max(minimum_step);
+        }
+        false
+    }
+}
+
+fn length(v: [f64; 3]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
 fn cover(
     region: TileId,
     fallback: Option<TileId>,
-    loaded: &BTreeSet<TileId>,
+    loaded: &BTreeMap<TileId, Arc<SourceTile>>,
     divisions: &BTreeSet<TileId>,
-    result: &mut Vec<Patch>,
+    result: &mut BTreeMap<TileId, Patch>,
 ) {
-    let source = loaded.get(&region).copied().or(fallback);
+    let source = loaded.contains_key(&region).then_some(region).or(fallback);
     if divisions.contains(&region) {
         for y in 0..2 {
             for x in 0..2 {
@@ -64,11 +183,23 @@ fn cover(
             }
         }
     } else if let Some(source) = source {
-        result.push(Patch { source, region });
+        result.insert(region, Patch { source, region });
     }
 }
 
 impl Patch {
+    pub fn steps(self, zoom: f64) -> u32 {
+        if zoom >= 64.0 && self.source.level >= 8 {
+            128
+        } else {
+            32
+        }
+    }
+
+    fn mesh_step(self, zoom: f64) -> f64 {
+        self.region.bounds()[2] / f64::from(self.steps(zoom))
+    }
+
     pub fn uv(&self) -> [f32; 3] {
         let scale = 1u32 << (self.region.level - self.source.level);
         let span = 1.0 / scale as f32;
@@ -140,8 +271,8 @@ impl HeightAtlas {
         &mut self,
         gl: &glow::Context,
         program: glow::Program,
-        frame: &Frame,
-        enabled: bool,
+        source: u64,
+        surface: &Surface,
     ) -> Result<bool, String> {
         use little_clip_core::geography::basemap::tiles::PADDED_EDGE;
         // SAFETY: the renderer owns the active program, context and atlas.
@@ -149,18 +280,15 @@ impl HeightAtlas {
             let loc = |name| gl.get_uniform_location(program, name);
             gl.uniform_1_i32(loc("u_terrain_dem").as_ref(), 6);
             gl.uniform_1_i32(loc("u_terrain_pages").as_ref(), 7);
-            if !enabled {
-                return Ok(false);
-            }
             let dimension = PADDED_EDGE as i32;
             let [dem, table] = self.initialize(gl, dimension)?;
-            if self.source != frame.source {
+            if self.source != source {
                 self.pages.clear();
-                self.source = frame.source;
+                self.source = source;
             }
-            let visible: BTreeSet<_> = frame
-                .tiles
-                .iter()
+            let visible: BTreeSet<_> = surface
+                .sources
+                .values()
                 .filter(|tile| !tile.elevation.is_empty())
                 .map(|tile| tile.id)
                 .collect();
@@ -172,7 +300,11 @@ impl HeightAtlas {
             gl.active_texture(glow::TEXTURE6);
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(dem));
             let mut updates = 0;
-            for tile in frame.tiles.iter().filter(|tile| visible.contains(&tile.id)) {
+            for tile in surface
+                .sources
+                .values()
+                .filter(|tile| visible.contains(&tile.id))
+            {
                 if updates == 8 {
                     break;
                 }
@@ -200,15 +332,22 @@ impl HeightAtlas {
                 self.pages.insert(tile.id, page);
                 updates += 1;
             }
-            let mut entries = [0u32; TABLE_SIZE * 2];
-            for (&tile, &page) in &self.pages {
+            let mut entries = [[0u32; 4]; TABLE_SIZE];
+            for patch in surface.patches.values() {
+                let tile = patch.region;
                 let key = ((u32::from(tile.level) << 24) | (tile.y << 12) | tile.x) + 1;
                 let mut slot = (key.wrapping_mul(2_654_435_761) >> 23) as usize;
-                while entries[slot * 2] != 0 {
+                while entries[slot][0] != 0 {
                     slot = (slot + 1) % TABLE_SIZE;
                 }
-                entries[slot * 2] = key;
-                entries[slot * 2 + 1] = page as u32;
+                entries[slot] = [
+                    key,
+                    self.pages
+                        .get(&patch.source)
+                        .map_or(0, |page| *page as u32 + 1),
+                    u32::from(patch.source.level),
+                    patch.steps(surface.zoom),
+                ];
             }
             let bytes = std::slice::from_raw_parts(
                 entries.as_ptr().cast(),
@@ -223,18 +362,12 @@ impl HeightAtlas {
                 0,
                 TABLE_SIZE as i32,
                 1,
-                glow::RG_INTEGER,
+                glow::RGBA_INTEGER,
                 glow::UNSIGNED_INT,
                 glow::PixelUnpackData::Slice(Some(bytes)),
             );
-            gl.uniform_1_i32(
-                loc("u_dem_level").as_ref(),
-                self.pages
-                    .keys()
-                    .map(|tile| i32::from(tile.level))
-                    .max()
-                    .unwrap_or(-1),
-            );
+            gl.uniform_1_i32(loc("u_dem_level").as_ref(), i32::from(surface.max_level));
+            gl.uniform_1_f32(loc("u_drape_step").as_ref(), surface.mesh_step_deg as f32);
             gl.active_texture(glow::TEXTURE0);
             Ok(self.pages.len() < visible.len())
         }
@@ -273,11 +406,11 @@ impl HeightAtlas {
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RG32UI as i32,
+                glow::RGBA32UI as i32,
                 TABLE_SIZE as i32,
                 1,
                 0,
-                glow::RG_INTEGER,
+                glow::RGBA_INTEGER,
                 glow::UNSIGNED_INT,
                 glow::PixelUnpackData::Slice(None),
             );
