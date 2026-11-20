@@ -478,6 +478,7 @@ mod tests {
             center_lon: 0.0,
             zoom: 700.0,
             mode: ProjectionMode::Map2D,
+            orbit: Default::default(),
         };
         let label = |x, y, class, text| {
             let (lat, lon) = camera.unproject(x, y, rect.width(), rect.height()).unwrap();

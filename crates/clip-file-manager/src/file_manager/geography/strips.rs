@@ -148,6 +148,7 @@ pub(super) fn camera(rect: egui::Rect, [west, south, east, north]: [f64; 4]) -> 
         center_lon: wrap_lon((west + east) * 0.5),
         zoom: 1.0,
         mode: ProjectionMode::Map2D,
+        orbit: Default::default(),
     };
     let cos_lat = camera.center_lat.to_radians().cos().abs().max(0.25);
     let horizontal = (east - west).max(0.001).to_radians() * cos_lat;

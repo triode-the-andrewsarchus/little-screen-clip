@@ -2,6 +2,7 @@
 
 pub mod hgt;
 pub mod land_cover;
+pub mod perspective;
 #[cfg(test)]
 mod profile;
 pub mod storage;
@@ -2052,7 +2053,7 @@ fn hsl_to_rgb(h_deg: f32, s: f32, l: f32) -> [f32; 3] {
     [r1 + m, g1 + m, b1 + m]
 }
 
-pub const MIN_MAP_ZOOM: f64 = 0.75;
+pub const MIN_MAP_ZOOM: f64 = 0.14;
 pub const MAX_MAP_ZOOM: f64 = 65_536.0;
 
 /// Interactive camera supporting smooth 3D-globe to 2D-map transition.
@@ -2063,6 +2064,7 @@ pub struct GlobeCamera {
     /// `1.0` = full globe; `>= 4.5` = 2D map; up to `MAX_MAP_ZOOM`.
     pub zoom: f64,
     pub mode: ProjectionMode,
+    pub orbit: perspective::Orbit,
 }
 
 impl Default for GlobeCamera {
@@ -2072,6 +2074,7 @@ impl Default for GlobeCamera {
             center_lon: 0.0,
             zoom: 1.0,
             mode: ProjectionMode::Auto,
+            orbit: perspective::Orbit::default(),
         }
     }
 }
@@ -2080,6 +2083,7 @@ impl GlobeCamera {
     /// Fits the document's compact, unwrapped geographic bounds, retaining the
     /// chosen projection mode. Missing positions restore the default globe.
     pub fn fit_bounds(&mut self, bounds: Option<[f64; 4]>) {
+        self.orbit = perspective::Orbit::default();
         let Some([west, south, east, north]) = bounds else {
             *self = Self::default();
             return;
@@ -2096,6 +2100,9 @@ impl GlobeCamera {
 
     /// Returns `1.0` for full 3D globe, `0.0` for flat 2D map, and smoothstepped values between.
     pub fn globe_blend(&self) -> f64 {
+        if self.orbit.active() {
+            return 1.0;
+        }
         match self.mode {
             ProjectionMode::Globe3D => 1.0,
             ProjectionMode::Map2D => 0.0,
@@ -2165,6 +2172,14 @@ impl GlobeCamera {
         width: f32,
         height: f32,
     ) -> Option<[f32; 2]> {
+        if self.orbit.active() {
+            return perspective::Perspective::new(
+                self,
+                [width, height],
+                perspective::EARTH_RADIUS_M,
+            )
+            .project(lat, self.center_lon + d_lon, self.orbit.target_height_m);
+        }
         let blend = self.globe_blend();
         let scale = self.scale_px(width, height);
         let cx = width as f64 * 0.5;
@@ -2208,6 +2223,14 @@ impl GlobeCamera {
         let scale = self.scale_px(width, height);
         if !scale.is_finite() || scale <= 0.0 || !px.is_finite() || !py.is_finite() {
             return None;
+        }
+        if self.orbit.active() {
+            return perspective::Perspective::new(
+                self,
+                [width, height],
+                perspective::EARTH_RADIUS_M,
+            )
+            .unproject(px, py);
         }
         let x = (px as f64 - width as f64 * 0.5) / scale;
         let y = -(py as f64 - height as f64 * 0.5) / scale;
@@ -2282,11 +2305,30 @@ impl GlobeCamera {
 
     /// Pans the camera by screen pixel delta `(dx, dy)`.
     pub fn pan_by(&mut self, dx: f32, dy: f32, width: f32, height: f32) {
+        if self.orbit.active() {
+            let pose =
+                perspective::Perspective::new(self, [width, height], perspective::EARTH_RADIUS_M);
+            if let Some((lat, lon)) = pose.unproject(width * 0.5 - dx, height * 0.5 - dy) {
+                self.center_lat = lat.clamp(-85.0, 85.0);
+                self.center_lon = wrap_lon(lon);
+                return;
+            }
+            let (sin, cos) = self.orbit.bearing.to_radians().sin_cos();
+            let tilt_scale = self.orbit.tilt.to_radians().cos().max(0.2);
+            let x = f64::from(dx);
+            let y = f64::from(dy) / tilt_scale;
+            self.pan_in_geographic_axes(x * cos - y * sin, y * cos + x * sin, width, height);
+            return;
+        }
+        self.pan_in_geographic_axes(f64::from(dx), f64::from(dy), width, height);
+    }
+
+    fn pan_in_geographic_axes(&mut self, dx: f64, dy: f64, width: f32, height: f32) {
         let scale = self.scale_px(width, height).max(1.0);
         let deg_per_px = (180.0 / std::f64::consts::PI) / scale;
         let cos_c = self.center_lat.to_radians().cos().abs().max(0.25);
-        self.center_lon = wrap_lon(self.center_lon - (dx as f64 * deg_per_px) / cos_c);
-        self.center_lat = (self.center_lat + dy as f64 * deg_per_px).clamp(-85.0, 85.0);
+        self.center_lon = wrap_lon(self.center_lon - (dx * deg_per_px) / cos_c);
+        self.center_lat = (self.center_lat + dy * deg_per_px).clamp(-85.0, 85.0);
     }
 }
 
@@ -3669,6 +3711,7 @@ mod tests {
             center_lon: -105.0,
             zoom: 1.0,
             mode: ProjectionMode::Auto,
+            orbit: Default::default(),
         };
         assert_eq!(cam.globe_blend(), 1.0);
         // Point on the opposite side of the Earth is culled on the 3D globe.
@@ -3696,6 +3739,7 @@ mod tests {
                         center_lon,
                         zoom,
                         mode: ProjectionMode::Auto,
+                        orbit: Default::default(),
                     };
                     for dy in [-40.0, -15.0, 0.0, 15.0, 40.0] {
                         for dx in [-80.0, -20.0, 0.0, 20.0, 80.0] {
@@ -3850,6 +3894,7 @@ mod tests {
                 zoom: 0.75,
                 center_lat: 70.0,
                 center_lon: 179.0,
+                orbit: Default::default(),
             };
             camera.constrain_view(width, height);
             let period = camera.world_width_px(width, height) as f32;

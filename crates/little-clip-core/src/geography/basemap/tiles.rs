@@ -2,9 +2,12 @@
 //!
 //! Decode these on bounded workers. Camera changes reuse the same source pixels;
 //! projection, filtering, lighting and contours belong to the desktop GPU renderer.
-use super::{BasemapAssets, GlobeCamera};
+use super::{
+    BasemapAssets, GlobeCamera,
+    perspective::{EARTH_RADIUS_M, Perspective, coordinates},
+};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -63,6 +66,29 @@ pub struct SourceTile {
 impl SourceTile {
     pub fn bytes(&self) -> usize {
         self.color.len() + self.elevation.len() * 4 + self.water.len()
+    }
+
+    /// Samples the same padded DEM texture coordinates used for terrain geometry.
+    pub fn height_at(&self, lat: f64, lon: f64) -> Option<f64> {
+        let [west, north, side] = self.id.bounds();
+        let x = ((lon - west).rem_euclid(360.0) / side) * EDGE as f64 + 0.5;
+        let y = ((north - lat) / side) * EDGE as f64 + 0.5;
+        if !(0.0..PADDED_EDGE as f64 - 1.0).contains(&x)
+            || !(0.0..PADDED_EDGE as f64 - 1.0).contains(&y)
+        {
+            return None;
+        }
+        let [ix, iy] = [x as usize, y as usize];
+        let elevation = |x, y| {
+            let i = (y * PADDED_EDGE + x) * 2;
+            let pair = self.elevation.get(i..i + 2)?;
+            (pair[1] > 0.99).then_some(f64::from(pair[0]))
+        };
+        let mix = |a: f64, b, t| a + (b - a) * t;
+        let [dx, dy] = [x.fract(), y.fract()];
+        let top = mix(elevation(ix, iy)?, elevation(ix + 1, iy)?, dx);
+        let bottom = mix(elevation(ix, iy + 1)?, elevation(ix + 1, iy + 1)?, dx);
+        Some(mix(top, bottom, dy))
     }
 
     pub fn prepare(assets: &BasemapAssets, id: TileId, cancel: &AtomicBool) -> Option<Self> {
@@ -137,6 +163,13 @@ pub fn visible_tiles(
     height: f32,
     pixels_per_point: f32,
 ) -> Vec<TileId> {
+    if camera.orbit.active() {
+        return perspective_tiles(
+            Perspective::new(camera, [width, height], EARTH_RADIUS_M),
+            [width, height],
+            pixels_per_point,
+        );
+    }
     let mut level = display_level(camera, width, height, pixels_per_point);
     loop {
         let mut ids = surface_tiles(camera, width, height, level);
@@ -163,6 +196,65 @@ pub fn visible_tiles(
         }
         level -= 1;
     }
+}
+
+fn perspective_tiles(
+    camera: Perspective,
+    [width, height]: [f32; 2],
+    pixels_per_point: f32,
+) -> Vec<TileId> {
+    let mut candidates = BTreeMap::<TileId, f64>::new();
+    for y in 0..=12 {
+        for x in 0..=16 {
+            let [u, v] = [x as f32 / 16.0, y as f32 / 12.0];
+            let Some((point, depth)) = camera.ground(width * u, height * v) else {
+                continue;
+            };
+            let (lat, lon) = coordinates(point);
+            // Sampling density follows distance to the camera so a thin strip
+            // near the horizon does not request the foreground's full resolution.
+            let angular_pixel = depth / (camera.focal * f64::from(pixels_per_point));
+            let level = (std::f64::consts::PI / (EDGE as f64 * angular_pixel))
+                .log2()
+                .ceil()
+                .clamp(0.0, f64::from(MAX_LEVEL)) as u8;
+            let tile = TileId::at(level, lat, lon);
+            let center_bias = 1.0 + f64::from(0.8 * ((u - 0.5).powi(2) + (v - 0.5).powi(2)));
+            let priority = depth * center_bias;
+            candidates
+                .entry(tile)
+                .and_modify(|previous| *previous = previous.min(priority))
+                .or_insert(priority);
+        }
+    }
+    let mut sorted: Vec<_> = candidates.into_iter().collect();
+    sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let root = TileId {
+        level: 0,
+        x: 0,
+        y: 0,
+    };
+    let mut ordered = vec![root, TileId { x: 1, ..root }];
+    let mut requested: BTreeSet<_> = ordered.iter().copied().collect();
+    for (leaf, _) in sorted {
+        if ordered.len() >= 96 {
+            break;
+        }
+        let mut branch = Vec::new();
+        let mut candidate = Some(leaf);
+        while let Some(tile) = candidate {
+            if requested.contains(&tile) {
+                break;
+            }
+            branch.push(tile);
+            candidate = tile.parent();
+        }
+        for tile in branch.into_iter().rev().take(96 - ordered.len()) {
+            requested.insert(tile);
+            ordered.push(tile);
+        }
+    }
+    ordered
 }
 
 /// A compact preview needs only visible raster tiles and limits work per document.
@@ -229,6 +321,39 @@ fn sample_tiles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tilted_map_prioritizes_foreground_detail_with_bounded_parent_coverage() {
+        use super::super::perspective::Orbit;
+        let camera = GlobeCamera {
+            zoom: 100.0,
+            orbit: Orbit {
+                tilt: 80.0,
+                bearing: 31.0,
+                ..Default::default()
+            },
+            ..GlobeCamera::default()
+        };
+        let view = [1280.0, 800.0];
+        let wanted = visible_tiles(&camera, view[0], view[1], 1.0);
+        assert!(wanted.len() <= 96);
+        assert!(wanted[0..2].iter().all(|tile| tile.level == 0));
+        for (i, tile) in wanted.iter().enumerate().skip(2) {
+            assert!(wanted[..i].contains(&tile.parent().unwrap()));
+        }
+        let pose = Perspective::new(&camera, view, EARTH_RADIUS_M);
+        let near = pose.unproject(640.0, 800.0 * 11.0 / 12.0).unwrap();
+        let far = pose.unproject(640.0, 800.0 * 5.0 / 12.0).unwrap();
+        let level_at = |(lat, lon)| {
+            wanted
+                .iter()
+                .rev()
+                .find(|tile| **tile == TileId::at(tile.level, lat, lon))
+                .unwrap()
+                .level
+        };
+        assert!(level_at(near) > level_at(far), "{wanted:?}");
+    }
     #[test]
     fn natural_earth_detail_is_not_replaced_by_coarse_land_cover() {
         use crate::geography::basemap::{EquirectTexture, GlobalLandCoverGrid, LandCoverClass};

@@ -329,6 +329,7 @@ fn detailed_roads_replace_fallback_only_inside_the_available_cell() {
         center_lon: 0.0,
         zoom: 420.0,
         mode: ProjectionMode::Map2D,
+        orbit: Default::default(),
     };
     assert!(
         detail::visible(
