@@ -758,52 +758,55 @@ fn extract_matching_from_zip(
         if cancelled.load(Ordering::Relaxed) {
             return Err("Extraction cancelled".into());
         }
-        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.is_dir() {
+        let info = archive
+            .by_index_data(i)
+            .map_err(|error| error.to_string())?;
+        if info.is_dir() {
             continue;
         }
         let member_name = entry.name().map_err(|error| error.to_string())?;
         let Some(name) = Path::new(member_name.as_ref())
             .file_name()
             .and_then(|n| n.to_str())
-            .map(str::to_string)
+            .filter(|name| {
+                let lower = name.to_ascii_lowercase();
+                suffixes.iter().any(|suffix| lower.ends_with(suffix))
+            })
+            .map(str::to_owned)
         else {
             continue;
         };
-        let lower = name.to_ascii_lowercase();
-        if suffixes.iter().any(|s| lower.ends_with(s)) {
-            if entry.size() > remaining {
-                return Err("Expanded archive exceeds the geography disk budget".into());
-            }
-            let entry_size = entry.size();
-            let mut staged = zip_path.directory.stage().map_err(|e| e.to_string())?;
-            let mut payload_budget = remaining;
-            let target_name = write_archive_payload(
-                &mut entry,
-                &mut staged,
-                &name,
-                entry_size,
-                &mut payload_budget,
-                cancelled,
-            )?;
-            remaining = remaining
-                .checked_sub(
-                    staged
-                        .as_file()
-                        .metadata()
-                        .map_err(|e| e.to_string())?
-                        .len(),
-                )
-                .ok_or("Expanded archive exceeds the geography disk budget")?;
-            if cancelled.load(Ordering::Relaxed) {
-                return Err("Extraction cancelled".into());
-            }
-            extracted += 1;
-            zip_path
-                .directory
-                .install(staged, std::ffi::OsStr::new(&target_name))
-                .map_err(|e| e.to_string())?;
+        let entry_size = entry.size();
+        if entry_size > remaining {
+            return Err("Expanded archive exceeds the geography disk budget".into());
         }
+        let mut staged = zip_path.directory.stage().map_err(|e| e.to_string())?;
+        let mut payload_budget = remaining;
+        let target_name = write_archive_payload(
+            &mut entry,
+            &mut staged,
+            &name,
+            entry_size,
+            &mut payload_budget,
+            cancelled,
+        )?;
+        remaining = remaining
+            .checked_sub(
+                staged
+                    .as_file()
+                    .metadata()
+                    .map_err(|e| e.to_string())?
+                    .len(),
+            )
+            .ok_or("Expanded archive exceeds the geography disk budget")?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Extraction cancelled".into());
+        }
+        extracted += 1;
+        zip_path
+            .directory
+            .install(staged, std::ffi::OsStr::new(&target_name))
+            .map_err(|e| e.to_string())?;
     }
     if extracted == 0 {
         return Err("Archive contains no supported map assets".into());

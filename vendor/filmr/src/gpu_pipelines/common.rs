@@ -1,6 +1,6 @@
 #[cfg(feature = "compute-gpu")]
 use crate::gpu::{GpuBuffer, GpuContext};
-#[cfg(feature = "compute-gpu")]
+#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
 use futures::channel::oneshot;
 
 // Native GPU handles are Send + Sync and share a process cache. Browser GPU
@@ -49,17 +49,10 @@ pub async fn read_gpu_buffer(
             label: Some("Readback Copy Encoder"),
         });
     encoder.copy_buffer_to_buffer(&gpu_buffer.buffer, 0, &staging_buffer, 0, size);
-    let submission = context.queue.submit(Some(encoder.finish()));
-
-    let buffer_slice = staging_buffer.slice(..);
-
-    let (sender, receiver) = oneshot::channel();
-    buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
-        let _ = sender.send(v);
-    });
-
     #[cfg(not(target_arch = "wasm32"))]
     {
+        encoder.map_buffer_on_submit(&staging_buffer, wgpu::MapMode::Read, .., |_| {});
+        let submission = context.queue.submit(Some(encoder.finish()));
         context
             .device
             .poll(wgpu::PollType::Wait {
@@ -67,15 +60,17 @@ pub async fn read_gpu_buffer(
                 timeout: Some(std::time::Duration::from_secs(30)),
             })
             .ok()?;
-        let mut receiver = receiver;
-        receiver.try_recv().ok()??.ok()?;
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = submission;
+        let (sender, receiver) = oneshot::channel();
+        encoder.map_buffer_on_submit(&staging_buffer, wgpu::MapMode::Read, .., move |result| {
+            let _ = sender.send(result);
+        });
+        context.queue.submit(Some(encoder.finish()));
         receiver.await.ok()?.ok()?;
     }
-    let data = buffer_slice.get_mapped_range().ok()?;
+    let data = staging_buffer.slice(..).get_mapped_range().ok()?;
     let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     staging_buffer.unmap();

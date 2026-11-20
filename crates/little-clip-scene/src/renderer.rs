@@ -1,5 +1,5 @@
 use image::RgbaImage;
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use wgpu_3dgs_viewer::{
     self as gs,
@@ -237,23 +237,14 @@ impl SplatRenderer {
                 depth_or_array_layers: 1,
             },
         );
+        encoder.map_buffer_on_submit(&target.staging, wgpu::MapMode::Read, .., |_| {});
         let submission = self.gpu.queue.submit([encoder.finish()]);
-        let (tx, rx) = mpsc::sync_channel(1);
-        target
-            .staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
         self.gpu
             .device
             .poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
                 timeout: Some(Duration::from_secs(30)),
             })
-            .map_err(|e| SceneError::Gpu(e.to_string()))?;
-        rx.recv_timeout(Duration::from_secs(1))
-            .map_err(|e| SceneError::Gpu(e.to_string()))?
             .map_err(|e| SceneError::Gpu(e.to_string()))?;
         let mapped = target
             .staging
