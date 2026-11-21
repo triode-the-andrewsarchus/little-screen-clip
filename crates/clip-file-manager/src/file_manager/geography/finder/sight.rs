@@ -1,5 +1,5 @@
 use super::{CONSTELLATIONS, Direction, Hit, NAMED_STARS, Target};
-use crate::file_manager::geography::sky::catalog::Catalog;
+use crate::file_manager::geography::{gpu, sky, solar::world::Backdrop};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use std::sync::Arc;
 
@@ -30,7 +30,12 @@ impl Sight {
         })
     }
 
-    pub fn paint(&mut self, ui: &egui::Ui, response: &egui::Response, catalog: Option<&Catalog>) {
+    pub fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        assets: Option<Arc<sky::Assets>>,
+    ) {
         let rect = response.rect;
         if !rect.is_positive() {
             return;
@@ -55,6 +60,28 @@ impl Sight {
             focal: rect.size().min_elem() * 0.5 / self.aperture.tan(),
             rect,
         };
+        if assets.is_some() {
+            let to_ecliptic = |[x, y, z]: Direction| {
+                [x, 0.917482 * y + 0.397777 * z, -0.397777 * y + 0.917482 * z]
+            };
+            let _ = gpu::paint_space(
+                ui,
+                rect,
+                Backdrop {
+                    axes: [
+                        projection.right,
+                        projection.up,
+                        projection.direction.map(|v| -v),
+                    ]
+                    .map(to_ecliptic),
+                    fov: [rect.width(), rect.height()].map(|side| side / (2.0 * projection.focal)),
+                    sun: ([0.0, 0.0, 1.0], 0.0),
+                    clock: [0.0; 2],
+                    brightness: 0.64,
+                    assets: assets.clone(),
+                },
+            );
+        }
         self.paint_figures(&painter, projection);
         let mut named_hover = None;
         let pointer = response.hover_pos();
@@ -81,7 +108,7 @@ impl Sight {
                 }
             }
         };
-        if let Some(catalog) = catalog {
+        if let Some(catalog) = assets.as_deref().and_then(sky::Assets::star_catalog) {
             for star in catalog.stars() {
                 paint_star(star.name.as_ref(), star.magnitude, star.direction);
             }

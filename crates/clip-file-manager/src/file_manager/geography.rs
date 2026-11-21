@@ -640,12 +640,7 @@ impl Viewer {
         let (rect, response) =
             ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
         if let Some(sight) = self.sight.as_mut() {
-            let catalog = self
-                .sky
-                .assets
-                .as_deref()
-                .and_then(sky::Assets::star_catalog);
-            sight.paint(ui, &response, catalog);
+            sight.paint(ui, &response, self.sky.assets.clone());
         } else if let Some(system) = self.solar_system.as_mut() {
             system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
             let recorded = recorded_scene_time(&self.document, self.selected, None);
