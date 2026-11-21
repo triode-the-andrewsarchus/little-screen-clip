@@ -10,6 +10,7 @@ pub(in crate::file_manager::geography) struct System {
     zoom: f32,
     pan: Vec2,
     middle: super::super::map_camera::MiddleDrag,
+    ephemeris: Option<(Id, Vec<[f64; 3]>)>,
 }
 
 impl System {
@@ -21,7 +22,12 @@ impl System {
             zoom: 1.0,
             pan: Vec2::ZERO,
             middle: Default::default(),
+            ephemeris: None,
         }
+    }
+
+    pub fn show_ephemeris(&mut self, id: Id, positions: &[[f64; 3]]) {
+        self.ephemeris = Some((id, positions.to_vec()));
     }
 
     pub fn paint(
@@ -81,6 +87,17 @@ impl System {
                 points,
                 Stroke::new(1.0, color.gamma_multiply(f32::from(opacity) / 255.0)),
             ));
+            if let Some((_, samples)) = self
+                .ephemeris
+                .as_ref()
+                .filter(|(id, _)| *id == satellite.id)
+            {
+                let points = samples
+                    .iter()
+                    .map(|point| projection.project(*point, scale).0)
+                    .collect();
+                painter.add(egui::Shape::line(points, Stroke::new(1.45, color)));
+            }
             let (point, depth) = projection.project(satellite.at(day), scale);
             if rect.expand(10.0).contains(point) {
                 marks.push(Mark::new(satellite, point, depth, false));
@@ -263,7 +280,7 @@ fn noise(i: u32) -> f64 {
     f64::from(hash.wrapping_mul(0x85eb_ca6b) >> 8) / f64::from(1 << 24)
 }
 
-fn paint_stars(painter: &egui::Painter, rect: Rect) {
+pub(in crate::file_manager::geography) fn paint_stars(painter: &egui::Painter, rect: Rect) {
     static POSITIONS: OnceLock<Vec<(f32, f32, u8)>> = OnceLock::new();
     let stars = POSITIONS.get_or_init(|| {
         (1..650)

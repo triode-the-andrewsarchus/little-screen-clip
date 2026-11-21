@@ -386,6 +386,7 @@ impl Tiles {
             show_sky: false,
             moon_view: false,
             lunar: None,
+            lunar_albedo: None,
             readable_sky: false,
             show_constellations: false,
             earth_lighting: false,

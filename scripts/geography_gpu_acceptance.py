@@ -44,7 +44,8 @@ def program(root, name):
         version, body = source.split("\n", 1)
         return f"{version}\n{(root / 'perspective.glsl').read_text()}\n{body}"
 
-    vertex = (root / f"{name}.vert").read_text()
+    vertex_name = "sky" if name == "world" else name
+    vertex = (root / f"{vertex_name}.vert").read_text()
     if name == "map":
         vertex = perspective(vertex)
     fragment_name = "vector" if name == "terrain_vector" else name
@@ -229,6 +230,37 @@ def check_moon_view(root, width, height):
 
     GL.glDeleteTextures([albedo, earth, stars])
     GL.glDeleteProgram(sky)
+
+
+def check_world_view(root, width, height, output):
+    world = program(root, "world")
+    GL.glUseProgram(world)
+    loc = lambda name: GL.glGetUniformLocation(world, name)
+    angle = np.deg2rad(23)
+    s, c = np.sin(angle), np.cos(angle)
+    axes = np.asarray([[0, 1, 0], [-s, 0, c], [c, 0, s]], dtype=np.float32)
+    GL.glUniformMatrix3fv(loc("u_axes"), 1, False, axes)
+    GL.glUniform3f(loc("u_eye"), 4.3 * c, 0, 4.3 * s)
+    GL.glUniform2f(loc("u_fov"), width / (1.9 * height), 1 / 1.9)
+    GL.glUniform3f(loc("u_color"), .85, .76, .52)
+    GL.glUniform1f(loc("u_zoom"), .5)
+    def draw(bands):
+        GL.glUniform1i(loc("u_band_count"), len(bands))
+        if bands:
+            GL.glUniform3fv(loc("u_bands[0]"), len(bands), np.asarray(bands, dtype=np.float32))
+        GL.glClearColor(0, 0, 0, 1)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
+        return np.frombuffer(GL.glReadPixels(0, 0, width, height,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+    globe = draw([])
+    ringed = draw([(1.28, 1.58, .41), (1.58, 2.02, .74), (2.10, 2.32, .52)])
+    exterior = (globe[:, :, 0] == 0) & (ringed[:, :, 0] > 5)
+    assert np.count_nonzero(exterior) > 1000, "The renderer did not draw rings beyond the limb"
+    assert len(np.unique(ringed[:, :, 0][exterior])) > 35, "Ring bands should vary in apparent density"
+    assert np.array_equal(globe[height // 2, width // 2], ringed[height // 2, width // 2]), "Body failed to occlude ring plane"
+    Image.fromarray(np.flipud(ringed)).save(output / "ringed-world.png")
+    GL.glDeleteProgram(world)
 
 
 def check_raised_terrain(raster, vao, vertex_count, width, height, height_texture, output, lunar=False):
@@ -718,13 +750,15 @@ def main():
         timings = warm_frame_timings(draw)
         check_sky_sizes(root, width, height)
         check_moon_view(root, width, height)
+        check_world_view(root, width, height, args.output)
         check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
-        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 5,
+        report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 6,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "raised_terrain_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
             "signed_lunar_relief_checked": True,
+            "world_ring_occlusion_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

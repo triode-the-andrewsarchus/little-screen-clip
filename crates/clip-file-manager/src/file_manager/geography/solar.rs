@@ -1,12 +1,14 @@
 //! Offline orbital geometry and the solar system view.
+pub(in crate::file_manager) mod assets;
 mod view;
+pub(super) mod world;
 
-pub(super) use view::System;
+pub(super) use view::{System, paint_stars};
 
 use serde::Deserialize;
 use std::{f64::consts::TAU, sync::OnceLock};
 
-pub(super) type Id = i32;
+pub(in crate::file_manager) type Id = i32;
 pub(super) const SUN: Id = 10;
 pub(super) const EARTH: Id = 399;
 pub(super) const MOON: Id = 301;

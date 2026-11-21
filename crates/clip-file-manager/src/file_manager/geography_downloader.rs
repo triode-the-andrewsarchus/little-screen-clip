@@ -2,7 +2,7 @@
 pub(crate) mod nasadem;
 pub(super) mod viewfinder;
 
-use super::geography::{detail, lunar_terrain, sky};
+use super::geography::{detail, lunar_terrain, sky, solar};
 
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
@@ -47,6 +47,7 @@ pub enum DownloadPack {
     Sky,
     StarCatalog,
     MoonRelief,
+    World(solar::Id),
     DetailedTransportation,
     All,
 }
@@ -67,6 +68,7 @@ impl DownloadPack {
             Self::Sky => "Sky and Earth Lighting",
             Self::StarCatalog => "Constellations and Star Catalog",
             Self::MoonRelief => "Moon Elevation (NASA LOLA)",
+            Self::World(_) => "World Assets",
             Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "Base Offline Maps",
         }
@@ -109,7 +111,11 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
-            Self::Sky | Self::StarCatalog | Self::MoonRelief | Self::DetailedTransportation => true, // Verified by their own loaders.
+            Self::Sky
+            | Self::StarCatalog
+            | Self::MoonRelief
+            | Self::World(_)
+            | Self::DetailedTransportation => true, // Verified by their own loaders.
             Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -235,6 +241,11 @@ struct DownloadOutcome {
     errors: Vec<String>,
     transport: detail::Status,
 }
+
+enum DownloadResult {
+    Earth(DownloadOutcome),
+    World { disk_usage_bytes: u64 },
+}
 impl DownloadSession<'_> {
     fn download(
         &self,
@@ -305,7 +316,7 @@ impl DownloadSession<'_> {
             DownloadPack::LandCover => self.land_cover(base, span),
             DownloadPack::DetailedTransportation => self.transportation(base, span),
             DownloadPack::MoonRelief => self.download_checked_files(
-                lunar_terrain::DIRECTORY,
+                Path::new(lunar_terrain::DIRECTORY),
                 lunar_terrain::FILES
                     .into_iter()
                     .map(|(name, url, size)| (name, url, size..=size)),
@@ -313,6 +324,17 @@ impl DownloadSession<'_> {
                 base,
                 span,
             ),
+            DownloadPack::World(id) => {
+                let asset =
+                    solar::assets::Download::for_body(id).ok_or("No dataset for this body")?;
+                self.download_checked_files(
+                    &asset.folder,
+                    [(asset.name, asset.url.as_str(), asset.size)],
+                    solar::assets::verify,
+                    base,
+                    span,
+                )
+            }
             DownloadPack::Sky | DownloadPack::StarCatalog => self.download_sky(
                 pack.files(self.config),
                 pack == DownloadPack::StarCatalog,
@@ -348,7 +370,7 @@ impl DownloadSession<'_> {
         span: f32,
     ) -> Result<(), String> {
         self.download_checked_files(
-            sky::DIRECTORY,
+            Path::new(sky::DIRECTORY),
             assets
                 .into_iter()
                 .filter_map(|file| Some((file.name, file.url, sky::asset_size(file.name)?))),
@@ -360,7 +382,7 @@ impl DownloadSession<'_> {
 
     fn download_checked_files<'a>(
         &self,
-        directory: &str,
+        directory: &Path,
         files: impl IntoIterator<Item = (&'a str, &'a str, std::ops::RangeInclusive<u64>)>,
         verify: impl Fn(&str, &fs::File) -> bool,
         base: f32,
@@ -562,7 +584,7 @@ pub struct AssetDownloader {
     pub last_error: Option<String>,
     progress: Arc<Mutex<DownloadProgress>>,
     cancelled: Arc<AtomicBool>,
-    job: Option<Task<Result<DownloadOutcome, String>>>,
+    job: Option<Task<Result<DownloadResult, String>>>,
 }
 
 impl AssetDownloader {
@@ -647,6 +669,12 @@ impl AssetDownloader {
                 viewfinder: plan.as_ref(),
                 all_ceiling,
             };
+            if matches!(pack, DownloadPack::World(_) | DownloadPack::MoonRelief) {
+                session.run(pack, 0.0, 0.98)?;
+                return Ok(DownloadResult::World {
+                    disk_usage_bytes: dir_size(&root.path()),
+                });
+            }
             let queue: Vec<_> = if pack == DownloadPack::All {
                 BASE_PACKS
                     .into_iter()
@@ -655,7 +683,9 @@ impl AssetDownloader {
             } else {
                 vec![pack]
             };
-            session.download(&queue, override_dir.as_deref())
+            session
+                .download(&queue, override_dir.as_deref())
+                .map(DownloadResult::Earth)
         });
         self.cancelled = job.token.clone();
         self.job = Some(job);
@@ -669,7 +699,11 @@ impl AssetDownloader {
         self.active = None;
         self.job = None;
         match result {
-            Ok(Ok(outcome)) => {
+            Ok(Ok(DownloadResult::World { disk_usage_bytes })) => {
+                self.disk_usage_bytes = disk_usage_bytes;
+                None
+            }
+            Ok(Ok(DownloadResult::Earth(outcome))) => {
                 self.disk_usage_bytes = outcome.disk_usage_bytes;
                 self.transport = outcome.transport;
                 self.status = outcome.assets.status();
@@ -1332,7 +1366,9 @@ mod tests {
         let pool = BackgroundJobs::new(1, 1);
         let mut downloader = AssetDownloader::new(&config);
         downloader.active = Some(DownloadPack::All);
-        downloader.job = Some(Task::start_unbounded(&pool, move |_| Ok(outcome)));
+        downloader.job = Some(Task::start_unbounded(&pool, move |_| {
+            Ok(DownloadResult::Earth(outcome))
+        }));
         let ctx = egui::Context::default();
         let deadline = Instant::now() + Duration::from_secs(5);
         let assets = loop {

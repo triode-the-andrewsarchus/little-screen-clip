@@ -441,7 +441,7 @@ impl SkyRenderer {
                 gl.get_uniform_location(p, "u_planets[0]").as_ref(),
                 scene.planets.as_flattened(),
             );
-            self.lunar_uniforms(gl, p, frame);
+            self.lunar_uniforms(gl, p, frame, None);
             bind(gl, p, "u_stars", 3, self.stars);
             if frame.moon_view {
                 self.bind_earth(gl, p, frame.earth_lighting, earth);
@@ -469,6 +469,7 @@ impl SkyRenderer {
         gl: &glow::Context,
         p: glow::Program,
         frame: &super::Frame,
+        fallback: Option<glow::Texture>,
     ) {
         let scene = frame.sky.as_ref();
         let phase = if scene.is_some() && frame.earth_lighting {
@@ -482,7 +483,7 @@ impl SkyRenderer {
         );
         let sun = scene.map_or([150_000_000.0, 0.0, 0.0], |scene| scene.lunar_sun);
         let earth = scene.map_or([-380_000.0, 0.0, 0.0], |scene| scene.lunar_earth);
-        let albedo = self.moon.filter(|_| scene.is_some());
+        let albedo = self.moon.filter(|_| scene.is_some()).or(fallback);
         // SAFETY: the current context owns the bound program and retained lunar texture.
         unsafe {
             let loc = |name| gl.get_uniform_location(p, name);
@@ -723,7 +724,7 @@ fn zoom_fade(zoom: f64, start: f64, end: f64) -> f32 {
     amount * amount * (3.0 - 2.0 * amount)
 }
 
-unsafe fn bind(
+pub(super) unsafe fn bind(
     gl: &glow::Context,
     program: glow::Program,
     name: &str,
@@ -738,7 +739,10 @@ unsafe fn bind(
     }
 }
 
-unsafe fn upload(gl: &glow::Context, source: &sky::Texture) -> Result<glow::Texture, String> {
+pub(super) unsafe fn upload(
+    gl: &glow::Context,
+    source: &sky::Texture,
+) -> Result<glow::Texture, String> {
     // SAFETY: the decoded RGB buffer fits the validated texture dimensions.
     unsafe {
         gl.active_texture(glow::TEXTURE3);

@@ -8,7 +8,7 @@ mod overlay;
 mod radiation;
 mod river_coverage;
 pub(super) mod sky;
-mod solar;
+pub(super) mod solar;
 mod strips;
 mod terrain_download;
 mod tiles;
@@ -132,6 +132,7 @@ pub(super) struct Viewer {
     camera: GlobeCamera,
     moon_camera: Option<GlobeCamera>,
     solar_system: Option<solar::System>,
+    world: Option<solar::world::World>,
     middle_drag: map_camera::MiddleDrag,
     style: BasemapStyle,
     show_country_borders: bool,
@@ -358,6 +359,7 @@ impl Viewer {
             camera: GlobeCamera::default(),
             moon_camera: None,
             solar_system: None,
+            world: None,
             middle_drag: Default::default(),
             style: BasemapStyle::Natural,
             show_country_borders: true,
@@ -409,6 +411,7 @@ impl Viewer {
 
     fn fit_document(&mut self) {
         self.solar_system = None;
+        self.world = None;
         self.moon_camera = None;
         self.camera.fit_bounds(self.document.geographic_bounds);
     }
@@ -439,6 +442,16 @@ impl Viewer {
         if active == Some(DownloadPack::MoonRelief) && self.downloader.active.is_none() {
             self.tiles.notice_lunar_assets();
         }
+        if let Some(DownloadPack::World(id)) = active
+            && self.downloader.active.is_none()
+        {
+            if let Some(world) = self.world.as_mut().filter(|world| world.body.id == id) {
+                world.reload();
+            }
+            if id == solar::MOON {
+                self.sky.reload(&self.downloader.assets_dir);
+            }
+        }
         if let Some(downloaded) = downloaded {
             self.terrain_download.invalidate_coverage();
             if matches!(active, Some(DownloadPack::Sky | DownloadPack::StarCatalog)) {
@@ -455,7 +468,10 @@ impl Viewer {
         let colors = WorkbenchColors::from_palette(palette);
         self.download_prompt_banner(ui, palette, colors);
 
-        let layout = if self.solar_system.is_some() {
+        if let Some(world) = self.world.as_mut() {
+            world.poll(ui.ctx(), &self.downloader.assets_dir);
+        }
+        let layout = if self.solar_system.is_some() || self.world.is_some() {
             StudioPanelLayout::center_only()
         } else {
             StudioPanelLayout::default().with_left()
@@ -484,6 +500,33 @@ impl Viewer {
                     recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
                 ) {
                     self.select_solar_target(id, ui.ctx());
+                }
+                return;
+            }
+
+            if self.moon_camera.is_none()
+                && let Some(world) = self.world.as_mut()
+            {
+                let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+                let (rect, response) = ui.allocate_exact_size(
+                    available.size().max(egui::Vec2::ZERO),
+                    egui::Sense::click_and_drag(),
+                );
+                if rect.is_positive() {
+                    world.navigate(&response);
+                    let painter = ui.painter_at(rect);
+                    painter.rect_filled(rect, 0, egui::Color32::from_rgb(7, 10, 17));
+                    solar::paint_stars(&painter, rect);
+                    let error = gpu::paint_world(ui, rect, world.frame(rect.size().into())).err();
+                    if let Some(error) = error {
+                        painter.text(
+                            rect.left_top() + egui::vec2(8.0, 8.0),
+                            egui::Align2::LEFT_TOP,
+                            error,
+                            egui::FontId::proportional(14.0),
+                            colors.warning,
+                        );
+                    }
                 }
                 return;
             }
@@ -547,13 +590,14 @@ impl Viewer {
                 map_camera::update_ground(camera, size, map_camera::MOON_RADIUS_M, |lat, lon| {
                     self.tiles.lunar_height_at(lat, lon)
                 });
-                let frame = self.tiles.moon_frame(
+                let mut frame = self.tiles.moon_frame(
                     ui.ctx(),
                     self.assets.as_ref(),
                     &self.downloader.assets_dir,
                     *camera,
                     size,
                 );
+                frame.0.lunar_albedo = self.world.as_ref().and_then(solar::world::World::texture);
                 self.paint_frame(ui, &response, slot, Some(frame), None);
                 return;
             }
@@ -771,7 +815,13 @@ impl Viewer {
                         "Sun" => self.open_solar_system(solar::SUN, ui.ctx()),
                         "Earth" => self.select_solar_target(solar::EARTH, ui.ctx()),
                         "Moon" => self.select_solar_target(solar::MOON, ui.ctx()),
-                        _ => {}
+                        _ => {
+                            if let Some(body) =
+                                solar::satellites(solar::SUN).find(|body| body.name == name)
+                            {
+                                self.select_solar_target(body.id, ui.ctx());
+                            }
+                        }
                     }
                 }
             }
@@ -860,12 +910,20 @@ impl Viewer {
         }
         if let Some(camera) = self.moon_camera.as_mut() {
             if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
-                self.moon_camera = None;
+                self.select_solar_target(solar::EARTH, ui.ctx());
             }
             if ui.button("Solar System").clicked() {
                 self.open_solar_system(solar::SUN, ui.ctx());
             }
+            if ui.button("Moon orbit").clicked() {
+                self.open_solar_system(solar::EARTH, ui.ctx());
+            }
             self.lunar_download(ui);
+            self.body_assets(ui);
+            return;
+        }
+        if self.world.is_some() {
+            self.world_toolbar(ui);
             return;
         }
         let terrain_available =
@@ -969,15 +1027,96 @@ impl Viewer {
         });
     }
 
+    fn world_toolbar(&mut self, ui: &mut egui::Ui) {
+        let Some(body) = self.world.as_ref().map(|world| world.body) else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Solar System").clicked() {
+                self.open_solar_system(solar::SUN, ui.ctx());
+                return;
+            }
+            let orbit = if body.kind() == solar::Kind::Moon {
+                body.parent
+                    .and_then(solar::body)
+                    .map(|parent| (parent.id, format!("Orbit around {}", parent.name)))
+            } else {
+                solar::satellites(body.id)
+                    .next()
+                    .map(|_| (body.id, "Moon orbits".to_string()))
+            };
+            if let Some((center, title)) = orbit
+                && ui.button(title).clicked()
+            {
+                self.open_solar_system(center, ui.ctx());
+                return;
+            }
+            ui.separator();
+            ui.strong(body.name);
+            if let Some(radius) = body.radius {
+                ui.label(format!("{radius:.1} km mean radius"));
+            }
+            self.body_assets(ui);
+        });
+    }
+
+    fn body_assets(&mut self, ui: &mut egui::Ui) {
+        let Some(world) = self.world.as_ref() else {
+            return;
+        };
+        let (dataset, credit, source, bytes) = solar::assets::information(world.body);
+        let pack = DownloadPack::World(world.body.id);
+        let local_error = world.error.clone();
+        if self.downloader.active == Some(pack) {
+            self.download_progress(ui);
+        } else if world.pending() {
+            ui.label("Checking offline assets…");
+        } else if world.installed() {
+            ui.hyperlink_to(credit, source).on_hover_text(dataset);
+            if let Some(observation) = &world.observation {
+                ui.menu_button("Reference image", |ui| {
+                    let size = observation.size_vec2();
+                    let scale = (480.0 / size.max_elem()).min(1.0);
+                    ui.image((observation.id(), size * scale));
+                    ui.hyperlink_to(credit, source);
+                });
+            }
+        } else if ui
+            .add_enabled(
+                self.downloader.active.is_none(),
+                egui::Button::new(format!(
+                    "Download {} · {:.1} MB",
+                    dataset.to_lowercase(),
+                    bytes as f64 / 1_000_000.0
+                )),
+            )
+            .on_hover_text(credit)
+            .clicked()
+        {
+            self.downloader.start(pack, &self.config);
+        }
+        if let Some(error) = local_error.as_ref().or(self.downloader.last_error.as_ref()) {
+            ui.label(error);
+        }
+    }
+
+    fn download_progress(&mut self, ui: &mut egui::Ui) {
+        let progress = self.downloader.progress_snapshot();
+        ui.add(
+            egui::ProgressBar::new(progress.fraction)
+                .text(progress.message)
+                .desired_width(230.0),
+        );
+        if ui.button("Cancel").clicked() {
+            self.downloader.cancel();
+        }
+    }
+
     fn lunar_download(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             let pack = DownloadPack::MoonRelief;
             if self.downloader.active == Some(pack) {
-                let progress = self.downloader.progress_snapshot();
-                ui.add(egui::ProgressBar::new(progress.fraction).text(progress.message));
-                if ui.button("Cancel").clicked() {
-                    self.downloader.cancel();
-                }
+                self.download_progress(ui);
             } else if self.tiles.has_lunar_assets() {
                 ui.hyperlink_to(
                     "NASA LOLA elevation",
@@ -1007,27 +1146,37 @@ impl Viewer {
     }
 
     fn open_solar_system(&mut self, center: solar::Id, ctx: &egui::Context) {
-        self.solar_system = Some(solar::System::new(center));
+        let mut system = solar::System::new(center);
+        if let Some(world) = self.world.take()
+            && world.body.parent == Some(center)
+            && let Some(ephemeris) = world.ephemeris()
+        {
+            system.show_ephemeris(world.body.id, ephemeris);
+        }
+        self.solar_system = Some(system);
+        self.moon_camera = None;
         self.tiles.suspend();
         ctx.request_repaint();
     }
 
     fn select_solar_target(&mut self, id: solar::Id, ctx: &egui::Context) {
-        match id {
-            solar::EARTH | solar::MOON => {
-                self.solar_system = None;
-                self.moon_camera = (id == solar::MOON).then(map_camera::lunar_camera);
-                self.tiles.suspend();
-                ctx.request_repaint();
-            }
-            _ => self.open_solar_system(id, ctx),
+        if id == solar::SUN {
+            self.open_solar_system(id, ctx);
+            return;
         }
+        self.solar_system = None;
+        self.moon_camera = (id == solar::MOON).then(map_camera::lunar_camera);
+        self.world = solar::body(id)
+            .filter(|body| body.id != solar::EARTH)
+            .map(solar::world::World::new);
+        self.tiles.suspend();
+        ctx.request_repaint();
     }
 
     fn solar_toolbar(&mut self, ui: &mut egui::Ui, center: solar::Id) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Back to map").clicked() {
-                self.solar_system = None;
+                self.select_solar_target(solar::EARTH, ui.ctx());
             }
             ui.separator();
             if ui
@@ -1893,7 +2042,9 @@ fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
                     "Sun" => {
                         ui.label("Click to explore the Solar System");
                     }
-                    _ => {}
+                    _ => {
+                        ui.label("Click to explore");
+                    }
                 }
             }
             gpu::SkyObject::Star(star) => {

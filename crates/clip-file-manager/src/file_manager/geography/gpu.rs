@@ -3,6 +3,7 @@
 //! camera uniforms. No framebuffer readback or per-camera CPU raster is involved.
 mod sky;
 mod terrain;
+mod world;
 use super::geometry::{Batch, Layer, Layers, RiverKey, Scene};
 use eframe::{
     egui_glow,
@@ -27,6 +28,25 @@ use std::{
 pub(super) use terrain::Surface;
 
 const GPU_BUDGET: usize = 128 * 1024 * 1024;
+
+unsafe fn configure_viewport(gl: &glow::Context, info: &egui::PaintCallbackInfo) {
+    let viewport = info.viewport_in_pixels();
+    // SAFETY: the caller owns the verified current context.
+    unsafe {
+        gl.viewport(
+            viewport.left_px,
+            viewport.from_bottom_px,
+            viewport.width_px,
+            viewport.height_px,
+        );
+        gl.disable(glow::DEPTH_TEST);
+        gl.disable(glow::CULL_FACE);
+        gl.disable(glow::STENCIL_TEST);
+        gl.enable(glow::BLEND);
+        gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+    }
+}
+
 fn runtime_key() -> egui::Id {
     egui::Id::unique("geography_gpu_runtime")
 }
@@ -101,6 +121,7 @@ pub(super) struct Frame {
     pub show_sky: bool,
     pub moon_view: bool,
     pub lunar: Option<(u64, Vec<Arc<SourceTile>>)>,
+    pub lunar_albedo: Option<super::sky::Texture>,
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
@@ -163,6 +184,32 @@ pub(super) fn paint_at(
     frame: Frame,
     slot: Option<egui::layers::ShapeIdx>,
 ) -> Result<(), String> {
+    schedule_paint(ui, rect, slot, move |renderer, gl, info| {
+        // SAFETY: schedule_paint verifies the owning GL context before calling us.
+        unsafe { renderer.paint(gl, info, &frame) }
+    })
+}
+
+pub(super) fn paint_world(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    frame: super::solar::world::Frame,
+) -> Result<(), String> {
+    schedule_paint(ui, rect, None, move |renderer, gl, info| {
+        // SAFETY: schedule_paint verifies the owning GL context before calling us.
+        unsafe { renderer.world.draw(gl, info, &frame) }
+    })
+}
+
+fn schedule_paint(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    slot: Option<egui::layers::ShapeIdx>,
+    draw: impl Fn(&mut Renderer, &glow::Context, &egui::PaintCallbackInfo) -> Result<bool, String>
+    + Send
+    + Sync
+    + 'static,
+) -> Result<(), String> {
     let handle = ui
         .ctx()
         .data(|d| d.get_temp::<Handle>(runtime_key()))
@@ -186,9 +233,7 @@ pub(super) fn paint_at(
                 return;
             }
             if let Ok(mut renderer) = handle.renderer.lock() {
-                // SAFETY: egui invokes callbacks with the verified owning context
-                // current. Resource deletion runs only in this callback or on_exit.
-                let result = unsafe { renderer.paint(painter.gl(), &info, &frame) };
+                let result = draw(&mut renderer, painter.gl(), &info);
                 match result {
                     Ok(true) => ctx.request_repaint(),
                     Ok(false) => {}
@@ -213,6 +258,7 @@ pub(super) fn paint_at(
 struct Renderer {
     resources: Option<Resources>,
     sky: sky::SkyRenderer,
+    world: world::Renderer,
     heights: terrain::HeightAtlas,
     tiles: HashMap<(u64, TileId), TextureTile>,
     bytes: usize,
@@ -257,18 +303,7 @@ impl Renderer {
             self.frame = self.frame.wrapping_add(1);
             self.upload_tiles(gl, frame)?;
             let resources = self.resources.as_ref().ok_or("Map resources unavailable")?;
-            let viewport = info.viewport_in_pixels();
-            gl.viewport(
-                viewport.left_px,
-                viewport.from_bottom_px,
-                viewport.width_px,
-                viewport.height_px,
-            );
-            gl.disable(glow::DEPTH_TEST);
-            gl.disable(glow::CULL_FACE);
-            gl.disable(glow::STENCIL_TEST);
-            gl.enable(glow::BLEND);
-            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            configure_viewport(gl, info);
             gl.bind_vertex_array(Some(resources.vao));
             let earth = [0, 1].map(|x| {
                 if !frame.moon_view {
@@ -281,6 +316,17 @@ impl Renderer {
             });
             self.sky.paint_frame(gl, frame, earth);
             if frame.moon_view && frame.terrain.is_none() {
+                if frame.sky.is_none()
+                    && let Some(moon) = super::solar::body(super::solar::MOON)
+                {
+                    let world = super::solar::world::Frame::new(
+                        moon,
+                        frame.camera,
+                        frame.size,
+                        frame.lunar_albedo.clone(),
+                    );
+                    self.world.draw(gl, info, &world)?;
+                }
                 gl.bind_vertex_array(None);
                 gl.active_texture(glow::TEXTURE0);
                 return Ok(self.needs_raster_upload(frame)
@@ -292,7 +338,17 @@ impl Renderer {
             gl.use_program(Some(resources.program));
             let p = resources.program;
             if frame.moon_view {
-                self.sky.lunar_uniforms(gl, p, frame);
+                let fallback = if frame
+                    .sky
+                    .as_ref()
+                    .is_none_or(|sky| sky.assets.moon.is_none())
+                {
+                    self.world.set_texture(gl, frame.lunar_albedo.as_ref())?;
+                    self.world.texture()
+                } else {
+                    None
+                };
+                self.sky.lunar_uniforms(gl, p, frame, fallback);
             } else {
                 self.sky.earth_uniforms(gl, p, frame);
             }
@@ -491,6 +547,7 @@ impl Renderer {
         // SAFETY: caller retains the owning current context throughout teardown.
         unsafe {
             self.sky.destroy(gl);
+            self.world.destroy(gl);
             self.heights.destroy(gl);
             for (_, batch) in self.vectors.drain() {
                 batch.destroy(gl);
