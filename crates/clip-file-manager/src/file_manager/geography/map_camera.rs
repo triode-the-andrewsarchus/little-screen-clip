@@ -10,7 +10,7 @@ pub(super) const CONTROLS: &str = "Left-drag to pan. Scroll to zoom. Middle-drag
 pub(super) struct MiddleDrag(Option<egui::Pos2>);
 
 impl MiddleDrag {
-    fn update(&mut self, response: &egui::Response) -> Option<egui::Vec2> {
+    pub(super) fn update(&mut self, response: &egui::Response) -> Option<egui::Vec2> {
         let press = response.ctx.input(|input| {
             input.events.iter().find_map(|event| match event {
                 egui::Event::PointerButton {

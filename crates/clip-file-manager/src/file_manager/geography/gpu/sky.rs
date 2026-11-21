@@ -192,32 +192,52 @@ pub(in super::super) fn moon_at(
     }
     let pose = SkyProjection::for_frame(frame, scene);
     let offset = pointer - rect.center();
-    if !pose.exposed(offset) {
-        return false;
-    }
+    pose.exposed(offset) && luminary_at(frame, scene, &pose, offset, false)
+}
+
+fn luminary_at(
+    frame: &super::Frame,
+    scene: &sky::Scene,
+    pose: &SkyProjection,
+    offset: egui::Vec2,
+    is_sun: bool,
+) -> bool {
     let ray = pose.inertial_ray(pose.basis, offset);
+    let sun = subtract(scene.sun, pose.eye);
     let moon = subtract(scene.moon, pose.eye);
+    let (body, body_radius) = if is_sun {
+        (sun, 695_700.0)
+    } else {
+        (moon, 1737.4)
+    };
     let scale = if frame.readable_sky {
-        let sun = subtract(scene.sun, pose.eye);
         let [a, b] = [unit(sun), unit(moon)];
         let separation = dot(cross(a, b), cross(a, b)).sqrt().atan2(dot(a, b));
         let radii = 695_700.0 / dot(sun, sun).sqrt() + 1737.4 / dot(moon, moon).sqrt();
-        let clearance = std::array::from_fn(|i| pose.eye[i] + b[i] * (-dot(pose.eye, b)).max(0.0));
+        let direction = if is_sun { a } else { b };
+        let clearance = std::array::from_fn(|i| {
+            pose.eye[i] + direction[i] * (-dot(pose.eye, direction)).max(0.0)
+        });
         let above_limb = dot(clearance, clearance).sqrt() - 6378.137;
         let smooth = |x: f32| {
             let t = x.clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
         };
+        let enlargement = if frame.moon_view {
+            1.0
+        } else {
+            smooth((separation / radii - 16.0) / 1.5)
+        };
         1.0 + 15.0
             * readable_disk_zoom(frame.camera.zoom)
-            * smooth((separation / radii - 16.0) / 1.5)
+            * enlargement
             * smooth(above_limb / 600.0)
     } else {
         1.0
     };
-    let across = cross(ray, moon);
-    let radius = (1737.4 * scale).max(dot(moon, moon).sqrt() * 5.0 / pose.focal);
-    dot(ray, moon) > 0.0 && dot(across, across) <= radius * radius
+    let across = cross(ray, body);
+    let radius = (body_radius * scale).max(dot(body, body).sqrt() * 5.0 / pose.focal);
+    dot(ray, body) > 0.0 && dot(across, across) <= radius * radius
 }
 
 pub(in super::super) fn earth_at(
@@ -255,12 +275,15 @@ pub(in super::super) fn sky_object_at(
     if moon_at(frame, rect, pointer) {
         return Some(SkyObject::Body("Moon"));
     }
-    if frame.moon_view && projection.earth_at(pointer - center) {
+    if earth_at(frame, rect, pointer) {
         return Some(SkyObject::Body("Earth"));
+    }
+    if luminary_at(frame, scene, &projection, pointer - center, true) {
+        return Some(SkyObject::Body("Sun"));
     }
     let body = scene
         .bodies()
-        .filter(|(name, _)| *name != "Moon")
+        .filter(|(name, _)| !matches!(*name, "Sun" | "Moon"))
         .filter_map(|(name, position)| {
             let point = center + projection.project(position)?;
             let distance = point.distance_sq(pointer);

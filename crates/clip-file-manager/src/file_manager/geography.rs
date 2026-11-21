@@ -7,6 +7,7 @@ mod overlay;
 mod radiation;
 mod river_coverage;
 pub(super) mod sky;
+mod solar;
 mod strips;
 mod terrain_download;
 mod tiles;
@@ -129,6 +130,7 @@ pub(super) struct Viewer {
     current: Option<Hit>,
     camera: GlobeCamera,
     moon_camera: Option<GlobeCamera>,
+    solar_system: Option<solar::System>,
     middle_drag: map_camera::MiddleDrag,
     style: BasemapStyle,
     show_country_borders: bool,
@@ -354,6 +356,7 @@ impl Viewer {
             current: None,
             camera: GlobeCamera::default(),
             moon_camera: None,
+            solar_system: None,
             middle_drag: Default::default(),
             style: BasemapStyle::Natural,
             show_country_borders: true,
@@ -404,6 +407,7 @@ impl Viewer {
     }
 
     fn fit_document(&mut self) {
+        self.solar_system = None;
         self.moon_camera = None;
         self.camera.fit_bounds(self.document.geographic_bounds);
     }
@@ -446,7 +450,12 @@ impl Viewer {
         let colors = WorkbenchColors::from_palette(palette);
         self.download_prompt_banner(ui, palette, colors);
 
-        let layout = StudioPanelLayout::default().with_left().allocate(ui);
+        let layout = if self.solar_system.is_some() {
+            StudioPanelLayout::center_only()
+        } else {
+            StudioPanelLayout::default().with_left()
+        }
+        .allocate(ui);
         if let Some(left) = layout.left {
             ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
@@ -456,6 +465,23 @@ impl Viewer {
         ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.toolbar(ui, palette);
+
+            if let Some(system) = &mut self.solar_system {
+                let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+                let (_, response) = ui.allocate_exact_size(
+                    available.size().max(egui::Vec2::ZERO),
+                    egui::Sense::click_and_drag(),
+                );
+                let recorded = recorded_scene_time(&self.document, self.selected, None);
+                if let Some(id) = system.paint(
+                    ui,
+                    &response,
+                    recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
+                ) {
+                    self.select_solar_target(id, ui.ctx());
+                }
+                return;
+            }
 
             let feature = &self.document.features[self.selected];
             let profile_visible = self.moon_camera.is_none()
@@ -727,13 +753,14 @@ impl Viewer {
             if response.clicked()
                 && let Some(pointer) = response.interact_pointer_pos()
             {
-                if gpu::earth_at(&frame, rect, pointer) {
-                    self.moon_camera = None;
-                    ui.ctx().request_repaint();
-                } else if gpu::moon_at(&frame, rect, pointer) {
-                    self.moon_camera = Some(map_camera::lunar_camera());
-                    self.tiles.suspend();
-                    ui.ctx().request_repaint();
+                if let Some(gpu::SkyObject::Body(name)) = gpu::sky_object_at(&frame, rect, pointer)
+                {
+                    match name {
+                        "Sun" => self.open_solar_system(solar::SUN, ui.ctx()),
+                        "Earth" => self.select_solar_target(solar::EARTH, ui.ctx()),
+                        "Moon" => self.select_solar_target(solar::MOON, ui.ctx()),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -815,9 +842,16 @@ impl Viewer {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if let Some(center) = self.solar_system.as_ref().map(|view| view.center) {
+            self.solar_toolbar(ui, center);
+            return;
+        }
         if let Some(camera) = self.moon_camera.as_mut() {
             if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
                 self.moon_camera = None;
+            }
+            if ui.button("Solar System").clicked() {
+                self.open_solar_system(solar::SUN, ui.ctx());
             }
             return;
         }
@@ -916,6 +950,68 @@ impl Viewer {
             {
                 self.show_assets_panel = !self.show_assets_panel;
             }
+            if ui.button("Solar System").clicked() {
+                self.open_solar_system(solar::SUN, ui.ctx());
+            }
+        });
+    }
+
+    fn open_solar_system(&mut self, center: solar::Id, ctx: &egui::Context) {
+        self.solar_system = Some(solar::System::new(center));
+        self.tiles.suspend();
+        ctx.request_repaint();
+    }
+
+    fn select_solar_target(&mut self, id: solar::Id, ctx: &egui::Context) {
+        match id {
+            solar::EARTH | solar::MOON => {
+                self.solar_system = None;
+                self.moon_camera = (id == solar::MOON).then(map_camera::lunar_camera);
+                self.tiles.suspend();
+                ctx.request_repaint();
+            }
+            _ => self.open_solar_system(id, ctx),
+        }
+    }
+
+    fn solar_toolbar(&mut self, ui: &mut egui::Ui, center: solar::Id) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Back to map").clicked() {
+                self.solar_system = None;
+            }
+            ui.separator();
+            if ui
+                .selectable_label(center == solar::SUN, "Solar System")
+                .clicked()
+                && center != solar::SUN
+            {
+                self.open_solar_system(solar::SUN, ui.ctx());
+            }
+            if let Some(body) = solar::body(center).filter(|body| body.id != solar::SUN) {
+                if let Some(parent) = body
+                    .parent
+                    .and_then(solar::body)
+                    .filter(|parent| parent.id != solar::SUN)
+                    && ui.button(parent.name).clicked()
+                {
+                    self.open_solar_system(parent.id, ui.ctx());
+                }
+                ui.label(body.name);
+            }
+            egui::ComboBox::from_id_salt("solar-system-bodies")
+                .selected_text(if center == solar::SUN {
+                    "Worlds"
+                } else {
+                    "Moons"
+                })
+                .show_ui(ui, |ui| {
+                    for body in solar::satellites(center) {
+                        if ui.button(body.name).clicked() {
+                            self.select_solar_target(body.id, ui.ctx());
+                            ui.close();
+                        }
+                    }
+                });
         });
     }
 
@@ -1743,6 +1839,9 @@ fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
                     }
                     "Moon" => {
                         ui.label("Click to explore");
+                    }
+                    "Sun" => {
+                        ui.label("Click to explore the Solar System");
                     }
                     _ => {}
                 }

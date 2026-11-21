@@ -13,7 +13,7 @@ use little_clip_core::geography::basemap::{
     perspective::{EARTH_RADIUS_M, Perspective},
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
-pub(super) use sky::{SkyObject, earth_at, moon_at, sky_object_at};
+pub(super) use sky::{SkyObject, sky_object_at};
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
