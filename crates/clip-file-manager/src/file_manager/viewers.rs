@@ -733,23 +733,8 @@ fn load(
     if !metadata.is_file() {
         return Err("Only regular files can be inspected".into());
     }
-    if let Some(document) = super::multisample::read_if_identified(path, cancelled) {
-        return Ok(Loaded::Multisample(Box::new(
-            super::multisample::Viewer::from_identified(path, document),
-        )));
-    }
-    if little_clip_core::notebook::is_candidate_path(path)
-        && little_clip_core::notebook::has_header(path, cancelled)?
-    {
-        little_clip_core::notebook::inspect(path, cancelled)?;
-        return Ok(Loaded::Handwritten);
-    }
-    if let Some(trajectory) =
-        super::geography::solar::trajectory::Trajectory::read_if_identified(path, cancelled)?
-    {
-        return Ok(Loaded::Geography(
-            super::geography::Viewer::from_trajectory(trajectory)?,
-        ));
+    if let Some(preview) = identify_special_file(path, cancelled)? {
+        return Ok(preview);
     }
     let kind = kind(path);
     let limit = match kind {
@@ -832,6 +817,31 @@ fn load(
         Kind::Pdf | Kind::Scene | Kind::Model => FileSource::capture(path).map(|_| Loaded::Path),
     }
 }
+fn identify_special_file(
+    path: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<Option<Loaded>, String> {
+    if let Some(document) = super::multisample::read_if_identified(path, cancelled) {
+        return Ok(Some(Loaded::Multisample(Box::new(
+            super::multisample::Viewer::from_identified(path, document),
+        ))));
+    }
+    if little_clip_core::notebook::is_candidate_path(path)
+        && little_clip_core::notebook::has_header(path, cancelled)?
+    {
+        little_clip_core::notebook::inspect(path, cancelled)?;
+        return Ok(Some(Loaded::Handwritten));
+    }
+    if let Some(trajectory) =
+        super::geography::solar::trajectory::Trajectory::read_if_identified(path, cancelled)?
+    {
+        return Ok(Some(Loaded::Geography(
+            super::geography::Viewer::from_trajectory(trajectory)?,
+        )));
+    }
+    Ok(None)
+}
+
 fn session(
     loaded: Loaded,
     path: PathBuf,

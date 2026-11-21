@@ -37,9 +37,8 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         VecDeque::new(),
     );
     let (ticket, _ticket_receiver) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
-    let (result_tx, receiver) = std::sync::mpsc::channel::<
-        Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>,
-    >();
+    let (result_tx, receiver) =
+        std::sync::mpsc::channel::<Result<Result<SpreadsheetLoadResult, String>, JobError>>();
     result_tx.send(Ok(Err("fixture failure".into()))).unwrap();
     app.spreadsheet_load_job = Some((ticket, receiver, None));
 
@@ -79,7 +78,7 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
     let (ticket, _ticket_receiver) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
     let (result_tx, receiver) = std::sync::mpsc::channel();
     result_tx
-        .send(Ok(Ok((
+        .send(Ok(Ok(SpreadsheetLoadResult::Sheet(
             SpreadsheetData {
                 title: "fixture".into(),
                 sheets: Vec::new(),

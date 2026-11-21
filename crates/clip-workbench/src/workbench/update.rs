@@ -146,7 +146,6 @@ impl eframe::App for WorkbenchApp {
                 WorkbenchView::Palette => {
                     if self.palette_ops_job.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Preparing actions…"); }); }
                     let text_preview_action = self.check_inspector_text_preview();
-                    let map_target = self.map_target(ui.ctx());
 
                     // Selected slots banner & shortcuts
                     let slot_labels: Vec<&str> = self.selected_slots.iter().map(|s| s.label()).collect();
@@ -334,13 +333,7 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        if let Some(target) = map_target
-                            && ui.add(contextual_palette_action_button(
-                                Some(Icon::Map), "Open in map", &self.ui_palette,
-                            )).clicked()
-                        {
-                            self.open_map(target);
-                        }
+                        self.geography_action(ui);
 
                         // Smart text previews: Unit conversions, Network (IP/MAC), and Timestamps
                         self.render_text_smart_preview_actions(ui);

@@ -103,6 +103,9 @@ impl System {
     }
 
     fn apply_trajectory_fit(&mut self, rect: Rect) {
+        if !std::mem::take(&mut self.fit_requested) {
+            return;
+        }
         let Some(trajectory) = self.trajectory.as_ref() else {
             return;
         };
@@ -176,9 +179,7 @@ impl System {
         maps: &assets::MapCache,
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
-        if std::mem::take(&mut self.fit_requested) {
-            self.apply_trajectory_fit(response.rect);
-        }
+        self.apply_trajectory_fit(response.rect);
         let wheel = self.navigate(response);
         if wheel == Wheel::Beyond && self.center != SUN {
             return Some(Selection::Overview);
@@ -218,9 +219,6 @@ impl System {
         self.paint_backdrop(ui, &painter, projection, &backdrop);
         let mut guides = painter.clone();
         guides.multiply_opacity(1.0 - (blend * 2.2).min(1.0));
-        if heliocentric {
-            paint_belts(&guides, projection, self.zoom);
-        }
         let mut layout = OrbitLayout {
             painter: &guides,
             marks: vec![Mark::new(
@@ -232,9 +230,6 @@ impl System {
             day,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
-        if let Some(trajectory) = self.trajectory.as_deref() {
-            paint_trajectory_path(&guides, projection, trajectory);
-        }
         if wheel == Wheel::In
             && self.flight.is_none()
             && approach.is_none()
@@ -263,14 +258,12 @@ impl System {
         }
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
         if heliocentric {
-            if let Some(position) = self
-                .trajectory
-                .as_deref()
-                .and_then(|path| path.position_at(preview.time))
-            {
-                paint_trajectory_position(&painter, projection.project(position).0);
-            }
-            orbit_scale_bar(&painter, rect, projection.scale);
+            paint_heliocentric_details(
+                &painter,
+                projection,
+                self.trajectory.as_deref(),
+                preview.time,
+            );
         } else {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
         }
@@ -381,6 +374,9 @@ impl System {
 
     fn paint_orbits(&self, layout: &mut OrbitLayout<'_>, projection: Projection, primary: Id) {
         let helio = primary == SUN;
+        if helio {
+            paint_belts(layout.painter, projection, self.zoom);
+        }
         let bodies = satellites(primary);
         let dense = bodies.clone().count() > 24;
         for satellite in bodies {
@@ -414,6 +410,9 @@ impl System {
             {
                 layout.marks.push(mark);
             }
+        }
+        if let Some(trajectory) = self.trajectory.as_deref() {
+            paint_trajectory_path(layout.painter, projection, trajectory);
         }
     }
 
@@ -792,16 +791,26 @@ fn paint_trajectory_path(painter: &egui::Painter, projection: Projection, path: 
     }
 }
 
-fn paint_trajectory_position(painter: &egui::Painter, point: Pos2) {
-    if painter.clip_rect().expand(8.0).contains(point) {
-        painter.circle_filled(point, 7.0, TRAJECTORY_COLOR.gamma_multiply(0.26));
-        painter.circle(
-            point,
-            4.0,
-            TRAJECTORY_COLOR,
-            Stroke::new(1.0, Color32::BLACK),
-        );
+fn paint_heliocentric_details(
+    painter: &egui::Painter,
+    projection: Projection,
+    path: Option<&Trajectory>,
+    time: chrono::DateTime<chrono::Utc>,
+) {
+    let rect = painter.clip_rect();
+    if let Some(position) = path.and_then(|path| path.position_at(time)) {
+        let point = projection.project(position).0;
+        if rect.expand(8.0).contains(point) {
+            painter.circle_filled(point, 7.0, TRAJECTORY_COLOR.gamma_multiply(0.26));
+            painter.circle(
+                point,
+                4.0,
+                TRAJECTORY_COLOR,
+                Stroke::new(1.0, Color32::BLACK),
+            );
+        }
     }
+    orbit_scale_bar(painter, rect, projection.scale);
 }
 
 fn orbit_arc(

@@ -40,33 +40,23 @@ pub fn resolve(text: &str) -> Option<Location> {
             kind: None,
         });
     }
-    if !text.chars().any(char::is_alphabetic) {
-        return None;
-    }
+    text.chars()
+        .any(char::is_alphabetic)
+        .then(|| named_location(text))
+        .flatten()
+}
+
+fn named_location(text: &str) -> Option<Location> {
     let (query, locality) = text.split_once(',').map_or((text, None), |(name, area)| {
         (name.trim(), Some(area.trim()))
     });
     let candidates = || {
-        PLACES.iter().filter(|(_, name, area, alias, _, _)| {
-            (same_name(query, name)
-                || alias
-                    .split(" / ")
-                    .any(|alias| !alias.is_empty() && same_name(query, alias)))
-                && locality.is_none_or(|part| {
-                    !part.is_empty()
-                        && (same_name(part, area)
-                            || area.split(',').any(|area| same_name(part, area.trim())))
-                })
-        })
+        PLACES
+            .iter()
+            .filter(|place| matches_place(place, query, locality))
     };
     let best = candidates().max_by(|a, b| a.5.total_cmp(&b.5))?;
-    let ambiguous = candidates().any(|other| {
-        // The same mapped city and its administrative region can share a name.
-        let nearby = (best.4[0] - other.4[0]).abs() < 0.25
-            && super::basemap::wrap_lon_delta(best.4[1] - other.4[1]).abs() < 0.25;
-        !nearby && (best.0 != other.0 || best.5 < 10.0 * other.5 || best.5 <= 0.0)
-    });
-    if ambiguous {
+    if candidates().any(|other| conflicts(best, other)) {
         return None;
     }
     // Ordinary lowercase words may coincide with less prominent place names.
@@ -83,6 +73,30 @@ pub fn resolve(text: &str) -> Option<Location> {
         lat_lon: best.4,
         kind: Some(best.0),
     })
+}
+
+fn matches_place(
+    (_, name, area, alias, _, _): &Place,
+    query: &str,
+    locality: Option<&str>,
+) -> bool {
+    let name_matches = same_name(query, name)
+        || alias
+            .split(" / ")
+            .any(|alias| !alias.is_empty() && same_name(query, alias));
+    name_matches
+        && locality.is_none_or(|part| {
+            !part.is_empty()
+                && (same_name(part, area)
+                    || area.split(',').any(|area| same_name(part, area.trim())))
+        })
+}
+
+fn conflicts(best: &Place, other: &Place) -> bool {
+    // A city and its administrative region can share a name and location.
+    let nearby = (best.4[0] - other.4[0]).abs() < 0.25
+        && super::basemap::wrap_lon_delta(best.4[1] - other.4[1]).abs() < 0.25;
+    !nearby && (best.0 != other.0 || best.5 < 10.0 * other.5 || best.5 <= 0.0)
 }
 
 fn same_name(query: &str, name: &str) -> bool {

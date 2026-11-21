@@ -186,7 +186,7 @@ fn replacing_spreadsheet_load_cancels_queued_previous_job() {
     let worker_ran = Arc::clone(&ran);
     let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
         worker_ran.store(true, Ordering::Release);
-        Err::<(SpreadsheetData, Option<PathBuf>), String>("obsolete job ran".into())
+        Err::<SpreadsheetLoadResult, String>("obsolete job ran".into())
     });
     let mut app = test_workbench_app(None, VecDeque::new());
     app.spreadsheet_load_job = Some((ticket, receiver, None));
@@ -227,7 +227,7 @@ fn dropping_workbench_cancels_queued_spreadsheet_load() {
     let worker_ran = Arc::clone(&ran);
     let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
         worker_ran.store(true, Ordering::Release);
-        Err::<(SpreadsheetData, Option<PathBuf>), String>("obsolete job ran".into())
+        Err::<SpreadsheetLoadResult, String>("obsolete job ran".into())
     });
     let mut app = test_workbench_app(None, VecDeque::new());
     app.spreadsheet_load_job = Some((ticket, receiver, None));

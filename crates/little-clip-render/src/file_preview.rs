@@ -97,27 +97,7 @@ impl crate::ScreenRenderer {
             _ => return None,
         };
         let extension = little_clip_core::diagram::Format::source_extension_hint(path);
-        let kind = if Format::for_path(path) == Some(Format::Geography) {
-            Kind::Geography
-        } else if spreadsheet::is_spreadsheet_file(path) {
-            Kind::Spreadsheet
-        } else if extension.is_some_and(|value| {
-            value.eq_ignore_ascii_case("mid") || value.eq_ignore_ascii_case("midi")
-        }) {
-            Kind::Midi
-        } else if little_clip_core::brushes::is_brush_file(path) {
-            Kind::Brush
-        } else if documents && little_clip_core::document::is_office_document(path) {
-            Kind::Office
-        } else if documents && little_clip_core::pdf::is_pdf_path(path) {
-            Kind::Pdf
-        } else if little_clip_core::syntax::is_code_file(path) {
-            Kind::Text
-        } else if Trajectory::is_candidate(path) {
-            Kind::Trajectory
-        } else {
-            return None;
-        };
+        let kind = file_kind(path, documents, extension)?;
         let source = FileSource::capture(path).ok()?;
         {
             let mut cache = self
@@ -213,6 +193,31 @@ impl crate::ScreenRenderer {
         cache.locations.push_back((text.to_owned(), result.clone()));
         result
     }
+}
+
+fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Kind> {
+    let kind = if Format::for_path(path) == Some(Format::Geography) {
+        Kind::Geography
+    } else if spreadsheet::is_spreadsheet_file(path) {
+        Kind::Spreadsheet
+    } else if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("mid") || value.eq_ignore_ascii_case("midi")
+    }) {
+        Kind::Midi
+    } else if little_clip_core::brushes::is_brush_file(path) {
+        Kind::Brush
+    } else if documents && little_clip_core::document::is_office_document(path) {
+        Kind::Office
+    } else if documents && little_clip_core::pdf::is_pdf_path(path) {
+        Kind::Pdf
+    } else if little_clip_core::syntax::is_code_file(path) {
+        Kind::Text
+    } else if Trajectory::is_candidate(path) {
+        Kind::Trajectory
+    } else {
+        return None;
+    };
+    Some(kind)
 }
 
 fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {

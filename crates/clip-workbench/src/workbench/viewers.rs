@@ -415,7 +415,21 @@ impl WorkbenchApp {
         }
     }
 
-    pub(super) fn map_target(&self, ctx: &egui::Context) -> Option<MapTarget> {
+    pub(super) fn geography_action(&mut self, ui: &mut egui::Ui) {
+        if let Some(target) = self.map_target(ui.ctx())
+            && ui
+                .add(contextual_palette_action_button(
+                    Some(Icon::Map),
+                    "Open in map",
+                    &self.ui_palette,
+                ))
+                .clicked()
+        {
+            self.open_map(target);
+        }
+    }
+
+    fn map_target(&self, ctx: &egui::Context) -> Option<MapTarget> {
         self.selected_slots.iter().find_map(|slot| {
             let item = self.state.get(*slot)?;
             if let Some(path) = bounded_item_file_path(item) {

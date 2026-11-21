@@ -243,60 +243,8 @@ impl ScreenRenderer {
             clip_right,
         );
 
-        match file {
-            Some(Preview::Map(map)) => {
-                self.draw_image_thumbnail(
-                    pixmap,
-                    0,
-                    0,
-                    Some(&map.thumbnail),
-                    rx,
-                    ry,
-                    rw,
-                    rh,
-                    is_hero,
-                );
-                if let Some(label) = &map.label {
-                    self.draw_text_clipped(
-                        pixmap,
-                        label,
-                        content_x,
-                        ry + if is_hero { 351.0 } else { 311.0 },
-                        sub_font_size,
-                        subtitle_color,
-                        false,
-                        clip_right,
-                    );
-                }
-                return;
-            }
-            Some(Preview::Spreadsheet { title, sheet }) => {
-                self.draw_spreadsheet_card(pixmap, title, sheet, rx, ry, rw, rh, is_hero);
-                return;
-            }
-            Some(Preview::Midi(score)) => {
-                self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
-                return;
-            }
-            Some(Preview::Brush(library)) => {
-                self.draw_brush_card(pixmap, library, rx, ry, rw, rh, is_hero);
-                return;
-            }
-            Some(Preview::Page(page)) => {
-                self.draw_image_thumbnail(
-                    pixmap,
-                    page.width,
-                    page.height,
-                    Some(&page.thumbnail),
-                    rx,
-                    ry,
-                    rw,
-                    rh,
-                    is_hero,
-                );
-                return;
-            }
-            _ => {}
+        if self.draw_prepared_file(pixmap, file, [rx, ry, rw, rh], is_hero) {
+            return;
         }
 
         // Payload-specific preview starting around y = 124.0
@@ -514,6 +462,69 @@ impl ScreenRenderer {
                     true,
                 );
             }
+        }
+    }
+    fn draw_prepared_file(
+        &self,
+        pixmap: &mut Pixmap,
+        file: Option<&Preview>,
+        [rx, ry, rw, rh]: [f32; 4],
+        is_hero: bool,
+    ) -> bool {
+        match file {
+            Some(Preview::Map(map)) => {
+                self.draw_image_thumbnail(
+                    pixmap,
+                    0,
+                    0,
+                    Some(&map.thumbnail),
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
+                if let Some(label) = &map.label {
+                    self.draw_text_clipped(
+                        pixmap,
+                        label,
+                        rx + 14.0,
+                        ry + if is_hero { 351.0 } else { 311.0 },
+                        if is_hero { 19.0 } else { 16.0 },
+                        self.color_from_hex(&self.palette.colors.text_secondary),
+                        false,
+                        rx + rw - 10.0,
+                    );
+                }
+                true
+            }
+            Some(Preview::Spreadsheet { title, sheet }) => {
+                self.draw_spreadsheet_card(pixmap, title, sheet, rx, ry, rw, rh, is_hero);
+                true
+            }
+            Some(Preview::Midi(score)) => {
+                self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
+                true
+            }
+            Some(Preview::Brush(library)) => {
+                self.draw_brush_card(pixmap, library, rx, ry, rw, rh, is_hero);
+                true
+            }
+            Some(Preview::Page(page)) => {
+                self.draw_image_thumbnail(
+                    pixmap,
+                    page.width,
+                    page.height,
+                    Some(&page.thumbnail),
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
+                true
+            }
+            _ => false,
         }
     }
 }
