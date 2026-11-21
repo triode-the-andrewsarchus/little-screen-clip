@@ -171,6 +171,13 @@ impl Viewers {
     pub fn open(&mut self, path: PathBuf) {
         self.open_on(path, false);
     }
+
+    pub fn open_location(&mut self, location: &little_clip_core::geography::places::Location) {
+        match super::geography::Viewer::from_location(location) {
+            Ok(viewer) => self.session = Some(ViewerSession::Geography(viewer)),
+            Err(error) => self.error = Some(error),
+        }
+    }
     fn open_on(&mut self, path: PathBuf, system: bool) {
         self.open_mode(path, system, false, None);
     }

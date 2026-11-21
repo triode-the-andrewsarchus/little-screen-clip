@@ -18,12 +18,22 @@ fn main() -> Result<(), eframe::Error> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: clip-file-manager [DIRECTORY]\n\nBrowse folders in the standalone Little Screen Clip file manager.\nDefaults to your home directory. Ctrl+Q closes the application.\n\nDownload elevation data: --download-nasadem [--config FILE] [--plan] [--limit N]"
+            "Usage: clip-file-manager [DIRECTORY | FILE]\n       clip-file-manager --map-location LOCATION\n\nBrowse folders or open a file in its viewer.\nDefaults to your home directory. Ctrl+Q closes the application.\n\nDownload elevation data: --download-nasadem [--config FILE] [--plan] [--limit N]"
         );
         return Ok(());
     }
+    if first.as_deref().is_some_and(|arg| arg == "--map-location") {
+        let location = args
+            .next()
+            .and_then(|arg| little_clip_core::geography::places::resolve(arg.to_str()?));
+        if let Some(location) = location.filter(|_| args.next().is_none()) {
+            return clip_file_manager::file_manager::run_location(location);
+        }
+        eprintln!("Expected a coordinate pair or a recognizable place name");
+        std::process::exit(2);
+    }
     if args.next().is_some() {
-        eprintln!("Usage: clip-file-manager [DIRECTORY]");
+        eprintln!("Usage: clip-file-manager [DIRECTORY | FILE]");
         std::process::exit(2);
     }
     clip_file_manager::file_manager::run(first.map(PathBuf::from))

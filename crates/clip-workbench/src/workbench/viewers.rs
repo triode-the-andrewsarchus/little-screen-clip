@@ -1,6 +1,27 @@
 use super::*;
 use clip_ui::buttons::ButtonRole;
 
+#[derive(Clone)]
+pub(super) enum MapTarget {
+    File(PathBuf),
+    Location(String),
+}
+
+fn geographic_path(path: &std::path::Path) -> bool {
+    use little_clip_core::file_format::Format;
+    Format::for_path(path) == Some(Format::Geography)
+}
+
+fn file_manager_command() -> std::process::Command {
+    const NAME: &str = "clip-file-manager";
+    let binary = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.join(NAME)))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(NAME));
+    std::process::Command::new(binary)
+}
+
 impl WorkbenchApp {
     pub(crate) fn retire_hidden_rolling_audio(&mut self) {
         let hidden = self.view != WorkbenchView::Palette
@@ -359,7 +380,9 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
-        if fp
+        if geographic_path(fp) {
+            self.open_geography_file(fp);
+        } else if fp
             .extension()
             .and_then(|s| s.to_str())
             .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
@@ -385,8 +408,69 @@ impl WorkbenchApp {
             self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
             self.start_image_load(ImageLoadSource::File(fp.to_path_buf()));
+        } else if little_clip_core::geography::trajectory::Trajectory::is_candidate(fp) {
+            self.start_file_map_or_text_load(fp.to_path_buf());
         } else if little_clip_ops::is_text_file(fp) {
             self.start_text_file_load(fp.to_path_buf());
+        }
+    }
+
+    pub(super) fn map_target(&self, ctx: &egui::Context) -> Option<MapTarget> {
+        self.selected_slots.iter().find_map(|slot| {
+            let item = self.state.get(*slot)?;
+            if let Some(path) = bounded_item_file_path(item) {
+                return (geographic_path(&path)
+                    || self
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|renderer| renderer.cached_map_for_file(&path)))
+                .then_some(MapTarget::File(path));
+            }
+            let ClipPayload::Text(text) = &item.payload else {
+                return None;
+            };
+            if text.trim().len() > 128 {
+                return None;
+            }
+            let key = egui::Id::unique("workbench-map-location");
+            if let Some((id, target)) =
+                ctx.data(|d| d.get_temp::<(uuid::Uuid, Option<MapTarget>)>(key))
+                && id == item.id
+            {
+                return target;
+            }
+            let target = little_clip_core::geography::places::resolve(text)
+                .map(|_| MapTarget::Location(text.trim().to_owned()));
+            ctx.data_mut(|d| d.insert_temp(key, (item.id, target.clone())));
+            target
+        })
+    }
+
+    pub(super) fn open_geography_file(&mut self, path: &std::path::Path) {
+        self.open_map(MapTarget::File(path.to_owned()));
+    }
+
+    pub(super) fn open_map(&mut self, target: MapTarget) {
+        let mut command = file_manager_command();
+        match target {
+            MapTarget::File(path) => {
+                let absolute = std::path::absolute(&path).unwrap_or(path);
+                command.arg(absolute);
+            }
+            MapTarget::Location(text) => {
+                command.arg("--map-location").arg(text);
+            }
+        }
+        match command.spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                self.clear_status_message();
+            }
+            Err(error) => {
+                self.set_status_message(format!("Could not open the map in Files: {error}"))
+            }
         }
     }
 
@@ -403,6 +487,10 @@ impl WorkbenchApp {
                 self.open_slot_file_preview(p, false);
                 return;
             }
+        }
+        if little_clip_core::geography::places::resolve(&text).is_some() {
+            self.open_map(MapTarget::Location(text.trim().to_owned()));
+            return;
         }
         self.start_spreadsheet_load(SpreadsheetLoadSource::Text {
             content: Arc::new(text),

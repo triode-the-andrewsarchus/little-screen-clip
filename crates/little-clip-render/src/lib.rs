@@ -196,6 +196,7 @@ pub enum FontStyle {
 pub struct ScreenRenderer {
     pub(crate) diagram_previews: std::sync::Arc<std::sync::Mutex<diagram::Cache>>,
     pub(crate) file_previews: std::sync::Arc<std::sync::Mutex<file_preview::Cache>>,
+    pub(crate) map_previews: std::sync::Arc<std::sync::Mutex<map_preview::Cache>>,
     pub(crate) scene_previews: std::sync::Arc<std::sync::Mutex<scene_preview::PreviewCache>>,
     pub(crate) scene_preview_source: Option<scene_preview::SharedSource>,
     pub(crate) font_regular: Option<std::sync::Arc<Font>>,
@@ -222,6 +223,7 @@ impl ScreenRenderer {
             palette,
             diagram_previews: Default::default(),
             file_previews: Default::default(),
+            map_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,
         })
@@ -239,6 +241,7 @@ impl ScreenRenderer {
             palette,
             diagram_previews: Default::default(),
             file_previews: Default::default(),
+            map_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,
         }
@@ -252,6 +255,10 @@ impl ScreenRenderer {
 
     /// Updates the active application configuration used for rendering.
     pub fn set_config(&mut self, config: AppConfig) {
+        if config.geography.assets_dir != self.config.geography.assets_dir {
+            self.file_previews = Default::default();
+            self.map_previews = Default::default();
+        }
         self.palette = config.resolve_palette();
         self.config = config;
     }
@@ -410,6 +417,7 @@ impl ScreenRenderer {
 mod cards;
 mod file_preview;
 mod fonts;
+mod map_preview;
 pub mod primitives;
 
 pub use fontdue;

@@ -63,7 +63,7 @@ struct FileManagerApp {
 }
 
 impl FileManagerApp {
-    fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, initial: Startup) -> Self {
         let ctx = &cc.egui_ctx;
         let vector_runtime =
             cc.gl
@@ -131,14 +131,23 @@ impl FileManagerApp {
         browser.photo_recursive_depth = config.file_manager.photo_recursive_depth;
         browser.photo_recursive_timeout_seconds =
             config.file_manager.photo_recursive_timeout_seconds;
-        if let Some(path) = initial {
-            browser.navigate(path, Navigation::New);
+        let mut viewers = super::viewers::Viewers::new(config);
+        match initial {
+            Startup::Browse(Some(path)) => browser.navigate(path, Navigation::New),
+            Startup::Browse(None) => {}
+            Startup::File(path) => {
+                if let Some(parent) = path.parent() {
+                    browser.navigate(parent.to_owned(), Navigation::New);
+                }
+                viewers.open(path);
+            }
+            Startup::Location(location) => viewers.open_location(&location),
         }
         Self {
             vector_runtime,
             map_runtime,
             browser,
-            viewers: super::viewers::Viewers::new(config),
+            viewers,
             pad_studio: None,
             closing: false,
             external: Default::default(),
@@ -849,7 +858,27 @@ impl eframe::App for FileManagerApp {
     }
 }
 
+enum Startup {
+    Browse(Option<PathBuf>),
+    File(PathBuf),
+    Location(little_clip_core::geography::places::Location),
+}
+
 pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
+    let initial = match initial {
+        Some(path) if path.is_file() => Startup::File(std::path::absolute(&path).unwrap_or(path)),
+        path => Startup::Browse(path),
+    };
+    run_with(initial)
+}
+
+pub fn run_location(
+    location: little_clip_core::geography::places::Location,
+) -> Result<(), eframe::Error> {
+    run_with(Startup::Location(location))
+}
+
+fn run_with(initial: Startup) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         depth_buffer: 24,
         viewport: egui::ViewportBuilder::default()

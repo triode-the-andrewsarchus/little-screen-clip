@@ -192,6 +192,24 @@ pub struct EquirectTexture {
 }
 
 impl EquirectTexture {
+    /// Reads the installed Natural Earth overview without decoding the source raster.
+    pub fn cached_overview(dir: &Path) -> Option<Self> {
+        let bytes =
+            crate::file_source::read_file_snapshot(&dir.join("ne2_overview.rgb"), 32 << 20).ok()?;
+        Self::from_cached_bytes(&bytes)
+    }
+
+    fn from_cached_bytes(bytes: &[u8]) -> Option<Self> {
+        let (header, rgb) = bytes.split_at_checked(8)?;
+        let w = u32::from_le_bytes(header[0..4].try_into().ok()?);
+        let h = u32::from_le_bytes(header[4..8].try_into().ok()?);
+        (grid_len(w, h, 3) == Some(rgb.len())).then(|| Self {
+            width: w,
+            height: h,
+            rgb: Arc::new(rgb.to_vec()),
+        })
+    }
+
     /// Bilinearly samples `(lat, lon)` in degrees.
     pub fn sample_rgb(&self, lat: f64, lon: f64) -> [u8; 3] {
         if grid_len(self.width, self.height, 3) != Some(self.rgb.len())
@@ -2831,17 +2849,9 @@ fn load_ne2_overview(
 ) -> Option<EquirectTexture> {
     let cached = dir.join("ne2_overview.rgb");
     if let Ok(bytes) = storage::read(&cached)
-        && bytes.len() >= 8
+        && let Some(texture) = EquirectTexture::from_cached_bytes(&bytes)
     {
-        let w = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
-        let h = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-        if grid_len(w, h, 3).and_then(|n| n.checked_add(8)) == Some(bytes.len()) {
-            return Some(EquirectTexture {
-                width: w,
-                height: h,
-                rgb: Arc::new(bytes[8..].to_vec()),
-            });
-        }
+        return Some(texture);
     }
     let img_path = find_first_with_ext(dir, &["png", "jpg", "jpeg", "tif", "tiff"])?;
     let file = crate::kernel_interface::open_content(&img_path, true).ok()?;

@@ -126,6 +126,47 @@ struct RawFeature {
     time_range: Option<[DateTime<Utc>; 2]>,
 }
 impl Document {
+    /// Loads a supported geographic file through a bounded, revision-checked snapshot.
+    pub fn from_path(path: &std::path::Path) -> Result<Self, String> {
+        let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
+        match path
+            .extension()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .to_str()
+        {
+            Some("geojson") => Self::geojson(&bytes),
+            Some("rctrk") => Self::radiacode(&bytes),
+            Some("gpx") => Self::gpx(&bytes),
+            _ => Err("Unsupported geographic file type".into()),
+        }
+    }
+
+    /// Builds a one-point geographic document from a resolved clipboard location.
+    pub fn from_location(location: &places::Location) -> Result<Self, String> {
+        let [lat, lon] = location.lat_lon;
+        if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+            return Err("Location is outside the valid latitude or longitude range".into());
+        }
+        prepare(
+            location.name.clone(),
+            vec![RawFeature {
+                name: location.name.clone(),
+                kind: Kind::Point,
+                paths: vec![vec![Point {
+                    lon,
+                    lat,
+                    elevation: None,
+                    time: String::new(),
+                    radiation: None,
+                }]],
+                properties: Vec::new(),
+                time_range: None,
+            }],
+            Vec::new(),
+        )
+    }
+
     pub fn shape_count(&self) -> usize {
         self.features
             .iter()

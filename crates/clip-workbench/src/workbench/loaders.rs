@@ -3,7 +3,21 @@ use super::*;
 impl WorkbenchApp {
     pub(crate) fn start_text_file_load(&mut self, path: PathBuf) {
         self.prepare_preview_load();
-        self.text_load_job = Some(TextPreviewLoadJob::from_file(path, self.config.clone()));
+        self.text_load_job = Some(TextPreviewLoadJob::from_file(
+            path,
+            self.config.clone(),
+            false,
+        ));
+        self.clear_status_message();
+    }
+
+    pub(crate) fn start_file_map_or_text_load(&mut self, path: PathBuf) {
+        self.prepare_preview_load();
+        self.text_load_job = Some(TextPreviewLoadJob::from_file(
+            path,
+            self.config.clone(),
+            true,
+        ));
         self.clear_status_message();
     }
 
@@ -63,10 +77,15 @@ impl WorkbenchApp {
         };
         self.text_load_job = None;
         match result {
-            Ok(Ok(state)) => {
-                self.replace_viewer(Some(state.into_viewer()));
+            Ok(Ok(TextPreviewLoadResult::Preview(state))) => {
+                self.replace_viewer(Some(ViewerSession::Text(*state)));
                 self.clear_status_message();
             }
+            Ok(Ok(TextPreviewLoadResult::Editor(state))) => {
+                self.replace_viewer(Some(ViewerSession::TextEditor(state)));
+                self.clear_status_message();
+            }
+            Ok(Ok(TextPreviewLoadResult::OpenMap(path))) => self.open_geography_file(&path),
             Ok(Err(error)) => self.set_status_message(format!("Text preview failed: {error}")),
             Err(error) => self.set_status_message(format!("Text preview failed: {error}")),
         }
@@ -86,10 +105,13 @@ impl WorkbenchApp {
         };
         let job = BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
             SpreadsheetLoadSource::File(path) => {
-                load_spreadsheet(&path).map(|data| (data, Some(path)))
+                if is_horizons_file(&path)? {
+                    return Ok(SpreadsheetLoadResult::OpenMap(path));
+                }
+                load_spreadsheet(&path).map(|data| SpreadsheetLoadResult::Sheet(data, Some(path)))
             }
             SpreadsheetLoadSource::Text { content, .. } => detect_csv_text(&content)
-                .map(|data| (data, None))
+                .map(|data| SpreadsheetLoadResult::Sheet(data, None))
                 .ok_or_else(|| "Clipboard text is not a valid table".to_string()),
         });
         self.spreadsheet_load_job = Some((job.0, job.1, fallback));
@@ -110,12 +132,13 @@ impl WorkbenchApp {
         };
         let (_, _, fallback) = self.spreadsheet_load_job.take().unwrap();
         match result {
-            Ok(Ok((data, path))) => {
+            Ok(Ok(SpreadsheetLoadResult::Sheet(data, path))) => {
                 self.replace_viewer(Some(ViewerSession::Spreadsheet(
                     SpreadsheetViewerState::new(data, path),
                 )));
                 ctx.request_repaint();
             }
+            Ok(Ok(SpreadsheetLoadResult::OpenMap(path))) => self.open_geography_file(&path),
             failure => {
                 if let Some((content, title)) = fallback {
                     self.start_shared_text_preview_load(content, title);

@@ -244,6 +244,32 @@ impl ScreenRenderer {
         );
 
         match file {
+            Some(Preview::Map(map)) => {
+                self.draw_image_thumbnail(
+                    pixmap,
+                    0,
+                    0,
+                    Some(&map.thumbnail),
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
+                if let Some(label) = &map.label {
+                    self.draw_text_clipped(
+                        pixmap,
+                        label,
+                        content_x,
+                        ry + if is_hero { 351.0 } else { 311.0 },
+                        sub_font_size,
+                        subtitle_color,
+                        false,
+                        clip_right,
+                    );
+                }
+                return;
+            }
             Some(Preview::Spreadsheet { title, sheet }) => {
                 self.draw_spreadsheet_card(pixmap, title, sheet, rx, ry, rw, rh, is_hero);
                 return;

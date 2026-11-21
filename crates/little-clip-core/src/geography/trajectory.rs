@@ -25,14 +25,18 @@ struct Sample {
 }
 
 impl Trajectory {
+    pub fn is_candidate(path: &Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                ["txt", "csv", "dat", "eph", "horizons"]
+                    .iter()
+                    .any(|suffix| ext.eq_ignore_ascii_case(suffix))
+            })
+    }
+
     pub fn read_if_identified(path: &Path, cancel: &AtomicBool) -> Result<Option<Self>, String> {
-        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-            return Ok(None);
-        };
-        if !["txt", "csv", "dat", "eph", "horizons"]
-            .iter()
-            .any(|suffix| ext.eq_ignore_ascii_case(suffix))
-        {
+        if !Self::is_candidate(path) {
             return Ok(None);
         }
         let check_cancel = || {
@@ -44,11 +48,7 @@ impl Trajectory {
         };
         check_cancel()?;
         let (mut file, source) = ReadCheck::default().open(path, None, cancel)?;
-        let mut bytes = Vec::with_capacity(HEADER_BYTES);
-        file.by_ref()
-            .take(HEADER_BYTES as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
+        let mut bytes = read_header(&mut file)?;
         if !Self::has_header(&String::from_utf8_lossy(&bytes)) {
             return Ok(None);
         }
@@ -64,6 +64,16 @@ impl Trajectory {
         }
         let text = String::from_utf8_lossy(&bytes);
         Self::parse(&text, cancel).map(Some)
+    }
+
+    pub fn has_file_header(path: &Path, cancel: &AtomicBool) -> Result<bool, String> {
+        if !Self::is_candidate(path) {
+            return Ok(false);
+        }
+        let (mut file, source) = ReadCheck::default().open(path, None, cancel)?;
+        let header = read_header(&mut file)?;
+        source.check_file(&file)?;
+        Ok(Self::has_header(&String::from_utf8_lossy(&header)))
     }
 
     fn has_header(header: &str) -> bool {
@@ -119,6 +129,14 @@ impl Trajectory {
             }
         }
     }
+}
+
+fn read_header(file: &mut std::fs::File) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(HEADER_BYTES);
+    file.take(HEADER_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes)
 }
 
 struct Metadata {
@@ -286,6 +304,25 @@ Reference frame : Ecliptic of J2000.0\n";
             &AtomicBool::new(false),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn real_horizons_exports_load_in_both_formats() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons");
+        for (filename, name, minimum_samples) in [
+            ("1P-Halley.txt", "1P/Halley", 2800),
+            ("99942-Apophis.txt", "Apophis", 450),
+            ("3I-ATLAS.txt", "ATLAS", 140),
+            ("4-Vesta.txt", "Vesta", 45),
+        ] {
+            let path = examples.join(filename);
+            let path = Trajectory::read_if_identified(&path, &AtomicBool::new(false))
+                .unwrap()
+                .unwrap();
+            assert!(path.name.contains(name));
+            assert!(path.positions().count() >= minimum_samples);
+            assert!(path.range()[0] < path.range()[1]);
+        }
     }
 
     #[test]

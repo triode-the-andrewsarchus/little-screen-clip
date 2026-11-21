@@ -57,7 +57,7 @@ mod video_playback;
 mod video_timeline;
 mod view_preferences;
 mod viewers;
-pub use app::run;
+pub use app::{run, run_location};
 #[cfg(test)]
 mod tests;
 mod tree;

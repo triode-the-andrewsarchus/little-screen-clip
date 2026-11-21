@@ -32,7 +32,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use little_clip_core::{
     config::AppConfig,
     geography::{
-        Document, Feature, Kind, MAX_BYTES, Sample,
+        Document, Feature, Kind, Sample,
         basemap::{
             BasemapAssets, BasemapStyle, GlobeCamera, MAX_MAP_ZOOM, MIN_MAP_ZOOM, ProjectionMode,
             oilslick_color,
@@ -51,16 +51,11 @@ use std::{
 };
 
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
-    let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
+    let result = Document::from_path(path);
     if token.load(Ordering::Relaxed) {
         return Err("Geography opening cancelled".into());
     }
-    let extension = path.extension().unwrap_or_default().to_ascii_lowercase();
-    match extension.to_str() {
-        Some("geojson") => Document::geojson(&bytes),
-        Some("rctrk") => Document::radiacode(&bytes),
-        _ => Document::gpx(&bytes),
-    }
+    result
 }
 
 pub(super) use strips::Strips;
@@ -367,6 +362,16 @@ impl Viewer {
         system.fit_trajectory();
         viewer.trajectory = Some(trajectory);
         viewer.solar_system = Some(system);
+        Ok(viewer)
+    }
+
+    pub fn from_location(
+        location: &little_clip_core::geography::places::Location,
+    ) -> Result<Self, String> {
+        let document = Document::from_location(location)?;
+        let timeline = timeline::Timeline::new(&document);
+        let mut viewer = Self::from_document(document, timeline, false);
+        viewer.camera.zoom = location.kind.map_or(104.0, finder::place_zoom);
         Ok(viewer)
     }
 

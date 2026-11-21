@@ -391,7 +391,12 @@ type SpreadsheetLoadJob = (
 );
 
 type SpreadsheetLoadReceiver =
-    little_clip_core::jobs::JobReceiver<Result<(SpreadsheetData, Option<PathBuf>), String>>;
+    little_clip_core::jobs::JobReceiver<Result<SpreadsheetLoadResult, String>>;
+
+enum SpreadsheetLoadResult {
+    Sheet(SpreadsheetData, Option<PathBuf>),
+    OpenMap(PathBuf),
+}
 type MidiLoadReceiver = little_clip_core::jobs::JobReceiver<Result<(MidiData, PathBuf), String>>;
 
 pub(crate) enum OfficeLoadResult {
@@ -519,6 +524,7 @@ struct ImageLoadJob {
 enum TextPreviewLoadResult {
     Preview(Box<TextPreviewState>),
     Editor(Box<clip_studios::text_editor::TextSession>),
+    OpenMap(PathBuf),
 }
 impl TextPreviewLoadResult {
     fn clipboard(content: Arc<String>, title: Option<String>, config: &AppConfig) -> Self {
@@ -534,12 +540,6 @@ impl TextPreviewLoadResult {
                 title,
                 config,
             )))
-        }
-    }
-    fn into_viewer(self) -> ViewerSession {
-        match self {
-            Self::Preview(state) => ViewerSession::Text(*state),
-            Self::Editor(state) => ViewerSession::TextEditor(state),
         }
     }
 }
@@ -589,9 +589,12 @@ impl Drop for ImageLoadJob {
 }
 
 impl TextPreviewLoadJob {
-    fn from_file(path: PathBuf, config: AppConfig) -> Self {
+    fn from_file(path: PathBuf, config: AppConfig, allow_map: bool) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                if allow_map && is_horizons_file(&path)? {
+                    return Ok(TextPreviewLoadResult::OpenMap(path));
+                }
                 let failure_path = path.display().to_string();
                 TextPreviewState::from_file(&path, &config)
                     .map(|state| TextPreviewLoadResult::Preview(Box::new(state)))
@@ -623,6 +626,13 @@ impl TextPreviewLoadJob {
             });
         Self { ticket, receiver }
     }
+}
+
+fn is_horizons_file(path: &std::path::Path) -> Result<bool, String> {
+    little_clip_core::geography::trajectory::Trajectory::has_file_header(
+        path,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
 }
 
 impl Drop for TextPreviewLoadJob {
