@@ -150,6 +150,9 @@ impl System {
             .and_then(|pointer| mark_at(&layout.marks, pointer))
             .map(|mark| (mark.point, mark.radius));
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
+        if heliocentric && blend < 1.0 {
+            orbit_scale_bar(&guides, rect, projection.scale);
+        }
         if !heliocentric {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
         }
@@ -741,6 +744,47 @@ fn paint_label(
     Some(rect)
 }
 
+fn orbit_scale_bar(painter: &egui::Painter, rect: Rect, pixels_per_au: f64) {
+    let (length, text) = orbit_scale_ticks(pixels_per_au);
+    let main = Color32::from_rgb(244, 246, 250);
+    let muted = Color32::from_rgb(186, 196, 211);
+    let label = painter.layout_no_wrap(text, FontId::proportional(11.5), main);
+    let note = painter.layout_no_wrap(
+        "objects not to scale".into(),
+        FontId::proportional(10.5),
+        muted,
+    );
+    let width = (length + label.size().x + 24.0).max(note.size().x + 16.0);
+    let badge = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -46.0), vec2(width, 36.0));
+    painter.rect_filled(badge, 4.0, Color32::from_black_alpha(165));
+    let start = badge.min + vec2(8.0, 13.0);
+    let end = start + vec2(length, 0.0);
+    painter.line_segment([start, end], Stroke::new(1.6, main));
+    for tick in [start, end] {
+        painter.line_segment(
+            [tick - vec2(0.0, 3.5), tick + vec2(0.0, 2.0)],
+            Stroke::new(1.6, main),
+        );
+    }
+    painter.galley(end + vec2(8.0, -label.size().y * 0.5), label, main);
+    painter.galley(badge.min + vec2(8.0, 20.0), note, muted);
+}
+
+fn orbit_scale_ticks(pixels_per_au: f64) -> (f32, String) {
+    let length = if (55.0..=160.0).contains(&pixels_per_au) {
+        1.0
+    } else {
+        let target = 128.0 / pixels_per_au;
+        let decade = 10.0_f64.powf(target.log10().floor());
+        [5.0, 2.0, 1.0]
+            .into_iter()
+            .map(|step| step * decade)
+            .find(|length| *length <= target)
+            .unwrap_or(decade)
+    };
+    ((length * pixels_per_au) as f32, format!("{length} AU"))
+}
+
 fn noise(i: u32) -> f64 {
     let hash = i.wrapping_mul(0x9e37_79b9) ^ i.rotate_left(13);
     f64::from(hash.wrapping_mul(0x85eb_ca6b) >> 8) / f64::from(1 << 24)
@@ -881,6 +925,13 @@ mod tests {
             assert!(earth.point.distance(lunar.point) > earth.radius * 2.0);
             assert!(lunar.radius < earth.radius);
         });
+    }
+
+    #[test]
+    fn ruler_tracks_the_actual_projected_length_per_au() {
+        assert_eq!(orbit_scale_ticks(90.0), (90.0, "1 AU".into()));
+        assert_eq!(orbit_scale_ticks(5.0), (100.0, "20 AU".into()));
+        assert_eq!(orbit_scale_ticks(100_000.0), (100.0, "0.001 AU".into()));
     }
 
     #[test]
