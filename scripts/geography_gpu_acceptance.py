@@ -276,13 +276,34 @@ def check_world_view(root, width, height, output):
     Image.fromarray(np.flipud(edge_rings)).save(output / "edge-on-rings.png")
     GL.glUniform1i(loc("u_emissive"), 1)
     GL.glUniform3f(loc("u_eye"), 2.75, 0, 0)
-    GL.glUniform2f(loc("u_solar_clock"), 9200.0, 12.0)
-    sun = draw([])
-    GL.glUniform2f(loc("u_solar_clock"), 9200.0, 18.8)
-    animated_sun = draw([])
-    assert np.ptp(sun[height // 2 - 10:height // 2 + 10, :, 1]) > 100
-    assert np.count_nonzero(sun[:, :, 1] != animated_sun[:, :, 1]) > 1000
+    def solar_frame(seconds):
+        GL.glUniform2f(loc("u_solar_clock"), 9200.0, seconds)
+        return draw([])
+
+    sun = solar_frame(12.0)
     Image.fromarray(np.flipud(sun)).save(output / "procedural-sun.png")
+    y, x = np.mgrid[:height, :width]
+    radius = .95 * height / np.sqrt(2.75**2 - 1.0)
+    radial = np.hypot(x + .5 - width / 2, y + .5 - height / 2) / radius
+    interior = radial < .70
+    corona = (radial > 1.04) & (radial < 1.25)
+    assert np.ptp(sun[:, :, 1][interior]) > 75, "Missing photospheric contrast"
+    assert sun[:, :, 0][corona].max() > 110, "Missing bright coronal structure beyond the limb"
+    # Camera and ephemeris stay fixed. Convection must have local brightening
+    # and dimming well inside the disk, including times between flare events.
+    for seconds in (0.0, 12.0, 26.0):
+        delta = solar_frame(seconds + .5).astype(int) - solar_frame(seconds).astype(int)
+        change = delta[:, :, 1][interior]
+        assert np.mean(change > 4) > .08 and np.mean(change < -4) > .08, "Frozen solar surface"
+        assert np.mean(np.abs(delta[:, :, 0][corona]) > 3) > .01, "Frozen solar atmosphere"
+    rollover = np.abs(solar_frame(4095.99).astype(int) - solar_frame(.01).astype(int))
+    assert np.percentile(rollover[interior], 95) < 4, "Solar animation jumped at clock rollover"
+
+    GL.glUniform3f(loc("u_eye"), 1.035, 0, 0)
+    granulation = solar_frame(12.0)
+    gradient = np.diff(granulation[:, :, 1].astype(int), axis=1)
+    assert np.abs(gradient).mean() > 2, "Solar approach lost its granular lanes"
+    Image.fromarray(np.flipud(granulation)).save(output / "solar-granulation.png")
     # The same shader must show the distant Sun over the shared sky, with a
     # smaller disk at a smaller angular radius and a separately dimmable sky.
     GL.glUniform1i(loc("u_background_only"), 1)
