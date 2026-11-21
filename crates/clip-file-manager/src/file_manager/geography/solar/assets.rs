@@ -13,7 +13,8 @@ use std::{
 
 pub(in crate::file_manager) const HORIZONS: &str = "https://ssd.jpl.nasa.gov/horizons/";
 const EPHEMERIS_LIMIT: u64 = 128 * 1024;
-const EPHEMERIS_SAMPLES: usize = 81;
+// Horizons accepts at most 80 epochs in one URL-based TLIST request.
+const EPHEMERIS_SAMPLES: usize = 80;
 
 #[derive(Deserialize)]
 pub(super) struct ImageAsset {
@@ -224,6 +225,46 @@ mod tests {
                 assert!(image.size[0] <= 8192 && image.size[1] <= 4096);
             }
             assert!(download.url.starts_with("https://"));
+        }
+    }
+
+    #[test]
+    #[ignore = "uses live NASA/JPL image and Horizons endpoints"]
+    fn downloads_a_world_map_and_orbit_then_reuses_both_offline() {
+        use crate::file_manager::geography_downloader::{AssetDownloader, DownloadPack};
+        use little_clip_core::config::AppConfig;
+        use std::{
+            os::unix::fs::MetadataExt,
+            time::{Duration, Instant},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.geography.assets_dir = Some(root.path().to_owned());
+        let mut downloader = AssetDownloader::new(&config);
+        let ctx = egui::Context::default();
+        let mut install = |id| {
+            downloader.start(DownloadPack::World(id), &config);
+            let deadline = Instant::now() + Duration::from_secs(25);
+            while downloader.active.is_some() {
+                downloader.poll(&ctx);
+                assert!(Instant::now() < deadline, "World {id} download timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(downloader.last_error, None);
+        };
+        for id in [699, 505] {
+            install(id);
+            let asset = Download::for_body(id).unwrap();
+            let path = root.path().join(asset.folder).join(asset.name);
+            let installed_inode = path.metadata().unwrap().ino();
+            let data = Assets::load(root.path(), id).unwrap().unwrap();
+            if id == 699 {
+                assert_eq!(data.texture.unwrap().size, [720, 360]);
+            } else {
+                assert_eq!(data.ephemeris.unwrap().len(), EPHEMERIS_SAMPLES);
+            }
+            install(id);
+            assert_eq!(path.metadata().unwrap().ino(), installed_inode);
         }
     }
 }
