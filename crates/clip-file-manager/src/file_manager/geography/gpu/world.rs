@@ -11,6 +11,18 @@ use std::{
     sync::{Arc, Weak},
 };
 
+pub(super) const FULL_REGION: [f32; 4] = [1.0, 1.0, 0.0, 0.0];
+
+pub(super) fn ray_region(canvas: egui::Rect, visible: egui::Rect) -> [f32; 4] {
+    let center = visible.center() - canvas.center();
+    [
+        visible.width() / canvas.width(),
+        visible.height() / canvas.height(),
+        2.0 * center.x / canvas.width(),
+        -2.0 * center.y / canvas.height(),
+    ]
+}
+
 #[derive(Default)]
 pub(super) struct Renderer {
     program: Option<(glow::Program, glow::VertexArray)>,
@@ -23,6 +35,7 @@ impl Renderer {
         gl: &glow::Context,
         info: &egui::PaintCallbackInfo,
         world: &Frame,
+        region: [f32; 4],
     ) -> Result<bool, String> {
         // SAFETY: the callback has verified the owning context before entering.
         unsafe {
@@ -34,6 +47,7 @@ impl Renderer {
             )?;
             let texture = self.texture(gl, world.id, world.texture.as_ref())?;
             let uniform = |name| gl.get_uniform_location(program, name);
+            gl.uniform_4_f32_slice(uniform("u_ray_region").as_ref(), &region);
             gl.uniform_1_i32(uniform("u_background_only").as_ref(), 0);
             gl.uniform_1_i32(uniform("u_emissive").as_ref(), i32::from(world.id == SUN));
             gl.uniform_2_f32_slice(uniform("u_solar_clock").as_ref(), &world.clock);
@@ -75,6 +89,7 @@ impl Renderer {
         unsafe {
             let program = self.bind_program(gl, info, view.axes, view.fov)?;
             let loc = |name| gl.get_uniform_location(program, name);
+            gl.uniform_4_f32_slice(loc("u_ray_region").as_ref(), &FULL_REGION);
             gl.uniform_1_i32(loc("u_background_only").as_ref(), 1);
             gl.uniform_1_i32(loc("u_has_stars").as_ref(), i32::from(stars.is_some()));
             gl.uniform_3_f32_slice(loc("u_sun_direction").as_ref(), &view.sun.0);
@@ -171,5 +186,21 @@ impl Renderer {
                 gl.delete_texture(texture);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cropped_globe_keeps_original_projection_at_the_screen_corner() {
+        let full = egui::Rect::from_min_max(egui::pos2(-40.0, -20.0), egui::pos2(60.0, 80.0));
+        let crop = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(60.0, 80.0));
+        let [sx, sy, dx, dy] = ray_region(full, crop);
+        assert!((dx - sx + 0.2).abs() < 1e-6);
+        assert!((dy + sy - 0.6).abs() < 1e-6);
+        assert!((dx + sx - 1.0).abs() < 1e-6);
+        assert!((dy - sy + 1.0).abs() < 1e-6);
     }
 }

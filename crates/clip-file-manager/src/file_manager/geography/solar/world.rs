@@ -105,6 +105,7 @@ impl World {
         response: &egui::Response,
         time: DateTime<Utc>,
         stars: Option<std::sync::Arc<sky::Assets>>,
+        constellations: bool,
     ) -> Result<Option<Id>, String> {
         let rect = response.rect;
         let painter = ui.painter_at(rect);
@@ -125,6 +126,7 @@ impl World {
             clock: frame.clock,
             brightness: 1.0,
             assets: stars,
+            constellations,
         };
         let sun_visible = self.body.id == SUN
             || frame.pose.intersects_sphere(
@@ -138,7 +140,7 @@ impl World {
         let moons = surroundings(self.body, frame.pose, rect, day);
         let pose = frame.pose;
         let clock = frame.clock;
-        gpu::paint_space(ui, rect, lights)?;
+        gpu::paint_space(ui, rect, lights.clone())?;
         let paint_side = |behind| {
             for moon in moons.iter().filter(|moon| moon.behind == behind) {
                 moon.paint(
@@ -155,13 +157,15 @@ impl World {
         paint_side(true)?;
         gpu::paint_world(ui, rect, frame)?;
         paint_side(false)?;
-        for moon in moons
-            .iter()
-            .filter(|moon| !moon.occluded && moon.radius >= 4.5)
-        {
-            moon.label(&painter);
-        }
+        label_major_moons(&painter, &moons);
         let target = pick_moon(&moons, pose, response).or_else(|| pick_sun(pose, sun, response));
+        if target.is_none() {
+            let exposed = |point: Pos2| {
+                let local = point - rect.min;
+                pose.ground(local.x, local.y).is_none()
+            };
+            lights.hover_star(response, exposed);
+        }
         Ok(target.filter(|_| response.clicked()))
     }
 
@@ -174,6 +178,18 @@ impl World {
     }
 }
 
+fn label_major_moons(painter: &egui::Painter, bodies: &[Nearby]) {
+    let mut majors: Vec<_> = bodies
+        .iter()
+        .filter(|body| body.major && !body.occluded)
+        .collect();
+    majors.sort_by(|a, b| b.radius.total_cmp(&a.radius));
+    let mut occupied = Vec::new();
+    for body in majors {
+        body.label(painter, &mut occupied);
+    }
+}
+
 struct Nearby {
     body: &'static Body,
     point: Pos2,
@@ -181,6 +197,7 @@ struct Nearby {
     position: [f64; 3],
     display_radius: f64,
     depth: f64,
+    major: bool,
     behind: bool,
     occluded: bool,
 }
@@ -195,7 +212,7 @@ impl Nearby {
         clock: [f32; 2],
         texture: Option<&sky::Texture>,
     ) -> Result<(), String> {
-        if self.radius < 2.0 && bands(self.body.id).is_empty() {
+        if self.display_radius / self.depth * pose.focal < 2.0 && bands(self.body.id).is_empty() {
             ui.painter_at(canvas)
                 .circle_filled(self.point, self.radius, self.body.color());
             return Ok(());
@@ -215,7 +232,7 @@ impl Nearby {
         gpu::paint_world_clipped(ui, canvas, clip, frame)
     }
 
-    fn label(&self, painter: &egui::Painter) {
+    fn label(&self, painter: &egui::Painter, occupied: &mut Vec<Rect>) {
         let text = painter.layout_no_wrap(
             self.body.name.to_owned(),
             FontId::proportional(11.0),
@@ -223,7 +240,10 @@ impl Nearby {
         );
         let position = self.point + egui::vec2(self.radius + 4.0, -text.size().y * 0.5);
         let rect = Rect::from_min_size(position, text.size()).expand2(egui::vec2(3.0, 1.0));
-        if painter.clip_rect().contains_rect(rect) {
+        if painter.clip_rect().contains_rect(rect)
+            && !occupied.iter().any(|used| used.intersects(rect))
+        {
+            occupied.push(rect);
             painter.rect_filled(rect, 2.0, Color32::from_black_alpha(180));
             painter.galley(position, text, Color32::WHITE);
         }
@@ -327,8 +347,6 @@ fn surroundings(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<
         .chain(parent)
         .filter_map(|(moon, orbit)| project_moon(primary, moon, orbit, pose, rect))
         .collect();
-    visible.sort_by(|a, b| b.radius.total_cmp(&a.radius));
-    visible.truncate(48);
     visible.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     visible
 }
@@ -354,8 +372,7 @@ fn project_moon(
     let ray = ray.map(|v| v / depth);
     let display_radius = (radius_ratio * 3.0).min(distance * 0.32);
     let radius = (pose.focal * display_radius / depth) as f32;
-    if radius < 0.26 || !pose.intersects_sphere(position, visible_radius(moon, display_radius), 2.0)
-    {
+    if !pose.intersects_sphere(position, visible_radius(moon, display_radius), 2.0) {
         return None;
     }
     let occluded = sphere_distance(pose.eye, ray, 1.0).is_some_and(|t| t < depth);
@@ -365,13 +382,18 @@ fn project_moon(
         .map(|(a, b)| a * b)
         .sum::<f64>()
         < 0.0;
+    let major = primary.parent == Some(moon.id)
+        || moon
+            .radius
+            .is_some_and(|radius| radius >= (primary_km * 0.001).max(3.0));
     Some(Nearby {
         body: moon,
         point,
-        radius: radius.max(0.9),
+        radius: radius.max(if major { 2.6 } else { 0.9 }),
         position,
         display_radius,
         depth,
+        major,
         behind,
         occluded,
     })
@@ -392,6 +414,7 @@ fn radius_m(body: &Body) -> f64 {
     body.radius.unwrap_or(5.0) * 1000.0
 }
 
+#[derive(Clone)]
 pub(in crate::file_manager::geography) struct Backdrop {
     pub axes: [[f32; 3]; 3],
     pub fov: [f32; 2],
@@ -399,6 +422,32 @@ pub(in crate::file_manager::geography) struct Backdrop {
     pub clock: [f32; 2],
     pub brightness: f32,
     pub assets: Option<std::sync::Arc<sky::Assets>>,
+    pub constellations: bool,
+}
+
+impl Backdrop {
+    pub(in crate::file_manager::geography) fn inertial_axes(&self) -> [[f32; 3]; 3] {
+        self.axes
+            .map(|[x, y, z]| [x, 0.917482 * y - 0.397777 * z, 0.397777 * y + 0.917482 * z])
+    }
+
+    pub(super) fn hover_star(&self, response: &egui::Response, exposed: impl Fn(Pos2) -> bool) {
+        let Some(pointer) = response.hover_pos().filter(|point| exposed(*point)) else {
+            return;
+        };
+        let Some(catalog) = self.assets.as_deref().and_then(sky::Assets::star_catalog) else {
+            return;
+        };
+        let view = gpu::StarView {
+            axes: self.inertial_axes(),
+            focal: response.rect.width() / (2.0 * self.fov[0]),
+        };
+        if let Some(star) = view.pick(catalog, response.rect, pointer, exposed) {
+            egui::Tooltip::for_widget(response)
+                .at_pointer()
+                .show(|ui| gpu::star_name(ui, star));
+        }
+    }
 }
 
 pub(in crate::file_manager::geography) struct Frame {
@@ -495,6 +544,19 @@ pub(in crate::file_manager::geography) fn bands(id: Id) -> &'static [[f32; 3]] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturn_keeps_minor_satellites_in_a_wide_view() {
+        let mut camera = map_camera::lunar_camera();
+        camera.zoom = 0.14;
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1800.0, 720.0));
+        let saturn = body(699).unwrap();
+        let pose = Perspective::new(&camera, rect.size().into(), radius_m(saturn));
+        let visible = surroundings(saturn, pose, rect, 8_100.0);
+        assert!(visible.len() > 48);
+        assert!(visible.iter().any(|m| m.major));
+        assert!(visible.iter().any(|m| !m.major && m.radius <= 1.0));
+    }
 
     #[test]
     fn a_parent_uses_the_viewers_projection_and_its_own_ring_scale() {

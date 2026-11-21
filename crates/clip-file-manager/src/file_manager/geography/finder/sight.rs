@@ -55,6 +55,7 @@ impl Sight {
         ui: &egui::Ui,
         response: &egui::Response,
         assets: Option<Arc<sky::Assets>>,
+        constellations: bool,
     ) {
         let rect = response.rect;
         let painter = ui.painter_at(rect);
@@ -87,10 +88,13 @@ impl Sight {
                     clock: [0.0; 2],
                     brightness: 0.64,
                     assets: assets.clone(),
+                    constellations: false,
                 },
             );
         }
-        self.paint_figures(&painter, projection);
+        if constellations {
+            self.paint_figures(&painter, projection);
+        }
         let mut named_hover = None;
         let pointer = response.hover_pos();
         let mut paint_star = |name: &str, magnitude: f32, direction: Direction| {

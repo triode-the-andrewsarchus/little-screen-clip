@@ -100,6 +100,7 @@ impl System {
         response: &egui::Response,
         time: DateTime<Utc>,
         stars: Option<Arc<sky::Assets>>,
+        constellations: bool,
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
         let wheel = self.navigate(response);
@@ -118,7 +119,8 @@ impl System {
         let day = scene_day(time);
         let clock = clock(time, animation);
         let projection = self.projection(rect, animation, primary.id);
-        self.paint_backdrop(ui, &painter, projection, clock, stars, blend);
+        let backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
+        self.paint_backdrop(ui, &painter, projection, &backdrop);
         let mut guides = painter.clone();
         guides.multiply_opacity(1.0 - blend);
         if heliocentric {
@@ -148,6 +150,9 @@ impl System {
             clock,
             &self.textures,
         );
+        if !heliocentric {
+            backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
+        }
         if let Some(id) = arrived {
             let mut camera = camera;
             camera.zoom = world::initial_zoom(id);
@@ -187,38 +192,46 @@ impl System {
         }
     }
 
+    fn backdrop(
+        &self,
+        rect: Rect,
+        projection: Projection,
+        clock: [f32; 2],
+        stars: Option<Arc<sky::Assets>>,
+        constellations: bool,
+        blend: f32,
+    ) -> world::Backdrop {
+        let brightness = if self.center == SUN { 0.17 } else { 0.28 };
+        let aperture = 0.60 + (1.0 / 1.9 - 0.60) * blend;
+        world::Backdrop {
+            axes: projection.axes(),
+            fov: [rect.width(), rect.height()]
+                .map(|s| s / rect.width().min(rect.height()) * aperture),
+            sun: ([0.0, 0.0, 1.0], 0.0),
+            clock,
+            brightness: brightness + (1.0 - brightness) * blend,
+            assets: stars,
+            constellations,
+        }
+    }
+
     fn paint_backdrop(
         &self,
         ui: &egui::Ui,
         painter: &egui::Painter,
         projection: Projection,
-        clock: [f32; 2],
-        stars: Option<Arc<sky::Assets>>,
-        blend: f32,
+        sky: &world::Backdrop,
     ) {
         let rect = painter.clip_rect();
-        let brightness = if self.center == SUN { 0.17 } else { 0.28 };
-        let aperture = 0.60 + (1.0 / 1.9 - 0.60) * blend;
         painter.rect_filled(rect, 0, Color32::from_rgb(7, 10, 17));
-        if stars.is_none()
-            || gpu::paint_space(
-                ui,
-                rect,
-                world::Backdrop {
-                    axes: projection.axes(),
-                    fov: [rect.width(), rect.height()]
-                        .map(|s| s / rect.width().min(rect.height()) * aperture),
-                    sun: ([0.0, 0.0, 1.0], 0.0),
-                    clock,
-                    brightness: brightness + (1.0 - brightness) * blend,
-                    assets: stars,
-                },
-            )
-            .is_err()
-        {
+        if sky.assets.is_none() || gpu::paint_space(ui, rect, sky.clone()).is_err() {
             paint_stars(painter, rect);
         }
-        let visible_sun = self.center == SUN && rect.contains(projection.center);
+        let visible_sun = self.center == SUN
+            && body(SUN).is_some_and(|sun| {
+                let mark = Mark::new(sun, projection.center, 0.0, true, self.zoom);
+                rect.expand(mark.radius * 1.65).contains(projection.center)
+            });
         let opening = self
             .opened_at
             .is_some_and(|start| ui.input(|i| i.time) - start < 0.28);
@@ -562,7 +575,7 @@ fn paint_icon(
     frame.clock = clock;
     frame.sun = sunlight(mark.body, f64::from(clock[0])).0;
     frame.ring_emphasis = (20.0 / mark.radius).clamp(1.0, 2.8);
-    if gpu::paint_world(ui, rect, frame).is_err() {
+    if gpu::paint_world_clipped(ui, rect, painter.clip_rect(), frame).is_err() {
         painter.circle_filled(mark.point, mark.radius, mark.body.color());
     }
 }

@@ -3,6 +3,7 @@ in vec2 v_ndc;
 out vec4 frag;
 uniform mat3 u_axes;
 uniform vec2 u_fov;
+uniform vec4 u_ray_region = vec4(1.0,1.0,0.0,0.0);
 uniform vec3 u_eye;
 uniform vec3 u_color;
 uniform float u_zoom;
@@ -50,7 +51,7 @@ vec2 cylinder_span(vec2 eye, vec2 ray, float radius) {
     return mid + sqrt(delta)*vec2(-1,1);
 }
 
-vec4 rings(vec3 ray, float surface_depth) {
+vec4 rings(vec3 ray, float surface_depth, float pixel_angle) {
     if (u_band_count == 0) return vec4(0);
     // A thin disk with finite vertical depth stays visible from its equator.
     // All distances are measured in planetary radii.
@@ -66,7 +67,6 @@ vec4 rings(vec3 ray, float surface_depth) {
     }
     if (slab.y <= slab.x) return vec4(0);
 
-    float pixel_angle = max(u_fov.x,u_fov.y) * fwidth(v_ndc.x);
     float thickness = 0.0;
     float shaded = 0.0;
     for (int i = 0; i < u_band_count; ++i) {
@@ -115,7 +115,9 @@ vec4 rings(vec3 ray, float surface_depth) {
 }
 
 void main() {
-    vec3 ray = u_axes * normalize(vec3(v_ndc * u_fov, -1.0));
+    vec2 ndc = v_ndc*u_ray_region.xy+u_ray_region.zw;
+    float pixel_angle = max(u_fov.x*fwidth(ndc.x),u_fov.y*fwidth(ndc.y));
+    vec3 ray = u_axes * normalize(vec3(ndc * u_fov, -1.0));
     if (u_background_only) {
         // Ecliptic coordinates -> J2000 equatorial coordinates.
         vec3 equatorial = vec3(ray.x,.917482*ray.y-.397777*ray.z,
@@ -156,6 +158,6 @@ void main() {
         float light = .25 + .75*pow(max(dot(normal,u_sun_direction),0.0),.54);
         body = vec4(albedo*mix(1.0,light,phase)*body_coverage,body_coverage);
     }
-    vec4 front = rings(ray,body_coverage > .5 && depth > 0.0 ? depth : 1e19);
+    vec4 front = rings(ray,body_coverage > .5 && depth > 0.0 ? depth : 1e19,pixel_angle);
     frag = front + body*(1.0-front.a);
 }

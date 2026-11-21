@@ -263,6 +263,16 @@ def check_world_view(root, width, height, output):
     assert len(np.unique(ringed[:, :, 0][exterior])) > 35, "Ring bands should vary in apparent density"
     assert np.array_equal(globe[height // 2, width // 2], ringed[height // 2, width // 2]), "Body failed to occlude ring plane"
     Image.fromarray(np.flipud(ringed)).save(output / "ringed-world.png")
+    # Render the right half in a smaller viewport. Its rays must match a
+    # crop of the full globe rather than squeezing the whole globe into it.
+    half = width // 2
+    GL.glViewport(0, 0, half, height)
+    GL.glUniform4f(loc("u_ray_region"), .5, 1, .5, 0)
+    cropped = draw([(1.28, 1.58, .41), (1.58, 2.02, .74), (2.10, 2.32, .52)])
+    difference = np.abs(cropped[:, 2:half - 2].astype(int) - ringed[:, half + 2:width - 2])
+    assert np.percentile(difference, 99.9) <= 1, "Clipping changed globe or ring projection"
+    GL.glUniform4f(loc("u_ray_region"), 1, 1, 0, 0)
+    GL.glViewport(0, 0, width, height)
     # At the equator the rings should still occupy multiple rows, with the
     # far side disappearing behind the planet.
     axes = np.asarray([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=np.float32)
@@ -824,6 +834,7 @@ def main():
             "signed_lunar_relief_checked": True,
             "world_ring_occlusion_checked": True,
             "edge_on_ring_thickness_checked": True,
+            "clipped_world_projection_checked": True,
             "shared_sky_and_solar_emission_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}

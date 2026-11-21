@@ -134,6 +134,13 @@ pub(in crate::file_manager) fn bulk_worlds() -> impl Iterator<Item = (Id, u64)> 
         )
 }
 
+pub(in crate::file_manager::geography) fn map_sources()
+-> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
+    images()
+        .iter()
+        .filter_map(|image| Some((name(image.id)?, image.credit, image.source)))
+}
+
 pub(in crate::file_manager) fn name(id: Id) -> Option<&'static str> {
     super::body(id).map(|body| body.name)
 }

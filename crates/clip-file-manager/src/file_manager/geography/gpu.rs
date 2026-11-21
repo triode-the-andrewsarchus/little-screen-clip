@@ -14,6 +14,7 @@ use little_clip_core::geography::basemap::{
     perspective::{EARTH_RADIUS_M, MOON_RADIUS_M, Perspective},
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
+pub(super) use sky::inspection::{View as StarView, show_name as star_name};
 pub(super) use sky::{SkyObject, sky_object_at};
 use std::{
     borrow::Cow,
@@ -118,6 +119,7 @@ pub(super) struct Frame {
     pub details: Vec<(TileId, Arc<super::detail::Tile>)>,
     pub sky: Option<super::sky::Scene>,
     pub star_trail: f32,
+    pub animation_seconds: f64,
     pub show_sky: bool,
     pub moon_view: bool,
     pub lunar: Option<(u64, Vec<Arc<SourceTile>>)>,
@@ -181,9 +183,14 @@ pub(super) fn paint(ui: &egui::Ui, rect: egui::Rect, frame: Frame) -> Result<(),
 pub(super) fn paint_at(
     ui: &egui::Ui,
     rect: egui::Rect,
-    frame: Frame,
+    mut frame: Frame,
     slot: Option<egui::layers::ShapeIdx>,
 ) -> Result<(), String> {
+    frame.animation_seconds = ui.input(|input| input.time);
+    if sky::animated_sun_visible(&frame) {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(66));
+    }
     schedule_paint(
         ui.painter_at(rect),
         rect,
@@ -209,13 +216,18 @@ pub(super) fn paint_world_clipped(
     clip: egui::Rect,
     frame: super::solar::world::Frame,
 ) -> Result<(), String> {
+    let visible = canvas.intersect(clip).intersect(ui.clip_rect());
+    if !visible.is_positive() {
+        return Ok(());
+    }
+    let region = world::ray_region(canvas, visible);
     schedule_paint(
-        ui.painter_at(clip),
-        canvas,
+        ui.painter_at(visible),
+        visible,
         None,
         move |renderer, gl, info| {
             // SAFETY: schedule_paint verifies the owning GL context before calling us.
-            unsafe { renderer.world.draw(gl, info, &frame) }
+            unsafe { renderer.world.draw(gl, info, &frame, region) }
         },
     )
 }
@@ -237,6 +249,17 @@ pub(super) fn paint_space(
                 }
                 let stars = frame.assets.as_ref().and(renderer.sky.stars());
                 renderer.world.backdrop(gl, info, &frame, stars)?;
+                if frame.constellations
+                    && let Some(assets) = &frame.assets
+                {
+                    renderer.sky.paint_figures(
+                        gl,
+                        assets,
+                        frame.inertial_axes(),
+                        frame.fov,
+                        frame.brightness.max(0.30),
+                    );
+                }
             }
             Ok(false)
         },
@@ -399,7 +422,7 @@ impl Renderer {
                         frame.size,
                         frame.lunar_albedo.clone(),
                     );
-                    self.world.draw(gl, info, &world)?;
+                    self.world.draw(gl, info, &world, world::FULL_REGION)?;
                 }
             }
         }

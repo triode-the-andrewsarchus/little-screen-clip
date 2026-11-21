@@ -383,6 +383,7 @@ impl Tiles {
             details: Vec::new(),
             sky: None,
             star_trail: 0.0,
+            animation_seconds: 0.0,
             show_sky: false,
             moon_view: false,
             lunar: None,

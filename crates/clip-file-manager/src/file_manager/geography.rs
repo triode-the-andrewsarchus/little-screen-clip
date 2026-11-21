@@ -682,7 +682,12 @@ impl Viewer {
             if sight.navigate(&response) {
                 self.open_solar_system(solar::SUN, ui.ctx());
             } else {
-                sight.paint(ui, &response, self.sky.assets.clone());
+                sight.paint(
+                    ui,
+                    &response,
+                    self.sky.assets.clone(),
+                    self.sky.constellations,
+                );
             }
         } else if let Some(system) = self.solar_system.as_mut() {
             system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
@@ -692,6 +697,7 @@ impl Viewer {
                 &response,
                 recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
                 self.sky.assets.clone(),
+                self.sky.constellations,
             ) {
                 self.arrive_at_world(selection, ui.ctx());
             }
@@ -702,7 +708,13 @@ impl Viewer {
             }
             let time = recorded_scene_time(&self.document, self.selected, None)
                 .unwrap_or_else(|| live_scene_time(ui.ctx()));
-            match world.paint(ui, &response, time, self.sky.assets.clone()) {
+            match world.paint(
+                ui,
+                &response,
+                time,
+                self.sky.assets.clone(),
+                self.sky.constellations,
+            ) {
                 Ok(Some(solar::SUN)) => self.open_solar_system(solar::SUN, ui.ctx()),
                 Ok(Some(id)) => self.select_solar_target(id, ui.ctx()),
                 Ok(None) => {}
@@ -1062,48 +1074,43 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if let Some(sight) = self.sight.as_ref() {
-            self.sky_toolbar(ui, sight.title.clone());
+            self.sky_toolbar(ui, palette, sight.title.clone());
         } else if let Some(center) = self.solar_system.as_ref().map(|view| view.center) {
-            self.solar_toolbar(ui, center);
+            self.solar_toolbar(ui, palette, center);
         } else if self.moon_camera.is_some() {
             self.moon_toolbar(ui, palette);
         } else if self.world.is_some() {
-            self.world_toolbar(ui);
+            self.world_toolbar(ui, palette);
         } else {
             self.earth_toolbar(ui, palette);
         }
     }
 
-    fn sky_toolbar(&mut self, ui: &mut egui::Ui, title: Arc<str>) {
+    fn sky_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette, title: Arc<str>) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Return to Earth").clicked() {
                 self.select_solar_target(solar::EARTH, ui.ctx());
             }
-            if ui.button("Solar System").clicked() {
-                self.open_solar_system(solar::SUN, ui.ctx());
-            }
             ui.separator();
             ui.strong(title.as_ref());
+            self.shared_sky_controls(ui, palette);
         });
     }
 
     fn moon_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let Some(camera) = self.moon_camera.as_mut() else {
-            return;
-        };
         let target = ui
             .horizontal_wrapped(|ui| {
+                let camera = self.moon_camera.as_mut()?;
                 let earth = map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky);
                 ui.separator();
-                let system = ui.button("Solar System").clicked();
                 let orbit = ui.button("Moon orbit").clicked();
-                (earth, system, orbit)
+                self.shared_sky_controls(ui, palette);
+                Some((earth, orbit))
             })
             .inner;
         match target {
-            (true, _, _) => self.select_solar_target(solar::EARTH, ui.ctx()),
-            (_, true, _) => self.open_solar_system(solar::SUN, ui.ctx()),
-            (_, _, true) => self.open_solar_system(solar::EARTH, ui.ctx()),
+            Some((true, _)) => self.select_solar_target(solar::EARTH, ui.ctx()),
+            Some((_, true)) => self.open_solar_system(solar::EARTH, ui.ctx()),
             _ => {
                 ui.horizontal_wrapped(|ui| {
                     self.lunar_download(ui);
@@ -1187,24 +1194,28 @@ impl Viewer {
             {
                 self.fit_document();
             }
-            if ui
-                .add(
-                    clip_ui::buttons::ButtonRole::Secondary
-                        .button("Offline Assets…", palette)
-                        .compact(),
-                )
-                .clicked()
-            {
-                self.show_assets_panel = !self.show_assets_panel;
-            }
-            if ui.button("Solar System").clicked() {
-                self.open_solar_system(solar::SUN, ui.ctx());
-            }
+            self.shared_sky_controls(ui, palette);
         });
     }
 
+    fn shared_sky_controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        ui.separator();
+        ui.checkbox(&mut self.sky.constellations, "Constellations")
+            .on_hover_text("Show Stellarium’s Modern figures. The star catalog is available in Offline Assets.");
+        if ui
+            .add(
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button("Offline Assets…", palette)
+                    .compact(),
+            )
+            .clicked()
+        {
+            self.show_assets_panel = !self.show_assets_panel;
+        }
+    }
+
     fn earth_sky_options(&mut self, ui: &mut egui::Ui) {
-        if let Some(assets) = &self.sky.assets {
+        if self.sky.assets.is_some() {
             ui.separator();
             ui.checkbox(&mut self.sky.visible, "Sky and planets");
             ui.add_enabled(
@@ -1213,25 +1224,14 @@ impl Viewer {
                 )
                 .on_hover_text("Enlarge the Sun and Moon up to 16×, with larger planet markers. Uses physical sizes during eclipses.");
             ui.checkbox(&mut self.sky.lighting, "Day and night");
-            if assets.star_catalog().is_some() {
-                ui.add_enabled(
-                    self.sky.visible,
-                    egui::Checkbox::new(&mut self.sky.constellations, "Constellations"),
-                )
-                .on_hover_text("Show Stellarium’s Modern constellation figures.");
-            }
         }
     }
 
-    fn world_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn world_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let Some(body) = self.world.as_ref().map(|world| world.body) else {
             return;
         };
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Solar System").clicked() {
-                self.open_solar_system(solar::SUN, ui.ctx());
-                return;
-            }
             let orbit = if body.kind() == solar::Kind::Moon {
                 body.parent
                     .and_then(solar::body)
@@ -1253,6 +1253,7 @@ impl Viewer {
                 ui.label(format!("{radius:.1} km mean radius"));
             }
             self.body_assets(ui);
+            self.shared_sky_controls(ui, palette);
         });
     }
 
@@ -1381,52 +1382,31 @@ impl Viewer {
         ctx.request_repaint();
     }
 
-    fn solar_toolbar(&mut self, ui: &mut egui::Ui, center: solar::Id) {
+    fn solar_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette, center: solar::Id) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Back to map").clicked() {
                 self.select_solar_target(solar::EARTH, ui.ctx());
             }
-            ui.separator();
-            if ui
-                .selectable_label(center == solar::SUN, "Solar System")
-                .clicked()
-                && center != solar::SUN
-            {
-                self.open_solar_system(solar::SUN, ui.ctx());
-            }
             if let Some(body) = solar::body(center).filter(|body| body.id != solar::SUN) {
-                if let Some(parent) = body
-                    .parent
-                    .and_then(solar::body)
-                    .filter(|parent| parent.id != solar::SUN)
-                    && ui.button(parent.name).clicked()
-                {
-                    self.open_solar_system(parent.id, ui.ctx());
-                }
-                ui.label(body.name);
-            }
-            egui::ComboBox::from_id_salt("solar-system-bodies")
-                .selected_text(if center == solar::SUN {
-                    "Worlds"
-                } else {
-                    "Moons"
-                })
-                .show_ui(ui, |ui| {
-                    for body in solar::satellites(center) {
-                        if ui.button(body.name).clicked() {
-                            self.select_solar_target(body.id, ui.ctx());
-                            ui.close();
+                ui.separator();
+                ui.label(format!("{} moon orbits", body.name));
+                egui::ComboBox::from_id_salt("solar-system-moons")
+                    .selected_text("Moons")
+                    .show_ui(ui, |ui| {
+                        for moon in solar::satellites(center) {
+                            if ui.button(moon.name).clicked() {
+                                self.select_solar_target(moon.id, ui.ctx());
+                                ui.close();
+                            }
                         }
-                    }
-                });
-            if center == solar::SUN {
-                self.solar_offline_data(ui);
+                    });
             }
+            self.shared_sky_controls(ui, palette);
         });
     }
 
     fn solar_offline_data(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Offline Data…", |ui| {
+        ui.menu_button("Solar System data…", |ui| {
             ui.label(
                 "Surface maps, orbital samples, Moon elevation, stars, and Earth night lighting.",
             );
@@ -1445,6 +1425,20 @@ impl Viewer {
                     .start(DownloadPack::SolarSystem, &self.config);
                 ui.close();
             }
+            ui.collapsing("Surface map sources", |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for (body, credit, source) in solar::assets::map_sources() {
+                            ui.hyperlink_to(format!("{body} · {credit}"), source);
+                        }
+                        ui.hyperlink_to(
+                            "NASA LOLA elevation",
+                            "https://pds-geosciences.wustl.edu/missions/lro/lola.htm",
+                        );
+                        ui.hyperlink_to("JPL Horizons orbital data", solar::assets::HORIZONS);
+                    });
+            });
             if let Some(errors) = &self.downloader.solar_errors {
                 if errors.is_empty() {
                     ui.label("All Solar System data is installed.");
@@ -1712,6 +1706,7 @@ impl Viewer {
         palette: &AppPalette,
         colors: WorkbenchColors,
     ) {
+        self.solar_offline_data(ui);
         self.transport_assets(ui, palette);
         let sky_download = match &self.sky.assets {
             None => Some(format!(
@@ -1733,21 +1728,19 @@ impl Viewer {
         {
             self.downloader.start(DownloadPack::Sky, &self.config);
         }
-        if self.sky.assets.is_some() {
-            ui.end_row();
-            self.star_catalog_assets(ui, palette, colors);
-            ui.end_row();
-            ui.hyperlink_to(
-                "JPL DE440",
-                "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
-            );
-            ui.hyperlink_to("NASA star map", "https://svs.gsfc.nasa.gov/4851/");
-            ui.hyperlink_to("NASA Moon albedo", "https://svs.gsfc.nasa.gov/4720/");
-            ui.hyperlink_to(
-                "NASA ΔT uncertainty",
-                "https://eclipse.gsfc.nasa.gov/SEcat5/uncertainty.html",
-            );
-        }
+        ui.end_row();
+        self.star_catalog_assets(ui, palette, colors);
+        ui.end_row();
+        ui.hyperlink_to(
+            "JPL DE440",
+            "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+        );
+        ui.hyperlink_to("NASA star map", "https://svs.gsfc.nasa.gov/4851/");
+        ui.hyperlink_to("NASA Moon albedo", "https://svs.gsfc.nasa.gov/4720/");
+        ui.hyperlink_to(
+            "NASA ΔT uncertainty",
+            "https://eclipse.gsfc.nasa.gov/SEcat5/uncertainty.html",
+        );
         if let Some(error) = &self.sky.error {
             ui.colored_label(colors.warning, format!("Sky assets: {error}"));
         }
@@ -1759,22 +1752,22 @@ impl Viewer {
         palette: &AppPalette,
         colors: WorkbenchColors,
     ) {
+        ui.hyperlink_to(
+            "Stellarium team · Modern figures",
+            sky::catalog::STELLARIUM_CREDIT,
+        );
+        ui.hyperlink_to(
+            "David Nash / Astronexus · HYG v4.1",
+            sky::catalog::HYG_CREDIT,
+        );
+        ui.hyperlink_to(
+            "CC BY-SA 4.0",
+            "https://creativecommons.org/licenses/by-sa/4.0/",
+        );
         let Some(assets) = &self.sky.assets else {
             return;
         };
         if assets.star_catalog().is_some() {
-            ui.hyperlink_to(
-                "Stellarium team · Modern figures",
-                sky::catalog::STELLARIUM_CREDIT,
-            );
-            ui.hyperlink_to(
-                "David Nash / Astronexus · HYG v4.1",
-                sky::catalog::HYG_CREDIT,
-            );
-            ui.hyperlink_to(
-                "CC BY-SA 4.0",
-                "https://creativecommons.org/licenses/by-sa/4.0/",
-            );
             return;
         }
         if let Err(error) = &assets.catalog {
@@ -2296,15 +2289,7 @@ fn show_sky_object(ui: &egui::Ui, rect: egui::Rect, frame: &gpu::Frame) {
                     }
                 }
             }
-            gpu::SkyObject::Star(star) => {
-                ui.label(star.name.as_ref());
-                if let Some(hip) = star.hip
-                    && !star.name.starts_with("HIP ")
-                {
-                    ui.label(format!("HIP {hip}"));
-                }
-                ui.label(format!("Visual magnitude {:.2}", star.magnitude));
-            }
+            gpu::SkyObject::Star(star) => gpu::star_name(ui, star),
         });
     }
 }

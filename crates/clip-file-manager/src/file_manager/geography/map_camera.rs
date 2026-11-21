@@ -244,16 +244,6 @@ pub(super) fn lunar_toolbar(
     ui.separator();
     ui.checkbox(&mut sky.visible, "Sky and planets");
     ui.checkbox(&mut sky.lighting, "Day and night");
-    if sky
-        .assets
-        .as_ref()
-        .is_some_and(|assets| assets.star_catalog().is_some())
-    {
-        ui.add_enabled(
-            sky.visible,
-            egui::Checkbox::new(&mut sky.constellations, "Constellations"),
-        );
-    }
     earth
 }
 
