@@ -420,6 +420,7 @@ enum Wheel {
 }
 
 const APPROACH_ZOOM: f64 = 0.18;
+const OVERVIEW_MOON_GUIDE_RADIUS_KM: f64 = 38.0;
 
 struct FlyIn {
     id: Id,
@@ -594,6 +595,7 @@ impl OrbitLayout<'_> {
     fn moon_system(&mut self, parent: &Body, position: [f64; 3], mark: &Mark, plane: Projection) {
         let viewport = self.painter.clip_rect();
         let projection = plane.at_parent(position);
+        let minor_visibility = f64::from((mark.physical_radius - 6.0) / 8.0).clamp(0.0, 1.0);
         for moon in satellites(parent.id) {
             let Some(orbit) = moon.orbit else { continue };
             let spread = moon.semimajor() * projection.scale;
@@ -605,8 +607,14 @@ impl OrbitLayout<'_> {
             {
                 continue;
             }
-            let visibility = ((spread - reveal) / reveal).clamp(0.0, 1.0);
-            self.orbit(moon, projection, (visibility * 117.0) as u8, None);
+            let separation = ((spread - reveal) / reveal).clamp(0.0, 1.0);
+            let guide = moon.radius.unwrap_or(0.0) > OVERVIEW_MOON_GUIDE_RADIUS_KM;
+            let visibility = if guide {
+                self.orbit(moon, projection, (separation * 117.0) as u8, None);
+                separation
+            } else {
+                separation * minor_visibility
+            };
             let (point, depth) = projection.project(moon.at(self.day));
             let mut next = Mark::new(moon, (point, depth + mark.depth), false, projection.scale);
             next.radius =
@@ -752,7 +760,8 @@ fn paint_marks(
         if mark.body.kind() == Kind::Moon
             && !mark.primary
             && hit != Some(mark.body.id)
-            && (mark.body.radius.unwrap_or(0.0) <= 38.0 || mark.radius < 2.5)
+            && (mark.body.radius.unwrap_or(0.0) <= OVERVIEW_MOON_GUIDE_RADIUS_KM
+                || mark.radius < 1.5)
         {
             continue;
         }
