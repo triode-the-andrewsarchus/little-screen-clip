@@ -835,9 +835,8 @@ fn identify_special_file(
     if let Some(trajectory) =
         super::geography::solar::trajectory::Trajectory::read_if_identified(path, cancelled)?
     {
-        return Ok(Some(Loaded::Geography(
-            super::geography::Viewer::from_trajectory(trajectory)?,
-        )));
+        return super::geography::Viewer::from_trajectory(trajectory)
+            .map(|viewer| Some(Loaded::Geography(Box::new(viewer))));
     }
     Ok(None)
 }
@@ -1111,6 +1110,21 @@ mod tests {
                 Loaded::Font(_)
             ));
         }
+    }
+
+    #[test]
+    fn horizons_vector_exports_open_as_geography() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons/4-Vesta.txt");
+        assert!(matches!(
+            load(
+                &path,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
+            Loaded::Geography(_)
+        ));
     }
 
     #[test]
