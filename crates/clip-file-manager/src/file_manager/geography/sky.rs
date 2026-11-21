@@ -3,6 +3,7 @@ pub(crate) mod catalog;
 mod orientation;
 pub(super) use orientation::RotationSource;
 
+use super::solar;
 use anise::{
     almanac::Almanac,
     astro::Aberration,
@@ -88,6 +89,7 @@ pub(super) struct Scene {
     pub solar_possible: bool,
     pub planets: [[f32; 3]; 7],
     pub rotation_source: RotationSource,
+    pub modeled_ephemeris: bool,
     pub assets: Arc<Assets>,
 }
 
@@ -164,6 +166,38 @@ impl Assets {
             solar_possible: dot / (norm(sun) * norm(moon)) > 0.9993,
             planets: PLANETS.map(|(_, planet)| from_earth(planet).unwrap_or([0.0; 3])),
             rotation_source,
+            modeled_ephemeris: false,
+            assets: self.clone(),
+        })
+    }
+
+    pub fn estimate(self: &Arc<Self>, time: DateTime<Utc>) -> Option<Scene> {
+        let (_, matrix, rotation_source) = self.orientation.at(time);
+        let day = solar::scene_day(time);
+        let position = |id| solar::body(id).map(|body| solar::position_au(body, day));
+        let earth = position(solar::EARTH)?;
+        let moon = position(solar::MOON)?;
+        let from = |target: [f64; 3], origin: [f64; 3]| {
+            let [x, y, z] = std::array::from_fn(|i| (target[i] - origin[i]) * solar::AU_KM);
+            let (sin, cos) = 23.43928_f64.to_radians().sin_cos();
+            erfa::vectors_and_matrices::mat_mul_pvec(
+                matrix,
+                [x, cos * y - sin * z, sin * y + cos * z],
+            )
+            .map(|value| value as f32)
+        };
+        Some(Scene {
+            time,
+            inertial_rows: matrix.map(|row| row.map(|v| v as f32)),
+            sun: from([0.0; 3], earth),
+            moon: from(moon, earth),
+            lunar_sun: from([0.0; 3], moon),
+            lunar_earth: from(earth, moon),
+            solar_possible: false,
+            planets: PLANET_IDS
+                .map(|id| position(id).map_or([0.0; 3], |target| from(target, earth))),
+            rotation_source,
+            modeled_ephemeris: true,
             assets: self.clone(),
         })
     }
@@ -294,5 +328,14 @@ mod tests {
         );
         assert!(assets.at("1549-01-01T00:00:00Z".parse().unwrap()).is_none());
         assert!(assets.at("2651-01-01T00:00:00Z".parse().unwrap()).is_none());
+        let earlier = assets
+            .estimate("1526-06-21T12:00:00Z".parse().unwrap())
+            .unwrap();
+        assert!(earlier.modeled_ephemeris);
+        assert!(
+            earlier.sun[0] > 0.8 * norm(earlier.sun),
+            "sun near zenith at 0°, 0°"
+        );
+        assert!((350_000.0..410_000.0).contains(&norm(earlier.moon)));
     }
 }

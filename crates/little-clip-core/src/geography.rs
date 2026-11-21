@@ -88,8 +88,8 @@ pub struct Feature {
     pub elevation: Option<[f64; 2]>,
     /// Dose-rate extrema in µSv/h over all readable positions.
     pub dose_rate: Option<[f64; 2]>,
-    /// Last dated position in source order, including positions omitted from drawing.
-    pub last_instant: Option<DateTime<Utc>>,
+    /// Earliest and latest dated positions, including positions omitted from drawing.
+    pub time_range: Option<[DateTime<Utc>; 2]>,
     /// Supplied text properties.
     pub properties: Vec<(String, String)>,
 }
@@ -118,6 +118,7 @@ struct RawFeature {
     kind: Kind,
     paths: Vec<Vec<Point>>,
     properties: Vec<(String, String)>,
+    time_range: Option<[DateTime<Utc>; 2]>,
 }
 impl Document {
     /// Reads Android tab-separated and JSON RadiaCode track exports.
@@ -253,6 +254,7 @@ fn gpx_feature(node: Node<'_, '_>, kind: &str) -> Result<RawFeature, String> {
         },
         paths: groups,
         properties,
+        time_range: None,
     })
 }
 fn children<'a>(node: Node<'a, 'a>, name: &'a str) -> impl Iterator<Item = Node<'a, 'a>> {
@@ -340,7 +342,7 @@ fn prepare(
                     distance_m: 0.0,
                     elevation: None,
                     dose_rate: None,
-                    last_instant: None,
+                    time_range: feature.time_range,
                     properties: feature.properties,
                 })
                 .collect(),
@@ -437,21 +439,21 @@ fn prepare_feature(
     bounds: &mut [f64; 4],
 ) -> Feature {
     let count: usize = feature.paths.iter().map(Vec::len).sum();
-    let last_instant = feature
-        .paths
-        .iter()
-        .rev()
-        .flat_map(|path| path.iter().rev())
-        .find_map(Point::instant);
     let stride = count.div_ceil((count * DRAW_POINTS / points).max(2)).max(1);
     let mut distance = 0.0;
     let mut elevation: Option<[f64; 2]> = None;
     let mut dose_rate: Option<[f64; 2]> = None;
+    let mut time_range = feature.time_range;
     let mut paths = Vec::new();
     for path in feature.paths {
         let mut prepared = Vec::new();
         let mut profile_gap = true;
         for (index, point) in path.iter().enumerate() {
+            if let Some(time) = point.instant() {
+                let [first, last] = time_range.get_or_insert([time, time]);
+                *first = (*first).min(time);
+                *last = (*last).max(time);
+            }
             if index > 0 && matches!(feature.kind, Kind::Line | Kind::Polygon) {
                 distance += distance_m(&path[index - 1], point);
             }
@@ -496,7 +498,7 @@ fn prepare_feature(
         distance_m: distance,
         elevation,
         dose_rate,
-        last_instant,
+        time_range,
         properties: feature.properties,
     }
 }
@@ -537,6 +539,27 @@ mod tests {
         assert_eq!(doc.features[0].distance_m, 0.0);
     }
     #[test]
+    fn geojson_retains_dated_features_and_explicit_recording_intervals() {
+        let document = Document::geojson(br#"{
+            "type":"FeatureCollection",
+            "features":[
+                {"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},
+                 "properties":{"datetime":"2024-02-02T18:00:00-06:00"}},
+                {"type":"Feature","geometry":null,
+                 "properties":{"start_datetime":"2024-01-15T12:00:00Z","end_datetime":"2024-04-01T04:00:00Z"}}
+            ]
+        }"#).unwrap();
+        let [first, last] = document.features[0].time_range.unwrap();
+        assert_eq!(first.to_rfc3339(), "2024-02-03T00:00:00+00:00");
+        assert_eq!(first, last);
+        let range = document.features[1].time_range.unwrap();
+        assert_eq!(
+            range.map(|time| time.format("%Y-%m-%d").to_string()),
+            ["2024-01-15", "2024-04-01"]
+        );
+    }
+
+    #[test]
     fn longitude_wrap_uses_a_compact_dateline_view_and_short_distance() {
         let doc=Document::gpx(br#"<gpx xmlns="http://www.topografix.com/GPX/1/1"><rte><rtept lat="0" lon="179"/><rtept lat="0" lon="-179"/></rte></gpx>"#).unwrap();
         assert!((doc.bounds[2] - doc.bounds[0] - 2.0).abs() < 1e-8);
@@ -562,7 +585,11 @@ mod tests {
                 lon: i as f64 / 100_000.0,
                 lat: 0.0,
                 elevation: (i != 1).then_some(i as f64),
-                time: String::new(),
+                time: match i {
+                    1 => "2012-01-01T00:00:00Z".into(),
+                    3 => "1995-01-01T00:00:00Z".into(),
+                    _ => String::new(),
+                },
                 radiation: None,
             })
             .collect();
@@ -573,12 +600,18 @@ mod tests {
                 kind: Kind::Line,
                 paths: vec![points],
                 properties: vec![],
+                time_range: None,
             }],
             vec![],
         )
         .unwrap();
         assert!(doc.features[0].paths[0][1].profile_break);
         assert!(!doc.features[0].paths[0][2].profile_break);
+        let range = doc.features[0].time_range.unwrap();
+        assert_eq!(
+            range.map(|time| time.format("%Y").to_string()),
+            ["1995", "2012"]
+        );
     }
     #[test]
     fn drawing_reduction_keeps_endpoints_and_full_resolution_metrics() {
@@ -598,6 +631,7 @@ mod tests {
                 kind: Kind::Line,
                 paths: vec![points],
                 properties: vec![],
+                time_range: None,
             }],
             vec![],
         )

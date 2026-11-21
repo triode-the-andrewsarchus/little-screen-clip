@@ -238,6 +238,7 @@ fn prepare_track<'a>(
             kind: Kind::Line,
             paths,
             properties,
+            time_range: None,
         }],
         notes,
     )

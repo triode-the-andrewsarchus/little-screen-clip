@@ -37,6 +37,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Document, String> {
             kind: Kind::Empty,
             paths: Vec::new(),
             properties: Vec::new(),
+            time_range: None,
         });
     }
     let capture_time = value["datetime"]
@@ -101,6 +102,7 @@ impl Reader {
         if let Some(id) = value.get("id") {
             properties.push(("Feature ID".into(), display(id)));
         }
+        let first = self.features.len();
         self.geometry(
             value
                 .get("geometry")
@@ -108,7 +110,21 @@ impl Reader {
             name,
             properties,
             0,
-        )
+        )?;
+        let fields = &value["properties"];
+        let point = fields["datetime"]
+            .as_str()
+            .or_else(|| fields["time"].as_str());
+        let range = ["start_datetime", "end_datetime"]
+            .map(|key| fields[key].as_str().and_then(parse_instant));
+        let time_range = match range {
+            [Some(start), Some(end)] if start <= end => Some([start, end]),
+            _ => point.and_then(parse_instant).map(|time| [time; 2]),
+        };
+        for feature in &mut self.features[first..] {
+            feature.time_range = time_range;
+        }
+        Ok(())
     }
     fn properties(&mut self, value: Option<&Value>) -> Result<Vec<(String, String)>, String> {
         let Some(value) = value.filter(|v| !v.is_null()) else {
@@ -289,6 +305,7 @@ impl Reader {
             kind,
             paths,
             properties: retained,
+            time_range: None,
         });
         Ok(())
     }

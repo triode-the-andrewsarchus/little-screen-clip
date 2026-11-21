@@ -82,6 +82,10 @@ impl Body {
         self.orbit.map_or(0.0, |orbit| orbit.0)
     }
 
+    pub fn orbit_days(&self) -> Option<f64> {
+        self.orbit.map(|orbit| orbit.6)
+    }
+
     fn orbit_point(&self, anomaly: f64) -> [f64; 3] {
         let Some(Orbit(a, e, inclination, node, apsis, ..)) = self.orbit else {
             return [0.0; 3];
@@ -123,6 +127,40 @@ impl Body {
     }
 }
 
+/// Mean solar days in Earth hours. Gas-giant values use the conventional rotation period.
+pub(super) fn mean_day_hours(target: &Body) -> Option<f64> {
+    // NASA planetary fact sheets and dwarf-planet fact pages.
+    // https://nssdc.gsfc.nasa.gov/planetary/factsheet/
+    // https://science.nasa.gov/dwarf-planets/
+    let hours = match target.id {
+        SUN => 25.1 * 24.0,
+        199 => 4222.6,
+        299 => 2802.0,
+        EARTH => 24.0,
+        MOON => 708.7,
+        499 => 24.6597,
+        599 => 9.9,
+        699 => 10.7,
+        799 => 17.2,
+        899 => 16.1,
+        999 => 153.3,
+        2_000_001 => 9.075,
+        2_136_108 => 3.91534, // Ortiz et al., doi:10.1038/nature24051
+        2_136_472 => 22.5,
+        2_136_199 => 15.786 * 24.0, // Bernstein et al., doi:10.3847/PSJ/acdd5f
+        // Known synchronous moons. Combine the spin and the parent's solar year;
+        // Triton's retrograde motion makes its solar day slightly shorter.
+        401 | 402 | 501..=504 | 601..=606 | 608 | 701..=705 | 801 | 901 => {
+            let spin = target.orbit_days()?;
+            let year = body(target.parent?)?.orbit_days()?;
+            let solar_rate = if target.id == 801 { -1.0 } else { 1.0 };
+            24.0 / (spin.recip() - solar_rate / year)
+        }
+        _ => return None,
+    };
+    Some(hours)
+}
+
 pub(super) fn scene_day(time: DateTime<Utc>) -> f64 {
     (time.timestamp_millis() as f64 * 0.001 - 946_728_000.0) / 86_400.0
 }
@@ -134,7 +172,7 @@ pub(super) fn clock(time: DateTime<Utc>, animation_seconds: f64) -> [f32; 2] {
     ]
 }
 
-fn position_au(body: &Body, day: f64) -> [f64; 3] {
+pub(super) fn position_au(body: &Body, day: f64) -> [f64; 3] {
     let primary = body.parent.and_then(self::body).filter(|p| p.id != SUN);
     primary.map_or_else(
         || body.at(day),

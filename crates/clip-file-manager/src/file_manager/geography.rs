@@ -13,6 +13,7 @@ pub(super) mod solar;
 mod strips;
 mod terrain_download;
 mod tiles;
+mod timeline;
 
 use super::{
     filesystem::Entry,
@@ -160,6 +161,7 @@ pub(super) struct Viewer {
     render_error: Option<String>,
     terrain_download: terrain_download::Regional,
     sky: SkyState,
+    timeline: timeline::Timeline,
 }
 
 struct SkyState {
@@ -260,7 +262,7 @@ impl SkyState {
         {
             return scene.clone();
         }
-        let scene = assets.at(time);
+        let scene = assets.at(time).or_else(|| assets.estimate(time));
         self.last = Some((time, scene.clone()));
         scene
     }
@@ -311,23 +313,6 @@ impl SkyState {
     }
 }
 
-fn recorded_scene_time(
-    document: &Document,
-    selected: usize,
-    hovered: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
-    hovered
-        .or(document.features[selected].last_instant)
-        .or_else(|| {
-            document
-                .features
-                .iter()
-                .rev()
-                .find_map(|feature| feature.last_instant)
-        })
-        .or(document.capture_time)
-}
-
 impl Viewer {
     pub fn load(path: &Path) -> Result<Self, String> {
         let document = read(path, &AtomicBool::new(false))?;
@@ -359,6 +344,7 @@ impl Viewer {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("gpx"));
         let mut viewer = Self {
             overlay: overlay::Overlay::prepare(&document, interpolate_gpx),
+            timeline: timeline::Timeline::new(&document),
             document,
             interpolate_gpx,
             selected,
@@ -496,6 +482,7 @@ impl Viewer {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
+        self.timeline.preview(None);
         self.finder.shortcut(ui.ctx());
         StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |ui| {
             if ui.button("Find").on_hover_text("Ctrl+F").clicked() {
@@ -519,6 +506,8 @@ impl Viewer {
         let layout = StudioPanelLayout {
             left: showing_earth,
             right: self.finder.open,
+            bottom: true,
+            bottom_height: timeline::HEIGHT,
             ..StudioPanelLayout::default()
         }
         .allocate(ui);
@@ -549,6 +538,32 @@ impl Viewer {
 
             self.paint_map(ui, colors);
         });
+        if let Some(bottom) = layout.bottom {
+            self.paint_timeline(ui, bottom);
+        }
+    }
+
+    fn paint_timeline(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let body = match (&self.solar_system, &self.world) {
+            (Some(system), _) if system.center != solar::SUN => system.center,
+            (None, Some(world)) => world.body.id,
+            _ => solar::EARTH,
+        };
+        let source = match (
+            body,
+            self.sky.last.as_ref().and_then(|(_, scene)| scene.as_ref()),
+        ) {
+            (solar::EARTH | solar::MOON, Some(scene)) if scene.modeled_ephemeris => {
+                Some("Approximate positions outside the DE440 ephemeris coverage")
+            }
+            (solar::EARTH | solar::MOON, Some(scene)) => Some(match scene.rotation_source {
+                sky::RotationSource::Observed => "IERS observed Earth rotation",
+                sky::RotationSource::Predicted => "IERS predicted Earth rotation",
+                sky::RotationSource::Modeled => "Modeled Earth rotation",
+            }),
+            _ => None,
+        };
+        self.timeline.show(ui, rect, body, Utc::now(), source);
     }
 
     fn paint_map(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) {
@@ -970,7 +985,7 @@ impl Viewer {
         let painter = ui.painter_at(rect);
         let moon = self.moon_camera.is_some();
         let camera = self.moon_camera.as_ref().unwrap_or(&self.camera);
-        let scale_badge = paint_scale_and_contour_overlay(
+        paint_scale_and_contour_overlay(
             ui,
             &painter,
             rect,
@@ -980,17 +995,22 @@ impl Viewer {
             self.config.geography.units,
             moon,
         );
+        self.timeline.preview(hovered.flatten());
         let Some((mut frame, result)) = prepared else {
             return;
         };
         let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
         frame.moon_view = moon;
         if self.sky.assets.is_some() && (visible || self.sky.lighting || moon) {
-            let recorded = recorded_scene_time(&self.document, self.selected, hovered.flatten());
-            let (time, star_trail) = self.sky.scene_time(recorded, ui.ctx());
+            let (time, star_trail) = if let Some(fixed) = self.timeline.fixed() {
+                self.sky.transition = None;
+                (fixed, 0.0)
+            } else {
+                self.sky
+                    .scene_time(self.timeline.contextual_time(), ui.ctx())
+            };
             frame.sky = self.sky.at(time);
             frame.star_trail = star_trail;
-            paint_scene_clock(ui, &painter, rect, scale_badge, time, frame.sky.as_ref());
             frame.show_sky = visible;
             frame.readable_sky = self.sky.readable;
             frame.show_constellations = self.sky.constellations;
@@ -1391,8 +1411,7 @@ impl Viewer {
     }
 
     fn solar_scene_time(&self, ctx: &egui::Context) -> DateTime<Utc> {
-        recorded_scene_time(&self.document, self.selected, None)
-            .unwrap_or_else(|| live_scene_time(ctx))
+        self.timeline.time().unwrap_or_else(|| live_scene_time(ctx))
     }
 
     fn depart_solar_body(
@@ -2125,7 +2144,7 @@ fn paint_scale_and_contour_overlay(
     local_elev_range: [f32; 2],
     units: Units,
     moon: bool,
-) -> egui::Rect {
+) {
     use little_clip_core::geography::basemap::perspective::Perspective;
 
     let size = [rect.width(), rect.height()];
@@ -2186,7 +2205,6 @@ fn paint_scale_and_contour_overlay(
         galley,
         egui::Color32::from_rgb(244, 246, 250),
     );
-    box_rect
 }
 
 fn map_badge_text(ui: &egui::Ui, text: String) -> Arc<egui::Galley> {
@@ -2197,46 +2215,6 @@ fn map_badge_text(ui: &egui::Ui, text: String) -> Arc<egui::Galley> {
             egui::Color32::from_rgb(244, 246, 250),
         )
     })
-}
-
-fn paint_scene_clock(
-    ui: &egui::Ui,
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    scale: egui::Rect,
-    time: DateTime<Utc>,
-    scene: Option<&sky::Scene>,
-) {
-    let galley = map_badge_text(ui, time.format("%Y-%m-%d %H:%M:%S").to_string());
-    let size = egui::vec2(galley.size().x + 16.0, 22.0);
-    let mut badge =
-        egui::Align2::RIGHT_BOTTOM.anchor_size(rect.right_bottom() - egui::vec2(10.0, 10.0), size);
-    if badge.left() < scale.right() + 6.0 {
-        badge = badge.translate(egui::vec2(0.0, -26.0));
-    }
-    if !rect.contains_rect(badge) {
-        return;
-    }
-    painter.rect_filled(badge, 4.0, egui::Color32::from_black_alpha(165));
-    painter.galley(
-        badge.center() - galley.size() * 0.5,
-        galley,
-        egui::Color32::from_rgb(244, 246, 250),
-    );
-    let description = match scene.map(|s| s.rotation_source) {
-        Some(sky::RotationSource::Observed) => "UTC · IERS observed Earth rotation",
-        Some(sky::RotationSource::Predicted) => "UTC · IERS predicted Earth rotation",
-        Some(sky::RotationSource::Modeled) => {
-            "UTC · Modeled Earth rotation · geographic shadow paths are approximate"
-        }
-        None => "UTC · Outside the DE440 ephemeris coverage",
-    };
-    ui.interact(
-        badge,
-        ui.scope_id().with("scene-clock"),
-        egui::Sense::hover(),
-    )
-    .on_hover_text(description);
 }
 
 fn paint_oilslick_legend(ui: &mut egui::Ui, colors: WorkbenchColors, units: Units) {
@@ -2553,48 +2531,6 @@ pub(super) fn show_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scene_clock_uses_dated_hover_and_restores_source_order_track_default() {
-        let gpx = r#"<gpx xmlns="http://www.topografix.com/GPX/1/1">
-            <metadata><time>2019-01-01T08:00:00+02:00</time></metadata>
-            <trk><trkseg>
-            <trkpt lat="1" lon="1"><time>2024-04-08T13:17:00-05:00</time></trkpt>
-            <trkpt lat="1" lon="2"><time>2023-10-14T18:00:00Z</time></trkpt>
-            <trkpt lat="1" lon="3"><time>2022-11-08T10:59:00</time></trkpt>
-            </trkseg></trk></gpx>"#;
-        let mut document = Document::gpx(gpx.as_bytes()).unwrap();
-        let times = &document.features[0].paths[0];
-        let hovered = times[0].point.instant().unwrap();
-        let last = times[1].point.instant().unwrap();
-        assert_eq!(hovered.to_rfc3339(), "2024-04-08T18:17:00+00:00");
-        assert_eq!(
-            recorded_scene_time(&document, 0, times[0].point.instant()),
-            Some(hovered)
-        );
-        assert_eq!(
-            recorded_scene_time(&document, 0, times[2].point.instant()),
-            Some(last)
-        );
-        assert_eq!(recorded_scene_time(&document, 0, None), Some(last));
-        document.features[0].last_instant = None;
-        assert_eq!(
-            recorded_scene_time(&document, 0, None)
-                .unwrap()
-                .to_rfc3339(),
-            "2019-01-01T06:00:00+00:00"
-        );
-        document.capture_time = None;
-        assert_eq!(recorded_scene_time(&document, 0, None), None);
-        assert_eq!(
-            recorded_scene_time(
-                &document,
-                0,
-                document.features[0].paths[0][2].point.instant()
-            ),
-            None
-        );
-    }
 
     #[test]
     fn scene_transition_eases_through_real_instants_in_both_directions() {
