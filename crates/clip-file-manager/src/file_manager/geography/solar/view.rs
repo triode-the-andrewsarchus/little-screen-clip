@@ -1,4 +1,6 @@
-use super::{Body, Id, Kind, SUN, assets, body, clock, satellites, scene_day, sunlight, world};
+use super::{
+    AU_KM, Body, Id, Kind, SUN, assets, body, clock, satellites, scene_day, sunlight, world,
+};
 use crate::file_manager::geography::{gpu, map_camera, sky};
 use chrono::{DateTime, Utc};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2, pos2, vec2};
@@ -17,11 +19,11 @@ pub(in crate::file_manager::geography) struct System {
     pub center: Id,
     yaw: f64,
     elevation: f64,
-    zoom: f32,
-    pan: Vec2,
+    zoom: f64,
+    pan: [f64; 2],
+    zoom_anchor: Option<(Pos2, f32)>,
     middle: super::super::map_camera::MiddleDrag,
     ephemeris: Option<(Id, Vec<[f64; 3]>)>,
-    opened_at: Option<f64>,
     texture_job: Option<Task<()>>,
     textures_checked: bool,
     earth_checked: bool,
@@ -35,10 +37,10 @@ impl System {
             yaw: -0.2,
             elevation: 0.68,
             zoom: 1.0,
-            pan: Vec2::ZERO,
+            pan: [0.0; 2],
+            zoom_anchor: None,
             middle: Default::default(),
             ephemeris: None,
-            opened_at: None,
             texture_job: None,
             textures_checked: false,
             earth_checked: false,
@@ -116,7 +118,7 @@ impl System {
         let heliocentric = primary.id == SUN;
         let day = scene_day(time);
         let clock = clock(time, animation);
-        let projection = self.projection(rect, animation, primary.id);
+        let projection = self.projection(rect);
         let backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
         self.paint_backdrop(ui, &painter, projection, &backdrop);
         let mut guides = painter.clone();
@@ -127,7 +129,12 @@ impl System {
         let camera = projection.camera();
         let mut layout = OrbitLayout {
             painter: &guides,
-            marks: vec![Mark::new(primary, projection.center, 0.0, true, self.zoom)],
+            marks: vec![Mark::new(
+                primary,
+                projection.project([0.0; 3]),
+                true,
+                projection.scale / self.unit_km(),
+            )],
             day,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
@@ -138,6 +145,10 @@ impl System {
         {
             self.start_flight(rect, pointer, &layout.marks, animation);
         }
+        self.zoom_anchor = response
+            .hover_pos()
+            .and_then(|pointer| mark_at(&layout.marks, pointer))
+            .map(|mark| (mark.point, mark.radius));
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
         if !heliocentric {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
@@ -155,27 +166,24 @@ impl System {
             .map(|id| Selection::Focus { id, camera: None })
     }
 
-    fn projection(&mut self, rect: Rect, animation: f64, center: Id) -> Projection {
-        let power = if center == SUN { 0.34 } else { 0.44 };
-        let extent = satellites(center)
+    fn unit_km(&self) -> f64 {
+        if self.center == SUN { AU_KM } else { 1.0 }
+    }
+
+    fn projection(&self, rect: Rect) -> Projection {
+        let extent = satellites(self.center)
             .filter_map(|body| body.orbit)
-            .map(|orbit| orbit.0.powf(power) * (1.0 + orbit.1))
+            .map(|orbit| orbit.0 * (1.0 + orbit.1))
             .fold(1.0, f64::max);
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_el, cos_el) = self.elevation.sin_cos();
-        let opening_scale = if center == SUN {
-            let started = *self.opened_at.get_or_insert(animation);
-            let progress = ((animation - started) / 0.28).clamp(0.0, 1.0);
-            1.0 + 1.4 * (1.0 - progress as f32).powi(3)
-        } else {
-            1.0
-        };
-        // An oblique orbital plane has more room horizontally.
-        let span = rect.width().min(rect.height() * 1.32);
+        let span = f64::from(rect.width().min(rect.height() * 1.32));
         Projection {
-            center: rect.center() + self.pan,
-            scale: span * 0.45 * self.zoom * opening_scale / extent as f32,
-            power,
+            center: [
+                f64::from(rect.center().x) + self.pan[0],
+                f64::from(rect.center().y) + self.pan[1],
+            ],
+            scale: span * 0.45 * self.zoom / extent,
             yaw: [sin_yaw, cos_yaw],
             elevation: [sin_el, cos_el],
         }
@@ -218,15 +226,15 @@ impl System {
         }
         let visible_sun = self.center == SUN
             && body(SUN).is_some_and(|sun| {
-                let mark = Mark::new(sun, projection.center, 0.0, true, self.zoom);
-                rect.expand(mark.radius * 1.65).contains(projection.center)
+                let mark = Mark::new(
+                    sun,
+                    projection.project([0.0; 3]),
+                    true,
+                    projection.scale / AU_KM,
+                );
+                rect.expand(mark.radius * 1.65).contains(mark.point)
             });
-        let opening = self
-            .opened_at
-            .is_some_and(|start| ui.input(|i| i.time) - start < 0.28);
-        if opening {
-            ui.ctx().request_repaint();
-        } else if visible_sun {
+        if visible_sun {
             ui.ctx().request_repaint_after(Duration::from_millis(66));
         }
     }
@@ -236,7 +244,6 @@ impl System {
         let bodies = satellites(primary);
         let dense = bodies.clone().count() > 24;
         for satellite in bodies {
-            let scale = projection.orbit_scale(satellite.semimajor());
             let opacity = match (helio, satellite.kind(), dense && satellite.radius.is_none()) {
                 (true, Kind::DwarfPlanet, _) => 84,
                 (true, _, _) => 165,
@@ -248,24 +255,22 @@ impl System {
                 .as_ref()
                 .filter(|(id, _)| *id == satellite.id)
                 .map(|(_, samples)| samples.as_slice());
-            layout.orbit(
+            layout.orbit(satellite, projection, opacity, samples);
+            let position = satellite.at(layout.day);
+            let mark = Mark::new(
                 satellite,
-                projection,
-                scale,
-                opacity,
-                if dense { 40 } else { 96 },
-                samples,
+                projection.project(position),
+                false,
+                projection.scale / self.unit_km(),
             );
-            let (point, depth) = projection.project(satellite.at(layout.day), scale);
-            let mark = Mark::new(satellite, point, depth, false, self.zoom);
             if helio {
-                layout.moon_system(&mark, projection);
+                layout.moon_system(satellite, position, &mark, projection);
             }
             if layout
                 .painter
                 .clip_rect()
                 .expand(mark.radius * 3.5)
-                .contains(point)
+                .contains(mark.point)
             {
                 layout.marks.push(mark);
             }
@@ -273,7 +278,7 @@ impl System {
     }
 
     fn navigate(&mut self, response: &egui::Response) -> Wheel {
-        let factor = map_camera::scroll_zoom(response);
+        let factor = map_camera::scroll_zoom(response).powf(1.8).clamp(0.2, 5.0);
         let middle = self.middle.update(response);
         let pan = response.dragged_by(egui::PointerButton::Primary);
         let cancel = response
@@ -289,20 +294,26 @@ impl System {
             self.yaw -= f64::from(delta.x) * 0.008;
             self.elevation = (self.elevation + f64::from(delta.y) * 0.007).clamp(0.04, 1.56);
         } else if pan {
-            self.pan += response.drag_delta();
+            let delta = response.drag_delta();
+            self.pan[0] += f64::from(delta.x);
+            self.pan[1] += f64::from(delta.y);
         }
         if let Some(pointer) = response.hover_pos()
             && factor != 1.0
         {
-            const MIN_ORBIT_ZOOM: f32 = 0.55;
-            let beyond = map_camera::past_zoom_limit(
-                f64::from(self.zoom),
-                f64::from(MIN_ORBIT_ZOOM),
-                factor,
-            );
-            let next = (self.zoom * factor as f32).clamp(MIN_ORBIT_ZOOM, 80.0);
-            let anchor = pointer - response.rect.center();
-            self.pan = anchor + (self.pan - anchor) * (next / self.zoom);
+            const MIN_ORBIT_ZOOM: f64 = 0.55;
+            const MAX_ORBIT_ZOOM: f64 = 30_000_000.0;
+            let beyond = map_camera::past_zoom_limit(self.zoom, MIN_ORBIT_ZOOM, factor);
+            let next = (self.zoom * factor).clamp(MIN_ORBIT_ZOOM, MAX_ORBIT_ZOOM);
+            let anchor_point = self
+                .zoom_anchor
+                .filter(|(at, radius)| factor > 1.0 && at.distance(pointer) <= radius.max(6.0))
+                .map_or(pointer, |(at, _)| at);
+            let anchor = anchor_point - response.rect.center();
+            for (pan, anchor) in self.pan.iter_mut().zip([anchor.x, anchor.y]) {
+                let anchor = f64::from(anchor);
+                *pan = anchor + (*pan - anchor) * next / self.zoom;
+            }
             self.zoom = next;
             response.ctx.request_repaint();
             if beyond {
@@ -321,20 +332,18 @@ impl System {
         };
         let target_radius =
             (world::initial_zoom(mark.body.id) * 0.43) as f32 * rect.width().min(rect.height());
-        // Begin from the pointed-at disk, preserving an ordinary zoom into
-        // empty orbital space even when a large world is elsewhere on screen.
-        if mark.radius < (target_radius * 0.56).max(26.0) {
+        if mark.physical_radius < (target_radius * 0.56).max(16.0) {
             return;
         }
-        let zoom_factor = (target_radius / mark.radius).powf(1.0 / 1.12);
-        let screen_offset = mark.point - rect.center();
+        let [x, y] = (mark.point - rect.center()).into();
+        let screen_offset = [f64::from(x), f64::from(y)];
         self.flight = Some(FlyIn {
             id: mark.body.id,
             began: now,
             from_zoom: self.zoom,
-            zoom_factor,
+            zoom_factor: f64::from((target_radius / mark.physical_radius).max(1.0)),
             screen_offset,
-            orbit_offset: screen_offset - self.pan,
+            orbit_offset: std::array::from_fn(|i| screen_offset[i] - self.pan[i]),
         });
     }
 
@@ -366,10 +375,10 @@ enum Wheel {
 struct FlyIn {
     id: Id,
     began: f64,
-    from_zoom: f32,
-    zoom_factor: f32,
-    screen_offset: Vec2,
-    orbit_offset: Vec2,
+    from_zoom: f64,
+    zoom_factor: f64,
+    screen_offset: [f64; 2],
+    orbit_offset: [f64; 2],
 }
 
 impl FlyIn {
@@ -378,12 +387,14 @@ impl FlyIn {
         progress * progress * (3.0 - 2.0 * progress)
     }
 
-    fn sample(&self, now: f64) -> (f32, Vec2, bool) {
-        let ease = self.ease(now);
+    fn sample(&self, now: f64) -> (f64, [f64; 2], bool) {
+        let ease = f64::from(self.ease(now));
         let scale = self.zoom_factor.powf(ease);
         (
             self.from_zoom * scale,
-            self.screen_offset * (1.0 - ease) - self.orbit_offset * scale,
+            std::array::from_fn(|i| {
+                self.screen_offset[i] * (1.0 - ease) - self.orbit_offset[i] * scale
+            }),
             ease >= 1.0,
         )
     }
@@ -391,15 +402,10 @@ impl FlyIn {
 
 #[derive(Clone, Copy)]
 struct Projection {
-    center: Pos2,
-    scale: f32,
-    power: f64,
+    center: [f64; 2],
+    scale: f64,
     yaw: [f64; 2],
     elevation: [f64; 2],
-}
-
-fn scale_distance(distance: f64, power: f64) -> f64 {
-    distance.powf(power)
 }
 
 impl Projection {
@@ -422,16 +428,28 @@ impl Projection {
         camera
     }
 
-    fn orbit_scale(self, semimajor: f64) -> f32 {
-        (scale_distance(semimajor, self.power) / semimajor) as f32 * self.scale
-    }
-
-    fn project(self, [x, y, z]: [f64; 3], scale: f32) -> (Pos2, f64) {
+    fn relative(self, [x, y, z]: [f64; 3]) -> [f64; 3] {
         let [sy, cy] = self.yaw;
         let [se, ce] = self.elevation;
-        let (x, y) = (cy * x - sy * y, sy * x + cy * y);
-        let offset = vec2(x as f32, -(se * y + ce * z) as f32) * scale;
-        (self.center + offset, (ce * y - se * z) * f64::from(scale))
+        let [x, y] = [cy * x - sy * y, sy * x + cy * y];
+        [x, -(se * y + ce * z), ce * y - se * z].map(|axis| axis * self.scale)
+    }
+
+    fn project(self, position: [f64; 3]) -> (Pos2, f64) {
+        let [x, y, z] = self.relative(position);
+        (
+            pos2((self.center[0] + x) as f32, (self.center[1] + y) as f32),
+            z,
+        )
+    }
+
+    fn at_parent(self, position: [f64; 3]) -> Self {
+        let [x, y, _] = self.relative(position);
+        Self {
+            center: [self.center[0] + x, self.center[1] + y],
+            scale: self.scale / AU_KM,
+            ..self
+        }
     }
 }
 
@@ -440,24 +458,41 @@ struct Mark {
     point: Pos2,
     depth: f64,
     radius: f32,
+    physical_radius: f32,
     primary: bool,
 }
 
 impl Mark {
-    fn new(body: &'static Body, point: Pos2, depth: f64, primary: bool, zoom: f32) -> Self {
-        let radius = body
-            .radius
-            .map_or(1.6, |km| (1.5 + (km / 8.0).powf(0.20) * 1.2) as f32);
+    fn new(
+        body: &'static Body,
+        (point, depth): (Pos2, f64),
+        primary: bool,
+        px_per_km: f64,
+    ) -> Self {
+        let km = body.radius.unwrap_or(3.0);
+        let marker = match body.kind() {
+            Kind::Star => 9.0,
+            Kind::Planet => 2.7 + (km / 8_000.0).sqrt().min(2.7) as f32,
+            Kind::DwarfPlanet => 2.2,
+            Kind::Moon => {
+                if km > 100.0 {
+                    1.9
+                } else {
+                    0.9
+                }
+            }
+        };
+        let physical_radius = (km * px_per_km) as f32;
         Self {
             body,
             point,
             depth,
-            radius: radius * zoom.powf(1.12),
+            radius: physical_radius.hypot(marker),
+            physical_radius,
             primary,
         }
     }
 }
-
 struct OrbitLayout<'a> {
     painter: &'a egui::Painter,
     marks: Vec<Mark>,
@@ -469,140 +504,96 @@ impl OrbitLayout<'_> {
         &self,
         body: &Body,
         projection: Projection,
-        scale: f32,
         opacity: u8,
-        segments: u32,
         samples: Option<&[[f64; 3]]>,
     ) {
         let color = body.color();
-        let points = (0..=segments)
-            .map(|i| body.orbit_point(f64::from(i) / f64::from(segments) * TAU))
-            .map(|point| projection.project(point, scale).0)
-            .collect();
-        self.painter.add(egui::Shape::line(
-            points,
-            Stroke::new(1.0, color.gamma_multiply(f32::from(opacity) / 255.0)),
-        ));
+        let clip = self.painter.clip_rect().expand(2.0);
+        let error = body.semimajor() * projection.scale;
+        let stroke = Stroke::new(1.0, color.gamma_multiply(f32::from(opacity) / 255.0));
+        let point = |t| projection.project(body.orbit_point(t)).0;
+        let mut start = point(0.0);
+        for i in 0..32 {
+            let t = f64::from(i) / 32.0 * TAU;
+            let end_t = f64::from(i + 1) / 32.0 * TAU;
+            let end = point(end_t);
+            self.orbit_arc(clip, &point, [t, end_t], [start, end], error, stroke);
+            start = end;
+        }
         if let Some(samples) = samples {
             let points = samples
                 .iter()
-                .map(|point| projection.project(*point, scale).0)
+                .map(|point| projection.project(*point).0)
                 .collect();
             self.painter
                 .add(egui::Shape::line(points, Stroke::new(1.45, color)));
         }
     }
 
-    fn moon_system(&mut self, mark: &Mark, plane: Projection) {
-        let viewport = self.painter.clip_rect();
-        let close = (viewport.width().min(viewport.height()) * 0.038).max(22.0);
-        if mark.radius < close
-            || !viewport.contains_rect(Rect::from_center_size(
-                mark.point,
-                Vec2::splat(4.0 * mark.radius),
-            ))
+    fn orbit_arc(
+        &self,
+        clip: Rect,
+        point: &impl Fn(f64) -> Pos2,
+        time: [f64; 2],
+        endpoints: [Pos2; 2],
+        curvature: f64,
+        stroke: Stroke,
+    ) {
+        let deviation = (curvature * (time[1] - time[0]).powi(2) * 0.125) as f32;
+        if !Rect::from_two_pos(endpoints[0], endpoints[1])
+            .expand(deviation)
+            .intersects(clip)
         {
             return;
         }
-        let radius = mark.body.radius.unwrap_or(100.0);
-        let power = 0.56;
-        let limit = moon_orbit_limit(mark, plane, self.day);
-        let mut moons: Vec<_> = satellites(mark.body.id)
-            .filter(|moon| moon.radius.unwrap_or(0.0) >= 8.0)
-            .collect();
-        moons.sort_unstable_by(|a, b| {
-            b.radius
-                .unwrap_or_default()
-                .total_cmp(&a.radius.unwrap_or_default())
-        });
-        moons.truncate(12);
-        let outer = moons
-            .iter()
-            .map(|moon| {
-                moon.orbit.map_or(0.0, |orbit| {
-                    (moon.semimajor() * (1.0 + orbit.1)).powf(power)
-                })
-            })
-            .fold(0.0, f64::max);
-        if outer <= 0.0 || limit <= mark.radius * 1.15 {
+        if deviation <= 0.6 {
+            self.painter.line_segment(endpoints, stroke);
             return;
         }
-        let projection = Projection {
-            center: mark.point,
-            scale: (mark.radius * 1.2 / radius.powf(power) as f32).min(limit / outer as f32),
-            power,
-            ..plane
-        };
-        let alpha = (50.0 + ((mark.radius - close) / close).clamp(0.0, 1.0) * 80.0) as u8;
-        for moon in moons {
-            let scale = projection.orbit_scale(moon.semimajor());
-            self.orbit(moon, projection, scale, alpha, 64, None);
-            let (point, depth) = projection.project(moon.at(self.day), scale);
-            if self.painter.clip_rect().expand(15.0).contains(point) {
-                let radius = ((moon.radius.unwrap_or_default() / radius).powf(0.68)
-                    * f64::from(mark.radius)
-                    * 2.0) as f32;
-                self.marks.push(Mark {
-                    body: moon,
-                    point,
-                    depth: mark.depth + depth,
-                    radius: radius.clamp(1.4, limit * 0.15),
-                    primary: false,
-                });
+        let middle = time[0].midpoint(time[1]);
+        let p = point(middle);
+        self.orbit_arc(
+            clip,
+            point,
+            [time[0], middle],
+            [endpoints[0], p],
+            curvature,
+            stroke,
+        );
+        self.orbit_arc(
+            clip,
+            point,
+            [middle, time[1]],
+            [p, endpoints[1]],
+            curvature,
+            stroke,
+        );
+    }
+
+    fn moon_system(&mut self, parent: &Body, position: [f64; 3], mark: &Mark, plane: Projection) {
+        let viewport = self.painter.clip_rect();
+        let projection = plane.at_parent(position);
+        for moon in satellites(parent.id) {
+            let Some(orbit) = moon.orbit else { continue };
+            let spread = moon.semimajor() * projection.scale;
+            let reveal = f64::from((mark.radius * 1.3).max(13.0));
+            if spread < reveal
+                || !viewport
+                    .expand((spread * (1.0 + orbit.1)) as f32)
+                    .contains(mark.point)
+            {
+                continue;
+            }
+            let visibility = ((spread - reveal) / reveal).clamp(0.0, 1.0);
+            self.orbit(moon, projection, (visibility * 117.0) as u8, None);
+            let (point, depth) = projection.project(moon.at(self.day));
+            let mut next = Mark::new(moon, (point, depth + mark.depth), false, projection.scale);
+            next.radius *= visibility.sqrt() as f32;
+            if next.radius > 0.6 && viewport.expand(next.radius * 3.5).contains(point) {
+                self.marks.push(next);
             }
         }
     }
-}
-
-fn moon_orbit_limit(parent: &Mark, projection: Projection, day: f64) -> f32 {
-    let radius = parent.body.semimajor().powf(projection.power);
-    let scale = projection.scale;
-    let next_planet = satellites(SUN)
-        .filter(|other| other.id != parent.body.id && other.kind() == Kind::Planet)
-        .map(|other| {
-            let point = projection
-                .project(other.at(day), projection.orbit_scale(other.semimajor()))
-                .0;
-            parent.point.distance(point)
-        })
-        .fold(f32::INFINITY, f32::min);
-    // Preserve a local group without colliding with neighboring visible disks.
-    let local = (0.20 * radius) as f32 * scale;
-    let limit = local.min(next_planet * 0.39);
-    if parent.body.id != super::EARTH {
-        return limit;
-    }
-    // Even in an oblique view, keep Earth's Moon well beyond the orbit of Mercury
-    // in the compressed heliocentric coordinate system.
-    let inner = body(199).and_then(|body| body.orbit).map_or(0.0, |orbit| {
-        orbit.0.powf(projection.power) * (1.0 + orbit.1)
-    });
-    limit.min((0.65 * (radius * 0.983 - inner).max(0.0)) as f32 * scale)
-}
-
-#[cfg(test)]
-#[test]
-fn overview_moon_orbits_stay_outside_mercury_and_leave_room_for_the_earth_disk() {
-    let plane = Projection {
-        center: Pos2::ZERO,
-        scale: 1300.0,
-        power: 0.34,
-        yaw: [0.0, 1.0],
-        elevation: [1.0, 0.0],
-    };
-    let earth = body(super::EARTH).unwrap();
-    let mut largest: f32 = 0.0;
-    for day in (0..365).step_by(8) {
-        let earth_scale = plane.orbit_scale(earth.semimajor());
-        let (point, depth) = plane.project(earth.at(f64::from(day)), earth_scale);
-        let mark = Mark::new(earth, point, depth, false, 6.0);
-        let limit = moon_orbit_limit(&mark, plane, f64::from(day));
-        let mercury = body(199).unwrap().orbit.unwrap();
-        let aphelion = mercury.0.powf(plane.power) * (1.0 + mercury.1);
-        assert!(point.distance(plane.center) - limit > aphelion as f32 * plane.scale);
-        largest = largest.max(limit / mark.radius);
-    }
-    assert!(largest > 1.7);
 }
 
 fn paint_icon(
@@ -779,10 +770,10 @@ pub(in crate::file_manager::geography) fn paint_stars(painter: &egui::Painter, r
     }
 }
 
-fn paint_belts(painter: &egui::Painter, projection: Projection, zoom: f32) {
+fn paint_belts(painter: &egui::Painter, projection: Projection, zoom: f64) {
     // Fixed orbital dust positions avoid flicker while panning. Point size grows
     // slowly with zoom so individual objects stay legible.
-    static PARTICLES: OnceLock<Vec<([f64; 3], f64, u8, f32)>> = OnceLock::new();
+    static PARTICLES: OnceLock<Vec<([f64; 3], u8, f32)>> = OnceLock::new();
     let particles = PARTICLES.get_or_init(|| {
         [(2.1, 3.35, 0.45, 2200), (39.0, 49.0, 4.0, 3200)]
             .into_iter()
@@ -793,7 +784,7 @@ fn paint_belts(painter: &egui::Painter, projection: Projection, zoom: f32) {
                     let a = inner + (outer - inner) * noise(seed + 1);
                     let (sin, cos) = (TAU * noise(seed + 2)).sin_cos();
                     let z = height * (noise(seed + 3) + noise(seed + 7) - 1.0);
-                    ([a * cos, a * sin, z], a, belt as u8, noise(seed + 4) as f32)
+                    ([a * cos, a * sin, z], belt as u8, noise(seed + 4) as f32)
                 })
             })
             .collect()
@@ -803,9 +794,9 @@ fn paint_belts(painter: &egui::Painter, projection: Projection, zoom: f32) {
         Color32::from_rgb(102, 125, 156),
     ];
     let clip = painter.clip_rect();
-    let scale = (0.8 + 0.72 * zoom.ln().max(0.0)).min(3.8);
-    for &(position, a, belt, bright) in particles {
-        let point = projection.project(position, projection.orbit_scale(a)).0;
+    let scale = (0.8 + 0.72 * zoom.ln().max(0.0)).min(3.8) as f32;
+    for &(position, belt, bright) in particles {
+        let point = projection.project(position).0;
         if clip.contains(point) {
             painter.circle_filled(
                 point,
@@ -827,24 +818,76 @@ mod tests {
             began: 1.0,
             from_zoom: 4.0,
             zoom_factor: 2.0,
-            screen_offset: vec2(130.0, -55.0),
-            orbit_offset: vec2(-240.0, 156.0),
+            screen_offset: [130.0, -55.0],
+            orbit_offset: [-240.0, 156.0],
         };
         let (start_zoom, start_pan, started) = flight.sample(1.0);
         assert!(!started);
-        assert_eq!(start_pan + flight.orbit_offset, flight.screen_offset);
+        assert_eq!(
+            std::array::from_fn(|i| start_pan[i] + flight.orbit_offset[i]),
+            flight.screen_offset
+        );
         assert_eq!(start_zoom, 4.0);
         let (zoom, pan, arrived) = flight.sample(1.3);
         assert!(arrived);
         assert_eq!(zoom, 8.0);
-        assert_eq!(pan + flight.orbit_offset * (zoom / start_zoom), Vec2::ZERO);
+        assert_eq!(
+            std::array::from_fn(|i| pan[i] + flight.orbit_offset[i] * zoom / start_zoom),
+            [0.0; 2]
+        );
+    }
+
+    #[test]
+    fn overview_uses_linear_au_and_reveals_the_moon_before_earth_lock() {
+        let plane = Projection {
+            center: [400.0, 300.0],
+            scale: 10_000.0,
+            yaw: [0.0, 1.0],
+            elevation: [1.0, 0.0],
+        };
+        assert_eq!(plane.relative([3.0, 0.0, 0.0])[0], 30_000.0);
+        let earth_pos = [1.0, 0.0, 0.0];
+        let local = plane.at_parent(earth_pos);
+        let moon = body(super::super::MOON).unwrap();
+        let distance = moon.semimajor();
+        assert!(
+            (local.relative([distance, 0.0, 0.0])[0] - distance / AU_KM * plane.scale).abs() < 1e-8
+        );
+        let map = Rect::from_min_max(Pos2::ZERO, pos2(800.0, 600.0));
+        egui::__run_test_ui(|ui| {
+            let painter = ui.painter_at(map);
+            let centered = Projection {
+                center: [-9600.0, 300.0],
+                ..plane
+            };
+            let earth = Mark::new(
+                body(super::super::EARTH).unwrap(),
+                centered.project(earth_pos),
+                false,
+                centered.scale / AU_KM,
+            );
+            let mut layout = OrbitLayout {
+                painter: &painter,
+                marks: Vec::new(),
+                day: 200.0,
+            };
+            layout.moon_system(earth.body, earth_pos, &earth, centered);
+            let lunar = layout
+                .marks
+                .iter()
+                .find(|mark| mark.body.id == moon.id)
+                .unwrap();
+            assert!(earth.physical_radius < 1.0);
+            assert!(earth.point.distance(lunar.point) > earth.radius * 2.0);
+            assert!(lunar.radius < earth.radius);
+        });
     }
 
     #[test]
     fn pointer_picks_the_nearer_world_when_disks_overlap() {
         let here = Pos2::ZERO;
-        let distant = Mark::new(body(599).unwrap(), here, 1.0, false, 1.0);
-        let nearer = Mark::new(body(501).unwrap(), here, 0.0, false, 1.0);
+        let distant = Mark::new(body(599).unwrap(), (here, 1.0), false, 0.0);
+        let nearer = Mark::new(body(501).unwrap(), (here, 0.0), false, 0.0);
         assert_eq!(mark_at(&[distant, nearer], here).unwrap().body.id, 501);
     }
 }

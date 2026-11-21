@@ -11,6 +11,7 @@ use serde::Deserialize;
 use std::{f64::consts::TAU, sync::OnceLock};
 
 pub(in crate::file_manager) type Id = i32;
+pub(super) const AU_KM: f64 = 149_597_870.7;
 pub(super) const SUN: Id = 10;
 pub(super) const EARTH: Id = 399;
 pub(super) const MOON: Id = 301;
@@ -140,7 +141,7 @@ fn position_au(body: &Body, day: f64) -> [f64; 3] {
         |p| {
             let center = p.at(day);
             let relative = body.at(day);
-            std::array::from_fn(|i| center[i] + relative[i] / 149_597_870.7)
+            std::array::from_fn(|i| center[i] + relative[i] / AU_KM)
         },
     )
 }
