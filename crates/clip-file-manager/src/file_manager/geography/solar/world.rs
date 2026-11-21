@@ -258,6 +258,7 @@ pub(in crate::file_manager::geography) struct Frame {
     pub gas: bool,
     pub sun: [f32; 3],
     pub clock: [f32; 2],
+    pub ring_emphasis: f32,
 }
 
 impl Frame {
@@ -278,6 +279,7 @@ impl Frame {
             gas: matches!(body.id, 599 | 699 | 799 | 899),
             sun: [0.811, 0.324, 0.487],
             clock: [0.0; 2],
+            ring_emphasis: 1.0,
         }
     }
 }

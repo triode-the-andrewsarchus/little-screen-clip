@@ -4,11 +4,15 @@ use crate::file_manager::geography::sky;
 use little_clip_core::file_source::read_file_snapshot;
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Cursor, Read},
     ops::RangeInclusive,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub(in crate::file_manager) const HORIZONS: &str = "https://ssd.jpl.nasa.gov/horizons/";
@@ -114,14 +118,65 @@ pub(in crate::file_manager::geography) fn information(
 }
 
 fn image(id: Id) -> Option<&'static ImageAsset> {
+    images().iter().find(|entry| entry.id == id)
+}
+
+fn images() -> &'static [ImageAsset] {
     static SOURCES: OnceLock<Vec<ImageAsset>> = OnceLock::new();
-    SOURCES
-        .get_or_init(|| {
-            serde_json::from_str(include_str!("images.json"))
-                .expect("valid bundled world imagery manifest")
-        })
+    SOURCES.get_or_init(|| {
+        serde_json::from_str(include_str!("images.json"))
+            .expect("valid bundled world imagery manifest")
+    })
+}
+
+pub(super) fn overview_maps(
+    root: &Path,
+    earth: Option<&little_clip_core::geography::basemap::EquirectTexture>,
+    cancel: &AtomicBool,
+) -> HashMap<Id, sky::Texture> {
+    let mut maps = HashMap::new();
+    if let Some(earth) = earth {
+        // The existing Natural Earth raster is also the overview's Earth albedo.
+        let size = [512, 256];
+        let pixels: Vec<_> = (0..size[1])
+            .flat_map(|y| {
+                (0..size[0]).flat_map(move |x| {
+                    earth
+                        .sample_rgb(
+                            90.0 - 180.0 * f64::from(y) / f64::from(size[1] - 1),
+                            -180.0 + 360.0 * f64::from(x) / f64::from(size[0]),
+                        )
+                        .into_iter()
+                })
+            })
+            .collect();
+        maps.insert(
+            super::EARTH,
+            sky::Texture {
+                size,
+                pixels: pixels.into(),
+            },
+        );
+    }
+    for image in images()
         .iter()
-        .find(|entry| entry.id == id)
+        .take_while(|_| !cancel.load(Ordering::Relaxed))
+    {
+        if maps.contains_key(&image.id) {
+            continue;
+        }
+        let Some(asset) = Download::for_body(image.id) else {
+            continue;
+        };
+        let path = root.join(asset.folder).join(asset.name);
+        if let Ok(bytes) = read_file_snapshot(&path, image.bytes as usize)
+            && bytes.len() as u64 == image.bytes
+            && let Ok(map) = decode(bytes, image.size, true)
+        {
+            maps.insert(image.id, map);
+        }
+    }
+    maps
 }
 
 impl Assets {
@@ -141,13 +196,13 @@ impl Assets {
             }));
         };
         Ok(Some(Self {
-            texture: Some(decode(bytes, asset.size)?),
+            texture: Some(decode(bytes, asset.size, false)?),
             ephemeris: None,
         }))
     }
 }
 
-fn decode(bytes: Vec<u8>, expected: [u32; 2]) -> Result<sky::Texture, String> {
+fn decode(bytes: Vec<u8>, expected: [u32; 2], thumbnail: bool) -> Result<sky::Texture, String> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|error| error.to_string())?;
@@ -163,8 +218,18 @@ fn decode(bytes: Vec<u8>, expected: [u32; 2]) -> Result<sky::Texture, String> {
     if [rgb.width(), rgb.height()] != expected {
         return Err("Unexpected world image dimensions".into());
     }
+    let rgb = if thumbnail && rgb.width() > 640 {
+        image::imageops::resize(
+            &rgb,
+            640,
+            (rgb.height() * 640 / rgb.width()).max(1),
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        rgb
+    };
     Ok(sky::Texture {
-        size: expected.map(|px| px as i32),
+        size: [rgb.width() as i32, rgb.height() as i32],
         pixels: rgb.into_raw().into(),
     })
 }

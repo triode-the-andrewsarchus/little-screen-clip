@@ -10,6 +10,7 @@ uniform sampler2D u_albedo;
 uniform bool u_has_albedo;
 uniform bool u_gas;
 uniform int u_band_count;
+uniform float u_ring_emphasis;
 uniform vec3 u_bands[10];
 
 const float PI = 3.141592653589793;
@@ -108,7 +109,7 @@ vec4 rings(vec3 ray, float surface_depth) {
             shaded += depth * mix(.24,1.0,shadow);
         }
     }
-    float alpha = 1.0-exp(-thickness);
+    float alpha = 1.0-exp(-thickness*max(1.0,u_ring_emphasis));
     vec3 color = mix(vec3(.74,.75,.77),u_color,.43)*shaded/max(thickness,1e-6);
     return vec4(color*alpha,alpha);
 }

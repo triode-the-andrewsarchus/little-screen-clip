@@ -647,11 +647,13 @@ impl Viewer {
                 .and_then(sky::Assets::star_catalog);
             sight.paint(ui, &response, catalog);
         } else if let Some(system) = self.solar_system.as_mut() {
+            system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
             let recorded = recorded_scene_time(&self.document, self.selected, None);
             if let Some(id) = system.paint(
                 ui,
                 &response,
                 recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
+                self.sky.assets.clone(),
             ) {
                 self.select_solar_target(id, ui.ctx());
             }

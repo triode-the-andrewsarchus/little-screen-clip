@@ -48,6 +48,7 @@ impl Renderer {
             );
             super::sky::bind(gl, program, "u_albedo", 0, texture);
             gl.uniform_1_i32(uniform("u_band_count").as_ref(), world.bands.len() as i32);
+            gl.uniform_1_f32(uniform("u_ring_emphasis").as_ref(), world.ring_emphasis);
             if !world.bands.is_empty() {
                 let radius = (world.pose.radius_m / 1000.0) as f32;
                 let bands: Vec<_> = world
