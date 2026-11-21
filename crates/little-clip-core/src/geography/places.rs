@@ -76,11 +76,16 @@ fn named_location(text: &str) -> Option<Location> {
 }
 
 fn matches_place(
-    (_, name, area, alias, _, _): &Place,
+    (kind, name, area, alias, _, _): &Place,
     query: &str,
     locality: Option<&str>,
 ) -> bool {
+    let explicit_city = *kind == PlaceKind::City
+        && query.rsplit_once(' ').is_some_and(|(base, suffix)| {
+            suffix.eq_ignore_ascii_case("city") && same_name(base, name)
+        });
     let name_matches = same_name(query, name)
+        || explicit_city
         || alias
             .split(" / ")
             .any(|alias| !alias.is_empty() && same_name(query, alias));
@@ -108,19 +113,20 @@ fn coordinates(text: &str) -> Option<[f64; 2]> {
     let (pair, explicit) = text
         .strip_prefix("geo:")
         .map_or((text, false), |s| (s, true));
-    let [lat, lon] = if let Some((lat, lon)) = pair.split_once(',') {
-        [lat.trim(), lon.trim()]
+    let ([lat, lon], comma_separated) = if let Some((lat, lon)) = pair.split_once(',') {
+        ([lat.trim(), lon.trim()], true)
     } else {
         let [lat, lon] = pair
             .split_whitespace()
             .collect::<Vec<_>>()
             .try_into()
             .ok()?;
-        [lat, lon]
+        ([lat, lon], false)
     };
     let (lat, lat_marked) = coordinate_axis(lat, 'N', 'S', 90.0)?;
     let (lon, lon_marked) = coordinate_axis(lon, 'E', 'W', 180.0)?;
-    (explicit || (lat_marked && lon_marked)).then_some([lat, lon])
+    (explicit || (lat_marked && lon_marked) || (comma_separated && (lat_marked || lon_marked)))
+        .then_some([lat, lon])
 }
 
 fn coordinate_axis(text: &str, positive: char, negative: char, limit: f64) -> Option<(f64, bool)> {
@@ -155,6 +161,7 @@ mod tests {
             assert_eq!(resolve(input).unwrap().lat_lon, [41.8781, -87.6298]);
         }
         assert_eq!(resolve("geo:0,0").unwrap().lat_lon, [0.0, 0.0]);
+        assert_eq!(resolve("51.5, 0").unwrap().lat_lon, [51.5, 0.0]);
         for input in [
             "1,2",
             "41.8, -181.0",
@@ -174,8 +181,14 @@ mod tests {
             [42.97, -81.24999]
         );
         assert!(resolve("Paris, France").is_some());
-        assert!(resolve("New York").is_some());
-        for input in ["Springfield", "Georgia", "nice", "Somewhere near Paris"] {
+        assert!(resolve("New York City").is_some());
+        for input in [
+            "New York",
+            "Springfield",
+            "Georgia",
+            "nice",
+            "Somewhere near Paris",
+        ] {
             assert!(resolve(input).is_none(), "{input}");
         }
     }
