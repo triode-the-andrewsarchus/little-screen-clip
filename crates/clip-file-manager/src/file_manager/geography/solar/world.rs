@@ -282,19 +282,29 @@ impl Approach {
         )
     }
 
-    fn pose(&self, viewport: Rect, canvas: Rect) -> Perspective {
+    pub(super) fn pose(&self, viewport: Rect) -> Perspective {
         let radius = radius_m(self.body);
-        let focused = Perspective::new(&self.camera, viewport.size().into(), radius);
         if self.progress >= 1.0 {
-            return focused;
+            return Perspective::new(&self.camera, viewport.size().into(), radius);
         }
-        let mut pose = Perspective::new(&self.camera, canvas.size().into(), radius);
+        let mut camera = self.camera;
+        camera.orbit.tilt *= self.progress;
+        camera.orbit.bearing *= self.progress;
+        camera.orbit.target_height_m *= self.progress;
+        camera.orbit.eye_ground_m *= self.progress;
+        let mut pose = Perspective::new(&camera, self.canvas(viewport).size().into(), radius);
         // Near-orthographic lens initially, converging to the exact focused
         // camera. Keep the planet's apparent radius independent of that change
         // so the moons move continuously as their depth becomes visible.
-        let focused_distance = focused.eye.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let back = pose.axes[2];
+        let focused_distance = pose
+            .eye
+            .iter()
+            .zip(back)
+            .map(|(v, axis)| v * axis)
+            .sum::<f64>();
         let distance = 1.0 / ((1.0 - self.progress) / 8192.0 + self.progress / focused_distance);
-        pose.eye = focused.eye.map(|axis| axis * distance / focused_distance);
+        pose.eye = std::array::from_fn(|i| pose.eye[i] + back[i] * (distance - focused_distance));
         pose.focal = self.radius * (distance * distance - 1.0).sqrt();
         pose
     }
@@ -308,7 +318,7 @@ impl Approach {
         cache: &assets::MapCache,
     ) -> Result<(), String> {
         let canvas = self.canvas(viewport);
-        let pose = self.pose(viewport, canvas);
+        let pose = self.pose(viewport);
         let texture = cache
             .map(self.body.id, false)
             .or_else(|| cache.preview(self.body.id));
@@ -794,7 +804,7 @@ mod tests {
                 radius: 28.0 * (final_radius / 28.0).powf(progress),
                 progress,
             };
-            let pose = lens.pose(viewport, lens.canvas(viewport));
+            let pose = lens.pose(viewport);
             let point = project_moon(planet, io, [0.0, 421_800.0, 0.0], pose, viewport).unwrap();
             if let Some(previous) = previous {
                 assert!(point.point.distance(previous) < 8.0);

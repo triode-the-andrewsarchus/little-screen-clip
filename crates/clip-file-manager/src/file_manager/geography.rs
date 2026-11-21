@@ -599,15 +599,9 @@ impl Viewer {
 
         let size = [rect.width(), rect.height()];
         let lunar_radius = self.moon_camera.map(|_| map_camera::MOON_RADIUS_M);
-        if map_camera::navigate(
-            self.moon_camera.as_mut().unwrap_or(&mut self.camera),
-            &response,
-            lunar_radius,
-            &mut self.middle_drag,
-        ) {
-            self.open_solar_system(solar::SUN, ui.ctx());
-            return;
-        }
+        let camera = self.moon_camera.as_mut().unwrap_or(&mut self.camera);
+        let departing =
+            map_camera::navigate(camera, &response, lunar_radius, &mut self.middle_drag);
         ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
         let slot = ui.painter_at(rect).add(egui::Shape::Noop);
         if let Some(camera) = self.moon_camera.as_mut() {
@@ -623,9 +617,25 @@ impl Viewer {
             );
             frame.0.lunar_albedo = self.world.as_ref().and_then(solar::world::World::texture);
             self.paint_frame(ui, &response, slot, Some(frame), None);
+            if departing && let Some(camera) = self.moon_camera {
+                self.depart_solar_body(
+                    solar::MOON,
+                    camera,
+                    &response,
+                    self.solar_scene_time(ui.ctx()),
+                );
+            }
             return;
         }
         self.paint_earth_map(ui, &response, slot, profile, colors);
+        if departing {
+            self.depart_solar_body(
+                solar::EARTH,
+                self.camera,
+                &response,
+                self.solar_scene_time(ui.ctx()),
+            );
+        }
     }
 
     fn paint_earth_map(
@@ -682,6 +692,7 @@ impl Viewer {
         }
         let (rect, response) =
             ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
+        let time = self.solar_scene_time(ui.ctx());
         if let Some(sight) = self.sight.as_mut() {
             if sight.navigate(&response) {
                 self.open_solar_system(solar::SUN, ui.ctx());
@@ -700,25 +711,7 @@ impl Viewer {
                 self.assets.clone(),
                 &self.world_maps,
             );
-            let recorded = recorded_scene_time(&self.document, self.selected, None);
             if let Some(selection) = system.paint(
-                ui,
-                &response,
-                recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
-                self.sky.assets.clone(),
-                self.sky.constellations,
-                &self.world_maps,
-            ) {
-                self.arrive_at_world(selection, ui.ctx());
-            }
-        } else if let Some(world) = self.world.as_mut() {
-            if world.navigate(&response) {
-                self.open_solar_system(solar::SUN, ui.ctx());
-                return true;
-            }
-            let time = recorded_scene_time(&self.document, self.selected, None)
-                .unwrap_or_else(|| live_scene_time(ui.ctx()));
-            match world.paint(
                 ui,
                 &response,
                 time,
@@ -726,6 +719,25 @@ impl Viewer {
                 self.sky.constellations,
                 &self.world_maps,
             ) {
+                self.arrive_at_world(selection, ui.ctx());
+            }
+        } else if let Some(world) = self.world.as_mut() {
+            let departing = world
+                .navigate(&response)
+                .then_some((world.body.id, world.camera));
+            let result = world.paint(
+                ui,
+                &response,
+                time,
+                self.sky.assets.clone(),
+                self.sky.constellations,
+                &self.world_maps,
+            );
+            if let Some((id, camera)) = departing {
+                self.depart_solar_body(id, camera, &response, time);
+                return true;
+            }
+            match result {
                 Ok(Some(solar::SUN)) => self.open_solar_system(solar::SUN, ui.ctx()),
                 Ok(Some(id)) => self.select_solar_target(id, ui.ctx()),
                 Ok(None) => {}
@@ -1360,9 +1372,12 @@ impl Viewer {
     }
 
     fn open_solar_system(&mut self, center: solar::Id, ctx: &egui::Context) {
-        let mut system = solar::System::new(center);
+        self.show_solar_system(solar::System::new(center), ctx);
+    }
+
+    fn show_solar_system(&mut self, mut system: solar::System, ctx: &egui::Context) {
         if let Some(world) = self.world.take()
-            && world.body.parent == Some(center)
+            && world.body.parent == Some(system.center)
             && let Some(ephemeris) = world.ephemeris()
         {
             system.show_ephemeris(world.body.id, ephemeris);
@@ -1373,6 +1388,26 @@ impl Viewer {
         self.found_place = None;
         self.tiles.suspend();
         ctx.request_repaint();
+    }
+
+    fn solar_scene_time(&self, ctx: &egui::Context) -> DateTime<Utc> {
+        recorded_scene_time(&self.document, self.selected, None)
+            .unwrap_or_else(|| live_scene_time(ctx))
+    }
+
+    fn depart_solar_body(
+        &mut self,
+        id: solar::Id,
+        camera: GlobeCamera,
+        response: &egui::Response,
+        time: DateTime<Utc>,
+    ) {
+        if let Some(body) = solar::body(id) {
+            let now = response.ctx.input(|input| input.time);
+            let system =
+                solar::System::departing(body, camera, response.rect, now, solar::scene_day(time));
+            self.show_solar_system(system, &response.ctx);
+        }
     }
 
     fn arrive_at_world(&mut self, selection: solar::Selection, ctx: &egui::Context) {

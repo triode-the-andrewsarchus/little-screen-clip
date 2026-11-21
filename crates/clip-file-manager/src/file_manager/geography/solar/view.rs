@@ -1,5 +1,6 @@
 use super::{
-    AU_KM, Body, Id, Kind, SUN, assets, body, clock, satellites, scene_day, sunlight, world,
+    AU_KM, Body, Id, Kind, SUN, assets, body, clock, position_au, satellites, scene_day, sunlight,
+    world,
 };
 use crate::file_manager::geography::{gpu, map_camera, sky};
 use chrono::{DateTime, Utc};
@@ -27,7 +28,7 @@ pub(in crate::file_manager::geography) struct System {
     texture_job: Option<Task<()>>,
     textures_checked: bool,
     earth_checked: bool,
-    flight: Option<FlyIn>,
+    flight: Option<Flight>,
 }
 
 impl System {
@@ -46,6 +47,44 @@ impl System {
             earth_checked: false,
             flight: None,
         }
+    }
+
+    pub fn departing(
+        target: &'static Body,
+        camera: GlobeCamera,
+        rect: Rect,
+        now: f64,
+        day: f64,
+    ) -> Self {
+        let mut system = Self::new(SUN);
+        system.yaw = camera.center_lon.to_radians() - TAU * 0.25;
+        system.elevation = camera.center_lat.to_radians();
+        let scale = system.projection(rect).scale;
+        let physical_radius = target.radius.unwrap_or(3.0) * scale / AU_KM;
+        let from_zoom = (focus_threshold(rect) * 0.98 / physical_radius).min(MAX_ORBIT_ZOOM);
+        system.zoom = from_zoom;
+        let projection = system.projection(rect);
+        let position = position_au(target, day);
+        let [x, y, _] = projection.relative(position);
+        let mark = Mark::new(
+            target,
+            projection.project(position),
+            false,
+            projection.scale / AU_KM,
+        );
+        let target_radius = camera.scale_px(rect.width(), rect.height());
+        system.flight = Some(Flight {
+            id: target.id,
+            began: now,
+            from_zoom,
+            zoom_factor: target_radius / f64::from(mark.physical_radius),
+            from_radius: f64::from(mark.radius),
+            target_radius,
+            screen_offset: [0.0; 2],
+            orbit_offset: [x, y],
+            departure: Some(camera),
+        });
+        system
     }
 
     pub fn show_ephemeris(&mut self, id: Id, positions: &[[f64; 3]]) {
@@ -107,10 +146,7 @@ impl System {
         if wheel == Wheel::Beyond && self.center != SUN {
             return Some(Selection::Overview);
         }
-        let approach = self.advance_flight(response, animation);
-        let blend = approach
-            .as_ref()
-            .map_or(0.0, |(_, sample)| sample.progress as f32);
+        let flight = self.advance_flight(response, animation);
         let rect = response.rect;
         let painter = ui.painter_at(rect);
         let primary = body(self.center)?;
@@ -118,12 +154,28 @@ impl System {
         let day = scene_day(time);
         let clock = clock(time, animation);
         let projection = self.projection(rect);
+        let camera = projection.camera();
+        let approach = flight.and_then(|(id, sample)| {
+            let lens = world::Approach {
+                body: body(id)?,
+                camera: self.flight.as_ref()?.departure.unwrap_or(GlobeCamera {
+                    zoom: APPROACH_ZOOM,
+                    ..camera
+                }),
+                center: rect.center() + vec2(sample.offset[0] as f32, sample.offset[1] as f32),
+                radius: sample.radius,
+                progress: sample.progress,
+            };
+            Some((lens, sample.finished))
+        });
+        let blend = approach
+            .as_ref()
+            .map_or(0.0, |(lens, _)| lens.progress as f32);
         let mut backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
-        if let Some((id, _)) = approach
-            && let Some(target) = body(id)
-        {
-            let (direction, radius) = sunlight(target, day);
+        if let Some((lens, _)) = &approach {
+            let (direction, radius) = sunlight(lens.body, day);
             backdrop.sun = (direction, radius * blend.powi(3));
+            backdrop.axes = lens.pose(rect).axes.map(|axis| axis.map(|v| v as f32));
         }
         self.paint_backdrop(ui, &painter, projection, &backdrop);
         let mut guides = painter.clone();
@@ -131,7 +183,6 @@ impl System {
         if heliocentric {
             paint_belts(&guides, projection, self.zoom);
         }
-        let camera = projection.camera();
         let mut layout = OrbitLayout {
             painter: &guides,
             marks: vec![Mark::new(
@@ -158,8 +209,16 @@ impl System {
                 hit_radius: mark.radius.max(6.0),
                 physical_radius: f64::from(mark.physical_radius),
             });
-        if let Some((id, sample)) = approach {
-            return self.paint_approach(ui, rect, &layout, camera, clock, maps, id, sample);
+        if let Some((lens, finished)) = approach {
+            Self::paint_approach(ui, rect, &layout, camera, clock, maps, &lens);
+            if finished {
+                self.flight = None;
+                return Some(Selection::Focus {
+                    id: lens.body.id,
+                    camera: Some(lens.camera),
+                });
+            }
+            return None;
         }
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
         if heliocentric {
@@ -173,46 +232,27 @@ impl System {
     }
 
     fn paint_approach(
-        &mut self,
         ui: &egui::Ui,
         rect: Rect,
         layout: &OrbitLayout<'_>,
-        mut camera: GlobeCamera,
+        chart_camera: GlobeCamera,
         clock: [f32; 2],
         maps: &assets::MapCache,
-        id: Id,
-        sample: FlightSample,
-    ) -> Option<Selection> {
-        let target = body(id)?;
-        let center = rect.center() + vec2(sample.offset[0] as f32, sample.offset[1] as f32);
-        camera.zoom = APPROACH_ZOOM;
+        lens: &world::Approach,
+    ) {
+        let target = lens.body;
         // The local planets and moons are drawn by the perspective renderer
         // during approach. Keep the other overview objects as distant context.
-        for mark in layout.marks.iter().filter(|mark| {
-            mark.body.id != id
-                && mark.body.parent != Some(id)
-                && target.parent != Some(mark.body.id)
-        }) {
-            if sample.progress < 0.82 {
-                paint_icon(ui, layout.painter, mark, camera, clock, maps);
+        if lens.progress < 0.82 {
+            for mark in layout.marks.iter().filter(|mark| {
+                mark.body.id != target.id
+                    && mark.body.parent != Some(target.id)
+                    && target.parent != Some(mark.body.id)
+            }) {
+                paint_icon(ui, layout.painter, mark, chart_camera, clock, maps);
             }
         }
-        let approach = world::Approach {
-            body: target,
-            camera,
-            center,
-            radius: sample.radius,
-            progress: sample.progress,
-        };
-        let _ = approach.paint(ui, rect, layout.day, clock, maps);
-        if sample.progress < 1.0 {
-            return None;
-        }
-        self.flight = None;
-        Some(Selection::Focus {
-            id,
-            camera: Some(camera),
-        })
+        let _ = lens.paint(ui, rect, layout.day, clock, maps);
     }
 
     fn unit_km(&self) -> f64 {
@@ -333,15 +373,16 @@ impl System {
         let cancel = response
             .ctx
             .input(|input| input.key_pressed(egui::Key::Escape));
-        if self.flight.is_some() {
-            if middle.is_none() && !pan && factor >= 1.0 && !cancel {
+        if let Some(flight) = self.flight.as_ref() {
+            if flight.departure.is_some() || (middle.is_none() && !pan && factor >= 1.0 && !cancel)
+            {
                 return Wheel::Idle;
             }
             self.flight = None;
         }
         if let Some(delta) = middle {
             self.yaw -= f64::from(delta.x) * 0.008;
-            self.elevation = (self.elevation + f64::from(delta.y) * 0.007).clamp(0.04, 1.56);
+            self.elevation = (self.elevation + f64::from(delta.y) * 0.007).clamp(-1.56, 1.56);
         } else if pan {
             let delta = response.drag_delta();
             self.pan[0] += f64::from(delta.x);
@@ -351,7 +392,6 @@ impl System {
             && factor != 1.0
         {
             const MIN_ORBIT_ZOOM: f64 = 0.55;
-            const MAX_ORBIT_ZOOM: f64 = 30_000_000.0;
             let beyond = map_camera::past_zoom_limit(self.zoom, MIN_ORBIT_ZOOM, factor);
             let hovered = self.zoom_anchor.filter(|anchor| {
                 factor > 1.0 && anchor.point.distance(pointer) <= anchor.hit_radius
@@ -383,12 +423,12 @@ impl System {
             return;
         };
         let target_radius = approach_radius(rect);
-        if f64::from(mark.physical_radius) < (target_radius * 0.55).max(13.0) {
+        if f64::from(mark.physical_radius) < focus_threshold(rect) {
             return;
         }
         let [x, y] = (mark.point - rect.center()).into();
         let screen_offset = [f64::from(x), f64::from(y)];
-        self.flight = Some(FlyIn {
+        self.flight = Some(Flight {
             id: mark.body.id,
             began: now,
             from_zoom: self.zoom,
@@ -397,6 +437,7 @@ impl System {
             target_radius,
             screen_offset,
             orbit_offset: std::array::from_fn(|i| screen_offset[i] - self.pan[i]),
+            departure: None,
         });
     }
 
@@ -410,6 +451,10 @@ impl System {
         self.zoom = sample.zoom;
         self.pan = sample.pan;
         response.ctx.request_repaint();
+        if sample.finished && flight.departure.is_some() {
+            self.flight = None;
+            return None;
+        }
         Some((flight.id, sample))
     }
 }
@@ -427,10 +472,15 @@ enum Wheel {
 }
 
 const APPROACH_ZOOM: f64 = 0.18;
+const MAX_ORBIT_ZOOM: f64 = 30_000_000.0;
 const OVERVIEW_MOON_GUIDE_RADIUS_KM: f64 = 38.0;
 
 fn approach_radius(rect: Rect) -> f64 {
     APPROACH_ZOOM * 0.43 * f64::from(rect.width().min(rect.height()))
+}
+
+fn focus_threshold(rect: Rect) -> f64 {
+    (approach_radius(rect) * 0.55).max(13.0)
 }
 
 #[derive(Clone, Copy)]
@@ -447,7 +497,7 @@ impl ZoomAnchor {
     }
 }
 
-struct FlyIn {
+struct Flight {
     id: Id,
     began: f64,
     from_zoom: f64,
@@ -456,6 +506,7 @@ struct FlyIn {
     target_radius: f64,
     screen_offset: [f64; 2],
     orbit_offset: [f64; 2],
+    departure: Option<GlobeCamera>,
 }
 
 #[derive(Clone, Copy)]
@@ -465,12 +516,18 @@ struct FlightSample {
     offset: [f64; 2],
     radius: f64,
     progress: f64,
+    finished: bool,
 }
 
-impl FlyIn {
+impl Flight {
     fn sample(&self, now: f64) -> FlightSample {
         let time = ((now - self.began) / 0.48).clamp(0.0, 1.0);
-        let progress = time * time * (3.0 - 2.0 * time);
+        let position = if self.departure.is_some() {
+            1.0 - time
+        } else {
+            time
+        };
+        let progress = position * position * (3.0 - 2.0 * position);
         let scale = self.zoom_factor.powf(progress);
         let offset = self.screen_offset.map(|v| v * (1.0 - progress));
         FlightSample {
@@ -479,6 +536,7 @@ impl FlyIn {
             offset,
             radius: self.from_radius * (self.target_radius / self.from_radius).powf(progress),
             progress,
+            finished: time >= 1.0,
         }
     }
 }
@@ -959,7 +1017,7 @@ mod tests {
 
     #[test]
     fn zoom_flight_keeps_its_anchor_and_hands_off_centered() {
-        let flight = FlyIn {
+        let flight = Flight {
             id: 599,
             began: 1.0,
             from_zoom: 4.0,
@@ -968,6 +1026,7 @@ mod tests {
             target_radius: 50.0,
             screen_offset: [130.0, -55.0],
             orbit_offset: [-240.0, 156.0],
+            departure: None,
         };
         let start = flight.sample(1.0);
         assert_eq!(start.progress, 0.0);
@@ -984,6 +1043,54 @@ mod tests {
             std::array::from_fn(|i| end.pan[i] + flight.orbit_offset[i] * end.zoom / start.zoom),
             [0.0; 2]
         );
+    }
+
+    #[test]
+    fn departure_keeps_the_body_centered_one_scroll_step_from_focus() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        let camera = GlobeCamera {
+            center_lat: -24.0,
+            center_lon: 130.0,
+            zoom: 0.14,
+            ..map_camera::lunar_camera()
+        };
+        for id in [599, super::super::EARTH, super::super::MOON] {
+            let target = body(id).unwrap();
+            let day = 200.0;
+            let mut system = System::departing(target, camera, rect, 1.0, day);
+            let flight = system.flight.take().unwrap();
+            let start = flight.sample(1.0);
+            let middle = flight.sample(1.24);
+            let end = flight.sample(1.48);
+            assert_eq!(start.progress, 1.0);
+            assert!((start.radius - camera.scale_px(rect.width(), rect.height())).abs() < 1e-12);
+            assert!(start.zoom > middle.zoom && middle.zoom > end.zoom);
+            assert!(end.finished);
+
+            let position = position_au(target, day);
+            let centered_mark = |system: &System| {
+                let projection = system.projection(rect);
+                let mark = Mark::new(
+                    target,
+                    projection.project(position),
+                    false,
+                    projection.scale / AU_KM,
+                );
+                assert!(mark.point.distance(rect.center()) < 0.01);
+                mark
+            };
+            system.zoom = end.zoom;
+            system.pan = end.pan;
+            let mark = centered_mark(&system);
+            assert!(f64::from(mark.physical_radius) < focus_threshold(rect));
+            system.start_flight(rect, rect.center(), &[mark], 1.6);
+            assert!(system.flight.is_none());
+
+            system.zoom *= 1.04;
+            system.pan = system.pan.map(|offset| offset * 1.04);
+            system.start_flight(rect, rect.center(), &[centered_mark(&system)], 1.7);
+            assert_eq!(system.flight.unwrap().id, id);
+        }
     }
 
     #[test]
