@@ -1,5 +1,5 @@
 use super::{CONSTELLATIONS, Direction, Hit, NAMED_STARS, Target};
-use crate::file_manager::geography::{gpu, sky, solar::world::Backdrop};
+use crate::file_manager::geography::{gpu, map_camera, sky, solar::world::Backdrop};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use std::sync::Arc;
 
@@ -30,27 +30,35 @@ impl Sight {
         })
     }
 
-    pub fn paint(
-        &mut self,
-        ui: &egui::Ui,
-        response: &egui::Response,
-        assets: Option<Arc<sky::Assets>>,
-    ) {
+    pub fn navigate(&mut self, response: &egui::Response) -> bool {
         let rect = response.rect;
         if !rect.is_positive() {
-            return;
+            return false;
         }
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0, Color32::from_rgb(7, 10, 17));
         if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta() * (2.0 * self.aperture / rect.size().min_elem());
             self.longitude -= delta.x / self.latitude.cos().abs().max(0.18);
             self.latitude = (self.latitude + delta.y).clamp(-1.5707, 1.5707);
         }
-        if response.hovered() {
-            let scroll = response.ctx.input(|i| i.smooth_scroll_delta.y);
-            self.aperture = (self.aperture * (-scroll * 0.004).exp()).clamp(0.035, 1.45);
-        }
+        let factor = map_camera::scroll_zoom(response);
+        let exit = map_camera::past_zoom_limit(
+            f64::from(1.0 / self.aperture),
+            f64::from(1.0_f32 / 1.45),
+            factor,
+        );
+        self.aperture = (self.aperture / factor as f32).clamp(0.035, 1.45);
+        exit
+    }
+
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        assets: Option<Arc<sky::Assets>>,
+    ) {
+        let rect = response.rect;
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0, Color32::from_rgb(7, 10, 17));
         let (sin_lat, cos_lat) = self.latitude.sin_cos();
         let (sin_lon, cos_lon) = self.longitude.sin_cos();
         let projection = Projection {

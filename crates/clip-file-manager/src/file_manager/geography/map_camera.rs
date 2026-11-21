@@ -73,12 +73,27 @@ impl MiddleDrag {
     }
 }
 
+pub(super) fn scroll_zoom(response: &egui::Response) -> f64 {
+    if response.hovered() {
+        let scroll = response.ctx.input(|input| input.smooth_scroll_delta.y);
+        if scroll.abs() > 0.01 {
+            return (scroll * 0.004).exp() as f64;
+        }
+    }
+    1.0
+}
+
+pub(super) fn past_zoom_limit(zoom: f64, limit: f64, factor: f64) -> bool {
+    // Keep the widest view available until the gesture actually moves past it.
+    factor < 1.0 && zoom <= limit && zoom * factor < limit
+}
+
 pub(super) fn navigate(
     camera: &mut GlobeCamera,
     response: &egui::Response,
     perspective_radius_m: Option<f64>,
     middle: &mut MiddleDrag,
-) {
+) -> bool {
     let size = [response.rect.width(), response.rect.height()];
     if let Some(delta) = middle.update(response) {
         if delta != egui::Vec2::ZERO {
@@ -93,15 +108,14 @@ pub(super) fn navigate(
             camera.pan_by(delta.x, delta.y, size[0], size[1]);
         }
     }
-    if response.hovered() {
-        let scroll = response.ctx.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.01 {
-            let factor = (scroll * 0.004).exp() as f64;
-            camera.zoom = (camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
-            response.ctx.request_repaint();
-        }
+    let factor = scroll_zoom(response);
+    let exit = past_zoom_limit(camera.zoom, MIN_MAP_ZOOM, factor);
+    if factor != 1.0 {
+        camera.zoom = (camera.zoom * factor).clamp(MIN_MAP_ZOOM, MAX_MAP_ZOOM);
+        response.ctx.request_repaint();
     }
     camera.constrain_view(size[0], size[1]);
+    exit
 }
 
 pub(super) fn follow_ground(camera: &mut GlobeCamera, tiles: &super::tiles::Tiles, size: [f32; 2]) {
@@ -272,5 +286,18 @@ mod tests {
             Some(release - point)
         );
         assert!(drag.0.is_none());
+    }
+}
+
+#[cfg(test)]
+mod zoom_limit_tests {
+    use super::*;
+
+    #[test]
+    fn another_outward_step_from_the_widest_view_leaves_the_globe() {
+        assert!(!past_zoom_limit(1.0, MIN_MAP_ZOOM, 0.1));
+        assert!(!past_zoom_limit(MIN_MAP_ZOOM, MIN_MAP_ZOOM, 1.0));
+        assert!(!past_zoom_limit(MIN_MAP_ZOOM, MIN_MAP_ZOOM, 1.1));
+        assert!(past_zoom_limit(MIN_MAP_ZOOM, MIN_MAP_ZOOM, 0.8));
     }
 }

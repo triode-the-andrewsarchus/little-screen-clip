@@ -572,12 +572,15 @@ impl Viewer {
 
         let size = [rect.width(), rect.height()];
         let lunar_radius = self.moon_camera.map(|_| map_camera::MOON_RADIUS_M);
-        map_camera::navigate(
+        if map_camera::navigate(
             self.moon_camera.as_mut().unwrap_or(&mut self.camera),
             &response,
             lunar_radius,
             &mut self.middle_drag,
-        );
+        ) {
+            self.open_solar_system(solar::SUN, ui.ctx());
+            return;
+        }
         ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
         let slot = ui.painter_at(rect).add(egui::Shape::Noop);
         if let Some(camera) = self.moon_camera.as_mut() {
@@ -640,7 +643,11 @@ impl Viewer {
         let (rect, response) =
             ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
         if let Some(sight) = self.sight.as_mut() {
-            sight.paint(ui, &response, self.sky.assets.clone());
+            if sight.navigate(&response) {
+                self.open_solar_system(solar::SUN, ui.ctx());
+            } else {
+                sight.paint(ui, &response, self.sky.assets.clone());
+            }
         } else if let Some(system) = self.solar_system.as_mut() {
             system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
             let recorded = recorded_scene_time(&self.document, self.selected, None);
@@ -653,7 +660,10 @@ impl Viewer {
                 self.arrive_at_world(selection, ui.ctx());
             }
         } else if let Some(world) = self.world.as_mut() {
-            world.navigate(&response);
+            if world.navigate(&response) {
+                self.open_solar_system(solar::SUN, ui.ctx());
+                return true;
+            }
             let time = recorded_scene_time(&self.document, self.selected, None)
                 .unwrap_or_else(|| live_scene_time(ui.ctx()));
             match world.paint(ui, &response, time, self.sky.assets.clone()) {
@@ -1305,9 +1315,13 @@ impl Viewer {
     }
 
     fn arrive_at_world(&mut self, selection: solar::Selection, ctx: &egui::Context) {
-        self.select_solar_target(selection.id, ctx);
-        if let Some(camera) = selection.camera {
-            match selection.id {
+        let solar::Selection::Focus { id, camera } = selection else {
+            self.open_solar_system(solar::SUN, ctx);
+            return;
+        };
+        self.select_solar_target(id, ctx);
+        if let Some(camera) = camera {
+            match id {
                 solar::EARTH => self.camera = camera,
                 solar::MOON => self.moon_camera = Some(camera),
                 _ => {

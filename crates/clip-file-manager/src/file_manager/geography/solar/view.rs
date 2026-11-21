@@ -96,7 +96,10 @@ impl System {
         stars: Option<Arc<sky::Assets>>,
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
-        let zooming_in = self.navigate(response);
+        let wheel = self.navigate(response);
+        if wheel == Wheel::Beyond && self.center != SUN {
+            return Some(Selection::Overview);
+        }
         let blend = self
             .flight
             .as_ref()
@@ -123,7 +126,7 @@ impl System {
             zoom: self.zoom,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
-        if zooming_in
+        if wheel == Wheel::In
             && self.flight.is_none()
             && arrived.is_none()
             && let Some(pointer) = response.hover_pos()
@@ -142,14 +145,14 @@ impl System {
         if let Some(id) = arrived {
             let mut camera = camera;
             camera.zoom = world::initial_zoom(id);
-            return Some(Selection {
+            return Some(Selection::Focus {
                 id,
                 camera: Some(camera),
             });
         }
         clicked
             .filter(|_| self.flight.is_none())
-            .map(|id| Selection { id, camera: None })
+            .map(|id| Selection::Focus { id, camera: None })
     }
 
     fn projection(&mut self, rect: Rect, animation: f64, center: Id) -> Projection {
@@ -261,16 +264,16 @@ impl System {
         }
     }
 
-    fn navigate(&mut self, response: &egui::Response) -> bool {
-        let scroll = response.ctx.input(|input| input.smooth_scroll_delta.y);
+    fn navigate(&mut self, response: &egui::Response) -> Wheel {
+        let factor = map_camera::scroll_zoom(response);
         let middle = self.middle.update(response);
         let pan = response.dragged_by(egui::PointerButton::Primary);
         let cancel = response
             .ctx
             .input(|input| input.key_pressed(egui::Key::Escape));
         if self.flight.is_some() {
-            if middle.is_none() && !pan && scroll >= -0.01 && !cancel {
-                return false;
+            if middle.is_none() && !pan && factor >= 1.0 && !cancel {
+                return Wheel::Idle;
             }
             self.flight = None;
         }
@@ -281,16 +284,27 @@ impl System {
             self.pan += response.drag_delta();
         }
         if let Some(pointer) = response.hover_pos()
-            && scroll.abs() > 0.01
+            && factor != 1.0
         {
-            let next = (self.zoom * (scroll * 0.004).exp()).clamp(0.55, 80.0);
+            const MIN_ORBIT_ZOOM: f32 = 0.55;
+            let beyond = map_camera::past_zoom_limit(
+                f64::from(self.zoom),
+                f64::from(MIN_ORBIT_ZOOM),
+                factor,
+            );
+            let next = (self.zoom * factor as f32).clamp(MIN_ORBIT_ZOOM, 80.0);
             let anchor = pointer - response.rect.center();
             self.pan = anchor + (self.pan - anchor) * (next / self.zoom);
             self.zoom = next;
             response.ctx.request_repaint();
-            return scroll > 0.0;
+            if beyond {
+                return Wheel::Beyond;
+            }
+            if factor > 1.0 {
+                return Wheel::In;
+            }
         }
-        false
+        Wheel::Idle
     }
 
     fn start_flight(&mut self, rect: Rect, pointer: Pos2, marks: &[Mark], now: f64) {
@@ -329,9 +343,16 @@ impl System {
     }
 }
 
-pub(in crate::file_manager::geography) struct Selection {
-    pub id: Id,
-    pub camera: Option<GlobeCamera>,
+pub(in crate::file_manager::geography) enum Selection {
+    Focus { id: Id, camera: Option<GlobeCamera> },
+    Overview,
+}
+
+#[derive(PartialEq, Eq)]
+enum Wheel {
+    Idle,
+    In,
+    Beyond,
 }
 
 struct FlyIn {

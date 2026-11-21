@@ -44,13 +44,13 @@ impl World {
         }
     }
 
-    pub fn navigate(&mut self, response: &egui::Response) {
+    pub fn navigate(&mut self, response: &egui::Response) -> bool {
         map_camera::navigate(
             &mut self.camera,
             response,
             Some(radius_m(self.body)),
             &mut self.middle,
-        );
+        )
     }
 
     pub fn reload(&mut self) {
