@@ -81,7 +81,7 @@ pub(super) fn albedo(source: RgbaImage, id: Id) -> Option<RgbImage> {
             let sx = (x as f32 + 0.5) * width as f32 / source.width() as f32 - 0.5 + width as f32;
             let sy = (y as f32 + 0.5) * height as f32 / source.height() as f32 - 0.5;
             let sy = sy.clamp(0.0, height as f32 - 1.0);
-            let nearby = imageops::sample_bilinear(&edge, sx, sy).map_or(0.0, |p| p[3]);
+            let nearby = imageops::interpolate_bilinear(&edge, sx, sy).map_or(0.0, |p| p[3]);
             // Let the blurred estimate continue a short way into a mosaic,
             // where the last strip of observations often has a dark edge.
             let feather = ((nearby - 0.55) / 0.34).clamp(0.0, 1.0);
@@ -90,7 +90,7 @@ pub(super) fn albedo(source: RgbaImage, id: Id) -> Option<RgbImage> {
             if weight >= 1.0 {
                 return Rgb(original);
             }
-            let fill = imageops::sample_bilinear(&infill, sx, sy)
+            let fill = imageops::interpolate_bilinear(&infill, sx, sy)
                 .unwrap_or(Rgb(average.map(|v| v / 255.0)));
             Rgb(std::array::from_fn(|i| {
                 (weight * f32::from(original[i]) + (1.0 - weight) * fill[i] * 255.0).round() as u8
@@ -146,6 +146,22 @@ mod tests {
             assert!((115..=125).contains(&blue));
         }
         assert!(map.get_pixel(0, 4)[0].abs_diff(map.get_pixel(79, 4)[0]) < 8);
+    }
+
+    #[test]
+    fn a_missing_hemisphere_retains_blurred_variation_from_observed_terrain() {
+        let source = RgbaImage::from_fn(128, 64, |x, y| {
+            if y < 29 {
+                Rgba([0, 0, 0, 255])
+            } else if x < 64 {
+                Rgba([72, 94, 110, 255])
+            } else {
+                Rgba([131, 153, 168, 255])
+            }
+        });
+        let map = albedo(source, 705).unwrap();
+        assert!(map.get_pixel(92, 10)[0] > map.get_pixel(34, 10)[0] + 45);
+        assert!(map.get_pixel(0, 10)[0].abs_diff(map.get_pixel(127, 10)[0]) < 12);
     }
 
     #[test]
