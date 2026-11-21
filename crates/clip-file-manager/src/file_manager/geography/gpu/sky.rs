@@ -203,6 +203,18 @@ fn luminary_at(
     is_sun: bool,
 ) -> bool {
     let ray = pose.inertial_ray(pose.basis, offset);
+    let (body, disk_radius) = luminary(frame, scene, pose, is_sun);
+    let across = cross(ray, body);
+    let radius = disk_radius.max(dot(body, body).sqrt() * 5.0 / pose.focal);
+    dot(ray, body) > 0.0 && dot(across, across) <= radius * radius
+}
+
+fn luminary(
+    frame: &super::Frame,
+    scene: &sky::Scene,
+    pose: &SkyProjection,
+    is_sun: bool,
+) -> ([f32; 3], f32) {
     let sun = subtract(scene.sun, pose.eye);
     let moon = subtract(scene.moon, pose.eye);
     let (body, body_radius) = if is_sun {
@@ -228,16 +240,45 @@ fn luminary_at(
         } else {
             smooth((separation / radii - 16.0) / 1.5)
         };
-        1.0 + 15.0
-            * readable_disk_zoom(frame.camera.zoom)
-            * enlargement
-            * smooth(above_limb / 600.0)
+        let zoom = if frame.moon_view {
+            1.0
+        } else {
+            readable_disk_zoom(frame.camera.zoom)
+        };
+        1.0 + 15.0 * zoom * enlargement * smooth(above_limb / 600.0)
     } else {
         1.0
     };
-    let across = cross(ray, body);
-    let radius = (body_radius * scale).max(dot(body, body).sqrt() * 5.0 / pose.focal);
-    dot(ray, body) > 0.0 && dot(across, across) <= radius * radius
+    (body, body_radius * scale)
+}
+
+pub(super) fn animated_sun_visible(frame: &super::Frame) -> bool {
+    let Some(scene) = &frame.sky else {
+        return false;
+    };
+    if !frame.moon_view && (!frame.show_sky || frame.camera.globe_blend() == 0.0) {
+        return false;
+    }
+    let pose = SkyProjection::for_frame(frame, scene);
+    let (sun, radius) = luminary(frame, scene, &pose, true);
+    let Some(offset) = pose.star_offset(pose.basis, sun) else {
+        return false;
+    };
+    let radius_px = radius * pose.focal / -dot(sun, pose.basis[2]);
+    // Only schedule animated repaints when surface or coronal detail resolves.
+    // Sample the limb too, so a horizon or the viewport can cover the center.
+    let viewport = egui::Rect::from_center_size(egui::Pos2::ZERO, frame.size.into());
+    radius_px >= 4.0
+        && viewport.expand(radius_px * 1.3).contains(offset.to_pos2())
+        && [
+            egui::Vec2::ZERO,
+            egui::Vec2::X,
+            -egui::Vec2::X,
+            egui::Vec2::Y,
+            -egui::Vec2::Y,
+        ]
+        .iter()
+        .any(|edge| pose.exposed(offset + *edge * radius_px))
 }
 
 pub(in super::super) fn earth_at(
@@ -438,10 +479,7 @@ impl SkyRenderer {
             gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
             gl.uniform_2_f32_slice(
                 loc("u_solar_clock").as_ref(),
-                &super::super::solar::clock(
-                    scene.time,
-                    scene.time.timestamp_millis() as f64 * 0.001,
-                ),
+                &super::super::solar::clock(scene.time, frame.animation_seconds),
             );
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_moon").as_ref(), &scene.moon);
             gl.uniform_3_f32_slice(
