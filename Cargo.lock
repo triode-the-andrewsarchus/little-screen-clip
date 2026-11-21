@@ -6557,6 +6557,7 @@ dependencies = [
  "flate2",
  "gltf",
  "hayro-jpeg2000",
+ "hifitime",
  "hokusai-brush",
  "hokusai-core",
  "hound",

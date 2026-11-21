@@ -32,6 +32,10 @@ impl Timeline {
             .filter_map(|feature| feature.time_range)
             .reduce(|[first, last], [start, end]| [first.min(start), last.max(end)])
             .or_else(|| document.capture_time.map(|time| [time; 2]));
+        Self::with_range(recorded)
+    }
+
+    pub fn with_range(recorded: Option<[DateTime<Utc>; 2]>) -> Self {
         let seconds_per_point = recorded.map_or(DEFAULT_SCALE, |[first, last]| {
             let span = (last - first).num_seconds() as f64;
             if span > 0.0 {

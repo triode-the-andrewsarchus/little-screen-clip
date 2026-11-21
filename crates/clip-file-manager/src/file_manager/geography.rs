@@ -136,6 +136,7 @@ pub(super) struct Viewer {
     camera: GlobeCamera,
     moon_camera: Option<GlobeCamera>,
     solar_system: Option<solar::System>,
+    trajectory: Option<Arc<solar::trajectory::Trajectory>>,
     world: Option<solar::world::World>,
     world_maps: Arc<solar::assets::MapCache>,
     finder: finder::Finder,
@@ -345,6 +346,31 @@ impl SkyState {
 impl Viewer {
     pub fn load(path: &Path) -> Result<Self, String> {
         let document = read(path, &AtomicBool::new(false))?;
+        let interpolate_gpx = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gpx"));
+        let timeline = timeline::Timeline::new(&document);
+        Ok(Self::from_document(document, timeline, interpolate_gpx))
+    }
+
+    pub fn from_trajectory(trajectory: solar::trajectory::Trajectory) -> Result<Self, String> {
+        let document = Document::geojson(br#"{"type":"FeatureCollection","features":[]}"#)?;
+        let timeline = timeline::Timeline::with_range(Some(trajectory.range()));
+        let mut viewer = Self::from_document(document, timeline, false);
+        let trajectory = Arc::new(trajectory);
+        let mut system = solar::System::new(solar::SUN);
+        system.set_trajectory(Some(Arc::clone(&trajectory)));
+        system.fit_trajectory();
+        viewer.trajectory = Some(trajectory);
+        viewer.solar_system = Some(system);
+        Ok(viewer)
+    }
+
+    fn from_document(
+        document: Document,
+        timeline: timeline::Timeline,
+        interpolate_gpx: bool,
+    ) -> Self {
         let selected = document
             .features
             .iter()
@@ -368,12 +394,9 @@ impl Viewer {
             )
         });
 
-        let interpolate_gpx = path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gpx"));
         let mut viewer = Self {
             overlay: overlay::Overlay::prepare(&document, interpolate_gpx),
-            timeline: timeline::Timeline::new(&document),
+            timeline,
             document,
             interpolate_gpx,
             selected,
@@ -381,6 +404,7 @@ impl Viewer {
             camera: GlobeCamera::default(),
             moon_camera: None,
             solar_system: None,
+            trajectory: None,
             world: None,
             world_maps: Arc::new(solar::assets::MapCache::new(downloader.assets_dir.clone())),
             finder: Default::default(),
@@ -413,7 +437,7 @@ impl Viewer {
         viewer.sky.reload(&viewer.downloader.assets_dir);
         viewer.fit_document();
         viewer.select(selected);
-        Ok(viewer)
+        viewer
     }
 
     pub fn writes_pending(&self) -> bool {
@@ -1423,6 +1447,9 @@ impl Viewer {
         {
             system.show_ephemeris(world.body.id, ephemeris);
         }
+        if system.center == solar::SUN {
+            system.set_trajectory(self.trajectory.clone());
+        }
         self.solar_system = Some(system);
         self.moon_camera = None;
         self.sight = None;
@@ -1483,8 +1510,22 @@ impl Viewer {
 
     fn solar_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette, center: solar::Id) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Back to map").clicked() {
+            let earth_label = if self.trajectory.is_some() {
+                "Earth"
+            } else {
+                "Back to map"
+            };
+            if ui.button(earth_label).clicked() {
                 self.select_solar_target(solar::EARTH, ui.ctx());
+            }
+            if center == solar::SUN
+                && let (Some(trajectory), Some(system)) = (&self.trajectory, &mut self.solar_system)
+            {
+                ui.separator();
+                ui.strong(&trajectory.name);
+                if ui.button("Fit trajectory").clicked() {
+                    system.fit_trajectory();
+                }
             }
             if let Some(body) = solar::body(center).filter(|body| body.id != solar::SUN) {
                 ui.separator();

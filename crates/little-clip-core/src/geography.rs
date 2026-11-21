@@ -2,12 +2,15 @@
 pub mod basemap;
 mod geojson;
 mod radiacode;
+pub mod trajectory;
 pub mod units;
 use chrono::{DateTime, Utc};
 use roxmltree::{Document as Xml, Node};
 
 /// Maximum encoded geographic document size.
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Astronomical unit in kilometers.
+pub const AU_KM: f64 = 149_597_870.7;
 const MAX_POINTS: usize = 200_000;
 const MAX_PATHS: usize = 4096;
 const DRAW_POINTS: usize = 8192;

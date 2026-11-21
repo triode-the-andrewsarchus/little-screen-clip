@@ -737,6 +737,13 @@ fn load(
         little_clip_core::notebook::inspect(path, cancelled)?;
         return Ok(Loaded::Handwritten);
     }
+    if let Some(trajectory) =
+        super::geography::solar::trajectory::Trajectory::read_if_identified(path, cancelled)?
+    {
+        return Ok(Loaded::Geography(
+            super::geography::Viewer::from_trajectory(trajectory)?,
+        ));
+    }
     let kind = kind(path);
     let limit = match kind {
         Kind::Image { max_bytes } => max_bytes as u64,

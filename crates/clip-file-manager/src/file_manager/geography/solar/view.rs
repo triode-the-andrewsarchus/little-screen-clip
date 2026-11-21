@@ -1,6 +1,6 @@
 use super::{
     AU_KM, Body, Id, Kind, SUN, assets, body, clock, position_au, satellites, scene_day, sunlight,
-    world,
+    trajectory::Trajectory, world,
 };
 use crate::file_manager::geography::{gpu, map_camera, sky, timeline};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2, pos2, vec2};
@@ -24,6 +24,8 @@ pub(in crate::file_manager::geography) struct System {
     zoom_anchor: Option<ZoomAnchor>,
     middle: super::super::map_camera::MiddleDrag,
     ephemeris: Option<(Id, Vec<[f64; 3]>)>,
+    trajectory: Option<Arc<Trajectory>>,
+    fit_requested: bool,
     texture_job: Option<Task<()>>,
     textures_checked: bool,
     earth_checked: bool,
@@ -41,6 +43,8 @@ impl System {
             zoom_anchor: None,
             middle: Default::default(),
             ephemeris: None,
+            trajectory: None,
+            fit_requested: false,
             texture_job: None,
             textures_checked: false,
             earth_checked: false,
@@ -88,6 +92,37 @@ impl System {
 
     pub fn show_ephemeris(&mut self, id: Id, positions: &[[f64; 3]]) {
         self.ephemeris = Some((id, positions.to_vec()));
+    }
+
+    pub fn set_trajectory(&mut self, trajectory: Option<Arc<Trajectory>>) {
+        self.trajectory = trajectory;
+    }
+
+    pub fn fit_trajectory(&mut self) {
+        self.fit_requested = true;
+    }
+
+    fn apply_trajectory_fit(&mut self, rect: Rect) {
+        let Some(trajectory) = self.trajectory.as_ref() else {
+            return;
+        };
+        self.flight = None;
+        self.zoom_anchor = None;
+        self.pan = [0.0; 2];
+        self.zoom = 1.0;
+        let projection = self.projection(rect);
+        let (mut min, mut max) = ([0.0_f64; 2], [0.0_f64; 2]);
+        for position in trajectory.positions() {
+            let [x, y, _] = projection.relative(position);
+            for (i, offset) in [x, y].into_iter().enumerate() {
+                min[i] = min[i].min(offset);
+                max[i] = max[i].max(offset);
+            }
+        }
+        let [width, height] = [rect.width(), rect.height()].map(|size| f64::from(size) * 0.78);
+        let path_share = ((max[0] - min[0]) / width).max((max[1] - min[1]) / height);
+        self.zoom = path_share.recip().clamp(MIN_ORBIT_ZOOM, MAX_ORBIT_ZOOM);
+        self.pan = std::array::from_fn(|axis| -0.5 * (min[axis] + max[axis]) * self.zoom);
     }
 
     pub fn reload_maps(&mut self) {
@@ -141,6 +176,9 @@ impl System {
         maps: &assets::MapCache,
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
+        if std::mem::take(&mut self.fit_requested) {
+            self.apply_trajectory_fit(response.rect);
+        }
         let wheel = self.navigate(response);
         if wheel == Wheel::Beyond && self.center != SUN {
             return Some(Selection::Overview);
@@ -194,6 +232,9 @@ impl System {
             day,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
+        if let Some(trajectory) = self.trajectory.as_deref() {
+            paint_trajectory_path(&guides, projection, trajectory);
+        }
         if wheel == Wheel::In
             && self.flight.is_none()
             && approach.is_none()
@@ -222,6 +263,13 @@ impl System {
         }
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
         if heliocentric {
+            if let Some(position) = self
+                .trajectory
+                .as_deref()
+                .and_then(|path| path.position_at(preview.time))
+            {
+                paint_trajectory_position(&painter, projection.project(position).0);
+            }
             orbit_scale_bar(&painter, rect, projection.scale);
         } else {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
@@ -263,7 +311,8 @@ impl System {
         let extent = satellites(self.center)
             .filter_map(|body| body.orbit)
             .map(|orbit| orbit.0 * (1.0 + orbit.1))
-            .fold(1.0, f64::max);
+            .fold(1.0, f64::max)
+            .max(self.trajectory.as_ref().map_or(0.0, |path| path.radius_au));
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_el, cos_el) = self.elevation.sin_cos();
         let span = f64::from(rect.width().min(rect.height() * 1.32));
@@ -393,7 +442,6 @@ impl System {
         if let Some(pointer) = response.hover_pos()
             && factor != 1.0
         {
-            const MIN_ORBIT_ZOOM: f64 = 0.55;
             let beyond = map_camera::past_zoom_limit(self.zoom, MIN_ORBIT_ZOOM, factor);
             let hovered = self.zoom_anchor.filter(|anchor| {
                 factor > 1.0 && anchor.point.distance(pointer) <= anchor.hit_radius
@@ -474,6 +522,7 @@ enum Wheel {
 }
 
 const APPROACH_ZOOM: f64 = 0.18;
+const MIN_ORBIT_ZOOM: f64 = 0.55;
 const MAX_ORBIT_ZOOM: f64 = 30_000_000.0;
 const OVERVIEW_MOON_GUIDE_RADIUS_KM: f64 = 38.0;
 
@@ -709,6 +758,49 @@ impl OrbitLayout<'_> {
                 self.marks.push(next);
             }
         }
+    }
+}
+
+const TRAJECTORY_COLOR: Color32 = Color32::from_rgb(103, 237, 207);
+
+fn paint_trajectory_path(painter: &egui::Painter, projection: Projection, path: &Trajectory) {
+    let clip = painter.clip_rect().expand(4.0);
+    let mut paths = Vec::new();
+    let mut previous = None;
+    for point in path
+        .positions()
+        .map(|position| projection.project(position).0)
+    {
+        if let Some(start) = previous {
+            if point.distance_sq(start) < 0.09 {
+                continue;
+            }
+            orbit_arc(
+                clip,
+                &|_| point,
+                [0.0, 1.0],
+                [start, point],
+                0.0,
+                &mut paths,
+            );
+        }
+        previous = Some(point);
+    }
+    let stroke = Stroke::new(1.8, TRAJECTORY_COLOR.gamma_multiply(0.78));
+    for path in paths {
+        painter.add(egui::Shape::line(path, stroke));
+    }
+}
+
+fn paint_trajectory_position(painter: &egui::Painter, point: Pos2) {
+    if painter.clip_rect().expand(8.0).contains(point) {
+        painter.circle_filled(point, 7.0, TRAJECTORY_COLOR.gamma_multiply(0.26));
+        painter.circle(
+            point,
+            4.0,
+            TRAJECTORY_COLOR,
+            Stroke::new(1.0, Color32::BLACK),
+        );
     }
 }
 

@@ -48,6 +48,7 @@ fearless_simd = "1.2"
 fearless_simd_macros = "0.1"
 lopdf = "0.47"
 chrono = "0.4"
+hifitime = { version = "4.3.2", default-features = false, features = ["std"] }
 calamine = "0.36.1"
 midly = "0.5"
 scenix-loader = "1.10.0"

@@ -1,6 +1,7 @@
 //! Offline orbital geometry and the solar system view.
 pub(in crate::file_manager) mod assets;
 mod coverage;
+pub(in crate::file_manager) use little_clip_core::geography::trajectory;
 mod view;
 pub(super) mod world;
 
@@ -11,7 +12,7 @@ use serde::Deserialize;
 use std::{f64::consts::TAU, sync::OnceLock};
 
 pub(in crate::file_manager) type Id = i32;
-pub(super) const AU_KM: f64 = 149_597_870.7;
+pub(super) use little_clip_core::geography::AU_KM;
 pub(super) const SUN: Id = 10;
 pub(super) const EARTH: Id = 399;
 pub(super) const MOON: Id = 301;
