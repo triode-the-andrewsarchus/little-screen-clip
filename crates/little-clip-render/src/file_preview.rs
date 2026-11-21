@@ -168,7 +168,7 @@ impl crate::ScreenRenderer {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .earth(&self.config.geo_assets_dir());
-        super::map_preview::Map::earth(document, texture.as_ref()).map(Preview::Map)
+        super::map_preview::Map::earth(self, document, texture.as_ref()).map(Preview::Map)
     }
 
     fn location_preview(&self, text: &str) -> CachedPreview {
@@ -295,6 +295,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lincoln_clipboard_map_contains_a_pin_and_an_inset_city_label() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = little_clip_core::AppConfig::default();
+        config.geography.assets_dir = Some(root.path().to_owned());
+        let renderer = crate::ScreenRenderer::new(config).unwrap();
+        let location = ClipItem::from_text("40.813599 -96.702606");
+        let preview = renderer.file_preview(&location).unwrap();
+        let Preview::Map(map) = preview.as_ref() else {
+            panic!("Expected a map preview")
+        };
+        let pixels = &map.thumbnail.premultiplied_rgba;
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|rgba| rgba == [115, 241, 211, 255])
+        );
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|rgba| rgba == [255, 255, 255, 255])
+        );
+    }
+
+    #[test]
     fn maps_are_prepared_for_geography_and_standalone_clipboard_locations() {
         let renderer = crate::ScreenRenderer::fallback(Default::default());
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -304,7 +328,6 @@ mod tests {
         let Preview::Map(map) = preview.as_ref() else {
             panic!("Expected a map preview")
         };
-        assert_eq!(map.label.as_deref(), Some("Seattle"));
         assert!(
             map.thumbnail
                 .premultiplied_rgba

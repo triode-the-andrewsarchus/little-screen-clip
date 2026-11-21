@@ -4,7 +4,7 @@ use little_clip_core::{
     geography::{
         Document, Kind,
         basemap::{EquirectTexture, wrap_lon_delta},
-        preview::{City, Context},
+        preview::Context,
         trajectory::Trajectory,
     },
 };
@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 220;
@@ -49,7 +49,11 @@ impl Cache {
 }
 
 impl Map {
-    pub fn earth(document: &Document, texture: Option<&EquirectTexture>) -> Option<Self> {
+    pub fn earth(
+        renderer: &crate::ScreenRenderer,
+        document: &Document,
+        texture: Option<&EquirectTexture>,
+    ) -> Option<Self> {
         let context = Context::new(document.geographic_bounds?);
         let camera = context.camera(SIZE);
         let mut pixmap = Pixmap::new(WIDTH, HEIGHT)?;
@@ -73,6 +77,21 @@ impl Map {
                 .to_color_u8();
         }
 
+        let city = context.city.and_then(|city| {
+            let [lat, lon] = city.lat_lon;
+            camera
+                .project(lat, lon, SIZE[0], SIZE[1])
+                .map(|point| (city.name, point))
+        });
+        if let Some((_, point)) = city {
+            draw_dot(
+                &mut pixmap,
+                point,
+                Color::from_rgba8(255, 210, 102, 255),
+                2.5,
+            );
+        }
+
         for feature in &document.features {
             for path in &feature.paths {
                 let mut relative = None;
@@ -87,22 +106,45 @@ impl Map {
             }
         }
 
-        let label = context.city.map(|city: City| {
-            let [lat, lon] = city.lat_lon;
-            if let Some(point) = camera.project(lat, lon, SIZE[0], SIZE[1]) {
-                draw_dot(
-                    &mut pixmap,
-                    point,
-                    Color::from_rgba8(255, 210, 102, 255),
-                    2.5,
-                );
-            }
-            city.name.to_owned()
-        });
+        if let Some((name, point)) = city {
+            paint_city_label(renderer, &mut pixmap, name, point);
+        }
         Some(Self {
             thumbnail: thumbnail(pixmap),
-            label,
+            label: None,
         })
+    }
+}
+
+fn paint_city_label(
+    renderer: &crate::ScreenRenderer,
+    pixmap: &mut Pixmap,
+    name: &str,
+    [x, y]: [f32; 2],
+) {
+    const FONT_SIZE: f32 = 18.0;
+    let width = (renderer.measure_text_width(name, FONT_SIZE, true) + 12.0).min(SIZE[0] - 8.0);
+    let preferred = if x + width + 12.0 < SIZE[0] {
+        x + 10.0
+    } else {
+        x - width - 10.0
+    };
+    let left = preferred.clamp(4.0, SIZE[0] - width - 4.0);
+    let top = (y - 12.0).clamp(3.0, SIZE[1] - 27.0);
+    if let Some(rect) = Rect::from_xywh(left, top, width, 24.0) {
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(10, 19, 27, 222);
+        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+        renderer.draw_text_clipped(
+            pixmap,
+            name,
+            left + 6.0,
+            top + 1.0,
+            FONT_SIZE,
+            Color::WHITE,
+            true,
+            rect.right() - 4.0,
+        );
     }
 }
 

@@ -7,6 +7,7 @@ use super::{
 #[derive(Clone, Copy)]
 pub struct Context {
     bounds: [f64; 4],
+    minimum_span: f64,
     pub city: Option<City>,
 }
 
@@ -20,6 +21,11 @@ impl Context {
     pub fn new(mut bounds: [f64; 4]) -> Self {
         let [west, south, east, north] = bounds;
         let [lat, lon] = [south.midpoint(north), west.midpoint(east)];
+        let minimum_span = if west == east && south == north {
+            0.55
+        } else {
+            0.09
+        };
         let city = ((east - west).max(north - south) < 2.0)
             .then(|| nearest_city(lat, lon))
             .flatten();
@@ -33,7 +39,11 @@ impl Context {
                 north.max(city_lat),
             ];
         }
-        Self { bounds, city }
+        Self {
+            bounds,
+            minimum_span,
+            city,
+        }
     }
 
     pub fn camera(self, [width, height]: [f32; 2]) -> GlobeCamera {
@@ -46,8 +56,10 @@ impl Context {
             orbit: Default::default(),
         };
         let cos_lat = camera.center_lat.to_radians().cos().abs().max(0.25);
-        let horizontal = ((east - west) * cos_lat).max(0.09).to_radians();
-        let vertical = (north - south).max(0.09).to_radians();
+        let horizontal = ((east - west) * cos_lat)
+            .max(self.minimum_span)
+            .to_radians();
+        let vertical = (north - south).max(self.minimum_span).to_radians();
         let scale = (f64::from((width - 34.0).max(1.0)) / horizontal)
             .min(f64::from((height - 28.0).max(1.0)) / vertical);
         camera.zoom = (scale / camera.scale_px(width, height)).min(MAX_MAP_ZOOM);
@@ -92,5 +104,22 @@ mod tests {
                 assert!(x > 0.0 && x < w && y > 0.0 && y < h);
             }
         }
+    }
+
+    #[test]
+    fn lincoln_pin_keeps_the_nearby_city_and_regional_context_in_frame() {
+        let [lat, lon] = [40.813599, -96.702606];
+        let context = Context::new([lon, lat, lon, lat]);
+        let city = context.city.unwrap();
+        assert_eq!(city.name, "Lincoln");
+        let [w, h] = [400.0, 220.0];
+        let camera = context.camera([w, h]);
+        let [x, y] = camera
+            .project(city.lat_lon[0], city.lat_lon[1], w, h)
+            .unwrap();
+        assert!((w * 0.35..w * 0.65).contains(&x));
+        assert!((h * 0.35..h * 0.65).contains(&y));
+        let (north, _) = camera.unproject(w * 0.5, 0.0, w, h).unwrap();
+        assert!(north - camera.center_lat > 0.25);
     }
 }
