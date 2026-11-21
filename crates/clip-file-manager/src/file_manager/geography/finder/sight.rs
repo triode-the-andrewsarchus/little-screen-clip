@@ -56,6 +56,7 @@ impl Sight {
         response: &egui::Response,
         assets: Option<Arc<sky::Assets>>,
         constellations: bool,
+        star_trail: f32,
     ) {
         let rect = response.rect;
         let painter = ui.painter_at(rect);
@@ -86,6 +87,7 @@ impl Sight {
                     fov: [rect.width(), rect.height()].map(|side| side / (2.0 * projection.focal)),
                     sun: ([0.0, 0.0, 1.0], 0.0),
                     directional_light: 1.0,
+                    star_trail,
                     clock: [0.0; 2],
                     brightness: 0.64,
                     assets: assets.clone(),

@@ -1,3 +1,10 @@
+uniform float u_star_trail; // Signed exposure in right ascension, in turns.
+
+vec3 star_signal(vec3 color) {
+    float peak = max(color.r,max(color.g,color.b));
+    return color * smoothstep(.18,.52,peak);
+}
+
 // NASA SVS star map, sampled in its inertial (J2000 equatorial) frame.
 vec3 star_color(sampler2D stars, vec3 direction) {
     const float pi = 3.141592653589793;
@@ -7,7 +14,25 @@ vec3 star_color(sampler2D stars, vec3 direction) {
     vec2 dx = dFdx(uv), dy = dFdy(uv);
     dx.x -= round(dx.x);
     dy.x -= round(dy.x);
-    return textureGrad(stars,uv,dx,dy).rgb;
+    vec3 sharp = textureGrad(stars,uv,dx,dy).rgb;
+    float exposure = abs(u_star_trail);
+    if (exposure < .00008) return sharp;
+
+    // Right ascension follows small circles around the celestial poles.
+    // Use at most a texel per sample on the 4K map to keep trails continuous.
+    float width = float(textureSize(stars,0).x);
+    int samples = int(clamp(ceil(width*exposure),2.0,50.0));
+    vec3 head = star_signal(sharp);
+    vec3 trail = head*.60;
+    for (int i = 1; i <= samples; ++i) {
+        float t = float(i)/float(samples);
+        vec3 color = textureGrad(stars,uv+vec2(u_star_trail*t,0.0),dx,dy).rgb;
+        float weight = (1.0-t)*(.76-.40*t);
+        trail = max(trail,star_signal(color)*weight);
+    }
+    // Expose the point sources and keep diffuse sky structure legible.
+    float blend = smoothstep(.00008,.0018,exposure);
+    return sharp + blend*(trail*.78-head*.67);
 }
 
 float solar_hash(vec3 p) {

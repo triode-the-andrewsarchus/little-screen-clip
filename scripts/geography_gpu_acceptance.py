@@ -171,20 +171,57 @@ def check_sky_sizes(root, width, height):
     GL.glDeleteTextures([surface])
     GL.glActiveTexture(GL.GL_TEXTURE0)
 
-    # A dark star map with a narrow bright feature. The transient trail can add
-    # a faint shoulder at the feature's edge while retaining the peak itself.
-    stars = np.full((4, 4096, 3), 5, dtype=np.uint8)
-    stars[:, 1990:2020] = 255
-    star_texture = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, stars)
-    sharp = render_sky(0, -.55)
-    GL.glUniform1f(uniform("u_star_trail"), 6 / 4096)
-    trail = render_sky(0, -.55)
-    lift = trail[:, :, 0].astype(int) - sharp[:, :, 0].astype(int)
-    assert 3 < lift.max() < 70 and np.count_nonzero(lift) > 10
-    assert np.all(lift[sharp[:, :, 0] > 100] == 0)
-    GL.glDeleteTextures([star_texture])
     GL.glDeleteTextures([background])
     GL.glDeleteProgram(sky)
+
+
+def check_star_trails(root, width, height):
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    # A sparse map isolates point sources so gaps in the exposure are visible.
+    stars = np.full((512, 4096, 3), 5, dtype=np.uint8)
+    stars[255:257, 2046:2050] = [255, 181, 95]
+    star_texture = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE, stars)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT)
+    equator = np.asarray([[0, -1, 0], [0, 0, 1], [-1, 0, 0]], dtype=np.float32)
+    # World rays are in the ecliptic frame before converting to equatorial.
+    to_ecliptic = np.asarray([[1, 0, 0], [0, .917482, .397777],
+                              [0, -.397777, .917482]], dtype=np.float32)
+    for name in ("sky", "world"):
+        shader = program(root, name)
+        GL.glUseProgram(shader)
+        loc = lambda uniform: GL.glGetUniformLocation(shader, uniform)
+        GL.glUniform1i(loc("u_stars"), 0)
+        GL.glUniform2f(loc("u_fov"), width / (1.9 * height), 1 / 1.9)
+        if name == "sky":
+            GL.glUniformMatrix3fv(loc("u_camera_basis"), 1, False, equator)
+            GL.glUniformMatrix3fv(loc("u_inertial_from_fixed"), 1, False, np.eye(3, dtype=np.float32))
+            GL.glUniform3f(loc("u_sun"), -150e6, 0, 0)
+            GL.glUniform3f(loc("u_moon"), -384400, 0, 0)
+            GL.glUniform1f(loc("u_opacity"), 1)
+        else:
+            GL.glUniformMatrix3fv(loc("u_axes"), 1, False, equator @ to_ecliptic.T)
+            GL.glUniform1i(loc("u_background_only"), 1)
+            GL.glUniform1i(loc("u_has_stars"), 1)
+            GL.glUniform1f(loc("u_sky_brightness"), 1)
+
+        def expose(turns):
+            GL.glUniform1f(loc("u_star_trail"), turns)
+            GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
+            pixels = GL.glReadPixels(0, height // 2, width, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE)
+            return np.frombuffer(pixels, dtype=np.uint8).reshape(width, 4)
+
+        sharp = expose(0.0)
+        stars_at = lambda row: np.flatnonzero(row[:, 0] > 19)
+        sharp_points = stars_at(sharp)
+        short = stars_at(expose(0.003))
+        forward = stars_at(expose(0.012))
+        reverse = stars_at(expose(-0.012))
+        assert 0 < len(sharp_points) < len(short) < len(forward) - 8, (name, sharp_points, short, forward)
+        assert forward.min() < sharp_points.min() - 10 and reverse.max() > sharp_points.max() + 10
+        assert np.all(np.diff(forward) == 1) and np.all(np.diff(reverse) == 1), name
+        assert np.array_equal(sharp, expose(0.0)), "The exposure failed to return to a sharp sky"
+        GL.glDeleteProgram(shader)
+    GL.glDeleteTextures([star_texture])
 
 
 def check_moon_view(root, width, height):
@@ -900,12 +937,14 @@ def main():
         check_vectors(vectors, width, height, args.output)
         timings = warm_frame_timings(draw)
         check_sky_sizes(root, width, height)
+        check_star_trails(root, width, height)
         check_moon_view(root, width, height)
         check_world_view(root, width, height, args.output)
         check_constellation_projection(root, width, height)
         assert GL.glGetError() == GL.GL_NO_ERROR
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 6,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
+            "timeline_star_trails_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "timeline_lighting_checked": True,
             "raised_terrain_checked": True, "tilted_lake_mask_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,

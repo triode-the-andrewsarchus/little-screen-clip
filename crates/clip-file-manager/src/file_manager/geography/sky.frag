@@ -18,7 +18,6 @@ uniform bool u_light_earth_disk;
 uniform bool u_earth_night_available;
 uniform float u_opacity;
 uniform float u_atmosphere;
-uniform float u_star_trail; // Offset in right ascension during a clock transition.
 uniform bool u_readable_sky;
 uniform float u_readable_disk_zoom;
 uniform sampler2D u_stars;
@@ -136,15 +135,7 @@ void main() {
         return;
     }
     vec3 icrf = u_inertial_from_fixed * ray;
-    vec2 uv = vec2(0.5 - atan(icrf.y, icrf.x) / (2.0 * PI), 0.5 - asin(clamp(icrf.z,-1.0,1.0)) / PI);
     vec3 rgb = star_color(u_stars, icrf) + vec3(.018,.023,.034);
-    if (abs(u_star_trail) > .0001) {
-        for (int i = 1; i <= 3; ++i) {
-            float t = float(i) / 3.0;
-            vec3 bright = max(texture(u_stars, uv + vec2(u_star_trail * t, 0.0)).rgb - .35, vec3(0.0));
-            rgb = max(rgb, bright * mix(.34, .12, t));
-        }
-    }
     float pixel = max(length(dFdx(ray)), length(dFdy(ray)));
     float nearest = 1e20;
     float distance;

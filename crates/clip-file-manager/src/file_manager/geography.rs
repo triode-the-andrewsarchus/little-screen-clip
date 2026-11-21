@@ -289,7 +289,7 @@ impl SkyState {
         };
         frame.sky = self.at(time);
         frame.directional_light = scrub.map_or(1.0, |preview| preview.directional_light);
-        frame.star_trail = star_trail;
+        frame.star_trail = scrub.map_or(star_trail, |preview| preview.star_trail);
         frame.show_sky = visible;
         frame.readable_sky = self.readable;
         frame.show_constellations = self.constellations;
@@ -750,6 +750,7 @@ impl Viewer {
                     &response,
                     self.sky.assets.clone(),
                     self.sky.constellations,
+                    preview.star_trail,
                 );
             }
         } else if let Some(system) = self.solar_system.as_mut() {
@@ -762,7 +763,7 @@ impl Viewer {
             if let Some(selection) = system.paint(
                 ui,
                 &response,
-                time,
+                preview,
                 self.sky.assets.clone(),
                 self.sky.constellations,
                 &self.world_maps,

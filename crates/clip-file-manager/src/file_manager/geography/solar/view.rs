@@ -2,8 +2,7 @@ use super::{
     AU_KM, Body, Id, Kind, SUN, assets, body, clock, position_au, satellites, scene_day, sunlight,
     world,
 };
-use crate::file_manager::geography::{gpu, map_camera, sky};
-use chrono::{DateTime, Utc};
+use crate::file_manager::geography::{gpu, map_camera, sky, timeline};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 use little_clip_core::{
     geography::basemap::{BasemapAssets, GlobeCamera},
@@ -136,7 +135,7 @@ impl System {
         &mut self,
         ui: &egui::Ui,
         response: &egui::Response,
-        time: DateTime<Utc>,
+        preview: timeline::Preview,
         stars: Option<Arc<sky::Assets>>,
         constellations: bool,
         maps: &assets::MapCache,
@@ -151,8 +150,8 @@ impl System {
         let painter = ui.painter_at(rect);
         let primary = body(self.center)?;
         let heliocentric = primary.id == SUN;
-        let day = scene_day(time);
-        let clock = clock(time, animation);
+        let day = scene_day(preview.time);
+        let clock = clock(preview.time, animation);
         let projection = self.projection(rect);
         let camera = projection.camera();
         let approach = flight.and_then(|(id, sample)| {
@@ -172,6 +171,7 @@ impl System {
             .as_ref()
             .map_or(0.0, |(lens, _)| lens.progress as f32);
         let mut backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
+        backdrop.star_trail = preview.star_trail;
         if let Some((lens, _)) = &approach {
             let (direction, radius) = sunlight(lens.body, day);
             backdrop.sun = (direction, radius * blend.powi(3));
@@ -295,6 +295,7 @@ impl System {
                 .map(|s| s / rect.width().min(rect.height()) * aperture),
             sun: ([0.0, 0.0, 1.0], 0.0),
             directional_light: 1.0,
+            star_trail: 0.0,
             clock,
             brightness: brightness + (1.0 - brightness) * blend,
             assets: stars,

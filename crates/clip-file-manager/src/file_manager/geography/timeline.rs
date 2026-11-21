@@ -115,38 +115,7 @@ impl Timeline {
             });
         let limit = Months::new(6_000);
         let bounds = [now - limit, now + limit].map(scale::seconds);
-        let current = self.time().unwrap_or(now);
-        let previous_fixed = self.fixed;
-        let scroll = map_camera::scroll_zoom(&response);
-        self.seconds_per_point =
-            (self.seconds_per_point / scroll.powf(2.5)).clamp(MIN_SCALE, MAX_SCALE);
-
-        if response.double_clicked() {
-            self.fixed = None;
-            self.drag_time = None;
-            ui.ctx().request_repaint();
-        } else if response.dragged_by(egui::PointerButton::Primary) {
-            let raw = self
-                .drag_time
-                .get_or_insert_with(|| scale::seconds(current));
-            *raw = (*raw - f64::from(response.drag_delta().x) * self.seconds_per_point)
-                .clamp(bounds[0], bounds[1]);
-            self.fixed = Some(scale::instant(
-                ((*raw / 60.0).round() * 60.0).clamp(bounds[0], bounds[1]),
-            ));
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            ui.ctx().request_repaint();
-        } else {
-            self.drag_time = None;
-        }
-
-        let time = self.time().unwrap_or(now);
-        if self.fixed != previous_fixed && time != current {
-            let animation_time = ui.input(|input| input.time);
-            self.scrub
-                .get_or_insert_with(|| scrub::Scrub::new(current, animation_time))
-                .retarget(time, animation_time);
-        }
+        let time = self.navigate(&response, now, bounds);
         if self.time().is_none() {
             let millis = 60_000 - now.timestamp_millis().rem_euclid(60_000);
             ui.ctx()
@@ -189,6 +158,49 @@ impl Timeline {
                 );
             }
         }
+    }
+
+    fn navigate(
+        &mut self,
+        response: &egui::Response,
+        now: DateTime<Utc>,
+        bounds: [f64; 2],
+    ) -> DateTime<Utc> {
+        let current = self.time().unwrap_or(now);
+        let previous_fixed = self.fixed;
+        let scroll = map_camera::scroll_zoom(response);
+        self.seconds_per_point =
+            (self.seconds_per_point / scroll.powf(2.5)).clamp(MIN_SCALE, MAX_SCALE);
+
+        if response.double_clicked() {
+            self.fixed = None;
+            self.drag_time = None;
+            response.ctx.request_repaint();
+        } else if response.dragged_by(egui::PointerButton::Primary) {
+            let raw = self
+                .drag_time
+                .get_or_insert_with(|| scale::seconds(current));
+            *raw = (*raw - f64::from(response.drag_delta().x) * self.seconds_per_point)
+                .clamp(bounds[0], bounds[1]);
+            self.fixed = Some(scale::instant(
+                ((*raw / 60.0).round() * 60.0).clamp(bounds[0], bounds[1]),
+            ));
+            response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            response.ctx.request_repaint();
+        } else if self.drag_time.take().is_some()
+            && let Some(scrub) = &mut self.scrub
+        {
+            scrub.end_drag();
+        }
+
+        let time = self.time().unwrap_or(now);
+        if self.fixed != previous_fixed && time != current {
+            let animation_time = response.ctx.input(|input| input.time);
+            self.scrub
+                .get_or_insert_with(|| scrub::Scrub::new(current, animation_time))
+                .retarget(time, animation_time, self.drag_time.is_some());
+        }
+        time
     }
 }
 

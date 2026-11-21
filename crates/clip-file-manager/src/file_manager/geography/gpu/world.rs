@@ -109,6 +109,7 @@ impl Renderer {
             gl.uniform_1_f32(loc("u_sun_radius").as_ref(), view.sun.1);
             gl.uniform_2_f32_slice(loc("u_solar_clock").as_ref(), &view.clock);
             gl.uniform_1_f32(loc("u_timeline_light").as_ref(), view.directional_light);
+            gl.uniform_1_f32(loc("u_star_trail").as_ref(), view.star_trail);
             gl.uniform_1_f32(loc("u_sky_brightness").as_ref(), view.brightness);
             super::sky::bind(gl, program, "u_stars", 0, stars);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
