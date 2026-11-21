@@ -23,10 +23,12 @@ uniform bool u_readable_sky;
 uniform float u_readable_disk_zoom;
 uniform sampler2D u_stars;
 uniform vec3 u_sun;
+uniform vec2 u_solar_clock;
 uniform vec3 u_moon;
 uniform vec3 u_planets[7];
 
 #include <lunar>
+#include <celestial>
 
 const float PI = 3.141592653589793;
 const float EARTH_RADIUS_KM = 6378.137;
@@ -104,7 +106,7 @@ void main() {
     }
     vec3 icrf = u_inertial_from_fixed * ray;
     vec2 uv = vec2(0.5 - atan(icrf.y, icrf.x) / (2.0 * PI), 0.5 - asin(clamp(icrf.z,-1.0,1.0)) / PI);
-    vec3 rgb = texture(u_stars, uv).rgb + vec3(.018,.023,.034);
+    vec3 rgb = star_color(u_stars, icrf) + vec3(.018,.023,.034);
     if (abs(u_star_trail) > .0001) {
         for (int i = 1; i <= 3; ++i) {
             float t = float(i) / 3.0;
@@ -146,14 +148,12 @@ void main() {
     float sun_scale = mix(1.0, READABLE_DISK_SCALE, sun_growth * u_readable_disk_zoom);
     float moon_scale = mix(1.0, READABLE_DISK_SCALE, moon_growth * u_readable_disk_zoom);
     float sun = disk(ray, sun_offset, SOLAR_RADIUS_KM * sun_scale, pixel, distance);
-    if (distance > 0.0 && sun_scale > 1.0) {
-        float disk_radii = length(cross(ray, sun_direction)) / (SOLAR_RADIUS_KM * sun_scale / length(sun_offset));
-        float glow = 1.0 - smoothstep(1.0, 2.8, disk_radii);
-        rgb += vec3(1.0,.83,.55) * (.16 * sun_growth * glow);
-    }
-    if (sun > 0.0 && distance < nearest) {
-        rgb = mix(rgb, vec3(1.0,.94,.81), sun);
-        nearest = distance;
+    if (dot(ray,sun_direction) > 0.0 && (distance <= 0.0 || distance < nearest)) {
+        vec4 emission = solar_disk(u_inertial_from_fixed*ray,
+            u_inertial_from_fixed*sun_direction, SOLAR_RADIUS_KM*sun_scale/length(sun_offset),
+            u_solar_clock);
+        rgb = emission.rgb + rgb*(1.0-emission.a);
+        if (sun > 0.0) nearest = distance;
     }
     float moon = disk(ray, moon_offset, MOON_RADIUS_KM * moon_scale, pixel, distance);
     if (!u_moon_view && moon > 0.0 && distance < nearest) {

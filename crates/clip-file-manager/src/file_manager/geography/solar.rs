@@ -5,6 +5,7 @@ pub(super) mod world;
 
 pub(super) use view::{System, paint_stars};
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::{f64::consts::TAU, sync::OnceLock};
 
@@ -118,6 +119,38 @@ impl Body {
         }
         self.orbit_point(anomaly)
     }
+}
+
+pub(super) fn scene_day(time: DateTime<Utc>) -> f64 {
+    (time.timestamp_millis() as f64 * 0.001 - 946_728_000.0) / 86_400.0
+}
+
+pub(super) fn clock(time: DateTime<Utc>, animation_seconds: f64) -> [f32; 2] {
+    [
+        scene_day(time) as f32,
+        animation_seconds.rem_euclid(4096.0) as f32,
+    ]
+}
+
+pub(super) fn sunlight(body: &Body, day: f64) -> ([f32; 3], f32) {
+    let primary = body.parent.and_then(self::body).filter(|p| p.id != SUN);
+    let position = primary.map_or_else(
+        || body.at(day),
+        |p| {
+            let center = p.at(day);
+            let relative = body.at(day);
+            std::array::from_fn(|i| center[i] + relative[i] / 149_597_870.7)
+        },
+    );
+    let distance = position.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if distance <= 0.0 {
+        return ([0.811, 0.324, 0.487], 0.0);
+    }
+    let direction = position.map(|value| (-value / distance) as f32);
+    // A compressed angular scale keeps the Sun recognizable beyond Jupiter.
+    // It still shrinks monotonically with heliocentric distance.
+    let radius = (0.068 / distance.powf(0.62)).min(0.22) as f32;
+    (direction, radius)
 }
 
 pub(super) fn bodies() -> &'static [Body] {

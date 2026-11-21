@@ -50,6 +50,7 @@ def program(root, name):
         vertex = perspective(vertex)
     fragment_name = "vector" if name == "terrain_vector" else name
     fragment = (root / f"{fragment_name}.frag").read_text()
+    fragment = fragment.replace("#include <celestial>", (root / "celestial.glsl").read_text())
     if name in ("map", "sky"):
         version, body = fragment.split("\n", 1)
         body = body.replace("#include <lunar>", (root / "lunar.glsl").read_text())
@@ -213,6 +214,7 @@ def check_moon_view(root, width, height):
     GL.glUniform1i(loc("u_earth_east"), 0)
     GL.glUniform1i(loc("u_stars"), 3)
     GL.glUniform3f(loc("u_sky_eye"), -387400.0, 0, 0)
+    GL.glUniform3f(loc("u_sun"), 0, 149_597_870.7, 0)
     GL.glActiveTexture(GL.GL_TEXTURE0)
     earth = texture(GL.GL_RGBA8, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE,
                     np.full((2, 2, 4), [38, 180, 72, 255], dtype=np.uint8))
@@ -243,6 +245,7 @@ def check_world_view(root, width, height, output):
     GL.glUniform3f(loc("u_eye"), 4.3 * c, 0, 4.3 * s)
     GL.glUniform2f(loc("u_fov"), width / (1.9 * height), 1 / 1.9)
     GL.glUniform3f(loc("u_color"), .85, .76, .52)
+    GL.glUniform3f(loc("u_sun_direction"), .811, .324, .487)
     GL.glUniform1f(loc("u_zoom"), .5)
     def draw(bands):
         GL.glUniform1i(loc("u_band_count"), len(bands))
@@ -271,6 +274,15 @@ def check_world_view(root, width, height, output):
     assert np.count_nonzero(edge.any(axis=1)) >= 3, "Edge-on rings lost their vertical profile"
     assert not edge[height // 2 - 6:height // 2 + 6, width // 2 - 30:width // 2 + 30].any()
     Image.fromarray(np.flipud(edge_rings)).save(output / "edge-on-rings.png")
+    GL.glUniform1i(loc("u_emissive"), 1)
+    GL.glUniform3f(loc("u_eye"), 2.75, 0, 0)
+    GL.glUniform2f(loc("u_solar_clock"), 9200.0, 12.0)
+    sun = draw([])
+    GL.glUniform2f(loc("u_solar_clock"), 9200.0, 18.8)
+    animated_sun = draw([])
+    assert np.ptp(sun[height // 2 - 10:height // 2 + 10, :, 1]) > 100
+    assert np.count_nonzero(sun[:, :, 1] != animated_sun[:, :, 1]) > 1000
+    Image.fromarray(np.flipud(sun)).save(output / "procedural-sun.png")
     GL.glDeleteProgram(world)
 
 

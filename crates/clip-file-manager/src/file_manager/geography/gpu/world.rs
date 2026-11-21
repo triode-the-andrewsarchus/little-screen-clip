@@ -1,12 +1,20 @@
-use super::super::{sky as assets, solar::world::Frame};
+use super::super::{
+    sky as assets,
+    solar::{
+        Id, SUN,
+        world::{Backdrop, Frame},
+    },
+};
 use eframe::glow::{self, HasContext};
-use std::sync::{Arc, Weak};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 #[derive(Default)]
 pub(super) struct Renderer {
     program: Option<(glow::Program, glow::VertexArray)>,
-    texture: Option<glow::Texture>,
-    source: Option<Weak<[u8]>>,
+    textures: HashMap<Id, (glow::Texture, Weak<[u8]>)>,
 }
 
 impl Renderer {
@@ -18,42 +26,27 @@ impl Renderer {
     ) -> Result<bool, String> {
         // SAFETY: the callback has verified the owning context before entering.
         unsafe {
-            let (program, vao) = match self.program {
-                Some(program) => program,
-                None => {
-                    let vao = gl.create_vertex_array()?;
-                    let program = match super::program(
-                        gl,
-                        include_str!("../sky.vert"),
-                        include_str!("../world.frag"),
-                    ) {
-                        Ok(program) => program,
-                        Err(error) => {
-                            gl.delete_vertex_array(vao);
-                            return Err(error);
-                        }
-                    };
-                    self.program = Some((program, vao));
-                    (program, vao)
-                }
-            };
-            self.set_texture(gl, world.texture.as_ref())?;
-            super::configure_viewport(gl, info);
-            gl.use_program(Some(program));
-            gl.bind_vertex_array(Some(vao));
+            let program = self.bind_program(
+                gl,
+                info,
+                world.pose.axes.map(|axis| axis.map(|v| v as f32)),
+                world.pose.half_fov(),
+            )?;
+            let texture = self.texture(gl, world.id, world.texture.as_ref())?;
             let uniform = |name| gl.get_uniform_location(program, name);
-            let axes = world.pose.axes.map(|axis| axis.map(|v| v as f32));
-            gl.uniform_matrix_3_f32_slice(uniform("u_axes").as_ref(), false, axes.as_flattened());
+            gl.uniform_1_i32(uniform("u_background_only").as_ref(), 0);
+            gl.uniform_1_i32(uniform("u_emissive").as_ref(), i32::from(world.id == SUN));
+            gl.uniform_2_f32_slice(uniform("u_solar_clock").as_ref(), &world.clock);
+            gl.uniform_3_f32_slice(uniform("u_sun_direction").as_ref(), &world.sun);
             gl.uniform_3_f32_slice(uniform("u_eye").as_ref(), &world.pose.eye.map(|v| v as f32));
-            gl.uniform_2_f32_slice(uniform("u_fov").as_ref(), &world.pose.half_fov());
             gl.uniform_3_f32_slice(uniform("u_color").as_ref(), &world.color);
             gl.uniform_1_f32(uniform("u_zoom").as_ref(), world.zoom);
             gl.uniform_1_i32(uniform("u_gas").as_ref(), i32::from(world.gas));
             gl.uniform_1_i32(
                 uniform("u_has_albedo").as_ref(),
-                i32::from(self.texture.is_some()),
+                i32::from(texture.is_some()),
             );
-            super::sky::bind(gl, program, "u_albedo", 0, self.texture);
+            super::sky::bind(gl, program, "u_albedo", 0, texture);
             gl.uniform_1_i32(uniform("u_band_count").as_ref(), world.bands.len() as i32);
             if !world.bands.is_empty() {
                 let radius = (world.pose.radius_m / 1000.0) as f32;
@@ -70,35 +63,100 @@ impl Renderer {
         }
     }
 
-    pub(super) fn texture(&self) -> Option<glow::Texture> {
-        self.texture
-    }
-
-    pub(super) unsafe fn set_texture(
+    pub(super) unsafe fn backdrop(
         &mut self,
         gl: &glow::Context,
-        image: Option<&assets::Texture>,
+        info: &egui::PaintCallbackInfo,
+        view: &Backdrop,
+        stars: Option<glow::Texture>,
     ) -> Result<(), String> {
-        let incoming = image.map(|image| Arc::downgrade(&image.pixels));
-        if self
-            .source
-            .as_ref()
-            .zip(incoming.as_ref())
-            .is_some_and(|(old, new)| old.ptr_eq(new))
+        // SAFETY: the callback verified the owning GL context.
+        unsafe {
+            let program = self.bind_program(gl, info, view.axes, view.fov)?;
+            let loc = |name| gl.get_uniform_location(program, name);
+            gl.uniform_1_i32(loc("u_background_only").as_ref(), 1);
+            gl.uniform_1_i32(loc("u_has_stars").as_ref(), i32::from(stars.is_some()));
+            gl.uniform_3_f32_slice(loc("u_sun_direction").as_ref(), &view.sun.0);
+            gl.uniform_1_f32(loc("u_sun_radius").as_ref(), view.sun.1);
+            gl.uniform_2_f32_slice(loc("u_solar_clock").as_ref(), &view.clock);
+            gl.uniform_1_f32(loc("u_sky_brightness").as_ref(), view.brightness);
+            super::sky::bind(gl, program, "u_stars", 0, stars);
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.bind_vertex_array(None);
+        }
+        Ok(())
+    }
+
+    unsafe fn bind_program(
+        &mut self,
+        gl: &glow::Context,
+        info: &egui::PaintCallbackInfo,
+        axes: [[f32; 3]; 3],
+        fov: [f32; 2],
+    ) -> Result<glow::Program, String> {
+        // SAFETY: shader objects are created and bound only on their owning context.
+        unsafe {
+            let (program, vao) = match self.program {
+                Some(program) => program,
+                None => {
+                    let vao = gl.create_vertex_array()?;
+                    let program = match super::program(
+                        gl,
+                        include_str!("../sky.vert"),
+                        &super::with_celestial(include_str!("../world.frag")),
+                    ) {
+                        Ok(program) => program,
+                        Err(error) => {
+                            gl.delete_vertex_array(vao);
+                            return Err(error);
+                        }
+                    };
+                    self.program = Some((program, vao));
+                    (program, vao)
+                }
+            };
+            super::configure_viewport(gl, info);
+            gl.use_program(Some(program));
+            gl.bind_vertex_array(Some(vao));
+            let loc = |name| gl.get_uniform_location(program, name);
+            gl.uniform_matrix_3_f32_slice(loc("u_axes").as_ref(), false, axes.as_flattened());
+            gl.uniform_2_f32_slice(loc("u_fov").as_ref(), &fov);
+            Ok(program)
+        }
+    }
+
+    pub(super) unsafe fn texture(
+        &mut self,
+        gl: &glow::Context,
+        id: Id,
+        image: Option<&assets::Texture>,
+    ) -> Result<Option<glow::Texture>, String> {
+        let Some(image) = image else { return Ok(None) };
+        let source = Arc::downgrade(&image.pixels);
+        if let Some((texture, saved)) = self.textures.get(&id)
+            && source.ptr_eq(saved)
         {
-            return Ok(());
+            return Ok(Some(*texture));
         }
         // SAFETY: texture objects are owned by the verified current context.
         unsafe {
-            if let Some(texture) = self.texture.take() {
+            self.textures.retain(|key, (texture, saved)| {
+                let keep = *key != id && saved.strong_count() != 0;
+                if !keep {
+                    gl.delete_texture(*texture)
+                };
+                keep
+            });
+            if self.textures.len() >= 24
+                && let Some(first) = self.textures.keys().next().copied()
+                && let Some((texture, _)) = self.textures.remove(&first)
+            {
                 gl.delete_texture(texture);
             }
-            self.texture = image
-                .map(|image| super::sky::upload(gl, image))
-                .transpose()?;
+            let texture = super::sky::upload(gl, image)?;
+            self.textures.insert(id, (texture, source));
+            Ok(Some(texture))
         }
-        self.source = incoming;
-        Ok(())
     }
 
     pub(super) unsafe fn destroy(&mut self, gl: &glow::Context) {
@@ -108,7 +166,7 @@ impl Renderer {
                 gl.delete_program(program);
                 gl.delete_vertex_array(vao);
             }
-            if let Some(texture) = self.texture.take() {
+            for (_, (texture, _)) in self.textures.drain() {
                 gl.delete_texture(texture);
             }
         }

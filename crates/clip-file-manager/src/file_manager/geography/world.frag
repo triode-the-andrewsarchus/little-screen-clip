@@ -13,7 +13,16 @@ uniform int u_band_count;
 uniform vec3 u_bands[10];
 
 const float PI = 3.141592653589793;
-const vec3 SUN = vec3(.811,.324,.487);
+uniform vec3 u_sun_direction;
+uniform float u_sun_radius;
+uniform vec2 u_solar_clock;
+uniform bool u_emissive;
+uniform bool u_background_only;
+uniform float u_sky_brightness;
+uniform bool u_has_stars;
+uniform sampler2D u_stars;
+
+#include <celestial>
 
 float grain(vec2 cell) {
     vec2 seed = fract(cell * vec2(.1031,.11369));
@@ -93,8 +102,8 @@ vec4 rings(vec3 ray, float surface_depth) {
                                 1.0-smoothstep(.004,.023,footprint));
             float depth = band.z * coverage * dust * profile
                         * min(length_in_band/(2.0*height),4.2);
-            float behind = -dot(SUN,point);
-            float shadow = behind > 0.0 ? smoothstep(.94,1.04,length(point+behind*SUN)) : 1.0;
+            float behind = -dot(u_sun_direction,point);
+            float shadow = behind > 0.0 ? smoothstep(.94,1.04,length(point+behind*u_sun_direction)) : 1.0;
             thickness += depth;
             shaded += depth * mix(.24,1.0,shadow);
         }
@@ -106,6 +115,20 @@ vec4 rings(vec3 ray, float surface_depth) {
 
 void main() {
     vec3 ray = u_axes * normalize(vec3(v_ndc * u_fov, -1.0));
+    if (u_background_only) {
+        // Ecliptic coordinates -> J2000 equatorial coordinates.
+        vec3 equatorial = vec3(ray.x,.917482*ray.y-.397777*ray.z,
+                                      .397777*ray.y+.917482*ray.z);
+        vec3 stars = u_has_stars ? star_color(u_stars,equatorial) : vec3(0);
+        vec3 sky = vec3(.012,.017,.028) + u_sky_brightness*stars;
+        vec4 sun = solar_disk(ray,u_sun_direction,u_sun_radius,u_solar_clock);
+        frag = u_has_stars ? vec4(sun.rgb + sky*(1.0-sun.a),1.0) : sun;
+        return;
+    }
+    if (u_emissive) {
+        frag = solar_disk(ray,normalize(-u_eye),1.0/length(u_eye),u_solar_clock);
+        return;
+    }
     float line = -dot(ray,u_eye);
     vec3 across = u_eye + ray * line;
     float margin = 1.0-dot(across,across);
@@ -129,7 +152,7 @@ void main() {
             albedo *= .93 + .10*sin(lat*27.0) + .035*sin(lat*73.5);
         }
         float phase = 1.0-smoothstep(2.5,30.0,u_zoom);
-        float light = .25 + .75*pow(max(dot(normal,SUN),0.0),.54);
+        float light = .25 + .75*pow(max(dot(normal,u_sun_direction),0.0),.54);
         body = vec4(albedo*mix(1.0,light,phase)*body_coverage,body_coverage);
     }
     vec4 front = rings(ray,body_coverage > .5 && depth > 0.0 ? depth : 1e19);

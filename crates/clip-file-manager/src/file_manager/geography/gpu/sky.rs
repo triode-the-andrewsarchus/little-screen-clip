@@ -373,7 +373,7 @@ impl SkyRenderer {
                     program
                 }
             };
-            self.prepare(gl, scene);
+            self.prepare(gl, &scene.assets);
             if self.stars.is_none() {
                 return Ok(());
             }
@@ -435,7 +435,14 @@ impl SkyRenderer {
                     atmosphere(camera, frame.style)
                 },
             );
-            gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_sun").as_ref(), &scene.sun);
+            gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
+            gl.uniform_2_f32_slice(
+                loc("u_solar_clock").as_ref(),
+                &super::super::solar::clock(
+                    scene.time,
+                    scene.time.timestamp_millis() as f64 * 0.001,
+                ),
+            );
             gl.uniform_3_f32_slice(gl.get_uniform_location(p, "u_moon").as_ref(), &scene.moon);
             gl.uniform_3_f32_slice(
                 gl.get_uniform_location(p, "u_planets[0]").as_ref(),
@@ -578,7 +585,7 @@ impl SkyRenderer {
             // A sampler must be assigned even when its layer is disabled.
             gl.uniform_1_i32(loc("u_night").as_ref(), 5);
             if let Some(scene) = scene {
-                self.prepare(gl, scene);
+                self.prepare(gl, &scene.assets);
                 gl.uniform_1_i32(
                     loc("u_black_marble").as_ref(),
                     i32::from(self.night.is_some()),
@@ -638,8 +645,8 @@ impl SkyRenderer {
         }
     }
 
-    unsafe fn prepare(&mut self, gl: &glow::Context, scene: &sky::Scene) {
-        let source = Arc::downgrade(&scene.assets);
+    pub(super) unsafe fn prepare(&mut self, gl: &glow::Context, assets: &Arc<sky::Assets>) {
+        let source = Arc::downgrade(assets);
         if self.source.ptr_eq(&source) {
             return;
         }
@@ -647,9 +654,9 @@ impl SkyRenderer {
         unsafe {
             self.clear_figures(gl);
             for (old, image) in [
-                (&mut self.stars, Some(&scene.assets.stars)),
-                (&mut self.moon, scene.assets.moon.as_ref()),
-                (&mut self.night, scene.assets.night.as_ref()),
+                (&mut self.stars, Some(&assets.stars)),
+                (&mut self.moon, assets.moon.as_ref()),
+                (&mut self.night, assets.night.as_ref()),
             ] {
                 if let Some(texture) = old.take() {
                     gl.delete_texture(texture);
@@ -664,6 +671,10 @@ impl SkyRenderer {
             }
             self.source = source;
         }
+    }
+
+    pub(super) fn stars(&self) -> Option<glow::Texture> {
+        self.stars
     }
 
     pub(super) unsafe fn destroy(&mut self, gl: &glow::Context) {

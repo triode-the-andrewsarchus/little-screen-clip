@@ -657,17 +657,20 @@ impl Viewer {
             }
         } else if let Some(world) = self.world.as_mut() {
             world.navigate(&response);
-            let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, 0, egui::Color32::from_rgb(7, 10, 17));
-            solar::paint_stars(&painter, rect);
-            if let Err(error) = gpu::paint_world(ui, rect, world.frame(rect.size().into())) {
-                painter.text(
-                    rect.left_top() + egui::vec2(8.0, 8.0),
-                    egui::Align2::LEFT_TOP,
-                    error,
-                    egui::FontId::proportional(14.0),
-                    colors.warning,
-                );
+            let time = recorded_scene_time(&self.document, self.selected, None)
+                .unwrap_or_else(|| live_scene_time(ui.ctx()));
+            match world.paint(ui, &response, time, self.sky.assets.clone()) {
+                Ok(Some(id)) => self.select_solar_target(id, ui.ctx()),
+                Ok(None) => {}
+                Err(error) => {
+                    ui.painter_at(rect).text(
+                        rect.left_top() + egui::vec2(8.0, 8.0),
+                        egui::Align2::LEFT_TOP,
+                        error,
+                        egui::FontId::proportional(14.0),
+                        colors.warning,
+                    );
+                }
             }
         }
         true
@@ -1191,7 +1194,7 @@ impl Viewer {
                     .map(|parent| (parent.id, format!("Orbit around {}", parent.name)))
             } else {
                 solar::satellites(body.id)
-                    .next()
+                    .find(|_| body.id != solar::SUN)
                     .map(|_| (body.id, "Moon orbits".to_string()))
             };
             if let Some((center, title)) = orbit
@@ -1304,10 +1307,6 @@ impl Viewer {
     }
 
     fn select_solar_target(&mut self, id: solar::Id, ctx: &egui::Context) {
-        if id == solar::SUN {
-            self.open_solar_system(id, ctx);
-            return;
-        }
         self.solar_system = None;
         self.sight = None;
         self.found_place = None;

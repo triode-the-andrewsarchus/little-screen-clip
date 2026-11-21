@@ -201,6 +201,24 @@ pub(super) fn paint_world(
     })
 }
 
+pub(super) fn paint_space(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    frame: super::solar::world::Backdrop,
+) -> Result<(), String> {
+    schedule_paint(ui, rect, None, move |renderer, gl, info| {
+        // SAFETY: schedule_paint verified the current GL context.
+        unsafe {
+            if let Some(assets) = &frame.assets {
+                renderer.sky.prepare(gl, assets);
+            }
+            let stars = frame.assets.as_ref().and(renderer.sky.stars());
+            renderer.world.backdrop(gl, info, &frame, stars)?;
+        }
+        Ok(false)
+    })
+}
+
 fn schedule_paint(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -383,8 +401,8 @@ impl Renderer {
                     .as_ref()
                     .is_none_or(|sky| sky.assets.moon.is_none())
                 {
-                    self.world.set_texture(gl, frame.lunar_albedo.as_ref())?;
-                    self.world.texture()
+                    self.world
+                        .texture(gl, super::solar::MOON, frame.lunar_albedo.as_ref())?
                 } else {
                     None
                 };
@@ -808,12 +826,16 @@ pub(super) fn float_bytes(values: &[f32]) -> &[u8] {
 
 fn with_shadow(shader: &str) -> String {
     let (version, body) = shader.split_once('\n').unwrap_or(("", shader));
-    let body = body.replace("#include <lunar>", include_str!("lunar.glsl"));
+    let body = with_celestial(&body.replace("#include <lunar>", include_str!("lunar.glsl")));
     format!(
         "{version}\n{}\n{}\n{body}",
         include_str!("eclipse.glsl"),
         include_str!("atmosphere.glsl"),
     )
+}
+
+pub(super) fn with_celestial(shader: &str) -> String {
+    shader.replace("#include <celestial>", include_str!("celestial.glsl"))
 }
 
 fn with_projection(shader: &str) -> String {

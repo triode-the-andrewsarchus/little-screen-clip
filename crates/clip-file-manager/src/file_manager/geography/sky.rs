@@ -78,6 +78,7 @@ pub(super) struct Scene {
     // Rows of ICRF → ITRF, also columns of the inverse used by the sky shader.
     pub inertial_rows: [[f32; 3]; 3],
     pub sun: [f32; 3],
+    pub time: DateTime<Utc>,
     pub moon: [f32; 3],
     pub lunar_sun: [f32; 3],
     pub lunar_earth: [f32; 3],
@@ -151,6 +152,7 @@ impl Assets {
         let lunar_earth = from_moon(EARTH_J2000)?;
         let dot: f32 = sun.iter().zip(moon).map(|(s, m)| s * m).sum();
         Some(Scene {
+            time,
             inertial_rows: matrix.map(|row| row.map(|v| v as f32)),
             sun,
             moon,

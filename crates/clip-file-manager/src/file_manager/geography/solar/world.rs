@@ -1,7 +1,12 @@
-use super::{Body, Id, assets};
-use crate::file_manager::geography::{map_camera, sky};
+use super::{Body, Id, SUN, assets, body, clock, satellites, scene_day, sunlight};
+use crate::file_manager::geography::{gpu, map_camera, sky};
+use chrono::{DateTime, Utc};
+use eframe::egui::{self, Color32, Pos2, Rect};
 use little_clip_core::{
-    geography::basemap::{GlobeCamera, perspective::Perspective},
+    geography::basemap::{
+        GlobeCamera,
+        perspective::{Perspective, sphere_distance},
+    },
     jobs::task::Task,
 };
 use std::{path::Path, time::Duration};
@@ -20,7 +25,7 @@ impl World {
     pub fn new(body: &'static Body) -> Self {
         let mut camera = map_camera::lunar_camera();
         camera.center_lat = 21.0;
-        camera.zoom = if bands(body.id).is_empty() { 1.0 } else { 0.50 };
+        camera.zoom = initial_zoom(body.id);
         Self {
             body,
             camera,
@@ -79,8 +84,52 @@ impl World {
         self.assets.is_some()
     }
 
-    pub fn frame(&self, size: [f32; 2]) -> Frame {
-        Frame::new(self.body, self.camera, size, self.texture())
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        time: DateTime<Utc>,
+        stars: Option<std::sync::Arc<sky::Assets>>,
+    ) -> Result<Option<Id>, String> {
+        let rect = response.rect;
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0, Color32::from_rgb(7, 10, 17));
+        if stars.is_none() {
+            super::paint_stars(&painter, rect);
+        }
+        let mut frame = Frame::new(self.body, self.camera, rect.size().into(), self.texture());
+        let animation = ui.input(|input| input.time);
+        let day = scene_day(time);
+        let sun = sunlight(self.body, day);
+        frame.sun = sun.0;
+        frame.clock = clock(time, animation);
+        let lights = Backdrop {
+            axes: frame.pose.axes.map(|axis| axis.map(|v| v as f32)),
+            fov: frame.pose.half_fov(),
+            sun,
+            clock: frame.clock,
+            brightness: 1.0,
+            assets: stars,
+        };
+        let sun_visible = self.body.id == SUN
+            || frame.pose.intersects_sphere(
+                sun.0.map(|v| f64::from(v) * 1e6),
+                f64::from(sun.1) * 1.65e6,
+                0.0,
+            );
+        if sun_visible {
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
+        }
+        let moons = surroundings(self.body, frame.pose, rect, day);
+        gpu::paint_space(ui, rect, lights)?;
+        for moon in moons.iter().filter(|moon| moon.behind) {
+            moon.paint(&painter);
+        }
+        gpu::paint_world(ui, rect, frame)?;
+        for moon in moons.iter().filter(|moon| !moon.behind) {
+            moon.paint(&painter);
+        }
+        Ok(pick_moon(&moons, response))
     }
 
     pub fn texture(&self) -> Option<sky::Texture> {
@@ -92,17 +141,123 @@ impl World {
     }
 }
 
+struct Nearby {
+    body: &'static Body,
+    point: Pos2,
+    radius: f32,
+    behind: bool,
+    occluded: bool,
+}
+
+impl Nearby {
+    fn paint(&self, painter: &egui::Painter) {
+        let color = self.body.color();
+        painter.circle_filled(self.point, self.radius, color.gamma_multiply(0.61));
+        painter.circle_filled(
+            self.point + egui::vec2(-0.16, -0.16) * self.radius,
+            self.radius * 0.72,
+            color,
+        );
+    }
+}
+
+fn pick_moon(moons: &[Nearby], response: &egui::Response) -> Option<Id> {
+    let pointer = response
+        .hover_pos()
+        .or_else(|| response.interact_pointer_pos())?;
+    let hit = moons
+        .iter()
+        .filter(|moon| !moon.occluded)
+        .filter(|moon| pointer.distance(moon.point) <= moon.radius.max(6.0))
+        .min_by(|a, b| {
+            pointer
+                .distance_sq(a.point)
+                .total_cmp(&pointer.distance_sq(b.point))
+        })?;
+    response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    response.clone().on_hover_text_at_pointer(hit.body.name);
+    response.clicked().then_some(hit.body.id)
+}
+
+fn surroundings(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<Nearby> {
+    let moons = satellites(primary.id)
+        .filter(|moon| moon.parent != Some(SUN))
+        .map(|moon| (moon, moon.at(day)));
+    let parent = primary
+        .parent
+        .and_then(body)
+        .filter(|parent| parent.id != SUN)
+        .map(|parent| (parent, primary.at(day).map(|x| -x)));
+    let mut visible: Vec<_> = moons
+        .chain(parent)
+        .filter_map(|(moon, orbit)| project_moon(primary, moon, orbit, pose, rect))
+        .collect();
+    visible.sort_by(|a, b| b.radius.total_cmp(&a.radius));
+    visible.truncate(48);
+    visible
+}
+
+fn project_moon(
+    primary: &Body,
+    moon: &'static Body,
+    orbit: [f64; 3],
+    pose: Perspective,
+    rect: Rect,
+) -> Option<Nearby> {
+    let primary_km = radius_m(primary) / 1000.0;
+    let orbit_km = orbit.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let relative_distance = orbit_km / primary_km;
+    let radius_ratio = moon.radius.unwrap_or(3.0) / primary_km;
+    let distance =
+        (1.0 + 0.66 * (relative_distance - 1.0).max(0.0).powf(0.67)).max(1.0 + radius_ratio * 1.4);
+    let position = orbit.map(|v| v * distance / orbit_km);
+    let offset = pose.project_position(position)?;
+    let point = rect.min + egui::vec2(offset[0], offset[1]);
+    let ray = std::array::from_fn(|i| position[i] - pose.eye[i]);
+    let depth = ray.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let ray = ray.map(|v| v / depth);
+    let radius = (pose.focal * (radius_ratio * 3.0).min(distance * 0.32) / depth) as f32;
+    if !rect.expand(radius).contains(point) || radius < 0.26 {
+        return None;
+    }
+    let occluded = sphere_distance(pose.eye, ray, 1.0).is_some_and(|t| t < depth);
+    let behind = depth > pose.altitude() + 1.0;
+    Some(Nearby {
+        body: moon,
+        point,
+        radius: radius.max(0.9),
+        behind,
+        occluded,
+    })
+}
+
+pub(super) fn initial_zoom(id: Id) -> f64 {
+    if bands(id).is_empty() { 1.0 } else { 0.42 }
+}
+
 fn radius_m(body: &Body) -> f64 {
     body.radius.unwrap_or(5.0) * 1000.0
 }
 
+pub(in crate::file_manager::geography) struct Backdrop {
+    pub axes: [[f32; 3]; 3],
+    pub fov: [f32; 2],
+    pub sun: ([f32; 3], f32),
+    pub clock: [f32; 2],
+    pub brightness: f32,
+    pub assets: Option<std::sync::Arc<sky::Assets>>,
+}
+
 pub(in crate::file_manager::geography) struct Frame {
+    pub id: Id,
     pub pose: Perspective,
     pub zoom: f32,
     pub color: [f32; 3],
     pub texture: Option<sky::Texture>,
     pub bands: &'static [[f32; 3]],
     pub gas: bool,
+    pub sun: [f32; 3],
+    pub clock: [f32; 2],
 }
 
 impl Frame {
@@ -114,17 +269,20 @@ impl Frame {
     ) -> Self {
         let color = body.color().to_array();
         Self {
+            id: body.id,
             pose: Perspective::new(&camera, size, radius_m(body)),
             zoom: camera.zoom as f32,
             color: [color[0], color[1], color[2]].map(|value| value as f32 / 255.0),
             texture,
             bands: bands(body.id),
             gas: matches!(body.id, 599 | 699 | 799 | 899),
+            sun: [0.811, 0.324, 0.487],
+            clock: [0.0; 2],
         }
     }
 }
 
-fn bands(id: Id) -> &'static [[f32; 3]] {
+pub(in crate::file_manager::geography) fn bands(id: Id) -> &'static [[f32; 3]] {
     // Inner and outer radii in km, with presentation opacity weights.
     // NASA PDS Ring-Moon Systems Node and USGS Gazetteer planetary ring tables.
     // Haumea's ring: Ortiz et al. (2017), https://doi.org/10.1038/nature24051.
