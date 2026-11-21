@@ -21,7 +21,7 @@ pub(in crate::file_manager::geography) struct System {
     elevation: f64,
     zoom: f64,
     pan: [f64; 2],
-    zoom_anchor: Option<(Pos2, f32)>,
+    zoom_anchor: Option<ZoomAnchor>,
     middle: super::super::map_camera::MiddleDrag,
     ephemeris: Option<(Id, Vec<[f64; 3]>)>,
     texture_job: Option<Task<()>>,
@@ -153,7 +153,11 @@ impl System {
         self.zoom_anchor = response
             .hover_pos()
             .and_then(|pointer| mark_at(&layout.marks, pointer))
-            .map(|mark| (mark.point, mark.radius));
+            .map(|mark| ZoomAnchor {
+                point: mark.point,
+                hit_radius: mark.radius.max(6.0),
+                physical_radius: f64::from(mark.physical_radius),
+            });
         if let Some((id, sample)) = approach {
             return self.paint_approach(ui, rect, &layout, camera, clock, maps, id, sample);
         }
@@ -349,11 +353,14 @@ impl System {
             const MIN_ORBIT_ZOOM: f64 = 0.55;
             const MAX_ORBIT_ZOOM: f64 = 30_000_000.0;
             let beyond = map_camera::past_zoom_limit(self.zoom, MIN_ORBIT_ZOOM, factor);
-            let next = (self.zoom * factor).clamp(MIN_ORBIT_ZOOM, MAX_ORBIT_ZOOM);
-            let anchor_point = self
-                .zoom_anchor
-                .filter(|(at, radius)| factor > 1.0 && at.distance(pointer) <= radius.max(6.0))
-                .map_or(pointer, |(at, _)| at);
+            let hovered = self.zoom_anchor.filter(|anchor| {
+                factor > 1.0 && anchor.point.distance(pointer) <= anchor.hit_radius
+            });
+            let applied_factor = hovered.map_or(factor, |anchor| {
+                anchor.approach_scroll_factor(response.rect, factor)
+            });
+            let next = (self.zoom * applied_factor).clamp(MIN_ORBIT_ZOOM, MAX_ORBIT_ZOOM);
+            let anchor_point = hovered.map_or(pointer, |anchor| anchor.point);
             let anchor = anchor_point - response.rect.center();
             for (pan, anchor) in self.pan.iter_mut().zip([anchor.x, anchor.y]) {
                 let anchor = f64::from(anchor);
@@ -375,7 +382,7 @@ impl System {
         let Some(mark) = mark_at(marks, pointer) else {
             return;
         };
-        let target_radius = APPROACH_ZOOM * 0.43 * f64::from(rect.width().min(rect.height()));
+        let target_radius = approach_radius(rect);
         if f64::from(mark.physical_radius) < (target_radius * 0.55).max(13.0) {
             return;
         }
@@ -421,6 +428,24 @@ enum Wheel {
 
 const APPROACH_ZOOM: f64 = 0.18;
 const OVERVIEW_MOON_GUIDE_RADIUS_KM: f64 = 38.0;
+
+fn approach_radius(rect: Rect) -> f64 {
+    APPROACH_ZOOM * 0.43 * f64::from(rect.width().min(rect.height()))
+}
+
+#[derive(Clone, Copy)]
+struct ZoomAnchor {
+    point: Pos2,
+    hit_radius: f32,
+    physical_radius: f64,
+}
+
+impl ZoomAnchor {
+    fn approach_scroll_factor(self, rect: Rect, factor: f64) -> f64 {
+        let landing_radius = approach_radius(rect).max(13.0);
+        factor.min((landing_radius / self.physical_radius).max(1.0))
+    }
+}
 
 struct FlyIn {
     id: Id,
@@ -1012,6 +1037,19 @@ mod tests {
         assert_eq!(orbit_scale_ticks(90.0), (90.0, "1 AU".into()));
         assert_eq!(orbit_scale_ticks(5.0), (100.0, "20 AU".into()));
         assert_eq!(orbit_scale_ticks(100_000.0), (100.0, "0.001 AU".into()));
+    }
+
+    #[test]
+    fn fast_zoom_cannot_overshoot_the_landing_radius() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        let radius = approach_radius(rect);
+        let anchor = ZoomAnchor {
+            point: rect.center(),
+            hit_radius: 0.5 * radius as f32,
+            physical_radius: 0.5 * radius,
+        };
+        assert_eq!(anchor.approach_scroll_factor(rect, 1.2), 1.2);
+        assert_eq!(anchor.approach_scroll_factor(rect, 4.0), 2.0);
     }
 
     #[test]
