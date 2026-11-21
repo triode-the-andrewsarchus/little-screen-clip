@@ -11,6 +11,7 @@ pub(in crate::file_manager::geography) struct System {
     pan: Vec2,
     middle: super::super::map_camera::MiddleDrag,
     ephemeris: Option<(Id, Vec<[f64; 3]>)>,
+    opened_at: Option<f64>,
 }
 
 impl System {
@@ -23,6 +24,7 @@ impl System {
             pan: Vec2::ZERO,
             middle: Default::default(),
             ephemeris: None,
+            opened_at: None,
         }
     }
 
@@ -52,9 +54,20 @@ impl System {
             .fold(1.0, f64::max);
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_el, cos_el) = self.elevation.sin_cos();
+        let opening_scale = if heliocentric {
+            let time = ui.input(|input| input.time);
+            let started = *self.opened_at.get_or_insert(time);
+            let progress = ((time - started) / 0.28).clamp(0.0, 1.0);
+            if progress < 1.0 {
+                ui.ctx().request_repaint();
+            }
+            1.0 + 1.4 * (1.0 - progress as f32).powi(3)
+        } else {
+            1.0
+        };
         let projection = Projection {
             center: rect.center() + self.pan,
-            scale: rect.size().min_elem() * 0.45 * self.zoom / extent as f32,
+            scale: rect.size().min_elem() * 0.45 * self.zoom * opening_scale / extent as f32,
             power,
             yaw: [sin_yaw, cos_yaw],
             elevation: [sin_el, cos_el],
