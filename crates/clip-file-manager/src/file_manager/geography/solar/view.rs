@@ -107,11 +107,10 @@ impl System {
         if wheel == Wheel::Beyond && self.center != SUN {
             return Some(Selection::Overview);
         }
-        let blend = self
-            .flight
+        let approach = self.advance_flight(response, animation);
+        let blend = approach
             .as_ref()
-            .map_or(0.0, |flight| flight.ease(animation));
-        let arrived = self.advance_flight(response, animation);
+            .map_or(0.0, |(_, sample)| sample.progress as f32);
         let rect = response.rect;
         let painter = ui.painter_at(rect);
         let primary = body(self.center)?;
@@ -119,10 +118,16 @@ impl System {
         let day = scene_day(time);
         let clock = clock(time, animation);
         let projection = self.projection(rect);
-        let backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
+        let mut backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
+        if let Some((id, _)) = approach
+            && let Some(target) = body(id)
+        {
+            let (direction, radius) = sunlight(target, day);
+            backdrop.sun = (direction, radius * blend.powi(3));
+        }
         self.paint_backdrop(ui, &painter, projection, &backdrop);
         let mut guides = painter.clone();
-        guides.multiply_opacity(1.0 - blend);
+        guides.multiply_opacity(1.0 - (blend * 2.2).min(1.0));
         if heliocentric {
             paint_belts(&guides, projection, self.zoom);
         }
@@ -140,7 +145,7 @@ impl System {
         self.paint_orbits(&mut layout, projection, primary.id);
         if wheel == Wheel::In
             && self.flight.is_none()
-            && arrived.is_none()
+            && approach.is_none()
             && let Some(pointer) = response.hover_pos()
         {
             self.start_flight(rect, pointer, &layout.marks, animation);
@@ -149,24 +154,61 @@ impl System {
             .hover_pos()
             .and_then(|pointer| mark_at(&layout.marks, pointer))
             .map(|mark| (mark.point, mark.radius));
+        if let Some((id, sample)) = approach {
+            return self.paint_approach(ui, rect, &layout, camera, clock, maps, id, sample);
+        }
         let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
-        if heliocentric && blend < 1.0 {
-            orbit_scale_bar(&guides, rect, projection.scale);
-        }
-        if !heliocentric {
+        if heliocentric {
+            orbit_scale_bar(&painter, rect, projection.scale);
+        } else {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
-        }
-        if let Some(id) = arrived {
-            let mut camera = camera;
-            camera.zoom = world::initial_zoom(id);
-            return Some(Selection::Focus {
-                id,
-                camera: Some(camera),
-            });
         }
         clicked
             .filter(|_| self.flight.is_none())
             .map(|id| Selection::Focus { id, camera: None })
+    }
+
+    fn paint_approach(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        layout: &OrbitLayout<'_>,
+        mut camera: GlobeCamera,
+        clock: [f32; 2],
+        maps: &assets::MapCache,
+        id: Id,
+        sample: FlightSample,
+    ) -> Option<Selection> {
+        let target = body(id)?;
+        let center = rect.center() + vec2(sample.offset[0] as f32, sample.offset[1] as f32);
+        camera.zoom = APPROACH_ZOOM;
+        // The local planets and moons are drawn by the perspective renderer
+        // during approach. Keep the other overview objects as distant context.
+        for mark in layout.marks.iter().filter(|mark| {
+            mark.body.id != id
+                && mark.body.parent != Some(id)
+                && target.parent != Some(mark.body.id)
+        }) {
+            if sample.progress < 0.82 {
+                paint_icon(ui, layout.painter, mark, camera, clock, maps);
+            }
+        }
+        let approach = world::Approach {
+            body: target,
+            camera,
+            center,
+            radius: sample.radius,
+            progress: sample.progress,
+        };
+        let _ = approach.paint(ui, rect, layout.day, clock, maps);
+        if sample.progress < 1.0 {
+            return None;
+        }
+        self.flight = None;
+        Some(Selection::Focus {
+            id,
+            camera: Some(camera),
+        })
     }
 
     fn unit_km(&self) -> f64 {
@@ -333,9 +375,8 @@ impl System {
         let Some(mark) = mark_at(marks, pointer) else {
             return;
         };
-        let target_radius =
-            (world::initial_zoom(mark.body.id) * 0.43) as f32 * rect.width().min(rect.height());
-        if mark.physical_radius < (target_radius * 0.56).max(16.0) {
+        let target_radius = APPROACH_ZOOM * 0.43 * f64::from(rect.width().min(rect.height()));
+        if f64::from(mark.physical_radius) < (target_radius * 0.55).max(13.0) {
             return;
         }
         let [x, y] = (mark.point - rect.center()).into();
@@ -344,22 +385,25 @@ impl System {
             id: mark.body.id,
             began: now,
             from_zoom: self.zoom,
-            zoom_factor: f64::from((target_radius / mark.physical_radius).max(1.0)),
+            zoom_factor: target_radius / f64::from(mark.physical_radius),
+            from_radius: f64::from(mark.radius),
+            target_radius,
             screen_offset,
             orbit_offset: std::array::from_fn(|i| screen_offset[i] - self.pan[i]),
         });
     }
 
-    fn advance_flight(&mut self, response: &egui::Response, now: f64) -> Option<Id> {
+    fn advance_flight(
+        &mut self,
+        response: &egui::Response,
+        now: f64,
+    ) -> Option<(Id, FlightSample)> {
         let flight = self.flight.as_ref()?;
-        let (zoom, pan, arrived) = flight.sample(now);
-        self.zoom = zoom;
-        self.pan = pan;
-        if arrived {
-            return self.flight.take().map(|flight| flight.id);
-        }
+        let sample = flight.sample(now);
+        self.zoom = sample.zoom;
+        self.pan = sample.pan;
         response.ctx.request_repaint();
-        None
+        Some((flight.id, sample))
     }
 }
 
@@ -375,31 +419,41 @@ enum Wheel {
     Beyond,
 }
 
+const APPROACH_ZOOM: f64 = 0.18;
+
 struct FlyIn {
     id: Id,
     began: f64,
     from_zoom: f64,
     zoom_factor: f64,
+    from_radius: f64,
+    target_radius: f64,
     screen_offset: [f64; 2],
     orbit_offset: [f64; 2],
 }
 
-impl FlyIn {
-    fn ease(&self, now: f64) -> f32 {
-        let progress = ((now - self.began) / 0.28).clamp(0.0, 1.0) as f32;
-        progress * progress * (3.0 - 2.0 * progress)
-    }
+#[derive(Clone, Copy)]
+struct FlightSample {
+    zoom: f64,
+    pan: [f64; 2],
+    offset: [f64; 2],
+    radius: f64,
+    progress: f64,
+}
 
-    fn sample(&self, now: f64) -> (f64, [f64; 2], bool) {
-        let ease = f64::from(self.ease(now));
-        let scale = self.zoom_factor.powf(ease);
-        (
-            self.from_zoom * scale,
-            std::array::from_fn(|i| {
-                self.screen_offset[i] * (1.0 - ease) - self.orbit_offset[i] * scale
-            }),
-            ease >= 1.0,
-        )
+impl FlyIn {
+    fn sample(&self, now: f64) -> FlightSample {
+        let time = ((now - self.began) / 0.48).clamp(0.0, 1.0);
+        let progress = time * time * (3.0 - 2.0 * time);
+        let scale = self.zoom_factor.powf(progress);
+        let offset = self.screen_offset.map(|v| v * (1.0 - progress));
+        FlightSample {
+            zoom: self.from_zoom * scale,
+            pan: std::array::from_fn(|i| offset[i] - self.orbit_offset[i] * scale),
+            offset,
+            radius: self.from_radius * (self.target_radius / self.from_radius).powf(progress),
+            progress,
+        }
     }
 }
 
@@ -516,12 +570,16 @@ impl OrbitLayout<'_> {
         let stroke = Stroke::new(1.0, color.gamma_multiply(f32::from(opacity) / 255.0));
         let point = |t| projection.project(body.orbit_point(t)).0;
         let mut start = point(0.0);
+        let mut paths = Vec::new();
         for i in 0..32 {
             let t = f64::from(i) / 32.0 * TAU;
             let end_t = f64::from(i + 1) / 32.0 * TAU;
             let end = point(end_t);
-            self.orbit_arc(clip, &point, [t, end_t], [start, end], error, stroke);
+            orbit_arc(clip, &point, [t, end_t], [start, end], error, &mut paths);
             start = end;
+        }
+        for path in paths {
+            self.painter.add(egui::Shape::line(path, stroke));
         }
         if let Some(samples) = samples {
             let points = samples
@@ -531,46 +589,6 @@ impl OrbitLayout<'_> {
             self.painter
                 .add(egui::Shape::line(points, Stroke::new(1.45, color)));
         }
-    }
-
-    fn orbit_arc(
-        &self,
-        clip: Rect,
-        point: &impl Fn(f64) -> Pos2,
-        time: [f64; 2],
-        endpoints: [Pos2; 2],
-        curvature: f64,
-        stroke: Stroke,
-    ) {
-        let deviation = (curvature * (time[1] - time[0]).powi(2) * 0.125) as f32;
-        if !Rect::from_two_pos(endpoints[0], endpoints[1])
-            .expand(deviation)
-            .intersects(clip)
-        {
-            return;
-        }
-        if deviation <= 0.6 {
-            self.painter.line_segment(endpoints, stroke);
-            return;
-        }
-        let middle = time[0].midpoint(time[1]);
-        let p = point(middle);
-        self.orbit_arc(
-            clip,
-            point,
-            [time[0], middle],
-            [endpoints[0], p],
-            curvature,
-            stroke,
-        );
-        self.orbit_arc(
-            clip,
-            point,
-            [middle, time[1]],
-            [p, endpoints[1]],
-            curvature,
-            stroke,
-        );
     }
 
     fn moon_system(&mut self, parent: &Body, position: [f64; 3], mark: &Mark, plane: Projection) {
@@ -591,12 +609,59 @@ impl OrbitLayout<'_> {
             self.orbit(moon, projection, (visibility * 117.0) as u8, None);
             let (point, depth) = projection.project(moon.at(self.day));
             let mut next = Mark::new(moon, (point, depth + mark.depth), false, projection.scale);
-            next.radius *= visibility.sqrt() as f32;
+            next.radius =
+                world::moon_marker_radius(next.physical_radius, world::major_moon(parent, moon))
+                    * visibility.sqrt() as f32;
             if next.radius > 0.6 && viewport.expand(next.radius * 3.5).contains(point) {
                 self.marks.push(next);
             }
         }
     }
+}
+
+fn orbit_arc(
+    clip: Rect,
+    point: &impl Fn(f64) -> Pos2,
+    time: [f64; 2],
+    endpoints: [Pos2; 2],
+    curvature: f64,
+    paths: &mut Vec<Vec<Pos2>>,
+) {
+    let deviation = (curvature * (time[1] - time[0]).powi(2) * 0.125) as f32;
+    if !Rect::from_two_pos(endpoints[0], endpoints[1])
+        .expand(deviation)
+        .intersects(clip)
+    {
+        return;
+    }
+    if deviation <= 0.6 {
+        match paths
+            .last_mut()
+            .filter(|path| path.last() == Some(&endpoints[0]))
+        {
+            Some(path) => path.push(endpoints[1]),
+            None => paths.push(endpoints.to_vec()),
+        }
+        return;
+    }
+    let middle = time[0].midpoint(time[1]);
+    let p = point(middle);
+    orbit_arc(
+        clip,
+        point,
+        [time[0], middle],
+        [endpoints[0], p],
+        curvature,
+        paths,
+    );
+    orbit_arc(
+        clip,
+        point,
+        [middle, time[1]],
+        [p, endpoints[1]],
+        curvature,
+        paths,
+    );
 }
 
 fn paint_icon(
@@ -643,16 +708,19 @@ fn mark_at(marks: &[Mark], pointer: Pos2) -> Option<&Mark> {
         .iter()
         .filter(|mark| mark.point.distance(pointer) <= mark.radius.max(6.0))
         .min_by(|a, b| {
-            let a_in_front = pointer.distance_sq(a.point) <= a.radius * a.radius;
-            let b_in_front = pointer.distance_sq(b.point) <= b.radius * b.radius;
-            b_in_front
-                .cmp(&a_in_front)
-                .then_with(|| a.depth.total_cmp(&b.depth))
-                .then_with(|| {
-                    pointer
-                        .distance_sq(a.point)
-                        .total_cmp(&pointer.distance_sq(b.point))
-                })
+            let resolved = |mark: &Mark| {
+                mark.physical_radius >= 2.5
+                    && pointer.distance_sq(mark.point) <= mark.radius * mark.radius
+            };
+            match (resolved(a), resolved(b)) {
+                (true, true) => a.depth.total_cmp(&b.depth),
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => pointer
+                    .distance_sq(a.point)
+                    .total_cmp(&pointer.distance_sq(b.point))
+                    .then_with(|| a.depth.total_cmp(&b.depth)),
+            }
         })
 }
 
@@ -862,21 +930,24 @@ mod tests {
             began: 1.0,
             from_zoom: 4.0,
             zoom_factor: 2.0,
+            from_radius: 25.0,
+            target_radius: 50.0,
             screen_offset: [130.0, -55.0],
             orbit_offset: [-240.0, 156.0],
         };
-        let (start_zoom, start_pan, started) = flight.sample(1.0);
-        assert!(!started);
+        let start = flight.sample(1.0);
+        assert_eq!(start.progress, 0.0);
         assert_eq!(
-            std::array::from_fn(|i| start_pan[i] + flight.orbit_offset[i]),
+            std::array::from_fn(|i| start.pan[i] + flight.orbit_offset[i]),
             flight.screen_offset
         );
-        assert_eq!(start_zoom, 4.0);
-        let (zoom, pan, arrived) = flight.sample(1.3);
-        assert!(arrived);
-        assert_eq!(zoom, 8.0);
+        assert_eq!(start.zoom, 4.0);
+        let end = flight.sample(1.6);
+        assert_eq!(end.progress, 1.0);
+        assert_eq!(end.zoom, 8.0);
+        assert_eq!(end.radius, 50.0);
         assert_eq!(
-            std::array::from_fn(|i| pan[i] + flight.orbit_offset[i] * zoom / start_zoom),
+            std::array::from_fn(|i| end.pan[i] + flight.orbit_offset[i] * end.zoom / start.zoom),
             [0.0; 2]
         );
     }

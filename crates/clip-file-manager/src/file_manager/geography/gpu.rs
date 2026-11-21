@@ -203,14 +203,6 @@ pub(super) fn paint_at(
     )
 }
 
-pub(super) fn paint_world(
-    ui: &egui::Ui,
-    rect: egui::Rect,
-    frame: super::solar::world::Frame,
-) -> Result<(), String> {
-    paint_world_clipped(ui, rect, rect, frame)
-}
-
 pub(super) fn paint_world_clipped(
     ui: &egui::Ui,
     canvas: egui::Rect,

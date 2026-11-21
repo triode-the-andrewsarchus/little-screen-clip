@@ -211,30 +211,13 @@ impl World {
                 ui,
                 pose,
                 rect,
+                rect,
                 sunlight(planet.body, day).0,
                 clock,
                 cache.preview(planet.body.id).as_ref(),
             )?;
         }
-        let paint_side = |behind| {
-            for moon in neighbors.iter().filter(|moon| moon.behind == behind) {
-                moon.paint(
-                    ui,
-                    pose,
-                    rect,
-                    lights.sun.0,
-                    clock,
-                    cache
-                        .map(moon.body.id, self.body.parent != Some(moon.body.id))
-                        .or_else(|| cache.preview(moon.body.id))
-                        .as_ref(),
-                )?;
-            }
-            Ok::<_, String>(())
-        };
-        paint_side(true)?;
-        gpu::paint_world(ui, rect, frame)?;
-        paint_side(false)?;
+        paint_local_bodies(ui, rect, rect, frame, self.body, &neighbors, cache)?;
         Ok((neighbors, distant))
     }
 
@@ -244,6 +227,98 @@ impl World {
 
     pub fn ephemeris(&self) -> Option<&[[f64; 3]]> {
         self.assets.as_ref()?.ephemeris.as_deref()
+    }
+}
+
+fn paint_local_bodies(
+    ui: &egui::Ui,
+    canvas: Rect,
+    viewport: Rect,
+    frame: Frame,
+    primary: &Body,
+    neighbors: &[Nearby],
+    cache: &assets::MapCache,
+) -> Result<(), String> {
+    let pose = frame.pose;
+    let clock = frame.clock;
+    let sun = frame.sun;
+    let paint_side = |behind| {
+        for moon in neighbors.iter().filter(|moon| moon.behind == behind) {
+            moon.paint(
+                ui,
+                pose,
+                canvas,
+                viewport,
+                sun,
+                clock,
+                cache
+                    .map(moon.body.id, primary.parent != Some(moon.body.id))
+                    .or_else(|| cache.preview(moon.body.id))
+                    .as_ref(),
+            )?;
+        }
+        Ok::<_, String>(())
+    };
+    paint_side(true)?;
+    gpu::paint_world_clipped(ui, canvas, viewport, frame)?;
+    paint_side(false)?;
+    Ok(())
+}
+
+/// The lens used while an orthographic chart becomes a focused globe.
+pub(super) struct Approach {
+    pub body: &'static Body,
+    pub camera: GlobeCamera,
+    pub center: Pos2,
+    pub radius: f64,
+    pub progress: f64,
+}
+
+impl Approach {
+    fn canvas(&self, viewport: Rect) -> Rect {
+        Rect::from_center_size(
+            self.center,
+            viewport.size() + (self.center - viewport.center()).abs() * 2.0,
+        )
+    }
+
+    fn pose(&self, viewport: Rect, canvas: Rect) -> Perspective {
+        let radius = radius_m(self.body);
+        let focused = Perspective::new(&self.camera, viewport.size().into(), radius);
+        if self.progress >= 1.0 {
+            return focused;
+        }
+        let mut pose = Perspective::new(&self.camera, canvas.size().into(), radius);
+        // Near-orthographic lens initially, converging to the exact focused
+        // camera. Keep the planet's apparent radius independent of that change
+        // so the moons move continuously as their depth becomes visible.
+        let focused_distance = focused.eye.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let distance = 1.0 / ((1.0 - self.progress) / 8192.0 + self.progress / focused_distance);
+        pose.eye = focused.eye.map(|axis| axis * distance / focused_distance);
+        pose.focal = self.radius * (distance * distance - 1.0).sqrt();
+        pose
+    }
+
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        viewport: Rect,
+        day: f64,
+        clock: [f32; 2],
+        cache: &assets::MapCache,
+    ) -> Result<(), String> {
+        let canvas = self.canvas(viewport);
+        let pose = self.pose(viewport, canvas);
+        let texture = cache
+            .map(self.body.id, false)
+            .or_else(|| cache.preview(self.body.id));
+        let mut frame = Frame::from_pose(self.body, pose, self.camera.zoom as f32, texture);
+        frame.clock = clock;
+        frame.sun = sunlight(self.body, day).0;
+        let neighbors = surroundings(self.body, pose, canvas, day);
+        paint_local_bodies(ui, canvas, viewport, frame, self.body, &neighbors, cache)?;
+        label_major_moons(&ui.painter_at(viewport), &neighbors);
+        Ok(())
     }
 }
 
@@ -277,13 +352,17 @@ impl Nearby {
         ui: &egui::Ui,
         pose: Perspective,
         canvas: Rect,
+        viewport: Rect,
         sun: [f32; 3],
         clock: [f32; 2],
         texture: Option<&sky::Texture>,
     ) -> Result<(), String> {
         if self.display_radius / self.depth * pose.focal < 2.0 && bands(self.body.id).is_empty() {
-            ui.painter_at(canvas)
-                .circle_filled(self.point, self.radius, self.body.color());
+            ui.painter_at(canvas.intersect(viewport)).circle_filled(
+                self.point,
+                self.radius,
+                self.body.color(),
+            );
             return Ok(());
         }
         let mut frame = Frame::from_pose(self.body, pose, 1.0, texture.cloned());
@@ -294,7 +373,7 @@ impl Nearby {
         // Preserve the canvas ray projection while restricting shader work to
         // the object's possible silhouette, including the outer edge of its rings.
         let bound = visible_radius(self.body, self.display_radius);
-        let clip = projected_bounds(pose, canvas, self.position, bound);
+        let clip = projected_bounds(pose, canvas, self.position, bound).intersect(viewport);
         if !clip.is_positive() {
             return Ok(());
         }
@@ -431,18 +510,28 @@ fn project_moon(
     rect: Rect,
 ) -> Option<Nearby> {
     let primary_km = radius_m(primary) / 1000.0;
-    let orbit_km = orbit.iter().map(|v| v * v).sum::<f64>().sqrt();
-    let relative_distance = orbit_km / primary_km;
-    let radius_ratio = moon.radius.unwrap_or(3.0) / primary_km;
-    let distance =
-        (1.0 + 0.66 * (relative_distance - 1.0).max(0.0).powf(0.67)).max(1.0 + radius_ratio * 1.4);
-    let position = orbit.map(|v| v * distance / orbit_km);
-    let display_radius = (radius_ratio * 3.0).min(distance * 0.32);
-    let major = primary.parent == Some(moon.id)
+    let position = orbit.map(|v| v / primary_km);
+    let display_radius = moon.radius.unwrap_or(3.0) / primary_km;
+    project_body(
+        moon,
+        position,
+        display_radius,
+        major_moon(primary, moon),
+        pose,
+        rect,
+    )
+}
+
+pub(super) fn major_moon(primary: &Body, moon: &Body) -> bool {
+    primary.parent == Some(moon.id)
         || moon
             .radius
-            .is_some_and(|radius| radius >= (primary_km * 0.001).max(3.0));
-    project_body(moon, position, display_radius, major, pose, rect)
+            .is_some_and(|radius| radius >= (radius_m(primary) * 1e-6).max(3.0))
+}
+
+pub(super) fn moon_marker_radius(physical: f32, major: bool) -> f32 {
+    let minimum = if major { 1.9 } else { 0.9 };
+    physical.max(minimum)
 }
 
 fn distant_planets(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<Nearby> {
@@ -460,7 +549,7 @@ fn distant_planets(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> V
             let target = super::position_au(planet, day);
             let delta: [f64; 3] = std::array::from_fn(|i| target[i] - origin[i]);
             let au = delta.iter().map(|v| v * v).sum::<f64>().sqrt();
-            let angular = (planet.radius? / (149_597_870.7 * au) * 120.0).min(0.045);
+            let angular = (planet.radius? / (super::AU_KM * au) * 120.0).min(0.045);
             let sky_distance = 1e6;
             let position = delta.map(|v| v * sky_distance / au);
             project_body(planet, position, angular * sky_distance, false, pose, rect)
@@ -497,7 +586,7 @@ fn project_body(
     Some(Nearby {
         body,
         point,
-        radius: radius.max(if major { 2.6 } else { 0.9 }),
+        radius: moon_marker_radius(radius, major),
         position,
         display_radius,
         depth,
@@ -685,6 +774,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn jupiter_approach_preserves_io_scale_and_ends_on_the_focused_camera() {
+        let mut camera = map_camera::lunar_camera();
+        camera.zoom = 0.18;
+        camera.center_lat = 72.0;
+        let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(1500.0, 800.0));
+        let planet = body(599).unwrap();
+        let io = body(501).unwrap();
+        let final_radius = camera.scale_px(viewport.width(), viewport.height());
+        let body_pose = Perspective::new(&camera, viewport.size().into(), radius_m(planet));
+        let world = project_moon(planet, io, [0.0, 421_800.0, 0.0], body_pose, viewport).unwrap();
+        let mut previous: Option<Pos2> = None;
+        for step in 0..=100 {
+            let progress = f64::from(step) / 100.0;
+            let lens = Approach {
+                body: planet,
+                camera,
+                center: viewport.center(),
+                radius: 28.0 * (final_radius / 28.0).powf(progress),
+                progress,
+            };
+            let pose = lens.pose(viewport, lens.canvas(viewport));
+            let point = project_moon(planet, io, [0.0, 421_800.0, 0.0], pose, viewport).unwrap();
+            if let Some(previous) = previous {
+                assert!(point.point.distance(previous) < 8.0);
+            }
+            previous = Some(point.point);
+            let distance_squared = pose.eye.iter().map(|v| v * v).sum::<f64>();
+            assert!((pose.focal / (distance_squared - 1.0).sqrt() - lens.radius).abs() < 1e-7);
+            if step == 100 {
+                assert_eq!(point.point, world.point);
+                assert_eq!(point.radius, world.radius);
+                assert_eq!(pose.half_fov(), body_pose.half_fov());
+            }
+        }
+    }
+
+    #[test]
     fn saturn_keeps_minor_satellites_in_a_wide_view() {
         let mut camera = map_camera::lunar_camera();
         camera.zoom = 0.14;
@@ -718,7 +844,7 @@ mod tests {
     #[test]
     fn major_moons_keep_relative_sizes_and_globe_occlusion() {
         let mut camera = map_camera::lunar_camera();
-        camera.zoom = initial_zoom(599);
+        camera.zoom = 0.18;
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1100.0, 720.0));
         let jupiter = body(599).unwrap();
         let pose = Perspective::new(&camera, rect.size().into(), radius_m(jupiter));
@@ -727,7 +853,7 @@ mod tests {
         let position = [0.0, 421_800.0, 0.0];
         let larger = project_moon(jupiter, io, position, pose, rect).unwrap();
         let smaller = project_moon(jupiter, europa, position, pose, rect).unwrap();
-        assert!(larger.radius > smaller.radius && larger.radius > 4.0);
+        assert!(larger.display_radius > smaller.display_radius && larger.radius >= smaller.radius);
         assert!(!larger.occluded);
         let behind = project_moon(jupiter, io, [-421_800.0, 0.0, 0.0], pose, rect).unwrap();
         assert!(behind.occluded && behind.behind);
