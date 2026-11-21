@@ -1,7 +1,7 @@
 use super::{Body, Id, SUN, assets, body, clock, satellites, scene_day, sunlight};
 use crate::file_manager::geography::{gpu, map_camera, sky};
 use chrono::{DateTime, Utc};
-use eframe::egui::{self, Color32, Pos2, Rect};
+use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 use little_clip_core::{
     geography::basemap::{
         GlobeCamera,
@@ -129,6 +129,12 @@ impl World {
         for moon in moons.iter().filter(|moon| !moon.behind) {
             moon.paint(&painter);
         }
+        for moon in moons
+            .iter()
+            .filter(|moon| !moon.occluded && moon.radius >= 4.5)
+        {
+            moon.label(&painter);
+        }
         Ok(pick_moon(&moons, response))
     }
 
@@ -158,6 +164,19 @@ impl Nearby {
             self.radius * 0.72,
             color,
         );
+    }
+    fn label(&self, painter: &egui::Painter) {
+        let text = painter.layout_no_wrap(
+            self.body.name.to_owned(),
+            FontId::proportional(11.0),
+            Color32::from_rgb(206, 217, 234),
+        );
+        let position = self.point + egui::vec2(self.radius + 4.0, -text.size().y * 0.5);
+        let rect = Rect::from_min_size(position, text.size()).expand2(egui::vec2(3.0, 1.0));
+        if painter.clip_rect().contains_rect(rect) {
+            painter.rect_filled(rect, 2.0, Color32::from_black_alpha(180));
+            painter.galley(position, text, Color32::WHITE);
+        }
     }
 }
 
@@ -221,7 +240,12 @@ fn project_moon(
         return None;
     }
     let occluded = sphere_distance(pose.eye, ray, 1.0).is_some_and(|t| t < depth);
-    let behind = depth > pose.altitude() + 1.0;
+    let behind = pose.axes[2]
+        .iter()
+        .zip(position)
+        .map(|(a, b)| a * b)
+        .sum::<f64>()
+        < 0.0;
     Some(Nearby {
         body: moon,
         point,
@@ -321,5 +345,28 @@ pub(in crate::file_manager::geography) fn bands(id: Id) -> &'static [[f32; 3]] {
         ],
         2_136_108 => &[[2252., 2322., 0.48]],
         _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn major_moons_keep_relative_sizes_and_globe_occlusion() {
+        let mut camera = map_camera::lunar_camera();
+        camera.zoom = initial_zoom(599);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1100.0, 720.0));
+        let jupiter = body(599).unwrap();
+        let pose = Perspective::new(&camera, rect.size().into(), radius_m(jupiter));
+        let io = body(501).unwrap();
+        let europa = body(502).unwrap();
+        let position = [0.0, 421_800.0, 0.0];
+        let larger = project_moon(jupiter, io, position, pose, rect).unwrap();
+        let smaller = project_moon(jupiter, europa, position, pose, rect).unwrap();
+        assert!(larger.radius > smaller.radius && larger.radius > 4.0);
+        assert!(!larger.occluded);
+        let behind = project_moon(jupiter, io, [-421_800.0, 0.0, 0.0], pose, rect).unwrap();
+        assert!(behind.occluded && behind.behind);
     }
 }
