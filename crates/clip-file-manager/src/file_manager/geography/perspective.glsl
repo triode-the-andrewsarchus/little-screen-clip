@@ -3,6 +3,7 @@ uniform vec3 u_eye;
 uniform mat3 u_view_axes;
 uniform vec2 u_half_fov;
 uniform float u_near;
+uniform float u_body_radius_m;
 
 const float EARTH_RADIUS_M = 6371000.0;
 
@@ -19,5 +20,5 @@ vec4 surface_clip(vec3 surface) {
 
 
 vec4 terrain_clip(vec3 normal, float height) {
-    return surface_clip(normal * (1.0 + height / EARTH_RADIUS_M));
+    return surface_clip(normal * (1.0 + height / u_body_radius_m));
 }

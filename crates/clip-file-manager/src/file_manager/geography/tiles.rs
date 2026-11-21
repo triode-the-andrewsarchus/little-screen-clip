@@ -2,18 +2,20 @@
 use super::{
     detail,
     geometry::{Layers, RiverKey, Scene},
-    gpu,
+    gpu, lunar_terrain,
 };
 use little_clip_core::{
     BackgroundJobs,
     geography::basemap::{
         BasemapAssets, BasemapStyle, GlobeCamera, choose_contour_interval_m,
-        tiles::{SourceTile, TileId, visible_tiles},
+        perspective::{MOON_RADIUS_M, Perspective},
+        tiles::{SourceTile, TileId, perspective_tiles, visible_tiles},
     },
     jobs::task::Task,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    path::Path,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -40,6 +42,45 @@ pub(super) struct Tiles {
     error: Option<String>,
     pub range: [f32; 2],
     pub contour: Option<f32>,
+    lunar: Lunar,
+}
+
+#[derive(Default)]
+struct Lunar {
+    inspected: bool,
+    id: u64,
+    source: Option<Arc<lunar_terrain::Source>>,
+    job: Option<Task<Result<Option<Arc<lunar_terrain::Source>>, String>>>,
+    cache: TileCache<TileId, SourceTile>,
+    error: Option<String>,
+}
+
+impl Lunar {
+    fn poll(&mut self, ctx: &egui::Context, root: &Path) {
+        if let Some(result) = self.job.as_ref().and_then(Task::poll) {
+            self.job = None;
+            self.inspected = true;
+            match result {
+                Ok(Ok(source)) => {
+                    self.source = source;
+                    self.id = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Err(error)) => self.error = Some(error),
+                Err(error) => self.error = Some(format!("Moon elevation worker: {error}")),
+            }
+        }
+        if self.job.is_none() && !self.inspected {
+            let root = root.to_owned();
+            self.job = Some(Task::start(
+                workers(),
+                Duration::from_secs(120),
+                move |cancel| lunar_terrain::Source::load(&root, cancel),
+            ));
+        }
+        if self.job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(80));
+        }
+    }
 }
 
 /// Geographic working set shared by one viewport or a collection of strips.
@@ -96,6 +137,7 @@ impl Default for Tiles {
             error: None,
             range: [0.0, 1000.0],
             contour: None,
+            lunar: Lunar::default(),
         }
     }
 }
@@ -160,6 +202,7 @@ impl Tiles {
         &mut self,
         ctx: &egui::Context,
         assets: Option<&Arc<BasemapAssets>>,
+        root: &Path,
         camera: GlobeCamera,
         size: [f32; 2],
     ) -> (gpu::Frame, Result<(), String>) {
@@ -170,7 +213,58 @@ impl Tiles {
         let ready = assets.map_or(Ok(()), |assets| {
             self.prepare(ctx, assets, &wanted, CPU_BUDGET, RIVER_BUDGET)
         });
-        (self.frame(wanted, camera, size, Layers::default()), ready)
+        let mut frame = self.frame(wanted, camera, size, Layers::default());
+        frame.moon_view = true;
+        self.lunar.poll(ctx, root);
+        let ready = ready.and(self.lunar.error.clone().map_or(Ok(()), Err));
+        let Some(source) = self.lunar.source.clone() else {
+            return (frame, ready);
+        };
+        let pose = Perspective::new(&camera, size, MOON_RADIUS_M);
+        let priority =
+            perspective_tiles(pose, size, ctx.pixels_per_point(), lunar_terrain::MAX_LEVEL);
+        let visible = priority.iter().copied().collect();
+        let error = self.lunar.cache.update(
+            &visible,
+            &priority,
+            CPU_BUDGET,
+            SourceTile::bytes,
+            move |key, cancel| source.prepare(key, cancel),
+        );
+        if !self.lunar.cache.pending.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(32));
+        }
+        let tiles = priority
+            .iter()
+            .filter_map(|id| self.lunar.cache.ready.get(id).cloned())
+            .collect();
+        frame.lunar = Some((self.lunar.id, tiles));
+        gpu::prepare_surface(ctx, &mut frame);
+        (frame, ready.and(error.map_or(Ok(()), Err)))
+    }
+
+    pub(super) fn notice_lunar_assets(&mut self) {
+        if self.lunar.source.is_none() {
+            self.lunar = Lunar::default();
+        }
+    }
+
+    pub(super) fn has_lunar_assets(&self) -> bool {
+        self.lunar.source.is_some() || self.lunar.error.is_some()
+    }
+
+    pub(super) fn inspecting_lunar_assets(&self) -> bool {
+        !self.lunar.inspected
+    }
+
+    pub(super) fn lunar_height_at(&self, lat: f64, lon: f64) -> Option<f64> {
+        (0..=lunar_terrain::MAX_LEVEL).rev().find_map(|level| {
+            self.lunar
+                .cache
+                .ready
+                .get(&TileId::at(level, lat, lon))?
+                .height_at(lat, lon)
+        })
     }
 
     pub(super) fn prepare(
@@ -291,6 +385,7 @@ impl Tiles {
             star_trail: 0.0,
             show_sky: false,
             moon_view: false,
+            lunar: None,
             readable_sky: false,
             show_constellations: false,
             earth_lighting: false,
@@ -325,6 +420,8 @@ impl Tiles {
         self.rivers.pending.clear();
         self.detail.pending.clear();
         self.scene_job = None;
+        self.lunar.job = None;
+        self.lunar.cache.pending.clear();
     }
 
     pub(super) fn height_at(&self, lat: f64, lon: f64) -> Option<f64> {

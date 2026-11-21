@@ -2,7 +2,7 @@
 pub(crate) mod nasadem;
 pub(super) mod viewfinder;
 
-use super::geography::{detail, sky};
+use super::geography::{detail, lunar_terrain, sky};
 
 use little_clip_core::{
     BackgroundJobs, CommandRequest,
@@ -46,6 +46,7 @@ pub enum DownloadPack {
     HydroRivers,
     Sky,
     StarCatalog,
+    MoonRelief,
     DetailedTransportation,
     All,
 }
@@ -65,6 +66,7 @@ impl DownloadPack {
             Self::HydroRivers => "HydroRIVERS Global Network",
             Self::Sky => "Sky and Earth Lighting",
             Self::StarCatalog => "Constellations and Star Catalog",
+            Self::MoonRelief => "Moon Elevation (NASA LOLA)",
             Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "Base Offline Maps",
         }
@@ -107,7 +109,7 @@ impl DownloadPack {
             Self::Viewfinder => status.local_hgt_count > 0,
             Self::LandCover => status.has_land_cover,
             Self::HydroRivers => status.has_hydrorivers,
-            Self::Sky | Self::StarCatalog | Self::DetailedTransportation => true, // Verified by their own loaders.
+            Self::Sky | Self::StarCatalog | Self::MoonRelief | Self::DetailedTransportation => true, // Verified by their own loaders.
             Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
         }
     }
@@ -302,6 +304,15 @@ impl DownloadSession<'_> {
             ),
             DownloadPack::LandCover => self.land_cover(base, span),
             DownloadPack::DetailedTransportation => self.transportation(base, span),
+            DownloadPack::MoonRelief => self.download_checked_files(
+                lunar_terrain::DIRECTORY,
+                lunar_terrain::FILES
+                    .into_iter()
+                    .map(|(name, url, size)| (name, url, size..=size)),
+                |_, _| true,
+                base,
+                span,
+            ),
             DownloadPack::Sky | DownloadPack::StarCatalog => self.download_sky(
                 pack.files(self.config),
                 pack == DownloadPack::StarCatalog,
@@ -336,41 +347,55 @@ impl DownloadSession<'_> {
         base: f32,
         span: f32,
     ) -> Result<(), String> {
-        let root = self.root.path().join(sky::DIRECTORY);
-        let files: Vec<_> = assets
+        self.download_checked_files(
+            sky::DIRECTORY,
+            assets
+                .into_iter()
+                .filter_map(|file| Some((file.name, file.url, sky::asset_size(file.name)?))),
+            |name, file| !verify_catalog || sky::catalog::verified(name, file),
+            base,
+            span,
+        )
+    }
+
+    fn download_checked_files<'a>(
+        &self,
+        directory: &str,
+        files: impl IntoIterator<Item = (&'a str, &'a str, std::ops::RangeInclusive<u64>)>,
+        verify: impl Fn(&str, &fs::File) -> bool,
+        base: f32,
+        span: f32,
+    ) -> Result<(), String> {
+        let root = self.root.path().join(directory);
+        let files: Vec<_> = files
             .into_iter()
-            .filter_map(|file| {
-                let sizes = sky::asset_size(file.name)?;
+            .filter(|(name, _, sizes)| {
                 let present =
-                    little_clip_core::kernel_interface::open_content(&root.join(file.name), false)
+                    little_clip_core::kernel_interface::open_content(&root.join(name), false)
                         .ok()
                         .is_some_and(|existing| {
                             existing
                                 .metadata()
                                 .is_ok_and(|meta| sizes.contains(&meta.len()))
-                                && (!verify_catalog || sky::catalog::verified(file.name, &existing))
+                                && verify(name, &existing)
                         });
-                (!present).then_some((file, sizes))
+                !present
             })
             .collect();
-        let required: u64 = files.iter().map(|(_, sizes)| *sizes.end()).sum();
+        let required: u64 = files.iter().map(|(_, _, sizes)| *sizes.end()).sum();
         require_space(self.root, required)?;
         let count = files.len().max(1) as f32;
-        for (i, (file, sizes)) in files.into_iter().enumerate() {
-            let downloaded = download_to_file(
-                &root,
-                file.name,
-                file.url,
-                *sizes.end(),
-                self.cancelled,
-                |f, m| self.report(base + span * (i as f32 + f) / count, m),
-            )?;
+        for (i, (name, url, sizes)) in files.into_iter().enumerate() {
+            let downloaded =
+                download_to_file(&root, name, url, *sizes.end(), self.cancelled, |f, m| {
+                    self.report(base + span * (i as f32 + f) / count, m)
+                })?;
             let bytes = downloaded.file.metadata().map_err(|e| e.to_string())?.len();
             if !sizes.contains(&bytes) {
-                return Err(format!("Unexpected source size for {}", file.name));
+                return Err(format!("Unexpected source size for {name}"));
             }
-            if verify_catalog && !sky::catalog::verified(file.name, &downloaded.file) {
-                return Err(format!("Unexpected source contents for {}", file.name));
+            if !verify(name, &downloaded.file) {
+                return Err(format!("Unexpected source contents for {name}"));
             }
         }
         Ok(())

@@ -2,6 +2,7 @@
 pub(super) mod detail;
 mod geometry;
 pub(super) mod gpu;
+pub(super) mod lunar_terrain;
 mod map_camera;
 mod overlay;
 mod radiation;
@@ -434,7 +435,11 @@ impl Viewer {
         }
         self.sky.poll(ctx);
         let active = self.downloader.active;
-        if let Some(downloaded) = self.downloader.poll(ctx) {
+        let downloaded = self.downloader.poll(ctx);
+        if active == Some(DownloadPack::MoonRelief) && self.downloader.active.is_none() {
+            self.tiles.notice_lunar_assets();
+        }
+        if let Some(downloaded) = downloaded {
             self.terrain_download.invalidate_coverage();
             if matches!(active, Some(DownloadPack::Sky | DownloadPack::StarCatalog)) {
                 self.sky.reload(&self.downloader.assets_dir);
@@ -538,10 +543,17 @@ impl Viewer {
             );
             ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
             let slot = ui.painter_at(rect).add(egui::Shape::Noop);
-            if let Some(camera) = self.moon_camera {
-                let frame = self
-                    .tiles
-                    .moon_frame(ui.ctx(), self.assets.as_ref(), camera, size);
+            if let Some(camera) = self.moon_camera.as_mut() {
+                map_camera::update_ground(camera, size, map_camera::MOON_RADIUS_M, |lat, lon| {
+                    self.tiles.lunar_height_at(lat, lon)
+                });
+                let frame = self.tiles.moon_frame(
+                    ui.ctx(),
+                    self.assets.as_ref(),
+                    &self.downloader.assets_dir,
+                    *camera,
+                    size,
+                );
                 self.paint_frame(ui, &response, slot, Some(frame), None);
                 return;
             }
@@ -853,6 +865,7 @@ impl Viewer {
             if ui.button("Solar System").clicked() {
                 self.open_solar_system(solar::SUN, ui.ctx());
             }
+            self.lunar_download(ui);
             return;
         }
         let terrain_available =
@@ -952,6 +965,43 @@ impl Viewer {
             }
             if ui.button("Solar System").clicked() {
                 self.open_solar_system(solar::SUN, ui.ctx());
+            }
+        });
+    }
+
+    fn lunar_download(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            let pack = DownloadPack::MoonRelief;
+            if self.downloader.active == Some(pack) {
+                let progress = self.downloader.progress_snapshot();
+                ui.add(egui::ProgressBar::new(progress.fraction).text(progress.message));
+                if ui.button("Cancel").clicked() {
+                    self.downloader.cancel();
+                }
+            } else if self.tiles.has_lunar_assets() {
+                ui.hyperlink_to(
+                    "NASA LOLA elevation",
+                    "https://pds-geosciences.wustl.edu/missions/lro/lola.htm",
+                )
+                .on_hover_text("Lunar Reconnaissance Orbiter · ~118 m source elevation");
+            } else if self.tiles.inspecting_lunar_assets() {
+                ui.label("Checking Moon elevation…");
+            } else if ui
+                .add_enabled(
+                    self.downloader.active.is_none(),
+                    egui::Button::new(format!(
+                        "Download Moon elevation · {:.2} GB",
+                        lunar_terrain::BYTES as f64 / 1_000_000_000.0
+                    )),
+                )
+                .clicked()
+            {
+                self.downloader.start(pack, &self.config);
+            }
+            if self.downloader.active.is_none()
+                && let Some(error) = &self.downloader.last_error
+            {
+                ui.label(error);
             }
         });
     }

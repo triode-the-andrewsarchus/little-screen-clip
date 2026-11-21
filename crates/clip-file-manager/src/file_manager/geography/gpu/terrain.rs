@@ -27,6 +27,14 @@ pub(in super::super) struct Surface {
 
 impl Surface {
     pub(in super::super) fn new(tiles: impl Iterator<Item = Arc<SourceTile>>, zoom: f64) -> Self {
+        Self::for_radius(tiles, zoom, EARTH_RADIUS_M)
+    }
+
+    pub(in super::super) fn for_radius(
+        tiles: impl Iterator<Item = Arc<SourceTile>>,
+        zoom: f64,
+        radius_m: f64,
+    ) -> Self {
         let sources: BTreeMap<_, _> = tiles.map(|tile| (tile.id, tile)).collect();
         let mut divisions = BTreeSet::new();
         for &tile in sources.keys() {
@@ -58,7 +66,7 @@ impl Surface {
                     .values()
                     .filter_map(|tile| tile.elevation_range.map(|range| range[1]))
                     .fold(0.0, f32::max),
-            ) / EARTH_RADIUS_M;
+            ) / radius_m;
         let largest_cell = patches
             .values()
             .map(|patch| patch.mesh_step(zoom))
@@ -108,7 +116,7 @@ impl Surface {
         // Bound the full geographic patch and its skirt before drawing its grid.
         camera.intersects_sphere(
             center,
-            side.to_radians() + self.relief() + 600.0 / EARTH_RADIUS_M,
+            side.to_radians() + self.relief() + 600.0 / camera.radius_m,
             0.0,
         )
     }
@@ -265,6 +273,7 @@ pub(super) unsafe fn uniforms(
         let loc = |name| gl.get_uniform_location(program, name);
         gl.uniform_1_i32(loc("u_perspective").as_ref(), i32::from(pose.is_some()));
         if let Some(camera) = pose {
+            gl.uniform_1_f32(loc("u_body_radius_m").as_ref(), camera.radius_m as f32);
             gl.uniform_3_f32_slice(loc("u_eye").as_ref(), &camera.eye.map(|v| v as f32));
             let basis = camera.axes.map(|axis| axis.map(|v| v as f32));
             gl.uniform_matrix_3_f32_slice(loc("u_view_axes").as_ref(), false, basis.as_flattened());

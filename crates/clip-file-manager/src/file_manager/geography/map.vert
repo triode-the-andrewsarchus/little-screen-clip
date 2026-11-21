@@ -6,6 +6,7 @@ uniform vec2 u_view;
 uniform vec4 u_tile; // west relative to camera, north, angular side, unused
 uniform vec3 u_patch; // tile-relative minimum UV and patch span
 uniform sampler2D u_height;
+uniform bool u_signed_elevation;
 out vec2 v_uv;
 out vec2 v_geo;
 out float v_front;
@@ -19,10 +20,10 @@ void main() {
     if (u_perspective) {
         vec3 normal = sphere_normal(vec2(u_camera.y+dl, lat));
         vec2 height = textureLod(u_height, v_uv, 0.0).rg;
-        float elevation = height.g > .99 ? max(0.0, height.r) : 0.0;
+        float elevation = height.g > .99 ? (u_signed_elevation ? height.r : max(0.0, height.r)) : 0.0;
         // Skirts close openings between meshes using different source levels.
         float edge = a_skirt * clamp(u_tile.z * u_patch.z * 380.0, 45.0, 600.0);
-        vec3 surface = normal * (1.0 + (elevation-edge) / EARTH_RADIUS_M);
+        vec3 surface = normal * (1.0 + (elevation-edge) / u_body_radius_m);
         v_front = dot(normal, normalize(u_eye - surface));
         gl_Position = terrain_clip(normal, elevation-edge);
         return;

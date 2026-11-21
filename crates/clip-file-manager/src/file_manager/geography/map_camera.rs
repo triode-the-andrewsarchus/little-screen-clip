@@ -106,14 +106,23 @@ pub(super) fn navigate(
 
 pub(super) fn follow_ground(camera: &mut GlobeCamera, tiles: &super::tiles::Tiles, size: [f32; 2]) {
     if camera.orbit.active() {
-        camera.orbit.target_height_m = tiles
-            .height_at(camera.center_lat, camera.center_lon)
-            .unwrap_or(0.0);
-        camera.orbit.eye_ground_m = 0.0;
-        let pose = Perspective::new(camera, size, EARTH_RADIUS_M);
-        let (lat, lon) = coordinates(pose.eye);
-        camera.orbit.eye_ground_m = tiles.height_at(lat, lon).unwrap_or(0.0);
+        update_ground(camera, size, EARTH_RADIUS_M, |lat, lon| {
+            tiles.height_at(lat, lon)
+        });
     }
+}
+
+pub(super) fn update_ground(
+    camera: &mut GlobeCamera,
+    size: [f32; 2],
+    radius: f64,
+    height: impl Fn(f64, f64) -> Option<f64>,
+) {
+    camera.orbit.target_height_m = height(camera.center_lat, camera.center_lon).unwrap_or(0.0);
+    camera.orbit.eye_ground_m = 0.0;
+    let pose = Perspective::new(camera, size, radius);
+    let (lat, lon) = coordinates(pose.eye);
+    camera.orbit.eye_ground_m = height(lat, lon).unwrap_or(0.0);
 }
 
 #[derive(Clone, Copy)]

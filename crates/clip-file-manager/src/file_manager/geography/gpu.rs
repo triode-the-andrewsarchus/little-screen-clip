@@ -10,7 +10,7 @@ use eframe::{
 };
 use little_clip_core::geography::basemap::{
     BasemapStyle, GlobeCamera,
-    perspective::{EARTH_RADIUS_M, Perspective},
+    perspective::{EARTH_RADIUS_M, MOON_RADIUS_M, Perspective},
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
 pub(super) use sky::{SkyObject, sky_object_at};
@@ -100,25 +100,56 @@ pub(super) struct Frame {
     pub star_trail: f32,
     pub show_sky: bool,
     pub moon_view: bool,
+    pub lunar: Option<(u64, Vec<Arc<SourceTile>>)>,
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
 }
 
+impl Frame {
+    fn surface_source(&self) -> (u64, &[Arc<SourceTile>]) {
+        self.lunar
+            .as_ref()
+            .map_or((self.source, &self.tiles), |(source, tiles)| {
+                (*source, tiles.as_slice())
+            })
+    }
+
+    fn raster_sources(&self) -> impl Iterator<Item = (u64, &Arc<SourceTile>)> {
+        self.tiles.iter().map(|tile| (self.source, tile)).chain(
+            self.lunar
+                .iter()
+                .flat_map(|(source, tiles)| tiles.iter().map(|tile| (*source, tile))),
+        )
+    }
+}
+
 pub(super) fn prepare_surface(ctx: &egui::Context, frame: &mut Frame) {
-    if frame.camera.orbit.active() {
+    if frame.camera.orbit.active() || frame.moon_view {
         let runtime = ctx.data(|data| data.get_temp::<Handle>(runtime_key()));
         let renderer = runtime
             .as_ref()
             .and_then(|runtime| runtime.renderer.lock().ok());
-        let resident = frame.tiles.iter().filter(|tile| {
+        let (source, tiles) = frame.surface_source();
+        let resident = tiles.iter().filter(|tile| {
             renderer
                 .as_ref()
-                .is_some_and(|renderer| renderer.tiles.contains_key(&(frame.source, tile.id)))
+                .is_some_and(|renderer| renderer.tiles.contains_key(&(source, tile.id)))
         });
+        if frame.moon_view
+            && (frame.lunar.is_none()
+                || resident.clone().filter(|tile| tile.id.level == 0).count() != 2)
+        {
+            return;
+        }
         // Keep one snapshot for GPU geometry and immediate UI hit tests. New
         // uploads become visible together on the following repaint.
-        frame.terrain = Some(Arc::new(Surface::new(resident.cloned(), frame.camera.zoom)));
+        let surface = if frame.moon_view {
+            Surface::for_radius(resident.cloned(), frame.camera.zoom, MOON_RADIUS_M)
+        } else {
+            Surface::new(resident.cloned(), frame.camera.zoom)
+        };
+        frame.terrain = Some(Arc::new(surface));
     }
 }
 
@@ -249,23 +280,39 @@ impl Renderer {
                     .map(|tile| tile.textures[0])
             });
             self.sky.paint_frame(gl, frame, earth);
-            if frame.moon_view {
+            if frame.moon_view && frame.terrain.is_none() {
                 gl.bind_vertex_array(None);
                 gl.active_texture(glow::TEXTURE0);
-                return Ok(false);
+                return Ok(self.needs_raster_upload(frame)
+                    || frame.lunar.as_ref().is_some_and(|(_, tiles)| {
+                        tiles.iter().filter(|tile| tile.id.level == 0).count() == 2
+                    }));
             }
             gl.bind_vertex_array(Some(resources.vao));
             gl.use_program(Some(resources.program));
             let p = resources.program;
-            self.sky.earth_uniforms(gl, p, frame);
+            if frame.moon_view {
+                self.sky.lunar_uniforms(gl, p, frame);
+            } else {
+                self.sky.earth_uniforms(gl, p, frame);
+            }
             let camera = frame.camera;
             let width = info.viewport.width();
             let height = info.viewport.height();
-            let perspective = camera
-                .orbit
-                .active()
-                .then(|| Perspective::new(&camera, [width, height], EARTH_RADIUS_M));
+            let radius = if frame.moon_view {
+                MOON_RADIUS_M
+            } else {
+                EARTH_RADIUS_M
+            };
+            let perspective = (camera.orbit.active() || frame.moon_view)
+                .then(|| Perspective::new(&camera, [width, height], radius));
             terrain::uniforms(gl, p, perspective);
+            for uniform in ["u_signed_elevation", "u_lunar_relief"] {
+                gl.uniform_1_i32(
+                    gl.get_uniform_location(p, uniform).as_ref(),
+                    i32::from(frame.moon_view),
+                );
+            }
             gl.uniform_4_f32(
                 gl.get_uniform_location(p, "u_camera").as_ref(),
                 camera.center_lat as f32,
@@ -303,34 +350,38 @@ impl Renderer {
                 gl.uniform_1_i32(gl.get_uniform_location(p, name).as_ref(), unit as i32);
             }
             self.paint_surface(gl, resources, frame, [width, height], perspective);
-            missing_vectors = self.paint_vectors(gl, frame, width, height, perspective)?;
+            missing_vectors =
+                !frame.moon_view && self.paint_vectors(gl, frame, width, height, perspective)?;
             gl.disable(glow::DEPTH_TEST);
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);
         }
-        let missing_tiles = frame
-            .tiles
-            .iter()
-            .any(|tile| !self.tiles.contains_key(&(frame.source, tile.id)));
+        let missing_tiles = self.needs_raster_upload(frame);
         let terrain_pending = frame
             .terrain
             .as_ref()
-            .is_some_and(|surface| surface.sources.len() < frame.tiles.len());
+            .is_some_and(|surface| surface.sources.len() < frame.surface_source().1.len());
         Ok(missing_tiles || missing_vectors || terrain_pending)
+    }
+
+    fn needs_raster_upload(&self, frame: &Frame) -> bool {
+        frame
+            .raster_sources()
+            .any(|(source, tile)| !self.tiles.contains_key(&(source, tile.id)))
     }
     unsafe fn upload_tiles(&mut self, gl: &glow::Context, frame: &Frame) -> Result<(), String> {
         // Mark current terrain textures before evicting anything. The overlays
         // and surface draw share the UI's snapshot of resident tiles.
         // SAFETY: all textures belong to the callback's current GL context.
         unsafe {
-            for tile in &frame.tiles {
-                if let Some(cached) = self.tiles.get_mut(&(frame.source, tile.id)) {
+            for (source, tile) in frame.raster_sources() {
+                if let Some(cached) = self.tiles.get_mut(&(source, tile.id)) {
                     cached.used = self.frame;
                 }
             }
             let mut uploads = 0;
-            for tile in &frame.tiles {
-                let key = (frame.source, tile.id);
+            for (source, tile) in frame.raster_sources() {
+                let key = (source, tile.id);
                 if !self.tiles.contains_key(&key) && uploads < 4 {
                     self.evict(gl, tile.bytes());
                     let cached = TextureTile::upload(gl, tile, self.frame)?;
@@ -367,7 +418,7 @@ impl Renderer {
                         .values()
                         .filter(move |patch| surface.patch_visible(pose, patch))
                 }) {
-                    let cached = &self.tiles[&(frame.source, patch.source)];
+                    let cached = &self.tiles[&(frame.surface_source().0, patch.source)];
                     let [west, north, side] = patch.source.bounds();
                     let west = little_clip_core::geography::basemap::wrap_lon_delta(
                         west + side * 0.5 - camera.center_lon,
@@ -668,6 +719,7 @@ pub(super) fn float_bytes(values: &[f32]) -> &[u8] {
 
 fn with_shadow(shader: &str) -> String {
     let (version, body) = shader.split_once('\n').unwrap_or(("", shader));
+    let body = body.replace("#include <lunar>", include_str!("lunar.glsl"));
     format!(
         "{version}\n{}\n{}\n{body}",
         include_str!("eclipse.glsl"),

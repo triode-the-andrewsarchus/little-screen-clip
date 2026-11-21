@@ -183,6 +183,7 @@ pub fn visible_tiles(
             Perspective::new(camera, [width, height], EARTH_RADIUS_M),
             [width, height],
             pixels_per_point,
+            MAX_LEVEL,
         );
     }
     let mut level = display_level(camera, width, height, pixels_per_point);
@@ -213,10 +214,11 @@ pub fn visible_tiles(
     }
 }
 
-fn perspective_tiles(
+pub fn perspective_tiles(
     camera: Perspective,
     [width, height]: [f32; 2],
     pixels_per_point: f32,
+    max_level: u8,
 ) -> Vec<TileId> {
     let mut candidates = BTreeMap::<TileId, f64>::new();
     for y in 0..=12 {
@@ -232,7 +234,7 @@ fn perspective_tiles(
             let level = (std::f64::consts::PI / (EDGE as f64 * angular_pixel))
                 .log2()
                 .ceil()
-                .clamp(0.0, f64::from(MAX_LEVEL)) as u8;
+                .clamp(0.0, f64::from(max_level.min(MAX_LEVEL))) as u8;
             let tile = TileId::at(level, lat, lon);
             let center_bias = 1.0 + f64::from(0.8 * ((u - 0.5).powi(2) + (v - 0.5).powi(2)));
             let priority = depth * center_bias;

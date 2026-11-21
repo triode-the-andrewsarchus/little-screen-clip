@@ -51,6 +51,7 @@ def program(root, name):
     fragment = (root / f"{fragment_name}.frag").read_text()
     if name in ("map", "sky"):
         version, body = fragment.split("\n", 1)
+        body = body.replace("#include <lunar>", (root / "lunar.glsl").read_text())
         fragment = f"{version}\n{(root / 'eclipse.glsl').read_text()}\n{(root / 'atmosphere.glsl').read_text()}\n{body}"
     shaders = [
         compileShader(vertex, GL.GL_VERTEX_SHADER),
@@ -169,6 +170,7 @@ def check_moon_view(root, width, height):
     GL.glUseProgram(sky)
     loc = lambda name: GL.glGetUniformLocation(sky, name)
     GL.glUniformMatrix3fv(loc("u_inertial_from_fixed"), 1, False, np.eye(3, dtype=np.float32))
+    GL.glUniformMatrix3fv(loc("u_lunar_basis"), 1, False, np.eye(3, dtype=np.float32))
     GL.glUniform2f(loc("u_fov"), width / (1.9 * height), 1 / 1.9)
     GL.glUniform3f(loc("u_moon"), -384400.0, 0.0, 0.0)
     GL.glUniform3f(loc("u_lunar_sun"), -150e6, 0.0, 0.0)
@@ -229,7 +231,7 @@ def check_moon_view(root, width, height):
     GL.glDeleteProgram(sky)
 
 
-def check_raised_terrain(raster, vao, vertex_count, width, height, height_texture, output):
+def check_raised_terrain(raster, vao, vertex_count, width, height, height_texture, output, lunar=False):
     GL.glUseProgram(raster)
     GL.glBindVertexArray(vao)
     loc = lambda name: GL.glGetUniformLocation(raster, name)
@@ -241,6 +243,13 @@ def check_raised_terrain(raster, vao, vertex_count, width, height, height_textur
     GL.glUniform2f(loc("u_half_fov"), width / (1.9 * height), 1 / 1.9)
     GL.glUniform1f(loc("u_near"), .00004)
     GL.glUniform1i(loc("u_perspective"), 1)
+    GL.glUniform1f(loc("u_body_radius_m"), 1_737_400 if lunar else 6_371_000)
+    GL.glUniform1i(loc("u_lunar_relief"), int(lunar))
+    GL.glUniform1i(loc("u_signed_elevation"), int(lunar))
+    if lunar:
+        GL.glUniformMatrix3fv(loc("u_lunar_basis"), 1, False, np.eye(3, dtype=np.float32))
+        GL.glUniform3f(loc("u_lunar_sun"), 150e6, 0, 0)
+        GL.glUniform3f(loc("u_lunar_earth"), 0, 384400, 0)
     GL.glUniform3f(loc("u_patch"), 0, 0, 1)
     GL.glUniform4f(loc("u_tile"), -.35, .35, .7, 0)
     GL.glUniform4f(loc("u_camera"), 0, 0, 12000, 1)
@@ -255,7 +264,13 @@ def check_raised_terrain(raster, vao, vertex_count, width, height, height_textur
     mask = np.ones_like(hill)
     pixels = []
     GL.glEnable(GL.GL_DEPTH_TEST)
-    for elevations in [np.full_like(hill, 150.0), hill]:
+    if lunar:
+        # Each value is below the reference sphere. Clamping negative heights
+        # to zero would make the crater and its surrounding plane coincide.
+        forms = [np.full_like(hill, -1350.0), -1350.0 - hill * 0.37]
+    else:
+        forms = [np.full_like(hill, 150.0), hill]
+    for elevations in forms:
         dem = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT, np.stack([elevations, mask], axis=-1).astype(np.float32))
         GL.glClearColor(0, 0, 0, 1)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
@@ -266,11 +281,14 @@ def check_raised_terrain(raster, vao, vertex_count, width, height, height_textur
         GL.glDeleteTextures([dem])
     GL.glDisable(GL.GL_DEPTH_TEST)
     flat, raised = pixels
-    silhouette = (flat[:, :, :3].max(axis=2) == 0) & (raised[:, :, :3].max(axis=2) > 50)
-    Image.fromarray(np.flipud(raised)).save(output / "tilted-terrain.png")
+    visible = lambda image: image[:, :, :3].max(axis=2) > 50
+    silhouette = visible(flat) ^ visible(raised)
+    Image.fromarray(np.flipud(raised)).save(output / ("tilted-lunar-crater.png" if lunar else "tilted-terrain.png"))
     assert np.count_nonzero(silhouette) > 300, "Elevation should change the perspective silhouette"
     GL.glBindTexture(GL.GL_TEXTURE_2D, height_texture)
     GL.glUniform1i(loc("u_perspective"), 0)
+    GL.glUniform1i(loc("u_lunar_relief"), 0)
+    GL.glUniform1i(loc("u_signed_elevation"), 0)
 
 
 def check_draped_vectors(root, raster, terrain_vao, vertex_count, width, height, height_texture, output):
@@ -295,6 +313,7 @@ def check_draped_vectors(root, raster, terrain_vao, vertex_count, width, height,
         GL.glUniform2f(loc("u_half_fov"), width / (1.9 * height), 1 / 1.9)
         GL.glUniform1f(loc("u_near"), .00004)
         GL.glUniform1i(loc("u_perspective"), 1)
+        GL.glUniform1f(loc("u_body_radius_m"), 6_371_000)
         GL.glUniform4f(loc("u_camera"), center, center, 12000, 1)
         return loc
 
@@ -693,6 +712,7 @@ def main():
         GL.glDeleteTextures([night_texture])
 
         check_raised_terrain(raster, vao, len(grid), width, height, textures[1], args.output)
+        check_raised_terrain(raster, vao, len(grid), width, height, textures[1], args.output, lunar=True)
         check_draped_vectors(root, raster, vao, len(grid), width, height, textures[1], args.output)
         check_vectors(vectors, width, height, args.output)
         timings = warm_frame_timings(draw)
@@ -704,6 +724,7 @@ def main():
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
             "raised_terrain_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
+            "signed_lunar_relief_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

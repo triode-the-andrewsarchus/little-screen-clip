@@ -10,7 +10,6 @@ uniform vec3 u_sky_eye;
 uniform bool u_moon_view;
 uniform bool u_moon_only;
 uniform vec3 u_moon_eye;
-uniform float u_moon_phase;
 uniform sampler2D u_earth_west;
 uniform sampler2D u_earth_east;
 uniform sampler2D u_earth_night;
@@ -26,14 +25,11 @@ uniform sampler2D u_stars;
 uniform vec3 u_sun;
 uniform vec3 u_moon;
 uniform vec3 u_planets[7];
-uniform sampler2D u_lunar_albedo;
-uniform bool u_has_lunar_albedo;
-uniform vec3 u_lunar_sun;
-uniform vec3 u_lunar_earth;
+
+#include <lunar>
 
 const float PI = 3.141592653589793;
 const float EARTH_RADIUS_KM = 6378.137;
-const float MOON_RADIUS_KM = 1737.4;
 const float READABLE_DISK_SCALE = 16.0;
 const float planet_radius[7] = float[7](2439.7, 6051.8, 3389.5, 69911.0, 58232.0, 25362.0, 24622.0);
 const vec3 planet_color[7] = vec3[7](
@@ -62,38 +58,11 @@ float disk(vec3 ray, vec3 offset, float radius, float pixel, out float distance)
     return distance > 0.0 ? aperture * (1.0 - smoothstep(max(0.0, angular - pixel*.5), angular + pixel*.5, off_axis)) : 0.0;
 }
 
-vec3 lunar_color(vec3 normal, float phase) {
-    vec3 point = MOON_RADIUS_KM * normal;
-    vec3 sunlight = u_lunar_sun - point;
-    vec3 earth = u_lunar_earth - point;
-    vec3 light = normalize(sunlight);
-    float diffuse = max(0.0, dot(normal, light));
-    float earth_phase = .5 * (1.0 - dot(normalize(earth), light));
-    float earthshine = .045 * earth_phase * earth_phase * max(0.0, dot(normal, normalize(earth)));
-    Shadow eclipse = shadow(sunlight, earth, 6371.0);
-    float direct = (1.0 - .32 * pow(eclipse.covered, 4.0)) *
-        (1.0 - smoothstep(.92, 1.0, eclipse.covered));
-    vec3 copper = vec3(.25,.063,.024) * exp(-2.3*eclipse.depth)
-        * smoothstep(.93, 1.0, eclipse.covered);
-    // Synchronous lunar longitude with a mean IAU lunar pole. The apparent
-    // Sun vector controls the crescent on this same textured sphere.
-    vec3 pole_icrf = vec3(-.0000355, -.39813, .91733);
-    vec3 north = normalize(transpose(u_inertial_from_fixed) * pole_icrf);
-    vec3 front = normalize(-u_moon - north * dot(-u_moon, north));
-    vec3 east = cross(north, front);
-    vec2 uv = vec2(.5 + atan(dot(normal,east),dot(normal,front))/(2.0*PI),
-        .5 - asin(clamp(dot(normal,north),-1.0,1.0))/PI);
-    vec3 albedo = u_has_lunar_albedo ? texture(u_lunar_albedo, uv).rgb : vec3(.6,.59,.57);
-    vec3 lighting = vec3(earthshine) + (vec3(direct) + copper) * pow(diffuse,.67);
-    // In the lunar viewer keep the terrain readable through all phases.
-    float minimum_light = u_moon_only ? .22 : 0.0;
-    return albedo * mix(vec3(1.0), clamp(lighting * 1.55, minimum_light, 1.3), phase);
-}
-
 vec3 lunar_surface(vec3 ray, vec3 offset) {
     vec3 across = cross(ray, cross(ray, offset));
     float chord = sqrt(max(0.0, MOON_RADIUS_KM * MOON_RADIUS_KM - dot(across, across)));
-    return lunar_color(normalize(across - ray * chord), 1.0);
+    vec3 normal = normalize(across - ray * chord);
+    return lunar_color(normal, normal, 1.0, 0.0);
 }
 vec3 earth_surface(vec3 ray, vec3 offset) {
     vec3 across = cross(ray, cross(ray, offset));
@@ -130,7 +99,7 @@ void main() {
         float coverage = smoothstep(-feather * .55, feather * .55, margin);
         if (dot(u_moon_eye, ray) >= 0.0 || coverage == 0.0) discard;
         vec3 normal = normalize(across - ray * sqrt(max(0.0, margin)));
-        frag = vec4(lunar_color(normal, u_moon_phase) * coverage, coverage);
+        frag = vec4(lunar_color(normal, normal, u_moon_phase, .22) * coverage, coverage);
         return;
     }
     vec3 icrf = u_inertial_from_fixed * ray;

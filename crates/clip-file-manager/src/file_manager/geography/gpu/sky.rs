@@ -409,12 +409,6 @@ impl SkyRenderer {
                     loc("u_moon_eye").as_ref(),
                     &projection.sphere_eye.unwrap_or_default(),
                 );
-                let phase = if frame.earth_lighting {
-                    zoom_fade(camera.zoom, 2.5, 30.0)
-                } else {
-                    0.0
-                };
-                gl.uniform_1_f32(loc("u_moon_phase").as_ref(), phase);
             }
             gl.uniform_1_f32(gl.get_uniform_location(p, "u_opacity").as_ref(), opacity);
             gl.uniform_1_f32(
@@ -447,19 +441,7 @@ impl SkyRenderer {
                 gl.get_uniform_location(p, "u_planets[0]").as_ref(),
                 scene.planets.as_flattened(),
             );
-            gl.uniform_3_f32_slice(
-                gl.get_uniform_location(p, "u_lunar_sun").as_ref(),
-                &scene.lunar_sun,
-            );
-            gl.uniform_3_f32_slice(
-                gl.get_uniform_location(p, "u_lunar_earth").as_ref(),
-                &scene.lunar_earth,
-            );
-            gl.uniform_1_i32(
-                gl.get_uniform_location(p, "u_has_lunar_albedo").as_ref(),
-                i32::from(self.moon.is_some()),
-            );
-            bind(gl, p, "u_lunar_albedo", 4, self.moon);
+            self.lunar_uniforms(gl, p, frame);
             bind(gl, p, "u_stars", 3, self.stars);
             if frame.moon_view {
                 self.bind_earth(gl, p, frame.earth_lighting, earth);
@@ -472,7 +454,7 @@ impl SkyRenderer {
                     gl.bind_vertex_array(vao);
                 }
             }
-            if frame.moon_view {
+            if frame.moon_view && frame.terrain.is_none() {
                 gl.use_program(Some(p));
                 gl.uniform_1_i32(loc("u_moon_only").as_ref(), 1);
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
@@ -480,6 +462,45 @@ impl SkyRenderer {
             gl.active_texture(glow::TEXTURE0);
         }
         Ok(())
+    }
+
+    pub(super) unsafe fn lunar_uniforms(
+        &self,
+        gl: &glow::Context,
+        p: glow::Program,
+        frame: &super::Frame,
+    ) {
+        let scene = frame.sky.as_ref();
+        let phase = if scene.is_some() && frame.earth_lighting {
+            zoom_fade(frame.camera.zoom, 2.5, 30.0)
+        } else {
+            0.0
+        };
+        let basis = scene.map_or(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            moon_axes,
+        );
+        let sun = scene.map_or([150_000_000.0, 0.0, 0.0], |scene| scene.lunar_sun);
+        let earth = scene.map_or([-380_000.0, 0.0, 0.0], |scene| scene.lunar_earth);
+        let albedo = self.moon.filter(|_| scene.is_some());
+        // SAFETY: the current context owns the bound program and retained lunar texture.
+        unsafe {
+            let loc = |name| gl.get_uniform_location(p, name);
+            gl.uniform_matrix_3_f32_slice(
+                loc("u_lunar_basis").as_ref(),
+                false,
+                basis.as_flattened(),
+            );
+            gl.uniform_3_f32_slice(loc("u_lunar_sun").as_ref(), &sun);
+            gl.uniform_3_f32_slice(loc("u_lunar_earth").as_ref(), &earth);
+            gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
+            gl.uniform_1_f32(loc("u_moon_phase").as_ref(), phase);
+            gl.uniform_1_i32(
+                loc("u_has_lunar_albedo").as_ref(),
+                i32::from(albedo.is_some()),
+            );
+            bind(gl, p, "u_lunar_albedo", 4, albedo);
+        }
     }
 
     unsafe fn bind_earth(

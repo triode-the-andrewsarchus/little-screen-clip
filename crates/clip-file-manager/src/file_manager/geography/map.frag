@@ -21,6 +21,32 @@ uniform float u_atmosphere;
 uniform vec3 u_sun;
 uniform vec3 u_moon;
 uniform sampler2D u_night;
+#include <lunar>
+uniform bool u_lunar_relief;
+
+vec3 lunar_normal(vec2 geo) {
+    vec2 angle = radians(geo + vec2(u_longitude, 0.0));
+    return vec3(cos(angle.y) * vec2(cos(angle.x), sin(angle.x)), sin(angle.y));
+}
+
+vec3 lunar_sample(vec2 offset) {
+    vec3 normal = lunar_normal(v_geo + offset * vec2(1.0, -1.0) * u_side / 256.0);
+    return normal * (1.0 + texture(u_height, v_uv + offset / 258.0).r / (MOON_RADIUS_KM * 1000.0));
+}
+
+vec3 lunar_relief_color() {
+    vec3 normal = lunar_normal(v_geo);
+    vec3 across = lunar_sample(vec2(1, 0)) - lunar_sample(vec2(-1, 0));
+    vec3 down = lunar_sample(vec2(0, 1)) - lunar_sample(vec2(0, -1));
+    vec3 cross_normal = cross(down, across);
+    vec3 relief = dot(cross_normal, cross_normal) > 1e-22 ? normalize(cross_normal) : normal;
+    if (dot(relief, normal) < 0.0) relief = -relief;
+    // Keep local relief available even when the broad lunar phase fades at close zoom.
+    vec3 hill_light = normalize(vec3(.48, -.6, .64));
+    float shade = clamp(1.0 + (dot(relief, hill_light) - dot(normal, hill_light)) * 1.3, .57, 1.3);
+    return lunar_color(u_lunar_basis * normal, u_lunar_basis * relief, u_moon_phase, .22) * shade;
+}
+
 const vec3 LUMA = vec3(.299,.587,.114);
 const float NATURAL_LAND_EXPOSURE = .84;
 float night_signal(vec3 sample_rgb) {
@@ -175,6 +201,10 @@ float contour_ink(float height, float close) {
 void main() {
     if(u_perspective ? v_front < -.12 :
        ((u_blend>0.0 && abs(v_geo.x)>180.0) || (u_blend>0.2 && v_front < -0.02*(1.0-u_blend)))) discard;
+    if (u_lunar_relief) {
+        frag = vec4(lunar_relief_color(), 1.0);
+        return;
+    }
     vec4 base=texture(u_color,v_uv);
     vec2 dem=texture(u_height,v_uv).rg;
     float h=dem.r, shade=1.0;
