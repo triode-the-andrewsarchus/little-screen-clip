@@ -131,7 +131,6 @@ impl System {
             painter: &guides,
             marks: vec![Mark::new(primary, projection.center, 0.0, true, self.zoom)],
             day,
-            zoom: self.zoom,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
         if wheel == Wheel::In
@@ -269,7 +268,7 @@ impl System {
             );
             let (point, depth) = projection.project(satellite.at(layout.day), scale);
             let mark = Mark::new(satellite, point, depth, false, self.zoom);
-            if helio && self.zoom > 2.2 && layout.painter.clip_rect().expand(30.0).contains(point) {
+            if helio {
                 layout.moon_system(&mark, projection);
             }
             if layout
@@ -473,7 +472,6 @@ struct OrbitLayout<'a> {
     painter: &'a egui::Painter,
     marks: Vec<Mark>,
     day: f64,
-    zoom: f32,
 }
 
 impl OrbitLayout<'_> {
@@ -506,14 +504,19 @@ impl OrbitLayout<'_> {
     }
 
     fn moon_system(&mut self, mark: &Mark, plane: Projection) {
+        let viewport = self.painter.clip_rect();
+        let close = (viewport.width().min(viewport.height()) * 0.038).max(22.0);
+        if mark.radius < close
+            || !viewport.contains_rect(Rect::from_center_size(
+                mark.point,
+                Vec2::splat(4.0 * mark.radius),
+            ))
+        {
+            return;
+        }
         let radius = mark.body.radius.unwrap_or(100.0);
         let power = 0.56;
-        let projection = Projection {
-            center: mark.point,
-            scale: mark.radius * 1.5 / radius.powf(power) as f32,
-            power,
-            ..plane
-        };
+        let limit = moon_orbit_limit(mark, plane, self.day);
         let mut moons: Vec<_> = satellites(mark.body.id)
             .filter(|moon| moon.radius.unwrap_or(0.0) >= 8.0)
             .collect();
@@ -535,12 +538,63 @@ impl OrbitLayout<'_> {
                     body: moon,
                     point,
                     depth: mark.depth + depth,
-                    radius: radius.max(1.4),
+                    radius: radius.clamp(1.4, limit * 0.15),
                     primary: false,
                 });
             }
         }
     }
+}
+
+fn moon_orbit_limit(parent: &Mark, projection: Projection, day: f64) -> f32 {
+    let radius = parent.body.semimajor().powf(projection.power);
+    let scale = projection.scale;
+    let next_planet = satellites(SUN)
+        .filter(|other| other.id != parent.body.id && other.kind() == Kind::Planet)
+        .map(|other| {
+            let point = projection
+                .project(other.at(day), projection.orbit_scale(other.semimajor()))
+                .0;
+            parent.point.distance(point)
+        })
+        .fold(f32::INFINITY, f32::min);
+    // Preserve a local group without colliding with neighboring visible disks.
+    let local = (0.20 * radius) as f32 * scale;
+    let limit = local.min(next_planet * 0.39);
+    if parent.body.id != super::EARTH {
+        return limit;
+    }
+    // Even in an oblique view, keep Earth's Moon well beyond the orbit of Mercury
+    // in the compressed heliocentric coordinate system.
+    let inner = body(199).and_then(|body| body.orbit).map_or(0.0, |orbit| {
+        orbit.0.powf(projection.power) * (1.0 + orbit.1)
+    });
+    limit.min((0.65 * (radius * 0.983 - inner).max(0.0)) as f32 * scale)
+}
+
+#[cfg(test)]
+#[test]
+fn overview_moon_orbits_stay_outside_mercury_and_leave_room_for_the_earth_disk() {
+    let plane = Projection {
+        center: Pos2::ZERO,
+        scale: 1300.0,
+        power: 0.34,
+        yaw: [0.0, 1.0],
+        elevation: [1.0, 0.0],
+    };
+    let earth = body(super::EARTH).unwrap();
+    let mut largest: f32 = 0.0;
+    for day in (0..365).step_by(8) {
+        let earth_scale = plane.orbit_scale(earth.semimajor());
+        let (point, depth) = plane.project(earth.at(f64::from(day)), earth_scale);
+        let mark = Mark::new(earth, point, depth, false, 6.0);
+        let limit = moon_orbit_limit(&mark, plane, f64::from(day));
+        let mercury = body(199).unwrap().orbit.unwrap();
+        let aphelion = mercury.0.powf(plane.power) * (1.0 + mercury.1);
+        assert!(point.distance(plane.center) - limit > aphelion as f32 * plane.scale);
+        largest = largest.max(limit / mark.radius);
+    }
+    assert!(largest > 1.7);
 }
 
 fn paint_icon(
