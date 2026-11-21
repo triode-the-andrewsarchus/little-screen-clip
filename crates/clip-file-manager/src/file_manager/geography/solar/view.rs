@@ -58,8 +58,10 @@ impl System {
         rect: Rect,
         now: f64,
         day: f64,
+        trajectory: Option<Arc<Trajectory>>,
     ) -> Self {
         let mut system = Self::new(SUN);
+        system.set_trajectory(trajectory);
         system.yaw = camera.center_lon.to_radians() - TAU * 0.25;
         system.elevation = camera.center_lat.to_radians();
         let scale = system.projection(rect).scale;
@@ -1159,7 +1161,7 @@ mod tests {
         for id in [599, super::super::EARTH, super::super::MOON] {
             let target = body(id).unwrap();
             let day = 200.0;
-            let mut system = System::departing(target, camera, rect, 1.0, day);
+            let mut system = System::departing(target, camera, rect, 1.0, day, None);
             let flight = system.flight.take().unwrap();
             let start = flight.sample(1.0);
             let middle = flight.sample(1.24);
@@ -1193,6 +1195,48 @@ mod tests {
             system.start_flight(rect, rect.center(), &[centered_mark(&system)], 1.7);
             assert_eq!(system.flight.unwrap().id, id);
         }
+    }
+
+    #[test]
+    fn departure_uses_the_same_projection_extent_as_the_imported_trajectory() {
+        let example =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons/4-Vesta.txt");
+        let original = std::fs::read_to_string(example).unwrap();
+        let (header, _) = original.split_once("$$SOE").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("distant.txt");
+        std::fs::write(
+            &path,
+            format!(
+                "{header}$$SOE\n2451545.0, date, 600.0, 0, 0\n2451546.0, date, 601.0, 0, 0\n$$EOE"
+            ),
+        )
+        .unwrap();
+        let trajectory = Arc::new(
+            Trajectory::read_if_identified(&path, &std::sync::atomic::AtomicBool::new(false))
+                .unwrap()
+                .unwrap(),
+        );
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        let target = body(super::super::EARTH).unwrap();
+        let camera = GlobeCamera {
+            zoom: 0.14,
+            ..GlobeCamera::default()
+        };
+        let day = 200.0;
+        let mut system = System::departing(target, camera, rect, 1.0, day, Some(trajectory));
+        let end = system.flight.take().unwrap().sample(2.0);
+        system.zoom = end.zoom;
+        system.pan = end.pan;
+        let projection = system.projection(rect);
+        let mark = Mark::new(
+            target,
+            projection.project(position_au(target, day)),
+            false,
+            projection.scale / AU_KM,
+        );
+        assert!(mark.point.distance(rect.center()) < 0.01);
+        assert!((f64::from(mark.physical_radius) / focus_threshold(rect) - 0.98).abs() < 1e-5);
     }
 
     #[test]

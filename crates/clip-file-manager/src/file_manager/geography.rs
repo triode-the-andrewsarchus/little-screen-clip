@@ -1446,7 +1446,11 @@ impl Viewer {
     }
 
     fn open_solar_system(&mut self, center: solar::Id, ctx: &egui::Context) {
-        self.show_solar_system(solar::System::new(center), ctx);
+        let mut system = solar::System::new(center);
+        if center == solar::SUN {
+            system.set_trajectory(self.trajectory.clone());
+        }
+        self.show_solar_system(system, ctx);
     }
 
     fn show_solar_system(&mut self, mut system: solar::System, ctx: &egui::Context) {
@@ -1455,9 +1459,6 @@ impl Viewer {
             && let Some(ephemeris) = world.ephemeris()
         {
             system.show_ephemeris(world.body.id, ephemeris);
-        }
-        if system.center == solar::SUN {
-            system.set_trajectory(self.trajectory.clone());
         }
         self.solar_system = Some(system);
         self.moon_camera = None;
@@ -1480,8 +1481,14 @@ impl Viewer {
     ) {
         if let Some(body) = solar::body(id) {
             let now = response.ctx.input(|input| input.time);
-            let system =
-                solar::System::departing(body, camera, response.rect, now, solar::scene_day(time));
+            let system = solar::System::departing(
+                body,
+                camera,
+                response.rect,
+                now,
+                solar::scene_day(time),
+                self.trajectory.clone(),
+            );
             self.show_solar_system(system, &response.ctx);
         }
     }
