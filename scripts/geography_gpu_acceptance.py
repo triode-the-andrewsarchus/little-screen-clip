@@ -283,6 +283,26 @@ def check_world_view(root, width, height, output):
     assert np.ptp(sun[height // 2 - 10:height // 2 + 10, :, 1]) > 100
     assert np.count_nonzero(sun[:, :, 1] != animated_sun[:, :, 1]) > 1000
     Image.fromarray(np.flipud(sun)).save(output / "procedural-sun.png")
+    # The same shader must show the distant Sun over the shared sky, with a
+    # smaller disk at a smaller angular radius and a separately dimmable sky.
+    GL.glUniform1i(loc("u_background_only"), 1)
+    GL.glUniform1i(loc("u_has_stars"), 1)
+    GL.glUniform1i(loc("u_stars"), 0)
+    GL.glUniform3f(loc("u_sun_direction"), -1, 0, 0)
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+    stars = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE,
+                    np.full((4, 4, 3), [29, 84, 123], dtype=np.uint8))
+    GL.glUniform1f(loc("u_sky_brightness"), 1.0)
+    GL.glUniform1f(loc("u_sun_radius"), .065)
+    near_sky = draw([])
+    GL.glUniform1f(loc("u_sky_brightness"), .17)
+    GL.glUniform1f(loc("u_sun_radius"), .018)
+    far_sky = draw([])
+    near_disk = np.count_nonzero(near_sky[:, :, 0] > 170)
+    far_disk = np.count_nonzero(far_sky[:, :, 0] > 170)
+    assert near_disk > far_disk * 6 and far_disk > 20
+    assert 0 < far_sky[4, 4, 2] < near_sky[4, 4, 2] * .65, (near_sky[4, 4], far_sky[4, 4])
+    GL.glDeleteTextures([stars])
     GL.glDeleteProgram(world)
 
 
@@ -782,6 +802,8 @@ def main():
             "raised_terrain_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
             "signed_lunar_relief_checked": True,
             "world_ring_occlusion_checked": True,
+            "edge_on_ring_thickness_checked": True,
+            "shared_sky_and_solar_emission_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

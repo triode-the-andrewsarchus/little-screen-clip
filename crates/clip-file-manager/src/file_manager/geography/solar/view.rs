@@ -97,6 +97,10 @@ impl System {
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
         let zooming_in = self.navigate(response);
+        let blend = self
+            .flight
+            .as_ref()
+            .map_or(0.0, |flight| flight.ease(animation));
         let arrived = self.advance_flight(response, animation);
         let rect = response.rect;
         let painter = ui.painter_at(rect);
@@ -105,13 +109,15 @@ impl System {
         let day = scene_day(time);
         let clock = clock(time, animation);
         let projection = self.projection(rect, animation, primary.id);
-        self.paint_backdrop(ui, &painter, projection, clock, stars);
+        self.paint_backdrop(ui, &painter, projection, clock, stars, blend);
+        let mut guides = painter.clone();
+        guides.multiply_opacity(1.0 - blend);
         if heliocentric {
-            paint_belts(&painter, projection, self.zoom);
+            paint_belts(&guides, projection, self.zoom);
         }
         let camera = projection.camera();
         let mut layout = OrbitLayout {
-            painter: &painter,
+            painter: &guides,
             marks: vec![Mark::new(primary, projection.center, 0.0, true, self.zoom)],
             day,
             zoom: self.zoom,
@@ -124,7 +130,15 @@ impl System {
         {
             self.start_flight(rect, pointer, &layout.marks, animation);
         }
-        let clicked = paint_marks(ui, &layout, response, camera, clock, &self.textures);
+        let clicked = paint_marks(
+            ui,
+            &painter,
+            &layout,
+            response,
+            camera,
+            clock,
+            &self.textures,
+        );
         if let Some(id) = arrived {
             let mut camera = camera;
             camera.zoom = world::initial_zoom(id);
@@ -171,8 +185,11 @@ impl System {
         projection: Projection,
         clock: [f32; 2],
         stars: Option<Arc<sky::Assets>>,
+        blend: f32,
     ) {
         let rect = painter.clip_rect();
+        let brightness = if self.center == SUN { 0.17 } else { 0.28 };
+        let aperture = 0.60 + (1.0 / 1.9 - 0.60) * blend;
         painter.rect_filled(rect, 0, Color32::from_rgb(7, 10, 17));
         if stars.is_none()
             || gpu::paint_space(
@@ -181,10 +198,10 @@ impl System {
                 world::Backdrop {
                     axes: projection.axes(),
                     fov: [rect.width(), rect.height()]
-                        .map(|s| s / rect.width().min(rect.height()) * 0.60),
+                        .map(|s| s / rect.width().min(rect.height()) * aperture),
                     sun: ([0.0, 0.0, 1.0], 0.0),
                     clock,
-                    brightness: if self.center == SUN { 0.17 } else { 0.28 },
+                    brightness: brightness + (1.0 - brightness) * blend,
                     assets: stars,
                 },
             )
@@ -327,14 +344,18 @@ struct FlyIn {
 }
 
 impl FlyIn {
-    fn sample(&self, now: f64) -> (f32, Vec2, bool) {
+    fn ease(&self, now: f64) -> f32 {
         let progress = ((now - self.began) / 0.28).clamp(0.0, 1.0) as f32;
-        let ease = progress * progress * (3.0 - 2.0 * progress);
+        progress * progress * (3.0 - 2.0 * progress)
+    }
+
+    fn sample(&self, now: f64) -> (f32, Vec2, bool) {
+        let ease = self.ease(now);
         let scale = self.zoom_factor.powf(ease);
         (
             self.from_zoom * scale,
             self.screen_offset * (1.0 - ease) - self.orbit_offset * scale,
-            progress >= 1.0,
+            ease >= 1.0,
         )
     }
 }
@@ -539,13 +560,13 @@ fn mark_at(marks: &[Mark], pointer: Pos2) -> Option<&Mark> {
 
 fn paint_marks(
     ui: &egui::Ui,
+    painter: &egui::Painter,
     layout: &OrbitLayout<'_>,
     response: &egui::Response,
     camera: GlobeCamera,
     clock: [f32; 2],
     images: &HashMap<Id, sky::Texture>,
 ) -> Option<Id> {
-    let painter = layout.painter;
     let mut marks: Vec<_> = layout.marks.iter().collect();
     marks.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     let pointer = response
@@ -569,7 +590,7 @@ fn paint_marks(
         {
             continue;
         }
-        let box_rect = paint_label(painter, response.rect, mark, &mut occupied);
+        let box_rect = paint_label(layout.painter, response.rect, mark, &mut occupied);
         if hit.is_none() && pointer.zip(box_rect).is_some_and(|(p, r)| r.contains(p)) {
             hit = Some(mark.body.id);
         }
