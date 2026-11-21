@@ -40,6 +40,7 @@ impl<'a> ListPreviews<'a> {
             || entry.has_content_strip()
             || self.files.is_binary(entry)
             || self.files.is_multisample(entry)
+            || self.files.solar_trajectory(entry).is_some()
         {
             media_row(ui, rect, marked, colors)
         } else {

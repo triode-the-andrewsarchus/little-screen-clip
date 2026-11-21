@@ -286,6 +286,10 @@ impl EntryPreviews {
                 .cached(entry)
                 .is_some_and(|ready| ready.data.multisample.is_some())
     }
+    pub fn solar_trajectory(&self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
+        self.cached(entry)
+            .filter(|ready| ready.data.solar_trajectory)
+    }
     pub fn is_text(&self, entry: &Entry) -> bool {
         if !text_candidate(entry) {
             return false;
@@ -638,11 +642,7 @@ impl EntryPreviews {
     ) -> Option<usize> {
         let id = self.identity(entry);
         self.listing(entry);
-        if let Some(ready) = self
-            .cache
-            .get(id)
-            .filter(|ready| ready.data.solar_trajectory)
-        {
+        if let Some(ready) = self.solar_trajectory(entry) {
             show_trajectory_strip(ui, row, entry, columns, colors, ready);
             return None;
         }
@@ -1049,11 +1049,16 @@ fn show_trajectory_strip(
     ready: &super::shelf::preview::Ready,
 ) {
     let strip = super::ui::information_strip(ui, row, entry, &ready.data.detail, columns, colors);
+    let texture = ready.texture.as_ref();
+    let ratio = texture.map_or(1.0, |image| {
+        let [width, height] = image.size();
+        width as f32 / height as f32
+    });
     let thumbnail = egui::Rect::from_min_size(
         strip.min,
-        egui::vec2(240.0_f32.min(strip.width()), strip.height()),
+        egui::vec2((strip.height() * ratio).min(strip.width()), strip.height()),
     );
-    super::ui::model_thumbnail(ui, thumbnail, ready.texture.as_ref(), colors);
+    super::ui::model_thumbnail(ui, thumbnail, texture, colors);
     let caption = egui::pos2(thumbnail.right() + 10.0, strip.center().y);
     ui.painter_at(strip).text(
         caption,
