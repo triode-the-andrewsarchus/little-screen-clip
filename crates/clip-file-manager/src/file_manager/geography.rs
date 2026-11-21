@@ -68,6 +68,7 @@ pub(super) use strips::Strips;
 pub(in crate::file_manager) struct Preview {
     document: Document,
     overlay: overlay::Overlay,
+    context: Option<little_clip_core::geography::preview::Context>,
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
@@ -75,8 +76,8 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     match read(path, token) {
         Ok(mut document) => {
             data.detail = format!(
-                "{} shapes · {} positions · partial map preview",
-                document.features.len(),
+                "{} shapes · {} positions",
+                document.shape_count(),
                 document.points
             );
             // Keep source-order indices while retaining only bounded drawing data in row caches.
@@ -112,6 +113,9 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
             document.notes.clear();
             data.geography = Some(Arc::new(Preview {
                 overlay: overlay::Overlay::prepare(&document, false),
+                context: document
+                    .geographic_bounds
+                    .map(little_clip_core::geography::preview::Context::new),
                 document,
             }));
         }
@@ -835,7 +839,7 @@ impl Viewer {
                 self.select_solar_target(solar::EARTH, ctx);
                 self.camera.center_lat = latitude;
                 self.camera.center_lon = longitude;
-                self.camera.zoom = kind.zoom();
+                self.camera.zoom = finder::place_zoom(kind);
                 self.camera.orbit = Default::default();
                 self.found_place = Some(([latitude, longitude], hit.label));
             }
@@ -2326,12 +2330,9 @@ fn paint_strip_map(
 ) -> Option<Hit> {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, colors.recessed);
-    let bounds = preview
-        .document
-        .geographic_bounds
-        .filter(|_| rect.is_positive())?;
-    let camera = strips::camera(rect, bounds);
-    maps.paint(ui, rect, camera);
+    let context = preview.context.filter(|_| rect.is_positive())?;
+    let camera = context.camera([rect.width(), rect.height()]);
+    maps.paint(ui, rect, camera, context.city.is_none());
     let pointer = ui
         .ctx()
         .pointer_hover_pos()
@@ -2344,8 +2345,11 @@ fn paint_strip_map(
     };
     let hit = preview
         .overlay
-        .paint_copy(&painter, projection, None, colors, pointer)?
-        .sample;
+        .paint_copy(&painter, projection, None, colors, pointer);
+    if let Some(city) = context.city {
+        strips::paint_city(&painter, rect, camera, city);
+    }
+    let hit = hit?.sample;
     let sample = &preview.document.features[hit.feature].paths[hit.path][hit.point];
     show_position(ui, &preview.document.features[hit.feature].name, sample);
     Some(hit)

@@ -1,10 +1,3 @@
-### Earth locations
-
-City, country, and region names and coordinates are extracted from Natural Earth 1:10m cultural vectors v5.1.2. The JSON files retain names, alternate spellings, coordinates, and population for ranking. Natural Earth data is public domain.
-
-- [Natural Earth cultural vectors](https://www.naturalearthdata.com/downloads/10m-cultural-vectors/)
-- [Natural Earth terms of use](https://www.naturalearthdata.com/about/terms-of-use/)
-
 ### Stars and constellations
 
 The offline search data includes named stars from David Nash's HYG v4.1 catalog, with coordinates converted to unit vectors. The 88 constellation names and line figures come from Stellarium's Modern sky culture v25.4, with endpoints resolved against HYG. The derived stars and constellation datasets are available under CC BY-SA 4.0.

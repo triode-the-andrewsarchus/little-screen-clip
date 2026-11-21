@@ -1,6 +1,8 @@
 //! Bounded WGS84 geometry and offline map/profile preparation.
 pub mod basemap;
 mod geojson;
+pub mod places;
+pub mod preview;
 mod radiacode;
 pub mod trajectory;
 pub mod units;
@@ -124,6 +126,13 @@ struct RawFeature {
     time_range: Option<[DateTime<Utc>; 2]>,
 }
 impl Document {
+    pub fn shape_count(&self) -> usize {
+        self.features
+            .iter()
+            .filter(|feature| feature.kind != Kind::Empty)
+            .count()
+    }
+
     /// Reads Android tab-separated and JSON RadiaCode track exports.
     ///
     /// # Errors

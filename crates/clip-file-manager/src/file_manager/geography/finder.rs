@@ -6,8 +6,9 @@ pub(super) use sight::Sight;
 use super::{Document, sky, solar};
 use crate::icons::Icon;
 use clip_search::name_match::navigation_rank;
+use little_clip_core::geography::places::{PLACES, Place, PlaceKind};
 use little_clip_core::{BackgroundJobs, JobError, jobs::task::Task};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use std::{
     sync::{
         Arc, LazyLock,
@@ -16,42 +17,23 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(super) enum PlaceKind {
-    City,
-    Country,
-    Region,
+pub(super) fn place_zoom(kind: PlaceKind) -> f64 {
+    match kind {
+        PlaceKind::City => 104.0,
+        PlaceKind::Country => 5.5,
+        PlaceKind::Region => 18.0,
+    }
 }
 
-impl PlaceKind {
-    pub fn zoom(self) -> f64 {
-        match self {
-            Self::City => 104.0,
-            Self::Country => 5.5,
-            Self::Region => 18.0,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::City => "City",
-            Self::Country => "Country",
-            Self::Region => "Region",
-        }
-    }
-
-    fn icon(self) -> Icon {
-        match self {
-            Self::City => Icon::Pin,
-            Self::Country => Icon::Map,
-            Self::Region => Icon::Layers,
-        }
+fn place_style(kind: PlaceKind) -> (&'static str, Icon) {
+    match kind {
+        PlaceKind::City => ("City", Icon::Pin),
+        PlaceKind::Country => ("Country", Icon::Map),
+        PlaceKind::Region => ("Region", Icon::Layers),
     }
 }
 
 type Direction = [f32; 3];
-type Place = (PlaceKind, String, String, String, [f64; 2], f64);
 type NamedStar = (String, u32, f32, Direction);
 type Constellation = (String, String, Direction, Vec<[Direction; 2]>);
 
@@ -60,8 +42,6 @@ fn read_catalog<T: DeserializeOwned>(compressed: &[u8]) -> Vec<T> {
     serde_json::from_reader(decoder).expect("valid bundled search catalog")
 }
 
-static PLACES: LazyLock<Vec<Place>> =
-    LazyLock::new(|| read_catalog(include_bytes!("finder/places.json.zst")));
 static NAMED_STARS: LazyLock<Vec<NamedStar>> =
     LazyLock::new(|| read_catalog(include_bytes!("finder/stars.json.zst")));
 static CONSTELLATIONS: LazyLock<Vec<Constellation>> =
@@ -229,17 +209,18 @@ fn rank_place(
             name_rank.1 + locality_rank.1,
         ))
     })?;
+    let (kind_label, icon) = place_style(*kind);
     let context = if locality.is_empty() {
-        kind.label().to_owned()
+        kind_label.to_owned()
     } else {
-        format!("{} · {locality}", kind.label())
+        format!("{kind_label} · {locality}")
     };
     Some(ranked_hit(
         rank,
         u32::MAX - *population as u32,
         name,
         &context,
-        kind.icon(),
+        icon,
         Target::Place(*kind, *coordinates),
     ))
 }

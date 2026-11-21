@@ -7,7 +7,10 @@ use super::{
 use crate::file_manager::geography_downloader::asset_workers;
 use little_clip_core::{
     JobError,
-    geography::basemap::{BasemapAssets, GlobeCamera, MAX_MAP_ZOOM, ProjectionMode, wrap_lon},
+    geography::{
+        basemap::{BasemapAssets, GlobeCamera},
+        preview::City,
+    },
     jobs::task::Task,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -77,7 +80,13 @@ impl Strips {
         self.previous = wanted;
     }
 
-    pub(super) fn paint(&mut self, ui: &egui::Ui, rect: egui::Rect, camera: GlobeCamera) {
+    pub(super) fn paint(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        camera: GlobeCamera,
+        show_city_labels: bool,
+    ) {
         let Some(directory) = &self.directory else {
             return;
         };
@@ -112,7 +121,7 @@ impl Strips {
                 roads: true,
             },
         );
-        if gpu::paint(ui, rect, frame).is_ok() {
+        if gpu::paint(ui, rect, frame).is_ok() && show_city_labels {
             paint_cities(
                 ui,
                 &ui.painter_at(rect),
@@ -142,20 +151,29 @@ fn has_context(assets: &BasemapAssets) -> bool {
         || !assets.coastlines.is_empty()
 }
 
-/// The projected track and basemap use the same fitted flat viewport.
-pub(super) fn camera(rect: egui::Rect, [west, south, east, north]: [f64; 4]) -> GlobeCamera {
-    let mut camera = GlobeCamera {
-        center_lat: (south + north) * 0.5,
-        center_lon: wrap_lon((west + east) * 0.5),
-        zoom: 1.0,
-        mode: ProjectionMode::Map2D,
-        orbit: Default::default(),
+pub(super) fn paint_city(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: GlobeCamera,
+    city: City,
+) {
+    use egui::{Color32, FontId, Rect, pos2, vec2};
+    let [lat, lon] = city.lat_lon;
+    let Some([x, y]) = camera.project(lat, lon, rect.width(), rect.height()) else {
+        return;
     };
-    let cos_lat = camera.center_lat.to_radians().cos().abs().max(0.25);
-    let horizontal = (east - west).max(0.001).to_radians() * cos_lat;
-    let vertical = (north - south).max(0.001).to_radians();
-    let scale = (f64::from((rect.width() - 18.0).max(1.0)) / horizontal)
-        .min(f64::from((rect.height() - 18.0).max(1.0)) / vertical);
-    camera.zoom = (scale / camera.scale_px(rect.width(), rect.height())).min(MAX_MAP_ZOOM);
-    camera
+    let point = rect.min + vec2(x, y);
+    let galley =
+        painter.layout_no_wrap(city.name.into(), FontId::proportional(12.0), Color32::WHITE);
+    let size = galley.size() + vec2(8.0, 4.0);
+    let left = if point.x + size.x + 6.0 <= rect.right() {
+        point.x + 5.0
+    } else {
+        point.x - size.x - 5.0
+    };
+    let top = (point.y - size.y * 0.5).clamp(rect.top(), (rect.bottom() - size.y).max(rect.top()));
+    let label = Rect::from_min_size(pos2(left.max(rect.left()), top), size);
+    painter.rect_filled(label, 3.0, Color32::from_black_alpha(200));
+    painter.galley(label.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+    painter.circle_filled(point, 3.0, Color32::from_rgb(255, 214, 112));
 }
