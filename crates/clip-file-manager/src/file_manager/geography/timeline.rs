@@ -1,10 +1,12 @@
 //! Scrub the shared astronomy clock without leaving the current view.
 mod scale;
+mod scrub;
 
 use super::{map_camera, solar};
 use chrono::{DateTime, Months, Utc};
 use egui::{Align2, Color32, FontId, Mesh, Painter, Rect, Sense, Stroke, pos2, vec2};
 use little_clip_core::geography::Document;
+pub(super) use scrub::Preview;
 
 pub(super) const HEIGHT: f32 = 63.0;
 const MIN_SCALE: f64 = 0.5;
@@ -19,6 +21,7 @@ pub(super) struct Timeline {
     recorded: Option<[DateTime<Utc>; 2]>,
     seconds_per_point: f64,
     drag_time: Option<f64>,
+    scrub: Option<scrub::Scrub>,
 }
 
 impl Timeline {
@@ -43,6 +46,7 @@ impl Timeline {
             recorded,
             seconds_per_point,
             drag_time: None,
+            scrub: None,
         }
     }
 
@@ -61,6 +65,17 @@ impl Timeline {
 
     pub fn time(&self) -> Option<DateTime<Utc>> {
         self.fixed.or_else(|| self.contextual_time())
+    }
+
+    pub fn rendered_time(&mut self, ctx: &egui::Context) -> Option<Preview> {
+        let scrub = self.scrub.as_mut()?;
+        let frame = scrub.frame(ctx.input(|input| input.time));
+        if scrub.settled() {
+            self.scrub = None;
+        } else {
+            ctx.request_repaint();
+        }
+        Some(frame)
     }
 
     pub fn show(
@@ -101,6 +116,7 @@ impl Timeline {
         let limit = Months::new(6_000);
         let bounds = [now - limit, now + limit].map(scale::seconds);
         let current = self.time().unwrap_or(now);
+        let previous_fixed = self.fixed;
         let scroll = map_camera::scroll_zoom(&response);
         self.seconds_per_point =
             (self.seconds_per_point / scroll.powf(2.5)).clamp(MIN_SCALE, MAX_SCALE);
@@ -125,6 +141,12 @@ impl Timeline {
         }
 
         let time = self.time().unwrap_or(now);
+        if self.fixed != previous_fixed && time != current {
+            let animation_time = ui.input(|input| input.time);
+            self.scrub
+                .get_or_insert_with(|| scrub::Scrub::new(current, animation_time))
+                .retarget(time, animation_time);
+        }
         if self.time().is_none() {
             let millis = 60_000 - now.timestamp_millis().rem_euclid(60_000);
             ui.ctx()

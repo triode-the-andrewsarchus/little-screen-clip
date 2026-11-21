@@ -258,6 +258,10 @@ void main() {
         float water = max(river,lake) * (u_style == 2 ? 1.0 : .94);
         rgb = mix(rgb, u_style == 2 ? vec3(0.0) : vec3(.149,.40,.675), water);
     }
-    if (u_earth_lighting > 0.0) rgb = mix(rgb, light_surface(rgb, v_geo), u_earth_lighting);
+    if (u_earth_lighting > 0.0) {
+        vec3 daylight = rgb * .66;
+        if (u_timeline_light > 0.0) daylight = mix(daylight, light_surface(rgb, v_geo), u_timeline_light);
+        rgb = mix(rgb, daylight, u_earth_lighting);
+    }
     frag=vec4(rgb,1.0);
 }

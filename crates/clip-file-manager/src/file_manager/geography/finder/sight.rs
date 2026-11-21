@@ -85,6 +85,7 @@ impl Sight {
                     .map(to_ecliptic),
                     fov: [rect.width(), rect.height()].map(|side| side / (2.0 * projection.focal)),
                     sun: ([0.0, 0.0, 1.0], 0.0),
+                    directional_light: 1.0,
                     clock: [0.0; 2],
                     brightness: 0.64,
                     assets: assets.clone(),

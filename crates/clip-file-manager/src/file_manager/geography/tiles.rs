@@ -392,6 +392,7 @@ impl Tiles {
             readable_sky: false,
             show_constellations: false,
             earth_lighting: false,
+            directional_light: 1.0,
         }
     }
 

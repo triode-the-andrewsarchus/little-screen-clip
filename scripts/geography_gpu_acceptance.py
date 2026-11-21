@@ -276,6 +276,13 @@ def check_world_view(root, width, height, output):
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
         return np.frombuffer(GL.glReadPixels(0, 0, width, height,
             GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+    GL.glUniform1f(loc("u_timeline_light"), 0.0)
+    neutral = draw([])
+    GL.glUniform3f(loc("u_sun_direction"), -.811, -.324, -.487)
+    assert np.array_equal(neutral, draw([])), "World lighting changed during a muted time jump"
+    GL.glUniform1f(loc("u_timeline_light"), 1.0)
+    assert not np.array_equal(neutral, draw([])), "World lighting did not return at full strength"
+    GL.glUniform3f(loc("u_sun_direction"), .811, .324, .487)
     globe = draw([])
     ringed = draw([(1.28, 1.58, .41), (1.58, 2.02, .74), (2.10, 2.32, .52)])
     exterior = (globe[:, :, 0] == 0) & (ringed[:, :, 0] > 5)
@@ -873,6 +880,14 @@ def main():
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
 
+        GL.glUniform1f(uniform("u_timeline_light"), 0.0)
+        neutral = lit_exposure(-150e6, 1)
+        assert np.array_equal(neutral, lit_exposure(150e6, 1)), "Earth flashed across a muted day/night jump"
+        GL.glUniform1f(uniform("u_timeline_light"), 0.5)
+        assert np.all(np.abs(lit_exposure(-150e6, 1) - (neutral + lit) / 2) <= 1)
+        GL.glUniform1f(uniform("u_timeline_light"), 1.0)
+        assert np.array_equal(lit, lit_exposure(-150e6, 1))
+
         check_eclipse_horizon(raster, draw, center, height // 2, textures[0])
         GL.glDeleteTextures([night_texture])
 
@@ -889,6 +904,7 @@ def main():
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 6,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
+            "timeline_lighting_checked": True,
             "raised_terrain_checked": True, "tilted_lake_mask_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
             "signed_lunar_relief_checked": True,
             "world_ring_occlusion_checked": True,

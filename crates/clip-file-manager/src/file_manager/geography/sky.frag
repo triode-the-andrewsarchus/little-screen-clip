@@ -90,7 +90,7 @@ vec3 earth_surface(vec3 ray, vec3 offset) {
         color = mix(color, vec3(1.0, .80, .46), lights * (1.0 - day));
     }
     float rim = 1.0 - smoothstep(0.0, .23, max(0.0, dot(normal, -ray)));
-    return mix(color, atmosphere_color(sunlight), .38 * rim);
+    return mix(surface * .66, mix(color, atmosphere_color(sunlight), .38 * rim), u_timeline_light);
 }
 
 vec3 remote_planet_albedo(int planet, vec2 uv) {
@@ -119,7 +119,7 @@ vec3 planet_disk(int i, vec3 ray, vec3 offset, float radius) {
     albedo = remote_planet_albedo(i,uv);
     if (i == 1) albedo = vec3(.92,.85,.70)*(.94+.05*albedo.r);
     float lighting = .32+.68*pow(max(dot(normal,normalize(u_sun-u_planets[i])),0.0),.54);
-    return albedo*lighting;
+    return albedo*mix(.66,lighting,u_timeline_light);
 }
 
 void main() {
@@ -184,6 +184,7 @@ void main() {
         vec4 emission = solar_disk(u_inertial_from_fixed*ray,
             u_inertial_from_fixed*sun_direction, SOLAR_RADIUS_KM*sun_scale/length(sun_offset),
             u_solar_clock);
+        emission *= u_timeline_light;
         rgb = emission.rgb + rgb*(1.0-emission.a);
         if (sun > 0.0) nearest = distance;
     }

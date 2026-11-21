@@ -294,6 +294,7 @@ impl System {
             fov: [rect.width(), rect.height()]
                 .map(|s| s / rect.width().min(rect.height()) * aperture),
             sun: ([0.0, 0.0, 1.0], 0.0),
+            directional_light: 1.0,
             clock,
             brightness: brightness + (1.0 - brightness) * blend,
             assets: stars,

@@ -1,6 +1,5 @@
 use super::{Body, Id, SUN, assets, body, clock, satellites, scene_day, sunlight};
-use crate::file_manager::geography::{gpu, map_camera, sky};
-use chrono::{DateTime, Utc};
+use crate::file_manager::geography::{gpu, map_camera, sky, timeline};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect};
 use little_clip_core::{
     geography::basemap::{
@@ -126,7 +125,7 @@ impl World {
         &self,
         ui: &egui::Ui,
         response: &egui::Response,
-        time: DateTime<Utc>,
+        preview: timeline::Preview,
         stars: Option<std::sync::Arc<sky::Assets>>,
         constellations: bool,
         cache: &Arc<assets::MapCache>,
@@ -146,14 +145,17 @@ impl World {
                 .or_else(|| cache.preview(self.body.id)),
         );
         let animation = ui.input(|input| input.time);
+        let time = preview.time;
         let day = scene_day(time);
         let sun = sunlight(self.body, day);
         frame.sun = sun.0;
         frame.clock = clock(time, animation);
+        frame.directional_light = preview.directional_light;
         let lights = Backdrop {
             axes: frame.pose.axes.map(|axis| axis.map(|v| v as f32)),
             fov: frame.pose.half_fov(),
             sun,
+            directional_light: frame.directional_light,
             clock: frame.clock,
             brightness: 1.0,
             assets: stars,
@@ -214,6 +216,7 @@ impl World {
                 rect,
                 sunlight(planet.body, day).0,
                 clock,
+                frame.directional_light,
                 cache.preview(planet.body.id).as_ref(),
             )?;
         }
@@ -242,6 +245,7 @@ fn paint_local_bodies(
     let pose = frame.pose;
     let clock = frame.clock;
     let sun = frame.sun;
+    let directional_light = frame.directional_light;
     let paint_side = |behind| {
         for moon in neighbors.iter().filter(|moon| moon.behind == behind) {
             moon.paint(
@@ -251,6 +255,7 @@ fn paint_local_bodies(
                 viewport,
                 sun,
                 clock,
+                directional_light,
                 cache
                     .map(moon.body.id, primary.parent != Some(moon.body.id))
                     .or_else(|| cache.preview(moon.body.id))
@@ -365,6 +370,7 @@ impl Nearby {
         viewport: Rect,
         sun: [f32; 3],
         clock: [f32; 2],
+        directional_light: f32,
         texture: Option<&sky::Texture>,
     ) -> Result<(), String> {
         if self.display_radius / self.depth * pose.focal < 2.0 && bands(self.body.id).is_empty() {
@@ -380,6 +386,7 @@ impl Nearby {
             std::array::from_fn(|i| (pose.eye[i] - self.position[i]) / self.display_radius);
         frame.sun = sun;
         frame.clock = clock;
+        frame.directional_light = directional_light;
         // Preserve the canvas ray projection while restricting shader work to
         // the object's possible silhouette, including the outer edge of its rings.
         let bound = visible_radius(self.body, self.display_radius);
@@ -657,6 +664,7 @@ pub(in crate::file_manager::geography) struct Backdrop {
     pub axes: [[f32; 3]; 3],
     pub fov: [f32; 2],
     pub sun: ([f32; 3], f32),
+    pub directional_light: f32,
     pub clock: [f32; 2],
     pub brightness: f32,
     pub assets: Option<std::sync::Arc<sky::Assets>>,
@@ -699,6 +707,7 @@ pub(in crate::file_manager::geography) struct Frame {
     pub sun: [f32; 3],
     pub clock: [f32; 2],
     pub ring_emphasis: f32,
+    pub directional_light: f32,
 }
 
 impl Frame {
@@ -735,6 +744,7 @@ impl Frame {
             sun: [0.811, 0.324, 0.487],
             clock: [0.0; 2],
             ring_emphasis: 1.0,
+            directional_light: 1.0,
         }
     }
 }

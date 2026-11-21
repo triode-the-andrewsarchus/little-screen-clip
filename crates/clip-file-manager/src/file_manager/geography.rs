@@ -267,6 +267,35 @@ impl SkyState {
         scene
     }
 
+    fn prepare_frame(
+        &mut self,
+        frame: &mut gpu::Frame,
+        timeline: &timeline::Timeline,
+        scrub: Option<timeline::Preview>,
+        ctx: &egui::Context,
+    ) {
+        let visible = self.visible && frame.camera.globe_blend() > 0.0;
+        if self.assets.is_none() || !(visible || self.lighting || frame.moon_view) {
+            return;
+        }
+        let manual = scrub
+            .map(|preview| preview.time)
+            .or_else(|| timeline.fixed());
+        let (time, star_trail) = if let Some(time) = manual {
+            self.transition = None;
+            (time, 0.0)
+        } else {
+            self.scene_time(timeline.contextual_time(), ctx)
+        };
+        frame.sky = self.at(time);
+        frame.directional_light = scrub.map_or(1.0, |preview| preview.directional_light);
+        frame.star_trail = star_trail;
+        frame.show_sky = visible;
+        frame.readable_sky = self.readable;
+        frame.show_constellations = self.constellations;
+        frame.earth_lighting = self.lighting;
+    }
+
     fn scene_time(
         &mut self,
         recorded: Option<DateTime<Utc>>,
@@ -707,7 +736,11 @@ impl Viewer {
         }
         let (rect, response) =
             ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
-        let time = self.solar_scene_time(ui.ctx());
+        let preview = self
+            .timeline
+            .rendered_time(ui.ctx())
+            .unwrap_or_else(|| timeline::Preview::exact(self.solar_scene_time(ui.ctx())));
+        let time = preview.time;
         if let Some(sight) = self.sight.as_mut() {
             if sight.navigate(&response) {
                 self.open_solar_system(solar::SUN, ui.ctx());
@@ -743,7 +776,7 @@ impl Viewer {
             let result = world.paint(
                 ui,
                 &response,
-                time,
+                preview,
                 self.sky.assets.clone(),
                 self.sky.constellations,
                 &self.world_maps,
@@ -996,26 +1029,13 @@ impl Viewer {
             moon,
         );
         self.timeline.preview(hovered.flatten());
+        let preview = self.timeline.rendered_time(ui.ctx());
         let Some((mut frame, result)) = prepared else {
             return;
         };
-        let visible = self.sky.visible && frame.camera.globe_blend() > 0.0;
         frame.moon_view = moon;
-        if self.sky.assets.is_some() && (visible || self.sky.lighting || moon) {
-            let (time, star_trail) = if let Some(fixed) = self.timeline.fixed() {
-                self.sky.transition = None;
-                (fixed, 0.0)
-            } else {
-                self.sky
-                    .scene_time(self.timeline.contextual_time(), ui.ctx())
-            };
-            frame.sky = self.sky.at(time);
-            frame.star_trail = star_trail;
-            frame.show_sky = visible;
-            frame.readable_sky = self.sky.readable;
-            frame.show_constellations = self.sky.constellations;
-            frame.earth_lighting = self.sky.lighting;
-        }
+        self.sky
+            .prepare_frame(&mut frame, &self.timeline, preview, ui.ctx());
         let resolved = gpu::resolved_planets(&frame);
         self.world_maps.request_distant(
             ui.ctx(),

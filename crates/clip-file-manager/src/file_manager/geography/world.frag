@@ -7,6 +7,7 @@ uniform vec4 u_ray_region = vec4(1.0,1.0,0.0,0.0);
 uniform vec3 u_eye;
 uniform vec3 u_color;
 uniform float u_zoom;
+uniform float u_timeline_light = 1.0;
 uniform sampler2D u_albedo;
 uniform bool u_has_albedo;
 uniform bool u_gas;
@@ -111,7 +112,7 @@ vec4 rings(vec3 ray, float surface_depth, float pixel_angle) {
             float behind = -dot(u_sun_direction,point);
             float shadow = behind > 0.0 ? smoothstep(.94,1.04,length(point+behind*u_sun_direction)) : 1.0;
             thickness += depth;
-            shaded += depth * mix(.24,1.0,shadow);
+            shaded += depth * mix(.66,mix(.24,1.0,shadow),u_timeline_light);
         }
     }
     float alpha = 1.0-exp(-thickness*max(1.0,u_ring_emphasis));
@@ -170,7 +171,7 @@ void main() {
                                       .397777*ray.y+.917482*ray.z);
         vec3 stars = u_has_stars ? star_color(u_stars,equatorial) : vec3(0);
         vec3 sky = vec3(.012,.017,.028) + u_sky_brightness*stars;
-        vec4 sun = solar_disk(ray,u_sun_direction,u_sun_radius,u_solar_clock);
+        vec4 sun = solar_disk(ray,u_sun_direction,u_sun_radius,u_solar_clock)*u_timeline_light;
         frag = u_has_stars ? vec4(sun.rgb + sky*(1.0-sun.a),1.0) : sun;
         return;
     }
@@ -215,10 +216,10 @@ void main() {
         }
         float phase = 1.0-smoothstep(2.5,30.0,u_zoom);
         float light = .25 + .75*pow(max(dot(normal,u_sun_direction),0.0),.54);
-        body = vec4(albedo*mix(1.0,light,phase)*body_coverage,body_coverage);
+        body = vec4(albedo*mix(1.0,mix(.66,light,u_timeline_light),phase)*body_coverage,body_coverage);
     }
     bool opaque = body_coverage > .5 && depth > 0.0;
-    vec4 air = atmospheric_light(ray,across,line,opaque ? -sqrt(max(0.0,margin)) : 1e19);
+    vec4 air = atmospheric_light(ray,across,line,opaque ? -sqrt(max(0.0,margin)) : 1e19)*u_timeline_light;
     vec4 globe = air + body*(1.0-air.a);
     vec4 front = rings(ray,opaque ? depth : 1e19,pixel_angle);
     frag = front + globe*(1.0-front.a);

@@ -128,6 +128,7 @@ pub(super) struct Frame {
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
+    pub directional_light: f32,
 }
 
 impl Frame {

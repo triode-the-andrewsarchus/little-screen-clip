@@ -55,6 +55,10 @@ impl Renderer {
             gl.uniform_3_f32_slice(uniform("u_eye").as_ref(), &world.pose.eye.map(|v| v as f32));
             gl.uniform_3_f32_slice(uniform("u_color").as_ref(), &world.color);
             gl.uniform_1_f32(uniform("u_zoom").as_ref(), world.zoom);
+            gl.uniform_1_f32(
+                uniform("u_timeline_light").as_ref(),
+                world.directional_light,
+            );
             gl.uniform_1_i32(uniform("u_gas").as_ref(), i32::from(world.gas));
             gl.uniform_1_i32(
                 uniform("u_has_albedo").as_ref(),
@@ -104,6 +108,7 @@ impl Renderer {
             gl.uniform_3_f32_slice(loc("u_sun_direction").as_ref(), &view.sun.0);
             gl.uniform_1_f32(loc("u_sun_radius").as_ref(), view.sun.1);
             gl.uniform_2_f32_slice(loc("u_solar_clock").as_ref(), &view.clock);
+            gl.uniform_1_f32(loc("u_timeline_light").as_ref(), view.directional_light);
             gl.uniform_1_f32(loc("u_sky_brightness").as_ref(), view.brightness);
             super::sky::bind(gl, program, "u_stars", 0, stars);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);

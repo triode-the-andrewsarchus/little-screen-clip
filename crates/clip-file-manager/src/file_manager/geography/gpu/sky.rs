@@ -489,7 +489,7 @@ impl SkyRenderer {
                 if frame.moon_view {
                     0.0
                 } else {
-                    atmosphere(camera, frame.style)
+                    atmosphere(camera, frame.style) * frame.directional_light
                 },
             );
             gl.uniform_3_f32_slice(loc("u_sun").as_ref(), &scene.sun);
@@ -573,6 +573,7 @@ impl SkyRenderer {
             gl.uniform_3_f32_slice(loc("u_lunar_earth").as_ref(), &earth);
             gl.uniform_1_f32(loc("u_longitude").as_ref(), frame.camera.center_lon as f32);
             gl.uniform_1_f32(loc("u_moon_phase").as_ref(), phase);
+            gl.uniform_1_f32(loc("u_timeline_light").as_ref(), frame.directional_light);
             gl.uniform_1_i32(
                 loc("u_has_lunar_albedo").as_ref(),
                 i32::from(albedo.is_some()),
@@ -647,6 +648,7 @@ impl SkyRenderer {
             let lighting = surface_lighting(frame);
             let scene = frame.sky.as_ref().filter(|_| lighting > 0.0);
             gl.uniform_1_f32(loc("u_earth_lighting").as_ref(), lighting);
+            gl.uniform_1_f32(loc("u_timeline_light").as_ref(), frame.directional_light);
             // A sampler must be assigned even when its layer is disabled.
             gl.uniform_1_i32(loc("u_night").as_ref(), 5);
             if let Some(scene) = scene {
@@ -685,7 +687,7 @@ impl SkyRenderer {
         // SAFETY: current context and active program are owned by the renderer.
         unsafe {
             let loc = |name| gl.get_uniform_location(program, name);
-            let lighting = surface_lighting(frame);
+            let lighting = surface_lighting(frame) * frame.directional_light;
             let scene = frame.sky.as_ref().filter(|_| lighting > 0.0);
             let marble = scene.is_some();
             gl.uniform_1_f32(loc("u_earth_lighting").as_ref(), lighting);

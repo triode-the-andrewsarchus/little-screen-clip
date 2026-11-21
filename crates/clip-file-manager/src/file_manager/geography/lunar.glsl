@@ -4,6 +4,7 @@ uniform vec3 u_lunar_sun;
 uniform vec3 u_lunar_earth;
 uniform mat3 u_lunar_basis;
 uniform float u_moon_phase;
+uniform float u_timeline_light = 1.0;
 
 const float LUNAR_PI = 3.141592653589793;
 const float MOON_RADIUS_KM = 1737.4;
@@ -26,5 +27,6 @@ vec3 lunar_color(vec3 normal, vec3 relief_normal, float phase, float minimum_lig
         .5 - asin(clamp(local.z, -1.0, 1.0)) / LUNAR_PI);
     vec3 albedo = u_has_lunar_albedo ? texture(u_lunar_albedo, uv).rgb : vec3(.6,.59,.57);
     vec3 lighting = vec3(earthshine) + (vec3(direct) + copper) * pow(diffuse,.67);
-    return albedo * mix(vec3(1.0), clamp(lighting * 1.55, minimum_light, 1.3), phase);
+    vec3 daylight = mix(vec3(.66), clamp(lighting * 1.55, minimum_light, 1.3), u_timeline_light);
+    return albedo * mix(vec3(1.0), daylight, phase);
 }
