@@ -15,41 +15,93 @@ uniform vec3 u_bands[10];
 const float PI = 3.141592653589793;
 const vec3 SUN = vec3(.811,.324,.487);
 
-float fringe(float a, float b, float r, float aa) {
-    return smoothstep(a-aa,a+aa,r) * (1.0-smoothstep(b-aa,b+aa,r));
-}
-
 float grain(vec2 cell) {
     vec2 seed = fract(cell * vec2(.1031,.11369));
     seed += dot(seed, seed.yx + 19.19);
     return fract((seed.x + seed.y) * seed.x);
 }
 
+float ring_dust(vec2 p) {
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(mix(grain(cell),grain(cell+vec2(1,0)),f.x),
+               mix(grain(cell+vec2(0,1)),grain(cell+1.0),f.x),f.y);
+}
+
+vec2 cylinder_span(vec2 eye, vec2 ray, float radius) {
+    float speed = dot(ray,ray);
+    if (speed < 1e-8)
+        return dot(eye,eye) < radius*radius ? vec2(-1e9,1e9) : vec2(1,-1);
+    float mid = -dot(eye,ray) / speed;
+    vec2 offset = eye + mid*ray;
+    float delta = (radius*radius - dot(offset,offset))/speed;
+    if (delta < 0.0) return vec2(1,-1);
+    return mid + sqrt(delta)*vec2(-1,1);
+}
+
 vec4 rings(vec3 ray, float surface_depth) {
-    if (u_band_count == 0 || abs(ray.z) < 1e-6) return vec4(0.0);
-    float t = -u_eye.z / ray.z;
-    if (t <= 0.0 || t >= surface_depth) return vec4(0.0);
-    vec2 position = u_eye.xy + t * ray.xy;
-    float r = length(position);
-    float width = clamp(fwidth(r)*.7, .00006, .09);
-    float opacity = 0.0;
+    if (u_band_count == 0) return vec4(0);
+    // A thin disk with finite vertical depth stays visible from its equator.
+    // All distances are measured in planetary radii.
+    float outer = u_bands[u_band_count-1].y;
+    float height = clamp(outer*.0032,.004,.011);
+    vec2 slab = vec2(0,surface_depth);
+    if (abs(ray.z) < 1e-6) {
+        if (abs(u_eye.z) >= height) return vec4(0);
+    } else {
+        vec2 crossings = (vec2(-height,height)-u_eye.z)/ray.z;
+        slab = vec2(max(0.0,min(crossings.x,crossings.y)),
+                    min(surface_depth,max(crossings.x,crossings.y)));
+    }
+    if (slab.y <= slab.x) return vec4(0);
+
+    float pixel_angle = max(u_fov.x,u_fov.y) * fwidth(v_ndc.x);
+    float thickness = 0.0;
+    float shaded = 0.0;
     for (int i = 0; i < u_band_count; ++i) {
         vec3 band = u_bands[i];
-        float middle = (band.x+band.y)*.5;
-        float radius = max((band.y-band.x)*.5, width*.55);
-        opacity += band.z * fringe(middle-radius,middle+radius,r,width);
+        float feather = clamp(pixel_angle*max(slab.x,.05)*.55,.00006,.05);
+        float width = band.y-band.x;
+        float edge = feather*.65;
+        vec2 span = cylinder_span(u_eye.xy,ray.xy,band.y+edge);
+        span = vec2(max(span.x,slab.x),min(span.y,slab.y));
+        if (span.y <= span.x) continue;
+        vec2 hole = cylinder_span(u_eye.xy,ray.xy,max(0.0,band.x-edge));
+        vec2 near_span = vec2(span.x, min(span.y, hole.x));
+        vec2 far_span = vec2(max(span.x, hole.y),span.y);
+        if (hole.y < hole.x) {
+            near_span = span;
+            far_span = vec2(0);
+        }
+        // Integrate the two sides of the annulus after clipping to the globe.
+        for (int side = 0; side < 2; ++side) {
+            vec2 section = side == 0 ? near_span : far_span;
+            float length_in_band = section.y-section.x;
+            if (length_in_band <= 0.0) continue;
+            float t = (section.x+section.y)*.5;
+            vec3 point = u_eye+t*ray;
+            float r = length(point.xy);
+            float coverage = smoothstep(band.x-edge,band.x+edge,r)
+                           * (1.0-smoothstep(band.y-edge,band.y+edge,r));
+            // For bands smaller than a pixel, preserve their integrated opacity.
+            coverage = max(coverage, min(.50,width/(width+2.0*edge)));
+            float footprint = pixel_angle*max(t,.01);
+            float noise_blend = 1.0-smoothstep(.001,.007,footprint+length_in_band*.06);
+            float dust = mix(.56, .19 + .93*ring_dust(point.xy*410.0), noise_blend);
+            float profile = mix(1.0,.80+.20*sin(r*132.0),
+                                1.0-smoothstep(.004,.023,footprint));
+            float depth = band.z * coverage * dust * profile
+                        * min(length_in_band/(2.0*height),4.2);
+            float behind = -dot(SUN,point);
+            float shadow = behind > 0.0 ? smoothstep(.94,1.04,length(point+behind*SUN)) : 1.0;
+            thickness += depth;
+            shaded += depth * mix(.24,1.0,shadow);
+        }
     }
-    if (opacity < .001) return vec4(0.0);
-    float layer = .76 + .14*sin(r*139.0) + .10*sin(r*311.0);
-    vec2 cell = floor(position * 930.0);
-    float dust = grain(cell);
-    float particles = mix(dust > .70 ? .27 + dust * .73 : .18 + dust * .24,
-        .55, smoothstep(.0004,.0018,width));
-    vec3 point = vec3(position,0.0);
-    float behind = -dot(SUN, point);
-    float shade = behind > 0.0 && length(point + behind * SUN) < 1.0 ? .27 : 1.0;
-    float alpha = clamp(layer * opacity * (particles * 1.42) / max(.50, abs(ray.z)), 0.0, .88);
-    return vec4(mix(vec3(.74,.75,.77),u_color,.43)*shade * alpha,alpha);
+    float alpha = 1.0-exp(-thickness);
+    vec3 color = mix(vec3(.74,.75,.77),u_color,.43)*shaded/max(thickness,1e-6);
+    return vec4(color*alpha,alpha);
 }
 
 void main() {

@@ -260,6 +260,17 @@ def check_world_view(root, width, height, output):
     assert len(np.unique(ringed[:, :, 0][exterior])) > 35, "Ring bands should vary in apparent density"
     assert np.array_equal(globe[height // 2, width // 2], ringed[height // 2, width // 2]), "Body failed to occlude ring plane"
     Image.fromarray(np.flipud(ringed)).save(output / "ringed-world.png")
+    # At the equator the rings should still occupy multiple rows, with the
+    # far side disappearing behind the planet.
+    axes = np.asarray([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=np.float32)
+    GL.glUniformMatrix3fv(loc("u_axes"), 1, False, axes)
+    GL.glUniform3f(loc("u_eye"), 4.3, 0, 0)
+    edge_globe = draw([])
+    edge_rings = draw([(1.32, 1.74, .09), (1.74, 1.82, .44), (1.82, 2.60, .11)])
+    edge = (edge_globe[:, :, 0] == 0) & (edge_rings[:, :, 0] > 5)
+    assert np.count_nonzero(edge.any(axis=1)) >= 3, "Edge-on rings lost their vertical profile"
+    assert not edge[height // 2 - 6:height // 2 + 6, width // 2 - 30:width // 2 + 30].any()
+    Image.fromarray(np.flipud(edge_rings)).save(output / "edge-on-rings.png")
     GL.glDeleteProgram(world)
 
 
