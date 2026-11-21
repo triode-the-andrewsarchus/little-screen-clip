@@ -17,6 +17,7 @@ pub(super) fn supported(entry: &Entry) -> bool {
         || entry.is_photo()
         || entry.is_video()
         || entry.is_brush()
+        || entry.is_geography()
         || little_clip_core::pdf::is_pdf_path(&entry.path)
         || epub(entry)
         || little_clip_core::notebook::is_candidate_path(&entry.path)
@@ -33,6 +34,7 @@ pub(super) fn load(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
         Category::Image => photo(entry, cancel)?,
         Category::Video => video(entry, cancel)?,
         Category::Document => document(entry, cancel)?,
+        Category::Geography => geography(entry)?,
         Category::Brushes => Summary {
             brush_count: Some(
                 little_clip_core::brushes::count_brushes(&entry.path, cancel)? as u64,
@@ -139,6 +141,23 @@ fn document(entry: &Entry, cancel: &AtomicBool) -> ResultSummary {
     }
 }
 
+fn geography(entry: &Entry) -> ResultSummary {
+    use little_clip_core::geography::{Document, basemap::wrap_lon};
+    let document = Document::from_path(&entry.path)?;
+    Ok(Summary {
+        track_times: document.recorded_range(),
+        coordinates: document
+            .geographic_bounds
+            .map(|[west, south, east, north]| {
+                [south.midpoint(north), wrap_lon(west.midpoint(east))]
+                    .map(|value| (value * 1e6).round() as i64)
+            }),
+        positions: Some(document.points as u64),
+        shapes: Some(document.shape_count() as u64),
+        ..Default::default()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{Field, Value};
@@ -154,6 +173,36 @@ mod tests {
         .find(|entry| entry.path == path)
         .unwrap()
     }
+    #[test]
+    fn geography_columns_show_source_dates_and_counts() {
+        let folder = tempfile::tempdir().unwrap();
+        let gpx = folder.path().join("harbor.gpx");
+        let geojson = folder.path().join("harbor.geojson");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/geography");
+        std::fs::copy(fixture.join("harbor.gpx"), &gpx).unwrap();
+        std::fs::copy(fixture.join("harbor.geojson"), &geojson).unwrap();
+        let cancel = AtomicBool::new(false);
+        let dated_entry = entry(&gpx);
+        assert_eq!(sorting::family(&dated_entry), Category::Geography);
+        let track = load(&dated_entry, &cancel).unwrap();
+        assert_eq!(track.cell(Field::TrackStart), "2026-11-09 15:00:00 UTC");
+        assert_eq!(track.cell(Field::TrackEnd), "2026-11-09 15:25:00 UTC");
+        let shapes = load(&entry(&geojson), &cancel).unwrap();
+        assert_eq!(shapes.value(Field::TrackStart), None);
+        assert_eq!(shapes.value(Field::TrackEnd), None);
+        assert_eq!(
+            shapes.value(Field::Latitude),
+            Some(Value::Signed(47_620_000))
+        );
+        assert_eq!(
+            shapes.value(Field::Longitude),
+            Some(Value::Signed(-122_350_000))
+        );
+        assert_eq!(shapes.value(Field::Shapes), Some(Value::Number(3)));
+        assert_eq!(shapes.value(Field::Positions), Some(Value::Number(15)));
+    }
+
     #[test]
     fn header_only_photos_provide_dimensions_without_decodable_pixels() {
         let directory = tempfile::tempdir().unwrap();

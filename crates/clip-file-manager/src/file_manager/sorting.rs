@@ -84,6 +84,7 @@ pub(super) enum Category {
     Video,
     Scene,
     Font,
+    Geography,
     Document,
     Text,
     Archive,
@@ -130,7 +131,10 @@ fn format_family(entry: &Entry) -> Category {
 }
 
 fn extension_category(entry: &Entry) -> Category {
-    if entry.is_geography() || little_clip_core::notebook::is_candidate_path(&entry.path) {
+    if entry.is_geography() {
+        return Category::Geography;
+    }
+    if little_clip_core::notebook::is_candidate_path(&entry.path) {
         return Category::Document;
     }
     let extension = entry
@@ -169,6 +173,7 @@ impl Category {
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",
+            Self::Geography => "Geography",
             Self::Document => "Documents",
             Self::Text => "Text & code",
             Self::Archive => "Archives",

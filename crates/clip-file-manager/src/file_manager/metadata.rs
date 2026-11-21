@@ -35,6 +35,12 @@ pub(super) enum Field {
     Author,
     Pages,
     BrushCount,
+    TrackStart,
+    TrackEnd,
+    Latitude,
+    Longitude,
+    Positions,
+    Shapes,
     Filename,
 }
 impl Field {
@@ -48,6 +54,14 @@ impl Field {
             Category::Video => &[Self::Duration, Self::Width, Self::Height, Self::Codec],
             Category::Document => &[Self::Title, Self::Author, Self::Pages],
             Category::Brushes => &[Self::BrushCount],
+            Category::Geography => &[
+                Self::TrackStart,
+                Self::TrackEnd,
+                Self::Latitude,
+                Self::Longitude,
+                Self::Positions,
+                Self::Shapes,
+            ],
             _ => &[],
         }
     }
@@ -68,6 +82,12 @@ impl Field {
             Self::Author => "Author",
             Self::Pages => "Pages",
             Self::BrushCount => "Brush count",
+            Self::TrackStart => "Start time",
+            Self::TrackEnd => "End time",
+            Self::Latitude => "Lat",
+            Self::Longitude => "Lon",
+            Self::Positions => "Positions",
+            Self::Shapes => "Shapes",
             Self::Filename => "Filename",
         }
     }
@@ -88,11 +108,16 @@ struct Summary {
     author: String,
     pages: Option<u64>,
     brush_count: Option<u64>,
+    track_times: Option<[chrono::DateTime<chrono::Utc>; 2]>,
+    coordinates: Option<[i64; 2]>,
+    positions: Option<u64>,
+    shapes: Option<u64>,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Value {
     Text(String),
     Number(u64),
+    Signed(i64),
 }
 impl Summary {
     fn text(&self, field: Field) -> Option<&str> {
@@ -120,16 +145,42 @@ impl Summary {
                 .map(|(width, height)| u64::from(width) * u64::from(height)),
             Field::Pages => self.pages,
             Field::BrushCount => self.brush_count,
+            Field::Positions => self.positions,
+            Field::Shapes => self.shapes,
             _ => None,
         }
     }
     fn value(&self, field: Field) -> Option<Value> {
+        match field {
+            Field::TrackStart | Field::TrackEnd => {
+                return self
+                    .track_time(field)
+                    .map(|time| Value::Signed(time.timestamp_micros()));
+            }
+            Field::Latitude | Field::Longitude => {
+                return self.coordinate(field).map(Value::Signed);
+            }
+            _ => {}
+        }
         self.text(field)
             .filter(|text| !text.is_empty())
             .map(|text| Value::Text(text.to_lowercase()))
             .or_else(|| self.number(field).map(Value::Number))
     }
     fn cell(&self, field: Field) -> String {
+        match field {
+            Field::TrackStart | Field::TrackEnd => {
+                return self.track_time(field).map_or_else(String::new, |time| {
+                    time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+                });
+            }
+            Field::Latitude | Field::Longitude => {
+                return self
+                    .coordinate(field)
+                    .map_or_else(String::new, |value| format!("{:.5}°", value as f64 / 1e6));
+            }
+            _ => {}
+        }
         if let Some(text) = self.text(field) {
             return text.into();
         }
@@ -140,6 +191,14 @@ impl Summary {
                 Field::Pixels => format!("{:.2} MP", number as f64 / 1_000_000.0),
                 _ => number.to_string(),
             })
+    }
+
+    fn track_time(&self, field: Field) -> Option<chrono::DateTime<chrono::Utc>> {
+        Some(self.track_times?[usize::from(field == Field::TrackEnd)])
+    }
+
+    fn coordinate(&self, field: Field) -> Option<i64> {
+        Some(self.coordinates?[usize::from(field == Field::Longitude)])
     }
 }
 #[derive(Default)]

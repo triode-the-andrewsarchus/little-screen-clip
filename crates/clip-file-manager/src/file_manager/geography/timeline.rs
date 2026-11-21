@@ -26,13 +26,7 @@ pub(super) struct Timeline {
 
 impl Timeline {
     pub fn new(document: &Document) -> Self {
-        let recorded = document
-            .features
-            .iter()
-            .filter_map(|feature| feature.time_range)
-            .reduce(|[first, last], [start, end]| [first.min(start), last.max(end)])
-            .or_else(|| document.capture_time.map(|time| [time; 2]));
-        Self::with_range(recorded)
+        Self::with_range(document.recorded_range())
     }
 
     pub fn with_range(recorded: Option<[DateTime<Utc>; 2]>) -> Self {

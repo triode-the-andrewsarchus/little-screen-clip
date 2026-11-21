@@ -126,6 +126,15 @@ struct RawFeature {
     time_range: Option<[DateTime<Utc>; 2]>,
 }
 impl Document {
+    /// Earliest and latest recorded positions, or a single file-level capture instant.
+    pub fn recorded_range(&self) -> Option<[DateTime<Utc>; 2]> {
+        self.features
+            .iter()
+            .filter_map(|feature| feature.time_range)
+            .reduce(|[first, last], [start, end]| [first.min(start), last.max(end)])
+            .or_else(|| self.capture_time.map(|time| [time; 2]))
+    }
+
     /// Loads a supported geographic file through a bounded, revision-checked snapshot.
     pub fn from_path(path: &std::path::Path) -> Result<Self, String> {
         let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;

@@ -1267,7 +1267,12 @@ impl ListColumns {
         {
             let end = self.extra.unwrap_or(self.size);
             let available = (end - self.left).max(0.0);
-            let left = self.left + (available * 0.4).max(120.0).min(available);
+            let name_share = if family == super::sorting::Category::Geography {
+                0.25
+            } else {
+                0.4
+            };
+            let left = self.left + (available * name_share).max(120.0).min(available);
             self.metadata = Some((left, end, family));
         }
         self
@@ -1278,15 +1283,22 @@ impl ListColumns {
         })
     }
     pub(super) fn metadata_cell(self, row: Rect, index: usize) -> Option<Rect> {
-        let (left, right, _) = self.metadata?;
+        let (left, right, family) = self.metadata?;
         let fields = self.metadata_fields();
         if index >= fields.len() {
             return None;
         }
-        let width = (right - left) / fields.len() as f32;
+        let (count, start, end) = if family == super::sorting::Category::Geography {
+            // The date columns need more room than counts or coordinates.
+            const EDGES: [f32; 7] = [0.0, 2.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+            (EDGES[fields.len()], EDGES[index], EDGES[index + 1])
+        } else {
+            (fields.len() as f32, index as f32, (index + 1) as f32)
+        };
+        let width = (right - left) / count;
         Some(Rect::from_min_max(
-            pos2(left + index as f32 * width, row.top()),
-            pos2(left + (index + 1) as f32 * width, row.top() + ROW_HEIGHT),
+            pos2(left + start * width, row.top()),
+            pos2(left + end * width, row.top() + ROW_HEIGHT),
         ))
     }
     fn name_end(self) -> f32 {
