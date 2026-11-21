@@ -136,6 +136,7 @@ pub(super) struct Viewer {
     moon_camera: Option<GlobeCamera>,
     solar_system: Option<solar::System>,
     world: Option<solar::world::World>,
+    world_maps: Arc<solar::assets::MapCache>,
     finder: finder::Finder,
     sight: Option<finder::Sight>,
     found_place: Option<([f64; 2], Arc<str>)>,
@@ -366,6 +367,7 @@ impl Viewer {
             moon_camera: None,
             solar_system: None,
             world: None,
+            world_maps: Arc::default(),
             finder: Default::default(),
             sight: None,
             found_place: None,
@@ -467,6 +469,7 @@ impl Viewer {
         match finished {
             Some(DownloadPack::MoonRelief) => self.tiles.notice_lunar_assets(),
             Some(DownloadPack::SolarSystem) => {
+                self.world_maps.refresh_installed(None);
                 self.tiles.notice_lunar_assets();
                 self.sky.reload(&self.downloader.assets_dir);
                 if let Some(world) = &mut self.world {
@@ -477,6 +480,7 @@ impl Viewer {
                 }
             }
             Some(DownloadPack::World(id)) => {
+                self.world_maps.refresh_installed(Some(id));
                 if let Some(world) = &mut self.world {
                     world.reload();
                 }
@@ -510,7 +514,7 @@ impl Viewer {
         }
 
         if let Some(world) = self.world.as_mut() {
-            world.poll(ui.ctx(), &self.downloader.assets_dir);
+            world.poll(ui.ctx(), &self.downloader.assets_dir, &self.world_maps);
         }
         let layout = StudioPanelLayout {
             left: showing_earth,
@@ -690,7 +694,12 @@ impl Viewer {
                 );
             }
         } else if let Some(system) = self.solar_system.as_mut() {
-            system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
+            system.poll_maps(
+                ui.ctx(),
+                &self.downloader.assets_dir,
+                self.assets.clone(),
+                &self.world_maps,
+            );
             let recorded = recorded_scene_time(&self.document, self.selected, None);
             if let Some(selection) = system.paint(
                 ui,
@@ -698,6 +707,7 @@ impl Viewer {
                 recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
                 self.sky.assets.clone(),
                 self.sky.constellations,
+                &self.world_maps,
             ) {
                 self.arrive_at_world(selection, ui.ctx());
             }
@@ -714,6 +724,7 @@ impl Viewer {
                 time,
                 self.sky.assets.clone(),
                 self.sky.constellations,
+                &self.world_maps,
             ) {
                 Ok(Some(solar::SUN)) => self.open_solar_system(solar::SUN, ui.ctx()),
                 Ok(Some(id)) => self.select_solar_target(id, ui.ctx()),

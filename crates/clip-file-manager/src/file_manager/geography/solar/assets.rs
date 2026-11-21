@@ -10,8 +10,8 @@ use std::{
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -171,53 +171,120 @@ fn images() -> &'static [ImageAsset] {
     })
 }
 
-pub(super) fn overview_maps(
-    root: &Path,
-    earth: Option<&little_clip_core::geography::basemap::EquirectTexture>,
-    cancel: &AtomicBool,
-) -> HashMap<Id, sky::Texture> {
-    let mut maps = HashMap::new();
-    if let Some(earth) = earth {
-        // The existing Natural Earth raster is also the overview's Earth albedo.
-        let size = [512, 256];
-        let pixels: Vec<_> = (0..size[1])
-            .flat_map(|y| {
-                (0..size[0]).flat_map(move |x| {
-                    earth
-                        .sample_rgb(
-                            90.0 - 180.0 * f64::from(y) / f64::from(size[1] - 1),
-                            -180.0 + 360.0 * f64::from(x) / f64::from(size[0]),
-                        )
-                        .into_iter()
-                })
-            })
-            .collect();
-        maps.insert(
-            super::EARTH,
-            sky::Texture {
-                size,
-                pixels: pixels.into(),
-            },
-        );
-    }
-    for image in images()
-        .iter()
-        .take_while(|_| !cancel.load(Ordering::Relaxed))
-    {
-        if maps.contains_key(&image.id) {
-            continue;
-        }
-        if let Some(map) = load_installed_map(root, image, true) {
-            maps.insert(image.id, map);
-        }
-    }
-    maps
+/// Texture ownership follows the map session across its individual views.
+/// Small maps stay resident and large maps share a byte-bounded LRU.
+#[derive(Default)]
+pub(in crate::file_manager::geography) struct MapCache {
+    maps: Mutex<Maps>,
+    replacement_epoch: AtomicU64,
 }
 
-fn load_installed_map(root: &Path, image: &ImageAsset, small: bool) -> Option<sky::Texture> {
-    let download = Download::for_body(image.id)?;
-    let rgb = decode_installed(root, image, download).ok()??;
-    Some(if small { thumbnail(&rgb) } else { texture(rgb) })
+#[derive(Default)]
+struct Maps {
+    previews: HashMap<Id, sky::Texture>,
+    detailed: HashMap<Id, (sky::Texture, u64)>,
+    sequence: u64,
+    detailed_bytes: usize,
+}
+
+const DETAILED_BUDGET: usize = 128 * 1024 * 1024;
+
+impl MapCache {
+    pub fn refresh_installed(&self, changed: Option<Id>) {
+        // Only a versioned replacement may supersede a currently usable map.
+        // Existing textures for unchanged files keep their GPU identity.
+        if let Ok(mut maps) = self.maps.lock() {
+            let replaced = |image: &&ImageAsset| {
+                image.legacy.is_some() && changed.is_none_or(|id| id == image.id)
+            };
+            for image in images().iter().filter(replaced) {
+                self.replacement_epoch.fetch_add(1, Ordering::Relaxed);
+                maps.previews.remove(&image.id);
+                if let Some((map, _)) = maps.detailed.remove(&image.id) {
+                    maps.detailed_bytes -= map.pixels.len();
+                }
+            }
+        }
+    }
+
+    pub fn preview(&self, id: Id) -> Option<sky::Texture> {
+        self.maps.lock().ok()?.previews.get(&id).cloned()
+    }
+
+    pub fn map(&self, id: Id, small: bool) -> Option<sky::Texture> {
+        let mut maps = self.maps.lock().ok()?;
+        if small {
+            return maps.previews.get(&id).cloned();
+        }
+        maps.sequence += 1;
+        let use_at = maps.sequence;
+        let (map, used) = maps.detailed.get_mut(&id)?;
+        *used = use_at;
+        Some(map.clone())
+    }
+
+    fn store(&self, id: Id, small: bool, map: sky::Texture, epoch: Option<u64>) -> sky::Texture {
+        let Ok(mut maps) = self.maps.lock() else {
+            return map;
+        };
+        if epoch.is_some_and(|epoch| epoch != self.replacement_epoch.load(Ordering::Relaxed)) {
+            return map;
+        }
+        if small {
+            return maps.previews.entry(id).or_insert(map).clone();
+        }
+        maps.sequence += 1;
+        let use_at = maps.sequence;
+        if let Some((current, used)) = maps.detailed.get_mut(&id) {
+            *used = use_at;
+            return current.clone();
+        }
+        while maps.detailed_bytes + map.pixels.len() > DETAILED_BUDGET {
+            let Some(oldest) = maps
+                .detailed
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(id, _)| *id)
+            else {
+                return map;
+            };
+            if let Some((removed, _)) = maps.detailed.remove(&oldest) {
+                maps.detailed_bytes -= removed.pixels.len();
+            }
+        }
+        maps.detailed_bytes += map.pixels.len();
+        maps.detailed.insert(id, (map.clone(), use_at));
+        map
+    }
+
+    pub fn load_map(
+        &self,
+        root: &Path,
+        id: Id,
+        small: bool,
+    ) -> Result<Option<sky::Texture>, String> {
+        if let Some(map) = self.map(id, small) {
+            return Ok(Some(map));
+        }
+        let Some(asset) = image(id) else {
+            return Ok(None);
+        };
+        let Some(download) = Download::for_body(id) else {
+            return Ok(None);
+        };
+        let epoch = asset
+            .legacy
+            .as_ref()
+            .map(|_| self.replacement_epoch.load(Ordering::Relaxed));
+        let Some(rgb) = decode_installed(root, asset, download)? else {
+            return Ok(None);
+        };
+        let preview = self.store(id, true, thumbnail(&rgb), epoch);
+        if small {
+            return Ok(Some(preview));
+        }
+        Ok(Some(self.store(id, false, texture(rgb), epoch)))
+    }
 }
 
 fn decode_installed(
@@ -243,33 +310,59 @@ fn decode_installed(
     decode(bytes, asset.id, size.2).map(Some)
 }
 
-pub(super) fn neighboring_maps(
+// Speculative image reads have their own single worker. They never take the
+// foreground slot needed by the selected world or the Earth map.
+pub(super) fn preview_workers() -> &'static little_clip_core::BackgroundJobs {
+    static POOL: std::sync::LazyLock<little_clip_core::BackgroundJobs> =
+        std::sync::LazyLock::new(|| little_clip_core::BackgroundJobs::new(1, 2));
+    &POOL
+}
+pub(super) fn overview_maps(
+    cache: &MapCache,
     root: &Path,
-    focused: &Body,
+    earth: Option<&little_clip_core::geography::basemap::EquirectTexture>,
     cancel: &AtomicBool,
-) -> HashMap<Id, sky::Texture> {
-    images()
+) {
+    if let Some(earth) = earth {
+        // The existing Natural Earth raster is also the overview's Earth albedo.
+        let size = [512, 256];
+        let pixels: Vec<_> = (0..size[1])
+            .flat_map(|y| {
+                (0..size[0]).flat_map(move |x| {
+                    earth
+                        .sample_rgb(
+                            90.0 - 180.0 * f64::from(y) / f64::from(size[1] - 1),
+                            -180.0 + 360.0 * f64::from(x) / f64::from(size[0]),
+                        )
+                        .into_iter()
+                })
+            })
+            .collect();
+        cache.store(
+            super::EARTH,
+            true,
+            sky::Texture {
+                size,
+                pixels: pixels.into(),
+            },
+            None,
+        );
+    }
+    for image in images()
         .iter()
         .take_while(|_| !cancel.load(Ordering::Relaxed))
-        .filter_map(|image| {
-            let is_parent = focused.parent == Some(image.id);
-            let is_moon = super::body(image.id).is_some_and(|body| body.parent == Some(focused.id));
-            if !(is_parent || is_moon && focused.id != super::SUN) {
-                return None;
-            }
-            Some((image.id, load_installed_map(root, image, !is_parent)?))
-        })
-        .collect()
+    {
+        cache.load_map(root, image.id, true).ok();
+    }
 }
 
 impl Assets {
-    pub fn load(root: &Path, id: Id) -> Result<Option<Self>, String> {
+    pub fn load(cache: &MapCache, root: &Path, id: Id) -> Result<Option<Self>, String> {
         if let Some(asset) = image(id) {
             let preferred = asset.legacy.is_none()
                 || Download::for_body(id).is_some_and(|download| download.present(root));
-            let download = Download::for_body(id).ok_or("No world image download")?;
-            return Ok(decode_installed(root, asset, download)?.map(|rgb| Self {
-                texture: Some(texture(rgb)),
+            return Ok(cache.load_map(root, id, false)?.map(|texture| Self {
+                texture: Some(texture),
                 ephemeris: None,
                 preferred,
             }));
@@ -355,6 +448,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn overview_and_closeup_reuse_distinct_textures_after_an_unrelated_download() {
+        let cache = MapCache::default();
+        let texture = |color, width| sky::Texture {
+            size: [width, 1],
+            pixels: vec![color; 3 * width as usize].into(),
+        };
+        let thumbnail = cache.store(599, true, texture(26, 4), None);
+        let detail = cache.store(599, false, texture(87, 8), None);
+        let legacy = cache.store(801, true, texture(1, 4), Some(0));
+        cache.refresh_installed(Some(801));
+        assert!(cache.preview(801).is_none());
+        cache.store(801, true, legacy, Some(0));
+        assert!(cache.preview(801).is_none(), "a retired decode republished");
+        assert!(std::sync::Arc::ptr_eq(
+            &cache.preview(599).unwrap().pixels,
+            &thumbnail.pixels
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &cache.map(599, false).unwrap().pixels,
+            &detail.pixels
+        ));
+    }
+
+    #[test]
     fn downloadable_datasets_match_catalog_ids_and_fit_their_budgets() {
         for body in super::super::bodies() {
             if body.id < 0 || body.id == super::super::SUN {
@@ -408,7 +525,9 @@ mod tests {
             let asset = Download::for_body(id).unwrap();
             let path = root.path().join(asset.folder).join(asset.name);
             let installed_inode = path.metadata().unwrap().ino();
-            let data = Assets::load(root.path(), id).unwrap().unwrap();
+            let data = Assets::load(&MapCache::default(), root.path(), id)
+                .unwrap()
+                .unwrap();
             if id == 699 {
                 assert_eq!(data.texture.unwrap().size, [720, 360]);
             } else {

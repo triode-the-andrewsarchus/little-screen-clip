@@ -9,22 +9,18 @@ use little_clip_core::{
     },
     jobs::task::Task,
 };
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 pub(in crate::file_manager::geography) struct World {
     pub body: &'static Body,
     pub camera: GlobeCamera,
     middle: map_camera::MiddleDrag,
     inspected: bool,
-    job: Option<Task<LocalAssets>>,
+    job: Option<Task<Result<Option<assets::Assets>, String>>>,
     assets: Option<assets::Assets>,
-    neighbors: HashMap<Id, sky::Texture>,
+    neighbors: Option<Task<()>>,
+    neighbors_checked: bool,
     pub error: Option<String>,
-}
-
-struct LocalAssets {
-    focused: Result<Option<assets::Assets>, String>,
-    neighbors: HashMap<Id, sky::Texture>,
 }
 
 impl World {
@@ -39,7 +35,8 @@ impl World {
             inspected: false,
             job: None,
             assets: None,
-            neighbors: HashMap::new(),
+            neighbors: None,
+            neighbors_checked: false,
             error: None,
         }
     }
@@ -55,40 +52,66 @@ impl World {
 
     pub fn reload(&mut self) {
         self.job = None;
+        self.neighbors = None;
+        self.neighbors_checked = false;
         self.inspected = false;
         self.error = None;
     }
 
-    pub fn poll(&mut self, ctx: &egui::Context, root: &Path) {
+    pub fn poll(&mut self, ctx: &egui::Context, root: &Path, cache: &Arc<assets::MapCache>) {
         if let Some(result) = self.job.as_ref().and_then(Task::poll) {
             self.job = None;
             self.inspected = true;
             match result {
-                Ok(local) => {
-                    self.neighbors = local.neighbors;
-                    match local.focused {
-                        Ok(assets) => self.assets = assets,
-                        Err(error) => self.error = Some(error),
-                    }
-                }
+                Ok(Ok(assets)) => self.assets = assets,
+                Ok(Err(error)) => self.error = Some(error),
                 Err(error) => self.error = Some(format!("World asset worker: {error}")),
             }
         }
         if !self.inspected && self.job.is_none() {
             let root = root.to_owned();
-            let body = self.body;
+            let id = self.body.id;
+            let cache = Arc::clone(cache);
             self.job = Some(Task::start(
                 super::super::super::geography_downloader::asset_workers(),
                 Duration::from_secs(30),
-                move |cancel| LocalAssets {
-                    focused: assets::Assets::load(&root, body.id),
-                    neighbors: assets::neighboring_maps(&root, body, &cancel),
-                },
+                move |_| assets::Assets::load(&cache, &root, id),
             ));
         }
-        if self.job.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(80));
+        self.poll_neighbors(root, cache);
+        if self.job.is_some() || self.neighbors.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
+    }
+
+    fn poll_neighbors(&mut self, root: &Path, cache: &Arc<assets::MapCache>) {
+        if self.neighbors.as_ref().and_then(Task::poll).is_some() {
+            self.neighbors = None;
+        }
+        if self.neighbors_checked || !self.inspected {
+            return;
+        }
+        self.neighbors_checked = true;
+        let root = root.to_owned();
+        let focused = self.body;
+        let cache = Arc::clone(cache);
+        self.neighbors = Some(Task::start(
+            assets::preview_workers(),
+            Duration::from_secs(30),
+            move |cancel| {
+                if let Some(parent) = focused.parent.filter(|id| *id != SUN) {
+                    cache.load_map(&root, parent, false).ok();
+                }
+                if focused.id == SUN {
+                    return;
+                }
+                for moon in satellites(focused.id)
+                    .take_while(|_| !cancel.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    cache.load_map(&root, moon.id, true).ok();
+                }
+            },
+        ));
     }
 
     pub fn pending(&self) -> bool {
@@ -106,6 +129,7 @@ impl World {
         time: DateTime<Utc>,
         stars: Option<std::sync::Arc<sky::Assets>>,
         constellations: bool,
+        cache: &Arc<assets::MapCache>,
     ) -> Result<Option<Id>, String> {
         let rect = response.rect;
         let painter = ui.painter_at(rect);
@@ -113,7 +137,14 @@ impl World {
         if stars.is_none() {
             super::paint_stars(&painter, rect);
         }
-        let mut frame = Frame::new(self.body, self.camera, rect.size().into(), self.texture());
+        let mut frame = Frame::new(
+            self.body,
+            self.camera,
+            rect.size().into(),
+            self.texture()
+                .or_else(|| cache.map(self.body.id, false))
+                .or_else(|| cache.preview(self.body.id)),
+        );
         let animation = ui.input(|input| input.time);
         let day = scene_day(time);
         let sun = sunlight(self.body, day);
@@ -137,28 +168,11 @@ impl World {
         if sun_visible {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
-        let moons = surroundings(self.body, frame.pose, rect, day);
         let pose = frame.pose;
-        let clock = frame.clock;
-        gpu::paint_space(ui, rect, lights.clone())?;
-        let paint_side = |behind| {
-            for moon in moons.iter().filter(|moon| moon.behind == behind) {
-                moon.paint(
-                    ui,
-                    pose,
-                    rect,
-                    sun.0,
-                    clock,
-                    self.neighbors.get(&moon.body.id),
-                )?;
-            }
-            Ok::<_, String>(())
-        };
-        paint_side(true)?;
-        gpu::paint_world(ui, rect, frame)?;
-        paint_side(false)?;
-        label_major_moons(&painter, &moons);
-        let target = pick_moon(&moons, pose, response).or_else(|| pick_sun(pose, sun, response));
+        let neighbors = self.paint_bodies(ui, rect, frame, day, &lights, cache)?;
+        label_major_moons(&painter, &neighbors);
+        let target = pick_nearby(neighbors.iter(), pose, response)
+            .or_else(|| pick_sun(pose, sun, response));
         if target.is_none() {
             let exposed = |point: Pos2| {
                 let local = point - rect.min;
@@ -167,6 +181,41 @@ impl World {
             lights.hover_star(response, exposed);
         }
         Ok(target.filter(|_| response.clicked()))
+    }
+
+    fn paint_bodies(
+        &self,
+        ui: &egui::Ui,
+        rect: Rect,
+        frame: Frame,
+        day: f64,
+        lights: &Backdrop,
+        cache: &Arc<assets::MapCache>,
+    ) -> Result<Vec<Nearby>, String> {
+        let neighbors = surroundings(self.body, frame.pose, rect, day);
+        let pose = frame.pose;
+        let clock = frame.clock;
+        gpu::paint_space(ui, rect, lights.clone())?;
+        let paint_side = |behind| {
+            for moon in neighbors.iter().filter(|moon| moon.behind == behind) {
+                moon.paint(
+                    ui,
+                    pose,
+                    rect,
+                    lights.sun.0,
+                    clock,
+                    cache
+                        .map(moon.body.id, self.body.parent != Some(moon.body.id))
+                        .or_else(|| cache.preview(moon.body.id))
+                        .as_ref(),
+                )?;
+            }
+            Ok::<_, String>(())
+        };
+        paint_side(true)?;
+        gpu::paint_world(ui, rect, frame)?;
+        paint_side(false)?;
+        Ok(neighbors)
     }
 
     pub fn texture(&self) -> Option<sky::Texture> {
@@ -279,7 +328,11 @@ fn projected_bounds(pose: Perspective, canvas: Rect, position: [f64; 3], radius:
     .intersect(canvas)
 }
 
-fn pick_moon(moons: &[Nearby], pose: Perspective, response: &egui::Response) -> Option<Id> {
+fn pick_nearby<'a>(
+    bodies: impl Iterator<Item = &'a Nearby>,
+    pose: Perspective,
+    response: &egui::Response,
+) -> Option<Id> {
     let pointer = response
         .hover_pos()
         .or_else(|| response.interact_pointer_pos())?;
@@ -291,8 +344,7 @@ fn pick_moon(moons: &[Nearby], pose: Perspective, response: &egui::Response) -> 
     let norm = ray.iter().map(|v| v * v).sum::<f64>().sqrt();
     let ray = ray.map(|v| v / norm);
     let foreground = sphere_distance(pose.eye, ray, 1.0).unwrap_or(f64::INFINITY);
-    let hit = moons
-        .iter()
+    let hit = bodies
         .filter_map(|moon| {
             let eye = std::array::from_fn(|i| pose.eye[i] - moon.position[i]);
             let depth = sphere_distance(eye, ray, moon.display_radius).or_else(|| {
@@ -365,14 +417,29 @@ fn project_moon(
     let distance =
         (1.0 + 0.66 * (relative_distance - 1.0).max(0.0).powf(0.67)).max(1.0 + radius_ratio * 1.4);
     let position = orbit.map(|v| v * distance / orbit_km);
+    let display_radius = (radius_ratio * 3.0).min(distance * 0.32);
+    let major = primary.parent == Some(moon.id)
+        || moon
+            .radius
+            .is_some_and(|radius| radius >= (primary_km * 0.001).max(3.0));
+    project_body(moon, position, display_radius, major, pose, rect)
+}
+
+fn project_body(
+    body: &'static Body,
+    position: [f64; 3],
+    display_radius: f64,
+    major: bool,
+    pose: Perspective,
+    rect: Rect,
+) -> Option<Nearby> {
     let offset = pose.project_position(position)?;
     let point = rect.min + egui::vec2(offset[0], offset[1]);
     let ray = std::array::from_fn(|i| position[i] - pose.eye[i]);
     let depth = ray.iter().map(|v| v * v).sum::<f64>().sqrt();
     let ray = ray.map(|v| v / depth);
-    let display_radius = (radius_ratio * 3.0).min(distance * 0.32);
     let radius = (pose.focal * display_radius / depth) as f32;
-    if !pose.intersects_sphere(position, visible_radius(moon, display_radius), 2.0) {
+    if !pose.intersects_sphere(position, visible_radius(body, display_radius), 2.0) {
         return None;
     }
     let occluded = sphere_distance(pose.eye, ray, 1.0).is_some_and(|t| t < depth);
@@ -382,12 +449,8 @@ fn project_moon(
         .map(|(a, b)| a * b)
         .sum::<f64>()
         < 0.0;
-    let major = primary.parent == Some(moon.id)
-        || moon
-            .radius
-            .is_some_and(|radius| radius >= (primary_km * 0.001).max(3.0));
     Some(Nearby {
-        body: moon,
+        body,
         point,
         radius: radius.max(if major { 2.6 } else { 0.9 }),
         position,

@@ -26,7 +26,7 @@ pub(super) fn ray_region(canvas: egui::Rect, visible: egui::Rect) -> [f32; 4] {
 #[derive(Default)]
 pub(super) struct Renderer {
     program: Option<(glow::Program, glow::VertexArray)>,
-    textures: HashMap<Id, (glow::Texture, Weak<[u8]>)>,
+    textures: HashMap<(Id, [i32; 2]), (glow::Texture, Weak<[u8]>)>,
 }
 
 impl Renderer {
@@ -157,29 +157,24 @@ impl Renderer {
         image: Option<&assets::Texture>,
     ) -> Result<Option<glow::Texture>, String> {
         let Some(image) = image else { return Ok(None) };
+        let key = (id, image.size);
         let source = Arc::downgrade(&image.pixels);
-        if let Some((texture, saved)) = self.textures.get(&id)
+        if let Some((texture, saved)) = self.textures.get(&key)
             && source.ptr_eq(saved)
         {
             return Ok(Some(*texture));
         }
         // SAFETY: texture objects are owned by the verified current context.
         unsafe {
-            self.textures.retain(|key, (texture, saved)| {
-                let keep = *key != id && saved.strong_count() != 0;
+            self.textures.retain(|existing, (texture, saved)| {
+                let keep = *existing != key && saved.strong_count() != 0;
                 if !keep {
                     gl.delete_texture(*texture)
                 };
                 keep
             });
-            if self.textures.len() >= 24
-                && let Some(first) = self.textures.keys().next().copied()
-                && let Some((texture, _)) = self.textures.remove(&first)
-            {
-                gl.delete_texture(texture);
-            }
             let texture = super::sky::upload(gl, image)?;
-            self.textures.insert(id, (texture, source));
+            self.textures.insert(key, (texture, source));
             Ok(Some(texture))
         }
     }

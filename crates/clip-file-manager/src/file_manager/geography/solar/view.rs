@@ -7,7 +7,6 @@ use little_clip_core::{
     jobs::task::Task,
 };
 use std::{
-    collections::HashMap,
     f64::consts::TAU,
     path::Path,
     sync::{Arc, OnceLock},
@@ -23,8 +22,7 @@ pub(in crate::file_manager::geography) struct System {
     middle: super::super::map_camera::MiddleDrag,
     ephemeris: Option<(Id, Vec<[f64; 3]>)>,
     opened_at: Option<f64>,
-    textures: HashMap<Id, sky::Texture>,
-    texture_job: Option<Task<HashMap<Id, sky::Texture>>>,
+    texture_job: Option<Task<()>>,
     textures_checked: bool,
     earth_checked: bool,
     flight: Option<FlyIn>,
@@ -41,7 +39,6 @@ impl System {
             middle: Default::default(),
             ephemeris: None,
             opened_at: None,
-            textures: HashMap::new(),
             texture_job: None,
             textures_checked: false,
             earth_checked: false,
@@ -64,24 +61,24 @@ impl System {
         ctx: &egui::Context,
         root: &Path,
         earth: Option<Arc<BasemapAssets>>,
+        cache: &Arc<assets::MapCache>,
     ) {
-        if let Some(maps) = self.texture_job.as_ref().and_then(Task::poll) {
+        if self.texture_job.as_ref().and_then(Task::poll).is_some() {
             self.texture_job = None;
             self.textures_checked = true;
-            if let Ok(maps) = maps {
-                self.textures = maps;
-            }
         }
         let new_earth =
             earth.as_ref().is_some_and(|earth| earth.ne2.is_some()) && !self.earth_checked;
         if self.texture_job.is_none() && (!self.textures_checked || new_earth) {
             self.earth_checked |= new_earth;
             let root = root.to_owned();
+            let cache = Arc::clone(cache);
             self.texture_job = Some(Task::start(
-                super::super::super::geography_downloader::asset_workers(),
+                assets::preview_workers(),
                 Duration::from_secs(30),
                 move |cancel| {
                     assets::overview_maps(
+                        &cache,
                         &root,
                         earth.as_ref().and_then(|a| a.ne2.as_ref()),
                         &cancel,
@@ -101,6 +98,7 @@ impl System {
         time: DateTime<Utc>,
         stars: Option<Arc<sky::Assets>>,
         constellations: bool,
+        maps: &assets::MapCache,
     ) -> Option<Selection> {
         let animation = ui.input(|input| input.time);
         let wheel = self.navigate(response);
@@ -140,15 +138,7 @@ impl System {
         {
             self.start_flight(rect, pointer, &layout.marks, animation);
         }
-        let clicked = paint_marks(
-            ui,
-            &painter,
-            &layout,
-            response,
-            camera,
-            clock,
-            &self.textures,
-        );
+        let clicked = paint_marks(ui, &painter, &layout, response, camera, clock, maps);
         if !heliocentric {
             backdrop.hover_star(response, |point| mark_at(&layout.marks, point).is_none());
         }
@@ -525,8 +515,26 @@ impl OrbitLayout<'_> {
                 .unwrap_or_default()
                 .total_cmp(&a.radius.unwrap_or_default())
         });
-        let alpha = (45.0 + ((self.zoom - 2.2) / 1.5).clamp(0.0, 1.0) * 88.0) as u8;
-        for moon in moons.into_iter().take(12) {
+        moons.truncate(12);
+        let outer = moons
+            .iter()
+            .map(|moon| {
+                moon.orbit.map_or(0.0, |orbit| {
+                    (moon.semimajor() * (1.0 + orbit.1)).powf(power)
+                })
+            })
+            .fold(0.0, f64::max);
+        if outer <= 0.0 || limit <= mark.radius * 1.15 {
+            return;
+        }
+        let projection = Projection {
+            center: mark.point,
+            scale: (mark.radius * 1.2 / radius.powf(power) as f32).min(limit / outer as f32),
+            power,
+            ..plane
+        };
+        let alpha = (50.0 + ((mark.radius - close) / close).clamp(0.0, 1.0) * 80.0) as u8;
+        for moon in moons {
             let scale = projection.orbit_scale(moon.semimajor());
             self.orbit(moon, projection, scale, alpha, 64, None);
             let (point, depth) = projection.project(moon.at(self.day), scale);
@@ -603,7 +611,7 @@ fn paint_icon(
     mark: &Mark,
     mut camera: GlobeCamera,
     clock: [f32; 2],
-    images: &HashMap<Id, sky::Texture>,
+    images: &assets::MapCache,
 ) {
     let rings = world::bands(mark.body.id);
     if mark.radius < 2.5 && rings.is_empty() && mark.body.id != SUN {
@@ -620,12 +628,14 @@ fn paint_icon(
         return;
     }
     camera.zoom = 1.0 / (0.86 * f64::from(size_ratio));
-    let mut frame = world::Frame::new(
-        mark.body,
-        camera,
-        rect.size().into(),
-        images.get(&mark.body.id).cloned(),
-    );
+    let texture = if mark.primary || mark.radius >= 135.0 {
+        images
+            .map(mark.body.id, false)
+            .or_else(|| images.preview(mark.body.id))
+    } else {
+        images.preview(mark.body.id)
+    };
+    let mut frame = world::Frame::new(mark.body, camera, rect.size().into(), texture);
     frame.clock = clock;
     frame.sun = sunlight(mark.body, f64::from(clock[0])).0;
     frame.ring_emphasis = (20.0 / mark.radius).clamp(1.0, 2.8);
@@ -659,7 +669,7 @@ fn paint_marks(
     response: &egui::Response,
     camera: GlobeCamera,
     clock: [f32; 2],
-    images: &HashMap<Id, sky::Texture>,
+    images: &assets::MapCache,
 ) -> Option<Id> {
     let mut marks: Vec<_> = layout.marks.iter().collect();
     marks.sort_by(|a, b| b.depth.total_cmp(&a.depth));
