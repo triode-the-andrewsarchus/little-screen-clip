@@ -9,16 +9,22 @@ use little_clip_core::{
     },
     jobs::task::Task,
 };
-use std::{path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 pub(in crate::file_manager::geography) struct World {
     pub body: &'static Body,
     pub camera: GlobeCamera,
     middle: map_camera::MiddleDrag,
     inspected: bool,
-    job: Option<Task<Result<Option<assets::Assets>, String>>>,
+    job: Option<Task<LocalAssets>>,
     assets: Option<assets::Assets>,
+    neighbors: HashMap<Id, sky::Texture>,
     pub error: Option<String>,
+}
+
+struct LocalAssets {
+    focused: Result<Option<assets::Assets>, String>,
+    neighbors: HashMap<Id, sky::Texture>,
 }
 
 impl World {
@@ -33,6 +39,7 @@ impl World {
             inspected: false,
             job: None,
             assets: None,
+            neighbors: HashMap::new(),
             error: None,
         }
     }
@@ -57,18 +64,26 @@ impl World {
             self.job = None;
             self.inspected = true;
             match result {
-                Ok(Ok(assets)) => self.assets = assets,
-                Ok(Err(error)) => self.error = Some(error),
+                Ok(local) => {
+                    self.neighbors = local.neighbors;
+                    match local.focused {
+                        Ok(assets) => self.assets = assets,
+                        Err(error) => self.error = Some(error),
+                    }
+                }
                 Err(error) => self.error = Some(format!("World asset worker: {error}")),
             }
         }
         if !self.inspected && self.job.is_none() {
             let root = root.to_owned();
-            let id = self.body.id;
+            let body = self.body;
             self.job = Some(Task::start(
                 super::super::super::geography_downloader::asset_workers(),
                 Duration::from_secs(30),
-                move |_| assets::Assets::load(&root, id),
+                move |cancel| LocalAssets {
+                    focused: assets::Assets::load(&root, body.id),
+                    neighbors: assets::neighboring_maps(&root, body, &cancel),
+                },
             ));
         }
         if self.job.is_some() {
@@ -122,21 +137,31 @@ impl World {
         }
         let moons = surroundings(self.body, frame.pose, rect, day);
         let pose = frame.pose;
+        let clock = frame.clock;
         gpu::paint_space(ui, rect, lights)?;
-        for moon in moons.iter().filter(|moon| moon.behind) {
-            moon.paint(&painter);
-        }
+        let paint_side = |behind| {
+            for moon in moons.iter().filter(|moon| moon.behind == behind) {
+                moon.paint(
+                    ui,
+                    pose,
+                    rect,
+                    sun.0,
+                    clock,
+                    self.neighbors.get(&moon.body.id),
+                )?;
+            }
+            Ok::<_, String>(())
+        };
+        paint_side(true)?;
         gpu::paint_world(ui, rect, frame)?;
-        for moon in moons.iter().filter(|moon| !moon.behind) {
-            moon.paint(&painter);
-        }
+        paint_side(false)?;
         for moon in moons
             .iter()
             .filter(|moon| !moon.occluded && moon.radius >= 4.5)
         {
             moon.label(&painter);
         }
-        let target = pick_moon(&moons, response).or_else(|| pick_sun(pose, sun, response));
+        let target = pick_moon(&moons, pose, response).or_else(|| pick_sun(pose, sun, response));
         Ok(target.filter(|_| response.clicked()))
     }
 
@@ -153,20 +178,43 @@ struct Nearby {
     body: &'static Body,
     point: Pos2,
     radius: f32,
+    position: [f64; 3],
+    display_radius: f64,
+    depth: f64,
     behind: bool,
     occluded: bool,
 }
 
 impl Nearby {
-    fn paint(&self, painter: &egui::Painter) {
-        let color = self.body.color();
-        painter.circle_filled(self.point, self.radius, color.gamma_multiply(0.61));
-        painter.circle_filled(
-            self.point + egui::vec2(-0.16, -0.16) * self.radius,
-            self.radius * 0.72,
-            color,
-        );
+    fn paint(
+        &self,
+        ui: &egui::Ui,
+        pose: Perspective,
+        canvas: Rect,
+        sun: [f32; 3],
+        clock: [f32; 2],
+        texture: Option<&sky::Texture>,
+    ) -> Result<(), String> {
+        if self.radius < 2.0 && bands(self.body.id).is_empty() {
+            ui.painter_at(canvas)
+                .circle_filled(self.point, self.radius, self.body.color());
+            return Ok(());
+        }
+        let mut frame = Frame::from_pose(self.body, pose, 1.0, texture.cloned());
+        frame.pose.eye =
+            std::array::from_fn(|i| (pose.eye[i] - self.position[i]) / self.display_radius);
+        frame.sun = sun;
+        frame.clock = clock;
+        // Preserve the canvas ray projection while restricting shader work to
+        // the object's possible silhouette, including the outer edge of its rings.
+        let bound = visible_radius(self.body, self.display_radius);
+        let clip = projected_bounds(pose, canvas, self.position, bound);
+        if !clip.is_positive() {
+            return Ok(());
+        }
+        gpu::paint_world_clipped(ui, canvas, clip, frame)
     }
+
     fn label(&self, painter: &egui::Painter) {
         let text = painter.layout_no_wrap(
             self.body.name.to_owned(),
@@ -182,19 +230,59 @@ impl Nearby {
     }
 }
 
-fn pick_moon(moons: &[Nearby], response: &egui::Response) -> Option<Id> {
+fn projected_bounds(pose: Perspective, canvas: Rect, position: [f64; 3], radius: f64) -> Rect {
+    let relative = std::array::from_fn::<_, 3, _>(|i| position[i] - pose.eye[i]);
+    let [x, y, z] = pose
+        .axes
+        .map(|axis| axis.iter().zip(relative).map(|(a, b)| a * b).sum::<f64>());
+    let depth = -z;
+    if depth <= radius {
+        return canvas;
+    }
+    // Extrema of x/depth and y/depth over the view-space bounding sphere.
+    let range = |offset: f64| {
+        let denominator = depth * depth - radius * radius;
+        let delta = radius * (offset * offset + denominator).sqrt();
+        [
+            (offset * depth - delta) / denominator,
+            (offset * depth + delta) / denominator,
+        ]
+        .map(|slope| (slope * pose.focal) as f32)
+    };
+    let [left, right] = range(x);
+    let [top, bottom] = range(-y);
+    Rect::from_min_max(
+        canvas.center() + egui::vec2(left, top),
+        canvas.center() + egui::vec2(right, bottom),
+    )
+    .expand(2.0)
+    .intersect(canvas)
+}
+
+fn pick_moon(moons: &[Nearby], pose: Perspective, response: &egui::Response) -> Option<Id> {
     let pointer = response
         .hover_pos()
         .or_else(|| response.interact_pointer_pos())?;
+    let offset = pointer - response.rect.center();
+    let [right, up, back] = pose.axes;
+    let ray = std::array::from_fn::<_, 3, _>(|i| {
+        (right[i] * f64::from(offset.x) - up[i] * f64::from(offset.y)) / pose.focal - back[i]
+    });
+    let norm = ray.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let ray = ray.map(|v| v / norm);
+    let foreground = sphere_distance(pose.eye, ray, 1.0).unwrap_or(f64::INFINITY);
     let hit = moons
         .iter()
-        .filter(|moon| !moon.occluded)
-        .filter(|moon| pointer.distance(moon.point) <= moon.radius.max(6.0))
-        .min_by(|a, b| {
-            pointer
-                .distance_sq(a.point)
-                .total_cmp(&pointer.distance_sq(b.point))
-        })?;
+        .filter_map(|moon| {
+            let eye = std::array::from_fn(|i| pose.eye[i] - moon.position[i]);
+            let depth = sphere_distance(eye, ray, moon.display_radius).or_else(|| {
+                (moon.radius < 6.0 && !moon.occluded && moon.point.distance(pointer) <= 6.0)
+                    .then_some(moon.depth)
+            })?;
+            (depth < foreground).then_some((moon, depth))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))?
+        .0;
     response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     response.clone().on_hover_text_at_pointer(hit.body.name);
     Some(hit.body.id)
@@ -241,6 +329,7 @@ fn surroundings(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<
         .collect();
     visible.sort_by(|a, b| b.radius.total_cmp(&a.radius));
     visible.truncate(48);
+    visible.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     visible
 }
 
@@ -263,8 +352,10 @@ fn project_moon(
     let ray = std::array::from_fn(|i| position[i] - pose.eye[i]);
     let depth = ray.iter().map(|v| v * v).sum::<f64>().sqrt();
     let ray = ray.map(|v| v / depth);
-    let radius = (pose.focal * (radius_ratio * 3.0).min(distance * 0.32) / depth) as f32;
-    if !rect.expand(radius).contains(point) || radius < 0.26 {
+    let display_radius = (radius_ratio * 3.0).min(distance * 0.32);
+    let radius = (pose.focal * display_radius / depth) as f32;
+    if radius < 0.26 || !pose.intersects_sphere(position, visible_radius(moon, display_radius), 2.0)
+    {
         return None;
     }
     let occluded = sphere_distance(pose.eye, ray, 1.0).is_some_and(|t| t < depth);
@@ -278,9 +369,19 @@ fn project_moon(
         body: moon,
         point,
         radius: radius.max(0.9),
+        position,
+        display_radius,
+        depth,
         behind,
         occluded,
     })
+}
+
+fn visible_radius(body: &Body, display_radius: f64) -> f64 {
+    display_radius
+        * bands(body.id)
+            .last()
+            .map_or(1.0, |band| f64::from(band[1]) / (radius_m(body) / 1000.0))
 }
 
 pub(super) fn initial_zoom(id: Id) -> f64 {
@@ -320,11 +421,26 @@ impl Frame {
         size: [f32; 2],
         texture: Option<sky::Texture>,
     ) -> Self {
+        Self::from_pose(
+            body,
+            Perspective::new(&camera, size, radius_m(body)),
+            camera.zoom as f32,
+            texture,
+        )
+    }
+
+    fn from_pose(
+        body: &Body,
+        mut pose: Perspective,
+        zoom: f32,
+        texture: Option<sky::Texture>,
+    ) -> Self {
         let color = body.color().to_array();
+        pose.radius_m = radius_m(body);
         Self {
             id: body.id,
-            pose: Perspective::new(&camera, size, radius_m(body)),
-            zoom: camera.zoom as f32,
+            pose,
+            zoom,
             color: [color[0], color[1], color[2]].map(|value| value as f32 / 255.0),
             texture,
             bands: bands(body.id),
@@ -379,6 +495,24 @@ pub(in crate::file_manager::geography) fn bands(id: Id) -> &'static [[f32; 3]] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parent_uses_the_viewers_projection_and_its_own_ring_scale() {
+        let camera = map_camera::lunar_camera();
+        let europa = body(502).unwrap();
+        let jupiter = body(599).unwrap();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let pose = Perspective::new(&camera, rect.size().into(), radius_m(europa));
+        let neighbor =
+            project_moon(europa, jupiter, [-671_100.0, 25_000.0, 0.0], pose, rect).unwrap();
+        let frame = Frame::from_pose(jupiter, pose, 1.0, None);
+        assert_eq!(frame.pose.half_fov(), pose.half_fov());
+        assert_eq!(frame.pose.radius_m, radius_m(jupiter));
+        assert_eq!(frame.bands, bands(jupiter.id));
+        let radius = visible_radius(jupiter, neighbor.display_radius);
+        let clip = projected_bounds(pose, rect, neighbor.position, radius);
+        assert!(clip.is_positive() && clip.width() > neighbor.radius * 2.0);
+    }
 
     #[test]
     fn major_moons_keep_relative_sizes_and_globe_occlusion() {

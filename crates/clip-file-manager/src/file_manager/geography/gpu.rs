@@ -184,10 +184,15 @@ pub(super) fn paint_at(
     frame: Frame,
     slot: Option<egui::layers::ShapeIdx>,
 ) -> Result<(), String> {
-    schedule_paint(ui, rect, slot, move |renderer, gl, info| {
-        // SAFETY: schedule_paint verifies the owning GL context before calling us.
-        unsafe { renderer.paint(gl, info, &frame) }
-    })
+    schedule_paint(
+        ui.painter_at(rect),
+        rect,
+        slot,
+        move |renderer, gl, info| {
+            // SAFETY: schedule_paint verifies the owning GL context before calling us.
+            unsafe { renderer.paint(gl, info, &frame) }
+        },
+    )
 }
 
 pub(super) fn paint_world(
@@ -195,10 +200,24 @@ pub(super) fn paint_world(
     rect: egui::Rect,
     frame: super::solar::world::Frame,
 ) -> Result<(), String> {
-    schedule_paint(ui, rect, None, move |renderer, gl, info| {
-        // SAFETY: schedule_paint verifies the owning GL context before calling us.
-        unsafe { renderer.world.draw(gl, info, &frame) }
-    })
+    paint_world_clipped(ui, rect, rect, frame)
+}
+
+pub(super) fn paint_world_clipped(
+    ui: &egui::Ui,
+    canvas: egui::Rect,
+    clip: egui::Rect,
+    frame: super::solar::world::Frame,
+) -> Result<(), String> {
+    schedule_paint(
+        ui.painter_at(clip),
+        canvas,
+        None,
+        move |renderer, gl, info| {
+            // SAFETY: schedule_paint verifies the owning GL context before calling us.
+            unsafe { renderer.world.draw(gl, info, &frame) }
+        },
+    )
 }
 
 pub(super) fn paint_space(
@@ -206,21 +225,26 @@ pub(super) fn paint_space(
     rect: egui::Rect,
     frame: super::solar::world::Backdrop,
 ) -> Result<(), String> {
-    schedule_paint(ui, rect, None, move |renderer, gl, info| {
-        // SAFETY: schedule_paint verified the current GL context.
-        unsafe {
-            if let Some(assets) = &frame.assets {
-                renderer.sky.prepare(gl, assets);
+    schedule_paint(
+        ui.painter_at(rect),
+        rect,
+        None,
+        move |renderer, gl, info| {
+            // SAFETY: schedule_paint verified the current GL context.
+            unsafe {
+                if let Some(assets) = &frame.assets {
+                    renderer.sky.prepare(gl, assets);
+                }
+                let stars = frame.assets.as_ref().and(renderer.sky.stars());
+                renderer.world.backdrop(gl, info, &frame, stars)?;
             }
-            let stars = frame.assets.as_ref().and(renderer.sky.stars());
-            renderer.world.backdrop(gl, info, &frame, stars)?;
-        }
-        Ok(false)
-    })
+            Ok(false)
+        },
+    )
 }
 
 fn schedule_paint(
-    ui: &egui::Ui,
+    painter: egui::Painter,
     rect: egui::Rect,
     slot: Option<egui::layers::ShapeIdx>,
     draw: impl Fn(&mut Renderer, &glow::Context, &egui::PaintCallbackInfo) -> Result<bool, String>
@@ -228,7 +252,7 @@ fn schedule_paint(
     + Sync
     + 'static,
 ) -> Result<(), String> {
-    let handle = ui
+    let handle = painter
         .ctx()
         .data(|d| d.get_temp::<Handle>(runtime_key()))
         .ok_or("OpenGL maps are unavailable in this host")?;
@@ -241,7 +265,7 @@ fn schedule_paint(
     {
         return Err(error);
     }
-    let ctx = ui.ctx().clone();
+    let ctx = painter.ctx().clone();
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
@@ -263,7 +287,6 @@ fn schedule_paint(
             }
         })),
     };
-    let painter = ui.painter_at(rect);
     if let Some(slot) = slot {
         painter.set(slot, callback);
     } else {

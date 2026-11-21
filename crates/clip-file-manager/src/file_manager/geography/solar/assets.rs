@@ -174,18 +174,38 @@ pub(super) fn overview_maps(
         if maps.contains_key(&image.id) {
             continue;
         }
-        let Some(asset) = Download::for_body(image.id) else {
-            continue;
-        };
-        let path = root.join(asset.folder).join(asset.name);
-        if let Ok(bytes) = read_file_snapshot(&path, image.bytes as usize)
-            && bytes.len() as u64 == image.bytes
-            && let Ok(map) = decode(bytes, image.size, true)
-        {
+        if let Some(map) = load_installed_map(root, image, true) {
             maps.insert(image.id, map);
         }
     }
     maps
+}
+
+fn load_installed_map(root: &Path, image: &ImageAsset, thumbnail: bool) -> Option<sky::Texture> {
+    let asset = Download::for_body(image.id)?;
+    let path = root.join(asset.folder).join(asset.name);
+    let bytes = read_file_snapshot(&path, image.bytes as usize).ok()?;
+    (bytes.len() as u64 == image.bytes).then_some(())?;
+    decode(bytes, image.size, thumbnail).ok()
+}
+
+pub(super) fn neighboring_maps(
+    root: &Path,
+    focused: &Body,
+    cancel: &AtomicBool,
+) -> HashMap<Id, sky::Texture> {
+    images()
+        .iter()
+        .take_while(|_| !cancel.load(Ordering::Relaxed))
+        .filter_map(|image| {
+            let is_parent = focused.parent == Some(image.id);
+            let is_moon = super::body(image.id).is_some_and(|body| body.parent == Some(focused.id));
+            if !(is_parent || is_moon && focused.id != super::SUN) {
+                return None;
+            }
+            Some((image.id, load_installed_map(root, image, !is_parent)?))
+        })
+        .collect()
 }
 
 impl Assets {
