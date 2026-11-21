@@ -210,7 +210,6 @@ impl System {
             .as_ref()
             .map_or(0.0, |(lens, _)| lens.progress as f32);
         let mut backdrop = self.backdrop(rect, projection, clock, stars, constellations, blend);
-        backdrop.star_trail = preview.star_trail;
         if let Some((lens, _)) = &approach {
             let (direction, radius) = sunlight(lens.body, day);
             backdrop.sun = (direction, radius * blend.powi(3));
