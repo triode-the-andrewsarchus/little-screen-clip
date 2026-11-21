@@ -61,6 +61,7 @@ fn terrain_loading_profile() {
                 center_lon: lon,
                 zoom,
                 mode: ProjectionMode::Map2D,
+                orbit: Default::default(),
             };
             let ids = tiles::visible_tiles(&camera, 1280., 800., 1.);
             let next = AtomicUsize::new(0);
