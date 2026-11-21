@@ -28,12 +28,21 @@ pub(super) struct ImageAsset {
     pub credit: &'static str,
     pub bytes: u64,
     size: [u32; 2],
+    file: Option<&'static str>,
+    legacy: Option<LegacyImage>,
+}
+
+#[derive(Deserialize)]
+struct LegacyImage {
+    size: [u32; 2],
+    bytes: u64,
 }
 
 #[derive(Default)]
 pub(super) struct Assets {
     pub texture: Option<sky::Texture>,
     pub ephemeris: Option<Vec<[f64; 3]>>,
+    pub preferred: bool,
 }
 
 pub(in crate::file_manager) struct Download {
@@ -50,7 +59,7 @@ impl Download {
             let (folder, name) = if id == super::MOON {
                 (PathBuf::from(sky::DIRECTORY), sky::MOON)
             } else {
-                (folder, "image")
+                (folder, image.file.unwrap_or("image"))
             };
             return Some(Self {
                 folder,
@@ -205,12 +214,33 @@ pub(super) fn overview_maps(
     maps
 }
 
-fn load_installed_map(root: &Path, image: &ImageAsset, thumbnail: bool) -> Option<sky::Texture> {
-    let asset = Download::for_body(image.id)?;
-    let path = root.join(asset.folder).join(asset.name);
-    let bytes = read_file_snapshot(&path, image.bytes as usize).ok()?;
-    (bytes.len() as u64 == image.bytes).then_some(())?;
-    decode(bytes, image.size, thumbnail).ok()
+fn load_installed_map(root: &Path, image: &ImageAsset, small: bool) -> Option<sky::Texture> {
+    let download = Download::for_body(image.id)?;
+    let rgb = decode_installed(root, image, download).ok()??;
+    Some(if small { thumbnail(&rgb) } else { texture(rgb) })
+}
+
+fn decode_installed(
+    root: &Path,
+    asset: &ImageAsset,
+    download: Download,
+) -> Result<Option<image::RgbImage>, String> {
+    let preferred = download.present(root);
+    let size = if preferred {
+        (download.name, asset.bytes, asset.size)
+    } else {
+        let Some(legacy) = &asset.legacy else {
+            return Ok(None);
+        };
+        ("image", legacy.bytes, legacy.size)
+    };
+    let path = root.join(download.folder).join(size.0);
+    let bytes = match read_file_snapshot(&path, size.1 as usize) {
+        Ok(bytes) if bytes.len() as u64 == size.1 => bytes,
+        _ if !preferred => return Ok(None),
+        _ => return Err("World image changed during read".to_owned()),
+    };
+    decode(bytes, asset.id, size.2).map(Some)
 }
 
 pub(super) fn neighboring_maps(
@@ -234,6 +264,16 @@ pub(super) fn neighboring_maps(
 
 impl Assets {
     pub fn load(root: &Path, id: Id) -> Result<Option<Self>, String> {
+        if let Some(asset) = image(id) {
+            let preferred = asset.legacy.is_none()
+                || Download::for_body(id).is_some_and(|download| download.present(root));
+            let download = Download::for_body(id).ok_or("No world image download")?;
+            return Ok(decode_installed(root, asset, download)?.map(|rgb| Self {
+                texture: Some(texture(rgb)),
+                ephemeris: None,
+                preferred,
+            }));
+        }
         let Some(download) = Download::for_body(id) else {
             return Ok(None);
         };
@@ -242,20 +282,15 @@ impl Assets {
             return Ok(None);
         }
         let bytes = read_file_snapshot(&path, *download.size.end() as usize)?;
-        let Some(asset) = image(id) else {
-            return Ok(Some(Self {
-                ephemeris: ephemeris(&bytes),
-                ..Self::default()
-            }));
-        };
         Ok(Some(Self {
-            texture: Some(decode(bytes, asset.size, false)?),
-            ephemeris: None,
+            ephemeris: ephemeris(&bytes),
+            preferred: true,
+            ..Self::default()
         }))
     }
 }
 
-fn decode(bytes: Vec<u8>, expected: [u32; 2], thumbnail: bool) -> Result<sky::Texture, String> {
+fn decode(bytes: Vec<u8>, id: Id, expected: [u32; 2]) -> Result<image::RgbImage, String> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|error| error.to_string())?;
@@ -267,24 +302,27 @@ fn decode(bytes: Vec<u8>, expected: [u32; 2], thumbnail: bool) -> Result<sky::Te
     let rgb = reader
         .decode()
         .map_err(|error| error.to_string())?
-        .into_rgb8();
+        .into_rgba8();
     if [rgb.width(), rgb.height()] != expected {
         return Err("Unexpected world image dimensions".into());
     }
-    let rgb = if thumbnail && rgb.width() > 640 {
-        image::imageops::resize(
-            &rgb,
-            640,
-            (rgb.height() * 640 / rgb.width()).max(1),
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        rgb
-    };
-    Ok(sky::Texture {
+    super::coverage::albedo(rgb, id).ok_or_else(|| "No observed world imagery".to_owned())
+}
+
+fn texture(rgb: image::RgbImage) -> sky::Texture {
+    sky::Texture {
         size: [rgb.width() as i32, rgb.height() as i32],
         pixels: rgb.into_raw().into(),
-    })
+    }
+}
+
+fn thumbnail(rgb: &image::RgbImage) -> sky::Texture {
+    texture(image::imageops::resize(
+        rgb,
+        rgb.width().min(640),
+        (rgb.height() * rgb.width().min(640) / rgb.width()).max(1),
+        image::imageops::FilterType::Triangle,
+    ))
 }
 
 fn ephemeris(bytes: &[u8]) -> Option<Vec<[f64; 3]>> {

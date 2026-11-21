@@ -96,7 +96,7 @@ impl World {
     }
 
     pub fn installed(&self) -> bool {
-        self.assets.is_some()
+        self.assets.as_ref().is_some_and(|assets| assets.preferred)
     }
 
     pub fn paint(

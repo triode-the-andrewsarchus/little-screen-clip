@@ -1,5 +1,6 @@
 //! Offline orbital geometry and the solar system view.
 pub(in crate::file_manager) mod assets;
+mod coverage;
 mod view;
 pub(super) mod world;
 
