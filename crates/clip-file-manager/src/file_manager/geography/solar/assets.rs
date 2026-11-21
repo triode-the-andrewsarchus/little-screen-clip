@@ -22,22 +22,13 @@ pub(super) struct ImageAsset {
     pub url: &'static str,
     pub source: &'static str,
     pub credit: &'static str,
-    pub kind: ImageKind,
     pub bytes: u64,
     size: [u32; 2],
-}
-
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(super) enum ImageKind {
-    Map,
-    Observation,
 }
 
 #[derive(Default)]
 pub(super) struct Assets {
     pub texture: Option<sky::Texture>,
-    pub observation: Option<sky::Texture>,
     pub ephemeris: Option<Vec<[f64; 3]>>,
 }
 
@@ -114,18 +105,12 @@ pub(in crate::file_manager) fn verify(name: &str, file: &File) -> bool {
 
 pub(in crate::file_manager::geography) fn information(
     body: &Body,
-) -> (&'static str, &'static str, &'static str, u64) {
-    image(body.id).map_or(
-        ("Orbital data", "JPL Horizons", HORIZONS, EPHEMERIS_LIMIT),
-        |image| {
-            let kind = if image.kind == ImageKind::Map {
-                "Surface map"
-            } else {
-                "Reference image"
-            };
-            (kind, image.credit, image.source, image.bytes)
-        },
-    )
+) -> Option<(&'static str, &'static str, &'static str, u64)> {
+    if let Some(image) = image(body.id) {
+        return Some(("Surface map", image.credit, image.source, image.bytes));
+    }
+    Download::for_body(body.id)?;
+    Some(("Orbital data", "JPL Horizons", HORIZONS, EPHEMERIS_LIMIT))
 }
 
 fn image(id: Id) -> Option<&'static ImageAsset> {
@@ -155,13 +140,10 @@ impl Assets {
                 ..Self::default()
             }));
         };
-        let image = decode(bytes, asset.size)?;
-        let mut loaded = Self::default();
-        match asset.kind {
-            ImageKind::Map => loaded.texture = Some(image),
-            ImageKind::Observation => loaded.observation = Some(image),
-        }
-        Ok(Some(loaded))
+        Ok(Some(Self {
+            texture: Some(decode(bytes, asset.size)?),
+            ephemeris: None,
+        }))
     }
 }
 

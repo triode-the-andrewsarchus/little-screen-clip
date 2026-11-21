@@ -1213,7 +1213,9 @@ impl Viewer {
         let Some(world) = self.world.as_ref() else {
             return;
         };
-        let (dataset, credit, source, bytes) = solar::assets::information(world.body);
+        let Some((dataset, credit, source, bytes)) = solar::assets::information(world.body) else {
+            return;
+        };
         let pack = DownloadPack::World(world.body.id);
         let local_error = world.error.clone();
         let size = if bytes < 1_000_000 {
@@ -1227,14 +1229,6 @@ impl Viewer {
             ui.label("Checking offline assets…");
         } else if world.installed() {
             ui.hyperlink_to(credit, source).on_hover_text(dataset);
-            if let Some(observation) = &world.observation {
-                ui.menu_button("Reference image", |ui| {
-                    let size = observation.size_vec2();
-                    let scale = (480.0 / size.max_elem()).min(1.0);
-                    ui.image((observation.id(), size * scale));
-                    ui.hyperlink_to(credit, source);
-                });
-            }
         } else if ui
             .add_enabled(
                 self.downloader.active.is_none(),

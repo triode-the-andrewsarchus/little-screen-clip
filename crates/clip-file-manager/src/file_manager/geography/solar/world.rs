@@ -14,7 +14,6 @@ pub(in crate::file_manager::geography) struct World {
     job: Option<Task<Result<Option<assets::Assets>, String>>>,
     assets: Option<assets::Assets>,
     pub error: Option<String>,
-    pub observation: Option<egui::TextureHandle>,
 }
 
 impl World {
@@ -30,7 +29,6 @@ impl World {
             job: None,
             assets: None,
             error: None,
-            observation: None,
         }
     }
 
@@ -54,22 +52,7 @@ impl World {
             self.job = None;
             self.inspected = true;
             match result {
-                Ok(Ok(assets)) => {
-                    self.observation = assets
-                        .as_ref()
-                        .and_then(|assets| assets.observation.as_ref())
-                        .map(|image| {
-                            ctx.load_texture(
-                                "world-observation",
-                                egui::ColorImage::from_rgb(
-                                    image.size.map(|n| n as usize),
-                                    &image.pixels,
-                                ),
-                                egui::TextureOptions::LINEAR,
-                            )
-                        });
-                    self.assets = assets;
-                }
+                Ok(Ok(assets)) => self.assets = assets,
                 Ok(Err(error)) => self.error = Some(error),
                 Err(error) => self.error = Some(format!("World asset worker: {error}")),
             }
