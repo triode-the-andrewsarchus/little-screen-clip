@@ -1,5 +1,5 @@
 //! Size-limited, independently downloadable assets for a selected solar-system body.
-use super::{Body, Id, SUN};
+use super::{Body, Id, Orbit};
 use crate::file_manager::geography::sky;
 use little_clip_core::file_source::read_file_snapshot;
 use serde::Deserialize;
@@ -59,9 +59,7 @@ impl Download {
                 size: image.bytes..=image.bytes,
             });
         }
-        let body = super::body(id)?;
-        (id > 0 && id != SUN).then_some(())?;
-        let orbit = body.orbit?;
+        let (orbit, center) = orbital_pack(super::body(id)?)?;
         let start = 2_451_545.0 + orbit.7;
         let epochs = (0..EPHEMERIS_SAMPLES)
             .map(|i| {
@@ -72,7 +70,6 @@ impl Download {
             })
             .collect::<Vec<_>>()
             .join("%20");
-        let center = body.parent?;
         let url = format!(
             "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27{id}%27&CENTER=%27500%40{center}%27&EPHEM_TYPE=VECTORS&MAKE_EPHEM=YES&VEC_TABLE=1&CSV_FORMAT=YES&REF_PLANE=ECLIPTIC&OUT_UNITS=KM-S&TLIST_TYPE=JD&TLIST={epochs}"
         );
@@ -113,8 +110,13 @@ pub(in crate::file_manager::geography) fn information(
     if let Some(image) = image(body.id) {
         return Some(("Surface map", image.credit, image.source, image.bytes));
     }
-    Download::for_body(body.id)?;
+    orbital_pack(body)?;
     Some(("Orbital data", "JPL Horizons", HORIZONS, EPHEMERIS_LIMIT))
+}
+
+fn orbital_pack(body: &Body) -> Option<(Orbit, Id)> {
+    (body.id > 0).then_some(())?;
+    body.orbit.zip(body.parent)
 }
 
 fn image(id: Id) -> Option<&'static ImageAsset> {
@@ -265,13 +267,24 @@ mod tests {
 
     #[test]
     fn downloadable_datasets_match_catalog_ids_and_fit_their_budgets() {
-        for body in super::super::bodies().iter().filter(|body| body.id != SUN) {
+        for body in super::super::bodies() {
+            if body.id < 0 || body.id == super::super::SUN {
+                assert!(Download::for_body(body.id).is_none());
+                continue;
+            }
             let download = Download::for_body(body.id).unwrap();
             assert!(*download.size.end() < 4_000_000_000);
             if let Some(image) = image(body.id) {
                 assert!(image.size[0] <= 8192 && image.size[1] <= 4096);
             }
             assert!(download.url.starts_with("https://"));
+        }
+    }
+
+    #[test]
+    fn observation_only_targets_use_procedural_worlds_without_a_reference_image() {
+        for id in [2_136_108, 2_136_199, 2_136_472, -1, -2, -3, -4] {
+            assert!(image(id).is_none());
         }
     }
 
