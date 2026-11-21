@@ -657,6 +657,7 @@ impl Viewer {
             let time = recorded_scene_time(&self.document, self.selected, None)
                 .unwrap_or_else(|| live_scene_time(ui.ctx()));
             match world.paint(ui, &response, time, self.sky.assets.clone()) {
+                Ok(Some(solar::SUN)) => self.open_solar_system(solar::SUN, ui.ctx()),
                 Ok(Some(id)) => self.select_solar_target(id, ui.ctx()),
                 Ok(None) => {}
                 Err(error) => {

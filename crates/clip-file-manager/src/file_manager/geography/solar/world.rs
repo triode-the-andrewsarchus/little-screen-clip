@@ -121,6 +121,7 @@ impl World {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
         let moons = surroundings(self.body, frame.pose, rect, day);
+        let pose = frame.pose;
         gpu::paint_space(ui, rect, lights)?;
         for moon in moons.iter().filter(|moon| moon.behind) {
             moon.paint(&painter);
@@ -135,7 +136,8 @@ impl World {
         {
             moon.label(&painter);
         }
-        Ok(pick_moon(&moons, response))
+        let target = pick_moon(&moons, response).or_else(|| pick_sun(pose, sun, response));
+        Ok(target.filter(|_| response.clicked()))
     }
 
     pub fn texture(&self) -> Option<sky::Texture> {
@@ -195,7 +197,33 @@ fn pick_moon(moons: &[Nearby], response: &egui::Response) -> Option<Id> {
         })?;
     response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     response.clone().on_hover_text_at_pointer(hit.body.name);
-    response.clicked().then_some(hit.body.id)
+    Some(hit.body.id)
+}
+
+fn pick_sun(pose: Perspective, sun: ([f32; 3], f32), response: &egui::Response) -> Option<Id> {
+    let (direction, radius) = sun;
+    if radius <= 0.0 {
+        return None;
+    }
+    let pointer = response
+        .hover_pos()
+        .or_else(|| response.interact_pointer_pos())?;
+    let point = pointer - response.rect.min;
+    let center = pose.project_position(direction.map(|v| f64::from(v) * 1.0e7))?;
+    let depth = -pose.axes[2]
+        .iter()
+        .zip(direction)
+        .map(|(a, b)| a * f64::from(b))
+        .sum::<f64>();
+    let radius_px = (pose.focal * f64::from(radius) / depth.max(0.001)) as f32;
+    if (point - egui::vec2(center[0], center[1])).length() > radius_px.max(5.0)
+        || pose.ground(point.x, point.y).is_some()
+    {
+        return None;
+    }
+    response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    response.clone().on_hover_text_at_pointer("Solar System");
+    Some(SUN)
 }
 
 fn surroundings(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<Nearby> {

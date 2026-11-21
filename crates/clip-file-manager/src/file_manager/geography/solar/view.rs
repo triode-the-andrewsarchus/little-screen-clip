@@ -461,7 +461,7 @@ impl OrbitLayout<'_> {
                 .unwrap_or_default()
                 .total_cmp(&a.radius.unwrap_or_default())
         });
-        let alpha = (((self.zoom - 2.2) / 1.1).clamp(0.05, 1.0) * 110.0) as u8;
+        let alpha = (45.0 + ((self.zoom - 2.2) / 1.5).clamp(0.0, 1.0) * 88.0) as u8;
         for moon in moons.into_iter().take(12) {
             let scale = projection.orbit_scale(moon.semimajor());
             self.orbit(moon, projection, scale, alpha, 64, None);
