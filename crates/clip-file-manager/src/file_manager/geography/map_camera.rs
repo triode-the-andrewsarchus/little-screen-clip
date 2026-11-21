@@ -217,32 +217,29 @@ pub(super) fn lunar_toolbar(
     camera: &mut GlobeCamera,
     sky: &mut SkyState,
 ) -> bool {
-    let mut earth = false;
-    ui.horizontal_wrapped(|ui| {
-        use clip_ui::buttons::ButtonRole::Secondary;
-        earth = ui
-            .add(Secondary.button("Return to Earth", palette).compact())
-            .clicked();
-        if ui
-            .add(Secondary.button("Reset Moon view", palette).compact())
-            .clicked()
-        {
-            *camera = lunar_camera();
-        }
-        ui.separator();
-        ui.checkbox(&mut sky.visible, "Sky and planets");
-        ui.checkbox(&mut sky.lighting, "Day and night");
-        if sky
-            .assets
-            .as_ref()
-            .is_some_and(|assets| assets.star_catalog().is_some())
-        {
-            ui.add_enabled(
-                sky.visible,
-                egui::Checkbox::new(&mut sky.constellations, "Constellations"),
-            );
-        }
-    });
+    use clip_ui::buttons::ButtonRole::Secondary;
+    let earth = ui
+        .add(Secondary.button("Return to Earth", palette).compact())
+        .clicked();
+    if ui
+        .add(Secondary.button("Reset Moon view", palette).compact())
+        .clicked()
+    {
+        *camera = lunar_camera();
+    }
+    ui.separator();
+    ui.checkbox(&mut sky.visible, "Sky and planets");
+    ui.checkbox(&mut sky.lighting, "Day and night");
+    if sky
+        .assets
+        .as_ref()
+        .is_some_and(|assets| assets.star_catalog().is_some())
+    {
+        ui.add_enabled(
+            sky.visible,
+            egui::Checkbox::new(&mut sky.constellations, "Constellations"),
+        );
+    }
     earth
 }
 

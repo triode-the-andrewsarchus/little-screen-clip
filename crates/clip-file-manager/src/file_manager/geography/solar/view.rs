@@ -46,7 +46,7 @@ impl System {
         let primary = body(self.center)?;
         let heliocentric = primary.id == SUN;
         let moons = satellites(primary.id);
-        let power = if heliocentric { 0.43 } else { 0.51 };
+        let power = if heliocentric { 0.34 } else { 0.44 };
         let extent = moons
             .clone()
             .filter_map(|body| body.orbit)
@@ -65,9 +65,12 @@ impl System {
         } else {
             1.0
         };
+        // An oblique orbit plane has more room horizontally. Use part of
+        // that space so the inner worlds remain distinct at overview scale.
+        let span = rect.width().min(rect.height() * 1.32);
         let projection = Projection {
             center: rect.center() + self.pan,
-            scale: rect.size().min_elem() * 0.45 * self.zoom * opening_scale / extent as f32,
+            scale: span * 0.45 * self.zoom * opening_scale / extent as f32,
             power,
             yaw: [sin_yaw, cos_yaw],
             elevation: [sin_el, cos_el],

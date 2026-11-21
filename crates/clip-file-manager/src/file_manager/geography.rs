@@ -1044,17 +1044,27 @@ impl Viewer {
         let Some(camera) = self.moon_camera.as_mut() else {
             return;
         };
-        if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
-            self.select_solar_target(solar::EARTH, ui.ctx());
+        let target = ui
+            .horizontal_wrapped(|ui| {
+                let earth = map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky);
+                ui.separator();
+                let system = ui.button("Solar System").clicked();
+                let orbit = ui.button("Moon orbit").clicked();
+                (earth, system, orbit)
+            })
+            .inner;
+        match target {
+            (true, _, _) => self.select_solar_target(solar::EARTH, ui.ctx()),
+            (_, true, _) => self.open_solar_system(solar::SUN, ui.ctx()),
+            (_, _, true) => self.open_solar_system(solar::EARTH, ui.ctx()),
+            _ => {
+                ui.horizontal_wrapped(|ui| {
+                    self.lunar_download(ui);
+                    self.body_assets(ui);
+                })
+                .inner
+            }
         }
-        if ui.button("Solar System").clicked() {
-            self.open_solar_system(solar::SUN, ui.ctx());
-        }
-        if ui.button("Moon orbit").clicked() {
-            self.open_solar_system(solar::EARTH, ui.ctx());
-        }
-        self.lunar_download(ui);
-        self.body_assets(ui);
     }
 
     fn earth_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -1253,36 +1263,34 @@ impl Viewer {
     }
 
     fn lunar_download(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            let pack = DownloadPack::MoonRelief;
-            if self.downloader.active == Some(pack) {
-                self.download_progress(ui);
-            } else if self.tiles.has_lunar_assets() {
-                ui.hyperlink_to(
-                    "NASA LOLA elevation",
-                    "https://pds-geosciences.wustl.edu/missions/lro/lola.htm",
-                )
-                .on_hover_text("Lunar Reconnaissance Orbiter · ~118 m source elevation");
-            } else if self.tiles.inspecting_lunar_assets() {
-                ui.label("Checking Moon elevation…");
-            } else if ui
-                .add_enabled(
-                    self.downloader.active.is_none(),
-                    egui::Button::new(format!(
-                        "Download Moon elevation · {:.2} GB",
-                        lunar_terrain::BYTES as f64 / 1_000_000_000.0
-                    )),
-                )
-                .clicked()
-            {
-                self.downloader.start(pack, &self.config);
-            }
-            if self.downloader.active.is_none()
-                && let Some(error) = &self.downloader.last_error
-            {
-                ui.label(error);
-            }
-        });
+        let pack = DownloadPack::MoonRelief;
+        if self.downloader.active == Some(pack) {
+            self.download_progress(ui);
+        } else if self.tiles.has_lunar_assets() {
+            ui.hyperlink_to(
+                "NASA LOLA elevation",
+                "https://pds-geosciences.wustl.edu/missions/lro/lola.htm",
+            )
+            .on_hover_text("Lunar Reconnaissance Orbiter · ~118 m source elevation");
+        } else if self.tiles.inspecting_lunar_assets() {
+            ui.label("Checking Moon elevation…");
+        } else if ui
+            .add_enabled(
+                self.downloader.active.is_none(),
+                egui::Button::new(format!(
+                    "Download Moon elevation · {:.2} GB",
+                    lunar_terrain::BYTES as f64 / 1_000_000_000.0
+                )),
+            )
+            .clicked()
+        {
+            self.downloader.start(pack, &self.config);
+        }
+        if self.downloader.active.is_none()
+            && let Some(error) = &self.downloader.last_error
+        {
+            ui.label(error);
+        }
     }
 
     fn open_solar_system(&mut self, center: solar::Id, ctx: &egui::Context) {
