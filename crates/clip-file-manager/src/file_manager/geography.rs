@@ -506,7 +506,7 @@ impl Viewer {
         let showing_earth =
             self.solar_system.is_none() && self.world.is_none() && self.sight.is_none();
         if showing_earth || self.show_assets_panel {
-            self.download_prompt_banner(ui, palette, colors);
+            self.download_prompt_banner(ui, palette, colors, showing_earth);
         }
 
         if let Some(world) = self.world.as_mut() {
@@ -1462,12 +1462,14 @@ impl Viewer {
         ui: &mut egui::Ui,
         palette: &AppPalette,
         colors: WorkbenchColors,
+        earth_view: bool,
     ) {
         if self.assets_job.is_some() {
             ui.label("Loading offline map assets…");
             return;
         }
-        let needs_prompt = self.config.geography.prompt_on_open
+        let needs_prompt = earth_view
+            && self.config.geography.prompt_on_open
             && !self.downloader.status.has_quick_start()
             && !self.prompt_dismissed;
         if !needs_prompt
@@ -1694,7 +1696,7 @@ impl Viewer {
                         ui.colored_label(colors.warning, err);
                     }
                 });
-                if self.show_assets_panel && self.downloader.active.is_none() {
+                if earth_view && self.show_assets_panel && self.downloader.active.is_none() {
                     self.terrain_download.ui(ui, self.camera, self.assets.as_ref(), &self.config, &mut self.downloader);
                 }
             });
