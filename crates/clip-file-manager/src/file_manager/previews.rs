@@ -1041,7 +1041,7 @@ impl EntryPreviews {
 }
 
 fn show_trajectory_strip(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     row: egui::Rect,
     entry: &Entry,
     columns: Option<super::ui::ListColumns>,
