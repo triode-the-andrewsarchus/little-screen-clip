@@ -114,137 +114,70 @@ fn body_kind(kind: solar::Kind) -> (&'static str, Icon) {
     }
 }
 
+fn ranked_hit(
+    rank: Rank,
+    priority: u32,
+    name: &str,
+    context: &str,
+    icon: Icon,
+    target: Target,
+) -> Ranked {
+    (
+        rank,
+        priority,
+        Hit {
+            label: Arc::from(name),
+            context: Arc::from(context),
+            icon,
+            target,
+        },
+    )
+}
+
 fn search(
     query: &str,
     catalog: Option<&sky::catalog::Catalog>,
     features: &[Arc<str>],
     cancel: &AtomicBool,
 ) -> Vec<Hit> {
-    let mut ranked: Vec<Ranked> = Vec::new();
-    let mut add = |rank: Rank, priority: u32, name: &str, context: &str, icon, target| {
-        ranked.push((
-            rank,
-            priority,
-            Hit {
-                label: Arc::from(name),
-                context: Arc::from(context),
-                icon,
-                target,
-            },
-        ));
-    };
-    for body in solar::bodies() {
-        let aliases = match body.id {
-            solar::SUN => "Sol",
-            solar::MOON => "Luna",
-            -1 => "Hiiaka",
-            -4 => "MK 2",
-            _ => "",
-        };
-        if let Some(rank) = scored(query, body.name, [aliases]) {
-            let (kind, icon) = body_kind(body.kind());
-            let parent = body
-                .parent
-                .filter(|&id| id != solar::SUN)
-                .and_then(solar::body);
-            let context = parent.map_or_else(
-                || kind.to_owned(),
-                |parent| format!("{kind} of {}", parent.name),
-            );
-            add(rank, 0, body.name, &context, icon, Target::Body(body.id));
-        }
-    }
-    for (kind, name, locality, alias, coordinates, population) in PLACES.iter() {
-        if cancel.load(Ordering::Relaxed) {
-            return Vec::new();
-        }
-        let rank = scored(query, name, [alias.as_str()]).or_else(|| {
-            // Also support a typed qualifier, for example “Lincoln Nebraska”.
-            let (name_part, locality_part) = query.split_once(' ')?;
-            let name_rank = navigation_rank(name, name_part)?;
-            let locality_rank = navigation_rank(locality, locality_part.trim())?;
-            Some((
-                name_rank.0.max(locality_rank.0) + 1,
-                name_rank.1 + locality_rank.1,
-            ))
-        });
-        if let Some(rank) = rank {
-            let context = if locality.is_empty() {
-                kind.label().to_owned()
-            } else {
-                format!("{} · {locality}", kind.label())
-            };
-            add(
-                rank,
-                u32::MAX - *population as u32,
-                name,
-                &context,
-                kind.icon(),
-                Target::Place(*kind, *coordinates),
-            );
-        }
-    }
-    for (index, (name, aliases, _, _)) in CONSTELLATIONS.iter().enumerate() {
-        if let Some(rank) = scored(query, name, aliases.split(" / ")) {
-            add(
+    let mut ranked: Vec<_> = solar::bodies()
+        .iter()
+        .filter_map(|body| rank_body(query, body))
+        .collect();
+    ranked.extend(
+        PLACES
+            .iter()
+            .take_while(|_| !cancel.load(Ordering::Relaxed))
+            .filter_map(|place| rank_place(query, place)),
+    );
+    ranked.extend(CONSTELLATIONS.iter().enumerate().filter_map(
+        |(index, (name, aliases, _, _))| {
+            let rank = scored(query, name, aliases.split(" / "))?;
+            Some(ranked_hit(
                 rank,
                 0,
                 name,
                 "Constellation",
                 Icon::NodeTree,
                 Target::Constellation(index),
-            );
-        }
+            ))
+        },
+    ));
+    collect_stars(query, catalog, cancel, &mut ranked);
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
     }
-    let mut named_hips = std::collections::HashSet::new();
-    for (name, hip, magnitude, direction) in NAMED_STARS.iter() {
-        if *hip > 0 {
-            named_hips.insert(*hip);
-        }
-        let alias = format!("HIP {hip}");
-        if let Some(rank) = scored(query, name, [alias]) {
-            add(
-                rank,
-                star_priority(*magnitude),
-                name,
-                "Star",
-                Icon::Star,
-                Target::Star(*direction),
-            );
-        }
-    }
-    if let Some(catalog) = catalog {
-        for star in catalog.stars() {
-            if cancel.load(Ordering::Relaxed) {
-                return Vec::new();
-            }
-            if star.hip.is_some_and(|hip| named_hips.contains(&hip)) {
-                continue;
-            }
-            if let Some(rank) = navigation_rank(&star.name, query) {
-                add(
-                    rank,
-                    star_priority(star.magnitude),
-                    &star.name,
-                    "Star",
-                    Icon::Star,
-                    Target::Star(star.direction),
-                );
-            }
-        }
-    }
-    for (index, name) in features.iter().enumerate() {
-        if let Some(rank) = navigation_rank(name, query) {
-            add(
-                rank,
-                0,
-                name,
-                "Open file feature",
-                Icon::Map,
-                Target::Feature(index),
-            );
-        }
-    }
+    ranked.extend(features.iter().enumerate().filter_map(|(index, name)| {
+        let rank = navigation_rank(name, query)?;
+        Some(ranked_hit(
+            rank,
+            0,
+            name,
+            "Open file feature",
+            Icon::Map,
+            Target::Feature(index),
+        ))
+    }));
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| a.1.cmp(&b.1))
@@ -252,6 +185,112 @@ fn search(
             .then_with(|| a.2.context.cmp(&b.2.context))
     });
     ranked.into_iter().map(|(_, _, hit)| hit).collect()
+}
+
+fn rank_body(query: &str, body: &solar::Body) -> Option<Ranked> {
+    let alias = match body.id {
+        solar::SUN => "Sol",
+        solar::MOON => "Luna",
+        -1 => "Hiiaka",
+        -4 => "MK 2",
+        _ => "",
+    };
+    let rank = scored(query, body.name, [alias])?;
+    let (kind, icon) = body_kind(body.kind());
+    let parent = body
+        .parent
+        .filter(|&id| id != solar::SUN)
+        .and_then(solar::body);
+    let context = parent.map_or_else(
+        || kind.to_owned(),
+        |parent| format!("{kind} of {}", parent.name),
+    );
+    Some(ranked_hit(
+        rank,
+        0,
+        body.name,
+        &context,
+        icon,
+        Target::Body(body.id),
+    ))
+}
+
+fn rank_place(
+    query: &str,
+    (kind, name, locality, alias, coordinates, population): &Place,
+) -> Option<Ranked> {
+    let rank = scored(query, name, [alias.as_str()]).or_else(|| {
+        // Also support a typed qualifier, for example “Lincoln Nebraska”.
+        let (name_part, locality_part) = query.split_once(' ')?;
+        let name_rank = navigation_rank(name, name_part)?;
+        let locality_rank = navigation_rank(locality, locality_part.trim())?;
+        Some((
+            name_rank.0.max(locality_rank.0) + 1,
+            name_rank.1 + locality_rank.1,
+        ))
+    })?;
+    let context = if locality.is_empty() {
+        kind.label().to_owned()
+    } else {
+        format!("{} · {locality}", kind.label())
+    };
+    Some(ranked_hit(
+        rank,
+        u32::MAX - *population as u32,
+        name,
+        &context,
+        kind.icon(),
+        Target::Place(*kind, *coordinates),
+    ))
+}
+
+fn collect_stars(
+    query: &str,
+    catalog: Option<&sky::catalog::Catalog>,
+    cancel: &AtomicBool,
+    ranked: &mut Vec<Ranked>,
+) {
+    static NAMED_HIPS: LazyLock<std::collections::HashSet<u32>> = LazyLock::new(|| {
+        NAMED_STARS
+            .iter()
+            .map(|star| star.1)
+            .filter(|&hip| hip != 0)
+            .collect()
+    });
+    ranked.extend(
+        NAMED_STARS
+            .iter()
+            .filter_map(|(name, hip, magnitude, direction)| {
+                let rank = scored(query, name, [format!("HIP {hip}")])?;
+                Some(ranked_hit(
+                    rank,
+                    star_priority(*magnitude),
+                    name,
+                    "Star",
+                    Icon::Star,
+                    Target::Star(*direction),
+                ))
+            }),
+    );
+    if let Some(catalog) = catalog {
+        ranked.extend(
+            catalog
+                .stars()
+                .take_while(|_| !cancel.load(Ordering::Relaxed))
+                .filter(|star| star.hip.is_none_or(|hip| !NAMED_HIPS.contains(&hip)))
+                .filter_map(|star| {
+                    let rank = navigation_rank(&star.name, query)?;
+                    Some(ranked_hit(
+                        rank,
+                        star_priority(star.magnitude),
+                        &star.name,
+                        "Star",
+                        Icon::Star,
+                        Target::Star(star.direction),
+                    ))
+                }),
+        );
+    }
 }
 
 fn star_priority(magnitude: f32) -> u32 {
@@ -299,34 +338,7 @@ impl Finder {
         // The text widget consumes Enter and arrows itself. Handle result
         // navigation while the field still owns focus.
         let navigated = focused.then(|| self.move_cursor(ui));
-        ui.horizontal(|ui| {
-            ui.strong("Find");
-            ui.menu_button("Sources", |ui| {
-                ui.hyperlink_to(
-                    "Natural Earth",
-                    "https://www.naturalearthdata.com/downloads/10m-cultural-vectors/",
-                );
-                ui.hyperlink_to("HYG v4.1", sky::catalog::HYG_CREDIT);
-                ui.hyperlink_to("Stellarium Modern", sky::catalog::STELLARIUM_CREDIT);
-                ui.hyperlink_to(
-                    "JPL Solar System Dynamics",
-                    "https://ssd.jpl.nasa.gov/orbits.html",
-                );
-            });
-            if ui.small_button("Close").on_hover_text("Escape").clicked() {
-                self.close();
-            }
-        });
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut self.query)
-                .id(field_id)
-                .hint_text("Search places and sky")
-                .desired_width(ui.available_width())
-                .char_limit(128),
-        );
-        if std::mem::take(&mut self.request_focus) {
-            field.request_focus();
-        }
+        let field = self.query_controls(ui, field_id);
         if !self.open {
             return None;
         }
@@ -355,6 +367,38 @@ impl Finder {
             field.request_focus();
         }
         selected
+    }
+
+    fn query_controls(&mut self, ui: &mut egui::Ui, field_id: egui::Id) -> egui::Response {
+        ui.horizontal(|ui| {
+            ui.strong("Find");
+            ui.menu_button("Sources", |ui| {
+                ui.hyperlink_to(
+                    "Natural Earth",
+                    "https://www.naturalearthdata.com/downloads/10m-cultural-vectors/",
+                );
+                ui.hyperlink_to("HYG v4.1", sky::catalog::HYG_CREDIT);
+                ui.hyperlink_to("Stellarium Modern", sky::catalog::STELLARIUM_CREDIT);
+                ui.hyperlink_to(
+                    "JPL Solar System Dynamics",
+                    "https://ssd.jpl.nasa.gov/orbits.html",
+                );
+            });
+            if ui.small_button("Close").on_hover_text("Escape").clicked() {
+                self.close();
+            }
+        });
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut self.query)
+                .id(field_id)
+                .hint_text("Search places and sky")
+                .desired_width(ui.available_width())
+                .char_limit(128),
+        );
+        if std::mem::take(&mut self.request_focus) {
+            field.request_focus();
+        }
+        field
     }
 
     fn close(&mut self) {

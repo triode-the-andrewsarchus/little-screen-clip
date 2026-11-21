@@ -291,7 +291,8 @@ impl Renderer {
     ) -> Result<bool, String> {
         // SAFETY: all calls use the owning current GL context; buffers contain
         // initialized floats and draw counts are bounded by the static grid.
-        let missing_vectors;
+        let pending;
+        // SAFETY: the map callback holds the verified current GL context.
         unsafe {
             if self.resources.is_none() {
                 self.resources = Some(Resources::new(gl)?);
@@ -302,9 +303,40 @@ impl Renderer {
             }
             self.frame = self.frame.wrapping_add(1);
             self.upload_tiles(gl, frame)?;
-            let resources = self.resources.as_ref().ok_or("Map resources unavailable")?;
+            let vao = self
+                .resources
+                .as_ref()
+                .ok_or("Map resources unavailable")?
+                .vao;
             configure_viewport(gl, info);
-            gl.bind_vertex_array(Some(resources.vao));
+            gl.bind_vertex_array(Some(vao));
+            self.paint_sky(gl, info, frame)?;
+            pending = if frame.moon_view && frame.terrain.is_none() {
+                frame.lunar.as_ref().is_some_and(|(_, tiles)| {
+                    tiles.iter().filter(|tile| tile.id.level == 0).count() == 2
+                })
+            } else {
+                self.paint_map_layers(gl, frame, info.viewport.size().into())?
+            };
+            gl.disable(glow::DEPTH_TEST);
+            gl.bind_vertex_array(None);
+            gl.active_texture(glow::TEXTURE0);
+        }
+        let terrain_pending = frame
+            .terrain
+            .as_ref()
+            .is_some_and(|surface| surface.sources.len() < frame.surface_source().1.len());
+        Ok(self.needs_raster_upload(frame) || pending || terrain_pending)
+    }
+
+    unsafe fn paint_sky(
+        &mut self,
+        gl: &glow::Context,
+        info: &egui::PaintCallbackInfo,
+        frame: &Frame,
+    ) -> Result<(), String> {
+        // SAFETY: called with the current context and the map VAO bound.
+        unsafe {
             let earth = [0, 1].map(|x| {
                 if !frame.moon_view {
                     return None;
@@ -315,6 +347,7 @@ impl Renderer {
                     .map(|tile| tile.textures[0])
             });
             self.sky.paint_frame(gl, frame, earth);
+
             if frame.moon_view && frame.terrain.is_none() {
                 if frame.sky.is_none()
                     && let Some(moon) = super::solar::body(super::solar::MOON)
@@ -327,13 +360,20 @@ impl Renderer {
                     );
                     self.world.draw(gl, info, &world)?;
                 }
-                gl.bind_vertex_array(None);
-                gl.active_texture(glow::TEXTURE0);
-                return Ok(self.needs_raster_upload(frame)
-                    || frame.lunar.as_ref().is_some_and(|(_, tiles)| {
-                        tiles.iter().filter(|tile| tile.id.level == 0).count() == 2
-                    }));
             }
+        }
+        Ok(())
+    }
+
+    unsafe fn paint_map_layers(
+        &mut self,
+        gl: &glow::Context,
+        frame: &Frame,
+        [width, height]: [f32; 2],
+    ) -> Result<bool, String> {
+        let resources = self.resources.as_ref().ok_or("Map resources unavailable")?;
+        // SAFETY: this pass uses the owning current context and the retained map resources.
+        unsafe {
             gl.bind_vertex_array(Some(resources.vao));
             gl.use_program(Some(resources.program));
             let p = resources.program;
@@ -353,8 +393,6 @@ impl Renderer {
                 self.sky.earth_uniforms(gl, p, frame);
             }
             let camera = frame.camera;
-            let width = info.viewport.width();
-            let height = info.viewport.height();
             let radius = if frame.moon_view {
                 MOON_RADIUS_M
             } else {
@@ -406,18 +444,12 @@ impl Renderer {
                 gl.uniform_1_i32(gl.get_uniform_location(p, name).as_ref(), unit as i32);
             }
             self.paint_surface(gl, resources, frame, [width, height], perspective);
-            missing_vectors =
-                !frame.moon_view && self.paint_vectors(gl, frame, width, height, perspective)?;
-            gl.disable(glow::DEPTH_TEST);
-            gl.bind_vertex_array(None);
-            gl.active_texture(glow::TEXTURE0);
+            if frame.moon_view {
+                Ok(false)
+            } else {
+                self.paint_vectors(gl, frame, width, height, perspective)
+            }
         }
-        let missing_tiles = self.needs_raster_upload(frame);
-        let terrain_pending = frame
-            .terrain
-            .as_ref()
-            .is_some_and(|surface| surface.sources.len() < frame.surface_source().1.len());
-        Ok(missing_tiles || missing_vectors || terrain_pending)
     }
 
     fn needs_raster_upload(&self, frame: &Frame) -> bool {

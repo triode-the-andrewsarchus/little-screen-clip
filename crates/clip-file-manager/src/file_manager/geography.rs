@@ -520,106 +520,110 @@ impl Viewer {
                 return;
             }
 
-            let feature = &self.document.features[self.selected];
-            let profile_visible = self.moon_camera.is_none()
-                && feature.kind != Kind::Point
-                && feature.elevation.is_some()
-                && feature.points > 1;
-            let mut available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-            available.max.y -= ui.spacing().item_spacing.y;
-            if !available.is_positive() {
-                return;
-            }
-            // Measure the bottom rows in their actual layout so wrapped labels,
-            // legends and errors never compete with the map for the same space.
-            let mut footer = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt("map-footer")
-                    .max_rect(available)
-                    .layout(egui::Layout::bottom_up(egui::Align::Min)),
-            );
-            let profile = profile_visible.then(|| {
-                footer
-                    .allocate_exact_size(
-                        egui::vec2(available.width(), 160.0_f32.min(available.height() * 0.4)),
-                        egui::Sense::hover(),
-                    )
-                    .0
-            });
-            self.map_status(&mut footer);
-            if let Some(error) = &self.render_error {
-                footer.colored_label(colors.warning, error);
-            }
-            if self.style == BasemapStyle::Oilslick {
-                paint_oilslick_legend(&mut footer, colors, self.config.geography.units);
-            }
-            if let Some(scale) = feature.dose_rate.map(radiation::DoseScale) {
-                scale.legend(&mut footer);
-            }
-            let map_height = footer.available_height();
-            if map_height < 1.0 {
-                return;
-            }
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(available.width(), map_height),
-                egui::Sense::click_and_drag(),
-            );
-
-            let size = [rect.width(), rect.height()];
-            let lunar_radius = self.moon_camera.map(|_| map_camera::MOON_RADIUS_M);
-            map_camera::navigate(
-                self.moon_camera.as_mut().unwrap_or(&mut self.camera),
-                &response,
-                lunar_radius,
-                &mut self.middle_drag,
-            );
-            ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
-            let slot = ui.painter_at(rect).add(egui::Shape::Noop);
-            if let Some(camera) = self.moon_camera.as_mut() {
-                map_camera::update_ground(camera, size, map_camera::MOON_RADIUS_M, |lat, lon| {
-                    self.tiles.lunar_height_at(lat, lon)
-                });
-                let mut frame = self.tiles.moon_frame(
-                    ui.ctx(),
-                    self.assets.as_ref(),
-                    &self.downloader.assets_dir,
-                    *camera,
-                    size,
-                );
-                frame.0.lunar_albedo = self.world.as_ref().and_then(solar::world::World::texture);
-                self.paint_frame(ui, &response, slot, Some(frame), None);
-                return;
-            }
-            let prepared = self.prepare_earth_frame(ui, rect);
-
-            let frame = prepared.as_ref().map(|(frame, _)| frame);
-            let detail_tiles = frame.map_or(&[][..], |frame| frame.details.as_slice());
-            let surface = frame.and_then(|frame| frame.terrain.as_deref());
-            let draped = map_camera::Draped::new(&self.camera, surface, size);
-            let hit = self.paint_globe_map(ui, rect, colors, detail_tiles, draped);
-            if response.clicked()
-                && let Some(hit) = hit
-            {
-                self.selected = hit.sample.feature;
-                self.current = Some(hit.sample);
-            }
-            self.paint_selected_position(ui, rect, colors, draped);
-            self.paint_found_place(ui, rect, colors, draped);
-
-            let hovered = profile
-                .and_then(|profile| self.profile_hover(ui, profile, colors))
-                .or_else(|| {
-                    hit.map(|pick| {
-                        if self.interpolate_gpx {
-                            pick.time
-                        } else {
-                            self.sample(pick.sample)
-                                .and_then(|sample| sample.point.instant())
-                        }
-                    })
-                });
-            self.paint_frame(ui, &response, slot, prepared, hovered);
+            self.paint_map(ui, colors);
         });
+    }
+
+    fn paint_map(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) {
+        let feature = &self.document.features[self.selected];
+        let profile_visible = self.moon_camera.is_none()
+            && feature.kind != Kind::Point
+            && feature.elevation.is_some()
+            && feature.points > 1;
+        let mut available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        available.max.y -= ui.spacing().item_spacing.y;
+        if !available.is_positive() {
+            return;
+        }
+        // Measure the bottom rows in their actual layout so wrapped labels,
+        // legends and errors never compete with the map for the same space.
+        let mut footer = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("map-footer")
+                .max_rect(available)
+                .layout(egui::Layout::bottom_up(egui::Align::Min)),
+        );
+        let profile = profile_visible.then(|| {
+            footer
+                .allocate_exact_size(
+                    egui::vec2(available.width(), 160.0_f32.min(available.height() * 0.4)),
+                    egui::Sense::hover(),
+                )
+                .0
+        });
+        self.map_status(&mut footer);
+        if let Some(error) = &self.render_error {
+            footer.colored_label(colors.warning, error);
+        }
+        if self.style == BasemapStyle::Oilslick {
+            paint_oilslick_legend(&mut footer, colors, self.config.geography.units);
+        }
+        if let Some(scale) = feature.dose_rate.map(radiation::DoseScale) {
+            scale.legend(&mut footer);
+        }
+        let map_height = footer.available_height();
+        if map_height < 1.0 {
+            return;
+        }
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(available.width(), map_height),
+            egui::Sense::click_and_drag(),
+        );
+
+        let size = [rect.width(), rect.height()];
+        let lunar_radius = self.moon_camera.map(|_| map_camera::MOON_RADIUS_M);
+        map_camera::navigate(
+            self.moon_camera.as_mut().unwrap_or(&mut self.camera),
+            &response,
+            lunar_radius,
+            &mut self.middle_drag,
+        );
+        ui.painter_at(rect).rect_filled(rect, 3.0, colors.recessed);
+        let slot = ui.painter_at(rect).add(egui::Shape::Noop);
+        if let Some(camera) = self.moon_camera.as_mut() {
+            map_camera::update_ground(camera, size, map_camera::MOON_RADIUS_M, |lat, lon| {
+                self.tiles.lunar_height_at(lat, lon)
+            });
+            let mut frame = self.tiles.moon_frame(
+                ui.ctx(),
+                self.assets.as_ref(),
+                &self.downloader.assets_dir,
+                *camera,
+                size,
+            );
+            frame.0.lunar_albedo = self.world.as_ref().and_then(solar::world::World::texture);
+            self.paint_frame(ui, &response, slot, Some(frame), None);
+            return;
+        }
+        let prepared = self.prepare_earth_frame(ui, rect);
+
+        let frame = prepared.as_ref().map(|(frame, _)| frame);
+        let detail_tiles = frame.map_or(&[][..], |frame| frame.details.as_slice());
+        let surface = frame.and_then(|frame| frame.terrain.as_deref());
+        let draped = map_camera::Draped::new(&self.camera, surface, size);
+        let hit = self.paint_globe_map(ui, rect, colors, detail_tiles, draped);
+        if response.clicked()
+            && let Some(hit) = hit
+        {
+            self.selected = hit.sample.feature;
+            self.current = Some(hit.sample);
+        }
+        self.paint_selected_position(ui, rect, colors, draped);
+        self.paint_found_place(ui, rect, colors, draped);
+
+        let hovered = profile
+            .and_then(|profile| self.profile_hover(ui, profile, colors))
+            .or_else(|| {
+                hit.map(|pick| {
+                    if self.interpolate_gpx {
+                        pick.time
+                    } else {
+                        self.sample(pick.sample)
+                            .and_then(|sample| sample.point.instant())
+                    }
+                })
+            });
+        self.paint_frame(ui, &response, slot, prepared, hovered);
     }
 
     fn paint_astronomy(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) -> bool {
@@ -1011,41 +1015,49 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if let Some(sight) = self.sight.as_ref() {
-            let title = sight.title.clone();
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Return to Earth").clicked() {
-                    self.select_solar_target(solar::EARTH, ui.ctx());
-                }
-                if ui.button("Solar System").clicked() {
-                    self.open_solar_system(solar::SUN, ui.ctx());
-                }
-                ui.separator();
-                ui.strong(title.as_ref());
-            });
-            return;
-        }
-        if let Some(center) = self.solar_system.as_ref().map(|view| view.center) {
+            self.sky_toolbar(ui, sight.title.clone());
+        } else if let Some(center) = self.solar_system.as_ref().map(|view| view.center) {
             self.solar_toolbar(ui, center);
-            return;
+        } else if self.moon_camera.is_some() {
+            self.moon_toolbar(ui, palette);
+        } else if self.world.is_some() {
+            self.world_toolbar(ui);
+        } else {
+            self.earth_toolbar(ui, palette);
         }
-        if let Some(camera) = self.moon_camera.as_mut() {
-            if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
+    }
+
+    fn sky_toolbar(&mut self, ui: &mut egui::Ui, title: Arc<str>) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Return to Earth").clicked() {
                 self.select_solar_target(solar::EARTH, ui.ctx());
             }
             if ui.button("Solar System").clicked() {
                 self.open_solar_system(solar::SUN, ui.ctx());
             }
-            if ui.button("Moon orbit").clicked() {
-                self.open_solar_system(solar::EARTH, ui.ctx());
-            }
-            self.lunar_download(ui);
-            self.body_assets(ui);
+            ui.separator();
+            ui.strong(title.as_ref());
+        });
+    }
+
+    fn moon_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let Some(camera) = self.moon_camera.as_mut() else {
             return;
+        };
+        if map_camera::lunar_toolbar(ui, palette, camera, &mut self.sky) {
+            self.select_solar_target(solar::EARTH, ui.ctx());
         }
-        if self.world.is_some() {
-            self.world_toolbar(ui);
-            return;
+        if ui.button("Solar System").clicked() {
+            self.open_solar_system(solar::SUN, ui.ctx());
         }
+        if ui.button("Moon orbit").clicked() {
+            self.open_solar_system(solar::EARTH, ui.ctx());
+        }
+        self.lunar_download(ui);
+        self.body_assets(ui);
+    }
+
+    fn earth_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let terrain_available =
             self.downloader.status.has_gebco || self.downloader.status.local_hgt_count > 0;
         ui.horizontal_wrapped(|ui| {
@@ -1095,20 +1107,7 @@ impl Viewer {
                 egui::Checkbox::new(&mut self.show_contours, "Contours"),
             )
             .on_disabled_hover_text("Contours require GEBCO elevation or local HGT terrain.");
-            if let Some(assets) = &self.sky.assets {
-                ui.separator();
-                ui.checkbox(&mut self.sky.visible, "Sky and planets");
-                ui.add_enabled(
-                    self.sky.visible,
-                    egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
-                )
-                .on_hover_text("Enlarge the Sun and Moon up to 16×, with larger planet markers. Uses physical sizes during eclipses.");
-                ui.checkbox(&mut self.sky.lighting, "Day and night");
-                if assets.star_catalog().is_some() {
-                    ui.add_enabled(self.sky.visible, egui::Checkbox::new(&mut self.sky.constellations, "Constellations"))
-                        .on_hover_text("Show Stellarium’s Modern constellation figures.");
-                }
-            }
+            self.earth_sky_options(ui);
             ui.separator();
             if ui
                 .add(
@@ -1145,6 +1144,26 @@ impl Viewer {
                 self.open_solar_system(solar::SUN, ui.ctx());
             }
         });
+    }
+
+    fn earth_sky_options(&mut self, ui: &mut egui::Ui) {
+        if let Some(assets) = &self.sky.assets {
+            ui.separator();
+            ui.checkbox(&mut self.sky.visible, "Sky and planets");
+            ui.add_enabled(
+                    self.sky.visible,
+                    egui::Checkbox::new(&mut self.sky.readable, "Larger sky objects"),
+                )
+                .on_hover_text("Enlarge the Sun and Moon up to 16×, with larger planet markers. Uses physical sizes during eclipses.");
+            ui.checkbox(&mut self.sky.lighting, "Day and night");
+            if assets.star_catalog().is_some() {
+                ui.add_enabled(
+                    self.sky.visible,
+                    egui::Checkbox::new(&mut self.sky.constellations, "Constellations"),
+                )
+                .on_hover_text("Show Stellarium’s Modern constellation figures.");
+            }
+        }
     }
 
     fn world_toolbar(&mut self, ui: &mut egui::Ui) {
