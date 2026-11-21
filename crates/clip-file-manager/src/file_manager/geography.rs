@@ -621,6 +621,19 @@ impl Viewer {
             self.paint_frame(ui, &response, slot, Some(frame), None);
             return;
         }
+        self.paint_earth_map(ui, &response, slot, profile, colors);
+    }
+
+    fn paint_earth_map(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        slot: egui::layers::ShapeIdx,
+        profile: Option<egui::Rect>,
+        colors: WorkbenchColors,
+    ) {
+        let rect = response.rect;
+        let size = [rect.width(), rect.height()];
         let prepared = self.prepare_earth_frame(ui, rect);
 
         let frame = prepared.as_ref().map(|(frame, _)| frame);
@@ -649,7 +662,7 @@ impl Viewer {
                     }
                 })
             });
-        self.paint_frame(ui, &response, slot, prepared, hovered);
+        self.paint_frame(ui, response, slot, prepared, hovered);
     }
 
     fn paint_astronomy(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) -> bool {
