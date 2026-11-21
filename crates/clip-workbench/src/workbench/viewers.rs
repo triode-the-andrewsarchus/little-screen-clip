@@ -425,7 +425,9 @@ impl WorkbenchApp {
                 ))
                 .clicked()
         {
-            self.open_map(target);
+            if self.open_map(target) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -464,7 +466,7 @@ impl WorkbenchApp {
         self.open_map(MapTarget::File(path.to_owned()));
     }
 
-    pub(super) fn open_map(&mut self, target: MapTarget) {
+    fn open_map(&mut self, target: MapTarget) -> bool {
         let mut command = file_manager_command();
         match target {
             MapTarget::File(path) => {
@@ -481,9 +483,11 @@ impl WorkbenchApp {
                     let _ = child.wait();
                 });
                 self.clear_status_message();
+                true
             }
             Err(error) => {
-                self.set_status_message(format!("Could not open the map in Files: {error}"))
+                self.set_status_message(format!("Could not open the map in Files: {error}"));
+                false
             }
         }
     }
