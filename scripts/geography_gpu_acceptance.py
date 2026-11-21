@@ -284,6 +284,19 @@ def check_world_view(root, width, height, output):
     assert np.count_nonzero(edge.any(axis=1)) >= 3, "Edge-on rings lost their vertical profile"
     assert not edge[height // 2 - 6:height // 2 + 6, width // 2 - 30:width // 2 + 30].any()
     Image.fromarray(np.flipud(edge_rings)).save(output / "edge-on-rings.png")
+    # Titan-like aerosols should extend beyond the nominal globe and respond
+    # to illumination. The same airless geometry should have no colored rim.
+    GL.glUniform3f(loc("u_sun_direction"), 0, 1, 0)
+    airless = draw([])
+    GL.glUniform4f(loc("u_air_optics"), .017, .19, .73, .72)
+    GL.glUniform3f(loc("u_air_tint"), .98, .63, .31)
+    hazy = draw([])
+    outside = airless[:, :, 0] == 0
+    x = np.indices(outside.shape)[1]
+    assert np.count_nonzero(outside & (hazy[:, :, 0] > 8) & (x > width / 2)) > 200
+    assert np.count_nonzero(outside & (hazy[:, :, 0] > 8) & (x < width / 2 - 40)) == 0
+    Image.fromarray(np.flipud(hazy)).save(output / "planetary-haze.png")
+    GL.glUniform4f(loc("u_air_optics"), 0, 0, 0, 0)
     GL.glUniform1i(loc("u_emissive"), 1)
     GL.glUniform3f(loc("u_eye"), 2.75, 0, 0)
     def solar_frame(seconds):
@@ -835,6 +848,7 @@ def main():
             "world_ring_occlusion_checked": True,
             "edge_on_ring_thickness_checked": True,
             "clipped_world_projection_checked": True,
+            "planetary_haze_checked": True,
             "shared_sky_and_solar_emission_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}

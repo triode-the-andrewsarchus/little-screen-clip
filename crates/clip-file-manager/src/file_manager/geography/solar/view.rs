@@ -610,11 +610,11 @@ fn paint_icon(
         painter.circle_filled(mark.point, mark.radius, mark.body.color());
         return;
     }
-    let size_ratio = rings
-        .last()
-        .map_or(if mark.body.id == SUN { 1.8 } else { 1.08 }, |band| {
-            (f64::from(band[1]) / mark.body.radius.unwrap_or(1.0)) as f32 * 1.08
-        });
+    let size_ratio = if mark.body.id == SUN {
+        1.8
+    } else {
+        world::outer_radius_factor(mark.body) * 1.08
+    };
     let rect = Rect::from_center_size(mark.point, Vec2::splat(mark.radius * size_ratio * 2.0));
     if !painter.clip_rect().intersects(rect) {
         return;

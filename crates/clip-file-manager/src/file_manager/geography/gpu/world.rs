@@ -2,7 +2,7 @@ use super::super::{
     sky as assets,
     solar::{
         Id, SUN,
-        world::{Backdrop, Frame},
+        world::{Backdrop, Frame, atmosphere},
     },
 };
 use eframe::glow::{self, HasContext};
@@ -61,6 +61,15 @@ impl Renderer {
                 i32::from(texture.is_some()),
             );
             super::sky::bind(gl, program, "u_albedo", 0, texture);
+            for (id, name) in [(299, "u_venus"), (799, "u_uranus"), (899, "u_neptune")] {
+                gl.uniform_1_i32(uniform(name).as_ref(), i32::from(world.id == id));
+            }
+            let air = atmosphere(world.id);
+            let optics = air.as_ref().map_or([0.0; 4], |air| air.optics);
+            gl.uniform_4_f32_slice(uniform("u_air_optics").as_ref(), &optics);
+            if let Some(air) = air {
+                gl.uniform_3_f32_slice(uniform("u_air_tint").as_ref(), &air.tint);
+            }
             gl.uniform_1_i32(uniform("u_band_count").as_ref(), world.bands.len() as i32);
             gl.uniform_1_f32(uniform("u_ring_emphasis").as_ref(), world.ring_emphasis);
             if !world.bands.is_empty() {

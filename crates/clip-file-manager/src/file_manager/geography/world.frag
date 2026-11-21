@@ -10,6 +10,11 @@ uniform float u_zoom;
 uniform sampler2D u_albedo;
 uniform bool u_has_albedo;
 uniform bool u_gas;
+uniform vec4 u_air_optics;
+uniform vec3 u_air_tint;
+uniform bool u_venus;
+uniform bool u_uranus;
+uniform bool u_neptune;
 uniform int u_band_count;
 uniform float u_ring_emphasis;
 uniform vec3 u_bands[10];
@@ -114,6 +119,47 @@ vec4 rings(vec3 ray, float surface_depth, float pixel_angle) {
     return vec4(color*alpha,alpha);
 }
 
+vec4 atmospheric_light(vec3 ray, vec3 across, float line, float body_depth) {
+    float height = u_air_optics.x;
+    if (height <= 0.0 || line < 0.0) return vec4(0);
+    float shell = 1.0 + 6.0*height;
+    float radial2 = dot(across,across);
+    if (radial2 >= shell*shell) return vec4(0);
+    float half_chord = sqrt(shell*shell-radial2);
+    // Integrate relative to closest approach to avoid cancellation when the
+    // observer is far away in units of the body's own radius.
+    float near = max(-line,-half_chord);
+    float far = min(body_depth,half_chord);
+    float step_size = (far-near)/6.0;
+    if (step_size <= 0.0) return vec4(0);
+    float column = 0.0, lit = 0.0;
+    if (radial2 < .88 && body_depth < 0.0) {
+        // Away from the tangent the layer is locally plane parallel.
+        column = 1.0;
+        step_size = height / sqrt(1.0-radial2);
+        vec3 surface = across+ray*body_depth;
+        lit = smoothstep(-.035,.022,dot(surface,u_sun_direction));
+    } else {
+        for (int i = 0; i < 6; ++i) {
+            vec3 p = across + ray*(near+(float(i)+.5)*step_size);
+            float r2 = dot(p,p);
+            float density = exp(-max(0.0,sqrt(r2)-1.0)/height);
+            float sun_height = dot(p,u_sun_direction);
+            float daylight = smoothstep(-.025,.018,sun_height+sqrt(max(0.0,r2-1.0)));
+            column += density;
+            lit += density*daylight;
+        }
+    }
+    float alpha = 1.0-exp(-column*step_size*u_air_optics.y/height);
+    float angle = dot(ray,u_sun_direction);
+    float g = u_air_optics.z;
+    float forward = pow((1.0-g)*(1.0-g)/(1.0+g*g-2.0*g*angle), 1.5);
+    vec3 color = mix(u_air_tint,vec3(.46,.67,1.0),u_air_optics.w*forward);
+    float scatter = .28 + .19*angle*angle + 1.25*forward;
+    float exposure = mix(1.0,.42,smoothstep(9.0,32.0,u_zoom));
+    return vec4(color*alpha*scatter*(lit/max(column,1e-5)),alpha) * exposure;
+}
+
 void main() {
     vec2 ndc = v_ndc*u_ray_region.xy+u_ray_region.zw;
     float pixel_angle = max(u_fov.x*fwidth(ndc.x),u_fov.y*fwidth(ndc.y));
@@ -154,10 +200,26 @@ void main() {
         } else if (u_gas) {
             albedo *= .93 + .10*sin(lat*27.0) + .035*sin(lat*73.5);
         }
+        if (u_venus) {
+            // The installed radar map describes the ground below the opaque
+            // clouds. Only a low-contrast suggestion of cloud structure is
+            // visible from orbit in reflected visible light.
+            float clouds = .5 + .16*sin(lat*24.0+sin(lon*2.0+lat*5.0));
+            albedo = vec3(.92,.85,.70) * (.91+.13*clouds);
+        }
+        if (u_uranus && !u_has_albedo)
+            albedo = vec3(.66,.80,.80) * (1.0+.055*sin(lat*13.0));
+        if (u_neptune && u_has_albedo) {
+            float luminance = dot(albedo,vec3(.25,.55,.20));
+            albedo = mix(albedo,vec3(luminance)*vec3(.87,1.02,1.10),.62);
+        }
         float phase = 1.0-smoothstep(2.5,30.0,u_zoom);
         float light = .25 + .75*pow(max(dot(normal,u_sun_direction),0.0),.54);
         body = vec4(albedo*mix(1.0,light,phase)*body_coverage,body_coverage);
     }
-    vec4 front = rings(ray,body_coverage > .5 && depth > 0.0 ? depth : 1e19,pixel_angle);
-    frag = front + body*(1.0-front.a);
+    bool opaque = body_coverage > .5 && depth > 0.0;
+    vec4 air = atmospheric_light(ray,across,line,opaque ? -sqrt(max(0.0,margin)) : 1e19);
+    vec4 globe = air + body*(1.0-air.a);
+    vec4 front = rings(ray,opaque ? depth : 1e19,pixel_angle);
+    frag = front + globe*(1.0-front.a);
 }

@@ -400,10 +400,41 @@ fn project_moon(
 }
 
 fn visible_radius(body: &Body, display_radius: f64) -> f64 {
-    display_radius
-        * bands(body.id)
-            .last()
-            .map_or(1.0, |band| f64::from(band[1]) / (radius_m(body) / 1000.0))
+    display_radius * f64::from(outer_radius_factor(body))
+}
+
+pub(super) fn outer_radius_factor(body: &Body) -> f32 {
+    let halo = atmosphere(body.id).map_or(1.0, |air| 1.0 + 6.0 * air.optics[0]);
+    bands(body.id).last().map_or(halo, |band| {
+        halo.max(band[1] / (radius_m(body) / 1000.0) as f32)
+    })
+}
+
+pub(in crate::file_manager::geography) struct Atmosphere {
+    pub tint: [f32; 3],
+    // Effective scale height in body radii, vertical optical depth, aerosol
+    // anisotropy and proportion of cool scattering at forward angles.
+    pub optics: [f32; 4],
+}
+
+pub(in crate::file_manager::geography) fn atmosphere(id: Id) -> Option<Atmosphere> {
+    // Representative visible-light profiles, guided by NASA planetary fact
+    // sheets and spacecraft color observations. For the giants the reference
+    // radius is the visible cloud deck, not the pressure datum.
+    let (tint, optics) = match id {
+        299 => ([1.00, 0.91, 0.72], [0.0026, 0.16, 0.76, 0.0]),
+        399 => ([0.35, 0.60, 1.00], [0.0013, 0.065, 0.38, 0.0]),
+        499 => ([0.89, 0.59, 0.35], [0.0031, 0.042, 0.73, 0.96]),
+        599 => ([0.73, 0.81, 0.92], [0.00085, 0.024, 0.60, 0.0]),
+        606 => ([0.98, 0.63, 0.31], [0.017, 0.19, 0.73, 0.72]),
+        699 => ([0.89, 0.81, 0.60], [0.0010, 0.033, 0.66, 0.0]),
+        799 => ([0.62, 0.91, 0.94], [0.0014, 0.038, 0.62, 0.0]),
+        801 => ([0.53, 0.72, 0.87], [0.010, 0.00045, 0.65, 0.0]),
+        899 => ([0.52, 0.77, 0.94], [0.0009, 0.030, 0.58, 0.0]),
+        999 => ([0.42, 0.64, 1.00], [0.032, 0.008, 0.77, 0.0]),
+        _ => return None,
+    };
+    Some(Atmosphere { tint, optics })
 }
 
 pub(super) fn initial_zoom(id: Id) -> f64 {
