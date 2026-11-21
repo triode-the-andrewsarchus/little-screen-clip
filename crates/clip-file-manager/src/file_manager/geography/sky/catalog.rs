@@ -113,6 +113,10 @@ impl Record<'_> {
 }
 
 impl Catalog {
+    pub(in crate::file_manager::geography) fn stars(&self) -> impl Iterator<Item = &Star> {
+        self.stars.values().flatten()
+    }
+
     pub(super) fn load(dir: &Path) -> Result<Option<Self>, String> {
         if SOURCES.iter().any(|(name, _, _)| !dir.join(name).is_file()) {
             return Ok(None);

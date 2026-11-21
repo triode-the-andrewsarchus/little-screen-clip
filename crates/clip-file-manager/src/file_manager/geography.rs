@@ -1,5 +1,6 @@
 //! Offline 3D-globe / 2D-map geography viewer with Oilslick elevation shading and linked profile.
 pub(super) mod detail;
+mod finder;
 mod geometry;
 pub(super) mod gpu;
 pub(super) mod lunar_terrain;
@@ -133,6 +134,9 @@ pub(super) struct Viewer {
     moon_camera: Option<GlobeCamera>,
     solar_system: Option<solar::System>,
     world: Option<solar::world::World>,
+    finder: finder::Finder,
+    sight: Option<finder::Sight>,
+    found_place: Option<([f64; 2], Arc<str>)>,
     middle_drag: map_camera::MiddleDrag,
     style: BasemapStyle,
     show_country_borders: bool,
@@ -360,6 +364,9 @@ impl Viewer {
             moon_camera: None,
             solar_system: None,
             world: None,
+            finder: Default::default(),
+            sight: None,
+            found_place: None,
             middle_drag: Default::default(),
             style: BasemapStyle::Natural,
             show_country_borders: true,
@@ -412,6 +419,8 @@ impl Viewer {
     fn fit_document(&mut self) {
         self.solar_system = None;
         self.world = None;
+        self.sight = None;
+        self.found_place = None;
         self.moon_camera = None;
         self.camera.fit_bounds(self.document.geographic_bounds);
     }
@@ -463,20 +472,40 @@ impl Viewer {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
-        StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |_| {});
+        self.finder.shortcut(ui.ctx());
+        StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |ui| {
+            if ui.button("Find").on_hover_text("Ctrl+F").clicked() {
+                self.finder.open();
+            }
+        });
 
         let colors = WorkbenchColors::from_palette(palette);
-        self.download_prompt_banner(ui, palette, colors);
+        let showing_earth =
+            self.solar_system.is_none() && self.world.is_none() && self.sight.is_none();
+        if showing_earth || self.show_assets_panel {
+            self.download_prompt_banner(ui, palette, colors);
+        }
 
         if let Some(world) = self.world.as_mut() {
             world.poll(ui.ctx(), &self.downloader.assets_dir);
         }
-        let layout = if self.solar_system.is_some() || self.world.is_some() {
-            StudioPanelLayout::center_only()
-        } else {
-            StudioPanelLayout::default().with_left()
+        let layout = StudioPanelLayout {
+            left: showing_earth,
+            right: self.finder.open,
+            ..StudioPanelLayout::default()
         }
         .allocate(ui);
+        if let Some(right) = layout.right {
+            let found = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+                    ui.set_clip_rect(right.intersect(ui.clip_rect()));
+                    self.finder.ui(ui, &self.document, self.sky.assets.as_ref())
+                })
+                .inner;
+            if let Some(hit) = found {
+                self.apply_found(hit, ui.ctx());
+            }
+        }
         if let Some(left) = layout.left {
             ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
@@ -487,47 +516,7 @@ impl Viewer {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             self.toolbar(ui, palette);
 
-            if let Some(system) = &mut self.solar_system {
-                let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-                let (_, response) = ui.allocate_exact_size(
-                    available.size().max(egui::Vec2::ZERO),
-                    egui::Sense::click_and_drag(),
-                );
-                let recorded = recorded_scene_time(&self.document, self.selected, None);
-                if let Some(id) = system.paint(
-                    ui,
-                    &response,
-                    recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
-                ) {
-                    self.select_solar_target(id, ui.ctx());
-                }
-                return;
-            }
-
-            if self.moon_camera.is_none()
-                && let Some(world) = self.world.as_mut()
-            {
-                let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-                let (rect, response) = ui.allocate_exact_size(
-                    available.size().max(egui::Vec2::ZERO),
-                    egui::Sense::click_and_drag(),
-                );
-                if rect.is_positive() {
-                    world.navigate(&response);
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 0, egui::Color32::from_rgb(7, 10, 17));
-                    solar::paint_stars(&painter, rect);
-                    let error = gpu::paint_world(ui, rect, world.frame(rect.size().into())).err();
-                    if let Some(error) = error {
-                        painter.text(
-                            rect.left_top() + egui::vec2(8.0, 8.0),
-                            egui::Align2::LEFT_TOP,
-                            error,
-                            egui::FontId::proportional(14.0),
-                            colors.warning,
-                        );
-                    }
-                }
+            if self.paint_astronomy(ui, colors) {
                 return;
             }
 
@@ -615,6 +604,7 @@ impl Viewer {
                 self.current = Some(hit.sample);
             }
             self.paint_selected_position(ui, rect, colors, draped);
+            self.paint_found_place(ui, rect, colors, draped);
 
             let hovered = profile
                 .and_then(|profile| self.profile_hover(ui, profile, colors))
@@ -630,6 +620,122 @@ impl Viewer {
                 });
             self.paint_frame(ui, &response, slot, prepared, hovered);
         });
+    }
+
+    fn paint_astronomy(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) -> bool {
+        if self.sight.is_none()
+            && self.solar_system.is_none()
+            && (self.world.is_none() || self.moon_camera.is_some())
+        {
+            return false;
+        }
+        let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        if !available.is_positive() {
+            return true;
+        }
+        let (rect, response) =
+            ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
+        if let Some(sight) = self.sight.as_mut() {
+            let catalog = self
+                .sky
+                .assets
+                .as_deref()
+                .and_then(sky::Assets::star_catalog);
+            sight.paint(ui, &response, catalog);
+        } else if let Some(system) = self.solar_system.as_mut() {
+            let recorded = recorded_scene_time(&self.document, self.selected, None);
+            if let Some(id) = system.paint(
+                ui,
+                &response,
+                recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
+            ) {
+                self.select_solar_target(id, ui.ctx());
+            }
+        } else if let Some(world) = self.world.as_mut() {
+            world.navigate(&response);
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0, egui::Color32::from_rgb(7, 10, 17));
+            solar::paint_stars(&painter, rect);
+            if let Err(error) = gpu::paint_world(ui, rect, world.frame(rect.size().into())) {
+                painter.text(
+                    rect.left_top() + egui::vec2(8.0, 8.0),
+                    egui::Align2::LEFT_TOP,
+                    error,
+                    egui::FontId::proportional(14.0),
+                    colors.warning,
+                );
+            }
+        }
+        true
+    }
+
+    fn apply_found(&mut self, hit: finder::Hit, ctx: &egui::Context) {
+        match hit.target {
+            finder::Target::Body(id) => self.select_solar_target(id, ctx),
+            finder::Target::Place(kind, [latitude, longitude]) => {
+                self.select_solar_target(solar::EARTH, ctx);
+                self.camera.center_lat = latitude;
+                self.camera.center_lon = longitude;
+                self.camera.zoom = kind.zoom();
+                self.camera.orbit = Default::default();
+                self.found_place = Some(([latitude, longitude], hit.label));
+            }
+            finder::Target::Star(_) | finder::Target::Constellation(_) => {
+                self.select_solar_target(solar::EARTH, ctx);
+                self.sight = finder::Sight::from_hit(&hit);
+            }
+            finder::Target::Feature(index) => {
+                self.select_solar_target(solar::EARTH, ctx);
+                self.select(index);
+                if let Some(point) = self
+                    .current
+                    .and_then(|sample| self.sample(sample))
+                    .map(|sample| &sample.point)
+                {
+                    let (latitude, longitude) = (point.lat, point.lon);
+                    self.camera.center_lat = latitude;
+                    self.camera.center_lon = longitude;
+                    self.camera.orbit = Default::default();
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn paint_found_place(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        colors: WorkbenchColors,
+        draped: Option<map_camera::Draped<'_>>,
+    ) {
+        let Some(([lat, lon], name)) = &self.found_place else {
+            return;
+        };
+        let projected = match draped {
+            Some(projector) => projector.project(*lat, *lon),
+            None => self.camera.project(*lat, *lon, rect.width(), rect.height()),
+        };
+        let Some(point) = projected
+            .map(|[x, y]| rect.min + egui::vec2(x, y))
+            .filter(|p| rect.contains(*p))
+        else {
+            return;
+        };
+        let painter = ui.painter_at(rect);
+        painter.circle_stroke(point, 7.5, egui::Stroke::new(2.0, colors.focus));
+        painter.circle_filled(point, 2.5, colors.text_primary);
+        let galley = painter.layout_no_wrap(
+            name.to_string(),
+            egui::FontId::proportional(13.0),
+            colors.text_primary,
+        );
+        let label = egui::Rect::from_min_size(
+            point + egui::vec2(10.0, -galley.size().y / 2.0),
+            galley.size(),
+        );
+        painter.rect_filled(label.expand2(egui::vec2(4.0, 2.0)), 3.0, colors.recessed);
+        painter.galley(label.min, galley, colors.text_primary);
     }
 
     fn prepare_earth_frame(
@@ -904,6 +1010,20 @@ impl Viewer {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if let Some(sight) = self.sight.as_ref() {
+            let title = sight.title.clone();
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Return to Earth").clicked() {
+                    self.select_solar_target(solar::EARTH, ui.ctx());
+                }
+                if ui.button("Solar System").clicked() {
+                    self.open_solar_system(solar::SUN, ui.ctx());
+                }
+                ui.separator();
+                ui.strong(title.as_ref());
+            });
+            return;
+        }
         if let Some(center) = self.solar_system.as_ref().map(|view| view.center) {
             self.solar_toolbar(ui, center);
             return;
@@ -1067,6 +1187,11 @@ impl Viewer {
         let (dataset, credit, source, bytes) = solar::assets::information(world.body);
         let pack = DownloadPack::World(world.body.id);
         let local_error = world.error.clone();
+        let size = if bytes < 1_000_000 {
+            format!("{:.0} kB", bytes as f64 / 1_000.0)
+        } else {
+            format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+        };
         if self.downloader.active == Some(pack) {
             self.download_progress(ui);
         } else if world.pending() {
@@ -1084,11 +1209,7 @@ impl Viewer {
         } else if ui
             .add_enabled(
                 self.downloader.active.is_none(),
-                egui::Button::new(format!(
-                    "Download {} · {:.1} MB",
-                    dataset.to_lowercase(),
-                    bytes as f64 / 1_000_000.0
-                )),
+                egui::Button::new(format!("Download {} · {size}", dataset.to_lowercase())),
             )
             .on_hover_text(credit)
             .clicked()
@@ -1155,6 +1276,8 @@ impl Viewer {
         }
         self.solar_system = Some(system);
         self.moon_camera = None;
+        self.sight = None;
+        self.found_place = None;
         self.tiles.suspend();
         ctx.request_repaint();
     }
@@ -1165,6 +1288,8 @@ impl Viewer {
             return;
         }
         self.solar_system = None;
+        self.sight = None;
+        self.found_place = None;
         self.moon_camera = (id == solar::MOON).then(map_camera::lunar_camera);
         self.world = solar::body(id)
             .filter(|body| body.id != solar::EARTH)
