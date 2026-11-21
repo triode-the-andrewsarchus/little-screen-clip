@@ -143,7 +143,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
         },
         color: [80, 160, 60, 255].repeat(count),
         elevation: [1000.0, 1.0].repeat(count),
-        water: vec![0; count],
+        water: vec![0; count * 2],
         elevation_range: Some([1000.0, 1000.0]),
     });
     let mut renderer = Renderer::default();
@@ -304,7 +304,7 @@ fn native_renderer_reuses_tiles_on_camera_changes_and_retires_resources() {
                     id: TileId { level: 0, x, y: 0 },
                     color: [80, 160, 60, 255].repeat(count),
                     elevation: Vec::new(),
-                    water: vec![0; count],
+                    water: vec![0; count * 2],
                     elevation_range: None,
                 })
             })

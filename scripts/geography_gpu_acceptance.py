@@ -418,6 +418,32 @@ def check_raised_terrain(raster, vao, vertex_count, width, height, height_textur
             GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
         pixels.append(rasterized)
         GL.glDeleteTextures([dem])
+    if not lunar:
+        lake = np.zeros((258, 258, 2), dtype=np.uint8)
+        lake[..., 1] = 255
+        dem = texture(GL.GL_RG32F, GL.GL_RG, GL.GL_FLOAT,
+                      np.stack([hill, mask], axis=-1).astype(np.float32))
+        GL.glUniform1i(loc("u_show_water"), 1)
+        GL.glUniform1f(loc("u_contour"), 100)
+        GL.glActiveTexture(GL.GL_TEXTURE2)
+        color_masks = []
+        for hole in (False, True):
+            if hole:
+                lake[(u-129)**2 + (v-125)**2 < 30**2, 1] = 0
+            water = texture(GL.GL_RG8, GL.GL_RG, GL.GL_UNSIGNED_BYTE, lake)
+            GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+            GL.glDrawArrays(GL.GL_TRIANGLES, 0, vertex_count)
+            image = np.frombuffer(GL.glReadPixels(0, 0, width, height,
+                GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
+            color_masks.append(image[..., 2] > 130)
+            GL.glDeleteTextures([water])
+        assert np.count_nonzero(color_masks[0]) > 3000, "Relief punched holes in a lake"
+        assert np.count_nonzero(color_masks[0] & ~color_masks[1]) > 250, "Lake covered its island"
+        Image.fromarray(np.flipud(image)).save(output / "tilted-lake.png")
+        GL.glUniform1f(loc("u_contour"), 0)
+        GL.glUniform1i(loc("u_show_water"), 0)
+        GL.glActiveTexture(GL.GL_TEXTURE1)
+        GL.glDeleteTextures([dem])
     GL.glDisable(GL.GL_DEPTH_TEST)
     flat, raised = pixels
     visible = lambda image: image[:, :, :3].max(axis=2) > 50
@@ -863,7 +889,7 @@ def main():
         report = {"renderer": renderer, "viewport": [width, height], "shader_programs_linked": 6,
             "sky_sizing_checked": True, "natural_terrain_tone_checked": True,
             "raster_scenarios": len(images), "night_lighting_checked": True, "vector_scenarios": 2,
-            "raised_terrain_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
+            "raised_terrain_checked": True, "tilted_lake_mask_checked": True, "draped_vectors_checked": True, "moon_view_checked": True,
             "signed_lunar_relief_checked": True,
             "world_ring_occlusion_checked": True,
             "edge_on_ring_thickness_checked": True,

@@ -244,13 +244,19 @@ void main() {
         float water_hint = smoothstep(.02, .10, rgb.b - rgb.g);
         rgb *= mix(NATURAL_LAND_EXPOSURE, 1.0, water_hint);
     }
+    vec2 water_mask = u_show_water ? texture(u_water,v_uv).rg : vec2(0.0);
+    // The lake mask is on the same raster patches as the DEM, so even a broad
+    // lake follows the surface without an interior triangle cutting below it.
+    float lake = (u_perspective && u_zoom >= 2.0)
+        ? edge_coverage(water_mask.g, .5, .02) : 0.0;
     if (u_contour > 0.0) {
         float ink = contour_ink(h, close);
-        if (dem.g > .99 && h > 0.0) rgb = mix(rgb, vec3(.10,.09,.08), ink * land);
+        if (dem.g > .99 && h > 0.0) rgb = mix(rgb, vec3(.10,.09,.08), ink * land * (1.0-lake));
     }
     if (u_show_water) {
-        float water = edge_coverage(texture(u_water,v_uv).r, .75, .04);
-        rgb = mix(rgb, u_style == 2 ? vec3(0.0) : vec3(.149,.40,.675), water * (u_style == 2 ? 1.0 : .94));
+        float river = edge_coverage(water_mask.r, .75, .04);
+        float water = max(river,lake) * (u_style == 2 ? 1.0 : .94);
+        rgb = mix(rgb, u_style == 2 ? vec3(0.0) : vec3(.149,.40,.675), water);
     }
     if (u_earth_lighting > 0.0) rgb = mix(rgb, light_surface(rgb, v_geo), u_earth_lighting);
     frag=vec4(rgb,1.0);

@@ -800,8 +800,8 @@ impl TextureTile {
                     float_bytes(&tile.elevation),
                 ),
                 (
-                    glow::R8,
-                    glow::RED,
+                    glow::RG8,
+                    glow::RG,
                     glow::UNSIGNED_BYTE,
                     tile.water.as_slice(),
                 ),
@@ -1145,7 +1145,10 @@ fn visible_batches(frame: &Frame) -> Vec<(VectorKey, &Batch)> {
                 .map(|(i, b)| (VectorKey::Detail(*key, i), b)),
         );
     }
-    batches.retain(|(_, b)| b.appearance(frame.camera.zoom, frame.layers).is_some());
+    batches.retain(|(_, b)| {
+        !(frame.camera.orbit.active() && b.layer == Layer::Lake)
+            && b.appearance(frame.camera.zoom, frame.layers).is_some()
+    });
     batches.sort_by_key(|(_, b)| b.layer);
     batches
 }

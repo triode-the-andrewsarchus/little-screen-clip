@@ -2,6 +2,8 @@
 //!
 //! Decode these on bounded workers. Camera changes reuse the same source pixels;
 //! projection, filtering, lighting and contours belong to the desktop GPU renderer.
+mod lakes;
+
 use super::{
     BasemapAssets, GlobeCamera,
     perspective::{EARTH_RADIUS_M, Perspective, coordinates},
@@ -58,7 +60,7 @@ pub struct SourceTile {
     pub color: Vec<u8>,
     /// Interleaved meters and validity. Empty when no elevation sources are loaded.
     pub elevation: Vec<f32>,
-    /// 0 = no coverage, 128 = observed land, 255 = observed water.
+    /// Interleaved GRWL and lake coverage. GRWL retains 0/128/255 for unknown, land and water.
     pub water: Vec<u8>,
     pub elevation_range: Option<[f32; 2]>,
 }
@@ -117,7 +119,7 @@ impl SourceTile {
             id,
             color: Vec::with_capacity(count * 4),
             elevation: Vec::with_capacity(if elevation.is_some() { count * 2 } else { 0 }),
-            water: Vec::with_capacity(count),
+            water: vec![0; count * 2],
             elevation_range: None,
         };
         for y in 0..PADDED_EDGE {
@@ -139,20 +141,19 @@ impl SourceTile {
                 if let Some(elevation) = &mut elevation {
                     tile.push_height(elevation.sample(lat, lon));
                 }
-                tile.water.push(
-                    match (id.level >= 8)
-                        .then_some(assets)
-                        .and_then(|assets| assets.grwl_masks.as_ref())
-                        .as_ref()
-                        .and_then(|m| m.sample_water(lat, lon))
-                    {
-                        Some(true) => 255,
-                        Some(false) => 128,
-                        None => 0,
-                    },
-                );
+                tile.water[(y * PADDED_EDGE + x) * 2] = match (id.level >= 8)
+                    .then_some(assets)
+                    .and_then(|assets| assets.grwl_masks.as_ref())
+                    .as_ref()
+                    .and_then(|m| m.sample_water(lat, lon))
+                {
+                    Some(true) => 255,
+                    Some(false) => 128,
+                    None => 0,
+                };
             }
         }
+        lakes::rasterize(&assets.lakes, id, &mut tile.water, cancel)?;
         Some(tile)
     }
 
