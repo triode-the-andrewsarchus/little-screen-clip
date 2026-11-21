@@ -367,7 +367,7 @@ impl Viewer {
             moon_camera: None,
             solar_system: None,
             world: None,
-            world_maps: Arc::default(),
+            world_maps: Arc::new(solar::assets::MapCache::new(downloader.assets_dir.clone())),
             finder: Default::default(),
             sight: None,
             found_place: None,
@@ -984,6 +984,19 @@ impl Viewer {
             frame.show_constellations = self.sky.constellations;
             frame.earth_lighting = self.sky.lighting;
         }
+        let resolved = gpu::resolved_planets(&frame);
+        self.world_maps.request_distant(
+            ui.ctx(),
+            sky::PLANET_IDS
+                .into_iter()
+                .zip(resolved)
+                .filter_map(|(id, visible)| visible.then_some(id)),
+        );
+        frame.planet_maps = std::array::from_fn(|i| {
+            resolved[i]
+                .then(|| self.world_maps.preview(sky::PLANET_IDS[i]))
+                .flatten()
+        });
         if hovered.is_none() {
             show_sky_object(ui, rect, &frame);
             if response.clicked()

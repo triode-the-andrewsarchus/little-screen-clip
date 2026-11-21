@@ -248,6 +248,36 @@ fn luminary(
     (body, body_radius * scale)
 }
 
+pub(in super::super) fn resolved_planets(frame: &super::Frame) -> [bool; 7] {
+    let Some(scene) = frame.sky.as_ref().filter(|_| frame.show_sky) else {
+        return [false; 7];
+    };
+    let pose = SkyProjection::for_frame(frame, scene);
+    let viewport = egui::Rect::from_center_size(egui::Pos2::ZERO, frame.size.into());
+    std::array::from_fn(|i| {
+        let relative = subtract(scene.planets[i], pose.eye);
+        let distance = dot(relative, relative).sqrt();
+        let Some(offset) = pose.project(scene.planets[i]) else {
+            return false;
+        };
+        let body = super::super::solar::body(sky::PLANET_IDS[i]);
+        let radius = body.and_then(|planet| planet.radius).unwrap_or_default() as f32;
+        let direction = relative.map(|x| x / distance);
+        let limb = pose.eye.map(|value| value / 6378.137);
+        let t = (-dot(limb, direction)).max(0.0);
+        let nearest = std::array::from_fn(|axis| limb[axis] + direction[axis] * t);
+        let height = (dot(nearest, nearest).sqrt() - 1.0) * 6378.137;
+        let growth = if frame.readable_sky {
+            let weight = (height / 250.0).clamp(0.0, 1.0);
+            1.0 + 3.0 * weight * weight * (3.0 - 2.0 * weight)
+        } else {
+            1.0
+        };
+        let pixels = radius * growth * pose.focal / distance;
+        pixels >= 1.35 && viewport.expand(pixels).contains(offset.to_pos2())
+    })
+}
+
 pub(super) fn animated_sun_visible(frame: &super::Frame) -> bool {
     let Some(scene) = &frame.sky else {
         return false;
@@ -356,13 +386,14 @@ impl SkyRenderer {
         gl: &glow::Context,
         frame: &super::Frame,
         earth: [Option<glow::Texture>; 2],
+        planet_maps: [Option<glow::Texture>; 7],
     ) {
         if self.failed || (!frame.show_sky && !frame.moon_view) {
             return;
         }
         let Some(scene) = &frame.sky else { return };
         // SAFETY: called during the owner's paint callback with its context current.
-        if let Err(error) = unsafe { self.paint(gl, scene, frame, earth) } {
+        if let Err(error) = unsafe { self.paint(gl, scene, frame, earth, planet_maps) } {
             self.failed = true;
             tracing::warn!(%error, "Sky renderer unavailable");
         }
@@ -374,6 +405,7 @@ impl SkyRenderer {
         scene: &sky::Scene,
         frame: &super::Frame,
         earth: [Option<glow::Texture>; 2],
+        planet_maps: [Option<glow::Texture>; 7],
     ) -> Result<(), String> {
         let camera = frame.camera;
         let opacity = if frame.moon_view {
@@ -470,6 +502,16 @@ impl SkyRenderer {
                 gl.get_uniform_location(p, "u_planets[0]").as_ref(),
                 scene.planets.as_flattened(),
             );
+            let mut installed = 0;
+            for (i, texture) in planet_maps
+                .into_iter()
+                .enumerate()
+                .filter(|(_, texture)| texture.is_some())
+            {
+                bind(gl, p, &format!("u_planet_maps[{i}]"), 6 + i as u32, texture);
+                installed |= 1 << i;
+            }
+            gl.uniform_1_i32(loc("u_planet_maps_mask").as_ref(), installed);
             self.lunar_uniforms(gl, p, frame, None);
             bind(gl, p, "u_stars", 3, self.stars);
             if frame.moon_view {

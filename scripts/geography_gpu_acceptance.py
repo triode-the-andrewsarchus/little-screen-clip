@@ -151,6 +151,26 @@ def check_sky_sizes(root, width, height):
     for moon_x in [.55, .525]:
         assert np.array_equal(render_sky(0, moon_x), render_sky(1, moon_x)), "Solar conjunction changed optical disks"
 
+    # A resolved nearby planet should sample its installed map while the
+    # download-free point marker behavior remains available for other bodies.
+    GL.glUniform3f(uniform("u_planets[2]"), -65000, -28000, eye - 97000)
+    flat = render_sky(0, -.55)
+    GL.glActiveTexture(GL.GL_TEXTURE6)
+    surface = texture(GL.GL_RGB8, GL.GL_RGB, GL.GL_UNSIGNED_BYTE,
+                      np.full((8, 8, 3), [35, 175, 235], dtype=np.uint8))
+    GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
+    GL.glUniform1i(uniform("u_planet_maps[2]"), 6)
+    GL.glUniform1i(uniform("u_planet_maps_mask"), 1 << 2)
+    mapped = render_sky(0, -.55)
+    center_x = round(width / 2 - 65000 * focal / 97000)
+    center_y = round(height / 2 - 28000 * focal / 97000)
+    assert int(mapped[center_y, center_x, 2]) - int(mapped[center_y, center_x, 0]) > 30
+    assert mapped[center_y, center_x, 0] < flat[center_y, center_x, 0] / 2
+    GL.glUniform3f(uniform("u_planets[2]"), 0, 0, 0)
+    GL.glUniform1i(uniform("u_planet_maps_mask"), 0)
+    GL.glDeleteTextures([surface])
+    GL.glActiveTexture(GL.GL_TEXTURE0)
+
     # A dark star map with a narrow bright feature. The transient trail can add
     # a faint shoulder at the feature's edge while retaining the peak itself.
     stars = np.full((4, 4096, 3), 5, dtype=np.uint8)
@@ -849,6 +869,7 @@ def main():
             "edge_on_ring_thickness_checked": True,
             "clipped_world_projection_checked": True,
             "planetary_haze_checked": True,
+            "distant_planet_albedo_checked": True,
             "shared_sky_and_solar_emission_checked": True,
             "warm_frame_median_ms": statistics.median(timings),
             "warm_frame_p95_ms": sorted(timings)[int(len(timings) * 0.95)]}

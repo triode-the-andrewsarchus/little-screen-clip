@@ -388,6 +388,7 @@ impl Tiles {
             moon_view: false,
             lunar: None,
             lunar_albedo: None,
+            planet_maps: Default::default(),
             readable_sky: false,
             show_constellations: false,
             earth_lighting: false,

@@ -57,6 +57,9 @@ const PLANETS: [(&str, Frame); 7] = [
     ("Neptune", NEPTUNE_BARYCENTER_J2000),
 ];
 
+// Same order as the DE440 positions and the sky shader's apparent disks.
+pub(super) const PLANET_IDS: [super::solar::Id; 7] = [199, 299, 499, 599, 699, 799, 899];
+
 #[derive(Clone)]
 pub(super) struct Texture {
     pub size: [i32; 2],

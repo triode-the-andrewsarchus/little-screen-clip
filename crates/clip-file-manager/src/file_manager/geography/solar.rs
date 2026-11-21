@@ -133,16 +133,20 @@ pub(super) fn clock(time: DateTime<Utc>, animation_seconds: f64) -> [f32; 2] {
     ]
 }
 
-pub(super) fn sunlight(body: &Body, day: f64) -> ([f32; 3], f32) {
+fn position_au(body: &Body, day: f64) -> [f64; 3] {
     let primary = body.parent.and_then(self::body).filter(|p| p.id != SUN);
-    let position = primary.map_or_else(
+    primary.map_or_else(
         || body.at(day),
         |p| {
             let center = p.at(day);
             let relative = body.at(day);
             std::array::from_fn(|i| center[i] + relative[i] / 149_597_870.7)
         },
-    );
+    )
+}
+
+pub(super) fn sunlight(body: &Body, day: f64) -> ([f32; 3], f32) {
+    let position = position_au(body, day);
     let distance = position.iter().map(|v| v * v).sum::<f64>().sqrt();
     if distance <= 0.0 {
         return ([0.811, 0.324, 0.487], 0.0);

@@ -2,17 +2,19 @@
 use super::{Body, Id, Orbit};
 use crate::file_manager::geography::sky;
 use little_clip_core::file_source::read_file_snapshot;
+use little_clip_core::jobs::task::Task;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{Cursor, Read},
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 pub(in crate::file_manager) const HORIZONS: &str = "https://ssd.jpl.nasa.gov/horizons/";
@@ -176,7 +178,15 @@ fn images() -> &'static [ImageAsset] {
 #[derive(Default)]
 pub(in crate::file_manager::geography) struct MapCache {
     maps: Mutex<Maps>,
+    distant: Mutex<DistantReads>,
+    root: PathBuf,
     replacement_epoch: AtomicU64,
+}
+
+#[derive(Default)]
+struct DistantReads {
+    checked: HashSet<Id>,
+    task: Option<Task<()>>,
 }
 
 #[derive(Default)]
@@ -190,6 +200,13 @@ struct Maps {
 const DETAILED_BUDGET: usize = 128 * 1024 * 1024;
 
 impl MapCache {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            ..Self::default()
+        }
+    }
+
     pub fn refresh_installed(&self, changed: Option<Id>) {
         // Only a versioned replacement may supersede a currently usable map.
         // Existing textures for unchanged files keep their GPU identity.
@@ -204,6 +221,39 @@ impl MapCache {
                     maps.detailed_bytes -= map.pixels.len();
                 }
             }
+        }
+        if let Ok(mut distant) = self.distant.lock() {
+            *distant = DistantReads::default();
+        }
+    }
+
+    pub fn request_distant(
+        self: &Arc<Self>,
+        ctx: &egui::Context,
+        ids: impl IntoIterator<Item = Id>,
+    ) {
+        let Ok(mut distant) = self.distant.lock() else {
+            return;
+        };
+        if distant.task.as_ref().and_then(Task::poll).is_some() {
+            distant.task = None;
+        }
+        if distant.task.is_none()
+            && let Some(id) = ids.into_iter().find(|id| {
+                image(*id).is_some() && self.preview(*id).is_none() && distant.checked.insert(*id)
+            })
+        {
+            let cache = Arc::clone(self);
+            distant.task = Some(Task::start(
+                preview_workers(),
+                Duration::from_secs(30),
+                move |_| {
+                    cache.load_map(&cache.root, id, true).ok();
+                },
+            ));
+        }
+        if distant.task.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 
@@ -461,11 +511,11 @@ mod tests {
         assert!(cache.preview(801).is_none());
         cache.store(801, true, legacy, Some(0));
         assert!(cache.preview(801).is_none(), "a retired decode republished");
-        assert!(std::sync::Arc::ptr_eq(
+        assert!(Arc::ptr_eq(
             &cache.preview(599).unwrap().pixels,
             &thumbnail.pixels
         ));
-        assert!(std::sync::Arc::ptr_eq(
+        assert!(Arc::ptr_eq(
             &cache.map(599, false).unwrap().pixels,
             &detail.pixels
         ));

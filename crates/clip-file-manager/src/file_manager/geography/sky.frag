@@ -26,6 +26,8 @@ uniform vec3 u_sun;
 uniform vec2 u_solar_clock;
 uniform vec3 u_moon;
 uniform vec3 u_planets[7];
+uniform sampler2D u_planet_maps[7];
+uniform int u_planet_maps_mask;
 
 #include <lunar>
 #include <celestial>
@@ -91,6 +93,35 @@ vec3 earth_surface(vec3 ray, vec3 offset) {
     return mix(color, atmosphere_color(sunlight), .38 * rim);
 }
 
+vec3 remote_planet_albedo(int planet, vec2 uv) {
+    // GLSL 330 requires literal sampler array indices.
+    switch (planet) {
+        case 0: return textureLod(u_planet_maps[0],uv,2.0).rgb;
+        case 1: return textureLod(u_planet_maps[1],uv,2.0).rgb;
+        case 2: return textureLod(u_planet_maps[2],uv,2.0).rgb;
+        case 3: return textureLod(u_planet_maps[3],uv,2.0).rgb;
+        case 4: return textureLod(u_planet_maps[4],uv,2.0).rgb;
+        case 5: return textureLod(u_planet_maps[5],uv,2.0).rgb;
+        default: return textureLod(u_planet_maps[6],uv,2.0).rgb;
+    }
+}
+
+vec3 planet_disk(int i, vec3 ray, vec3 offset, float radius) {
+    vec3 albedo = planet_color[i];
+    if ((u_planet_maps_mask & (1 << i)) == 0) return albedo;
+    vec3 across = cross(ray,cross(ray,offset)) / radius;
+    vec3 normal = normalize(across - ray*sqrt(max(0.0,1.0-dot(across,across))));
+    vec3 equatorial = u_inertial_from_fixed*normal;
+    vec3 ecliptic = vec3(equatorial.x,.917482*equatorial.y+.397777*equatorial.z,
+                                    -.397777*equatorial.y+.917482*equatorial.z);
+    vec2 uv = vec2(.5+atan(ecliptic.y,ecliptic.x)/(2.0*PI),
+                  .5-asin(clamp(ecliptic.z,-1.0,1.0))/PI);
+    albedo = remote_planet_albedo(i,uv);
+    if (i == 1) albedo = vec3(.92,.85,.70)*(.94+.05*albedo.r);
+    float lighting = .32+.68*pow(max(dot(normal,normalize(u_sun-u_planets[i])),0.0),.54);
+    return albedo*lighting;
+}
+
 void main() {
     vec3 eye = u_sky_eye_override ? u_sky_eye : u_camera_basis[2] * u_camera_distance;
     vec3 ray = u_camera_basis * normalize(vec3(v_ndc * u_fov, -1.0));
@@ -136,7 +167,8 @@ void main() {
             rgb = mix(rgb, planet_color[i] * (.87 + .13 * emphasis), (.72 + .23 * emphasis) * marker);
         }
         if (coverage > 0.0) {
-            rgb = mix(rgb, planet_color[i], coverage);
+            vec3 surface = planet_disk(i,ray,offset,radius);
+            rgb = mix(rgb, surface, coverage);
             nearest = distance;
         }
     }

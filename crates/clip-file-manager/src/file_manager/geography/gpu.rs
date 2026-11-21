@@ -15,7 +15,7 @@ use little_clip_core::geography::basemap::{
     tiles::{PADDED_EDGE, SourceTile, TileId},
 };
 pub(super) use sky::inspection::{View as StarView, show_name as star_name};
-pub(super) use sky::{SkyObject, sky_object_at};
+pub(super) use sky::{SkyObject, resolved_planets, sky_object_at};
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
@@ -124,6 +124,7 @@ pub(super) struct Frame {
     pub moon_view: bool,
     pub lunar: Option<(u64, Vec<Arc<SourceTile>>)>,
     pub lunar_albedo: Option<super::sky::Texture>,
+    pub planet_maps: [Option<super::sky::Texture>; 7],
     pub readable_sky: bool,
     pub show_constellations: bool,
     pub earth_lighting: bool,
@@ -410,7 +411,13 @@ impl Renderer {
                     .get(&(frame.source, id))
                     .map(|tile| tile.textures[0])
             });
-            self.sky.paint_frame(gl, frame, earth);
+            let mut planet_maps = [None; 7];
+            if frame.show_sky {
+                for (i, id) in super::sky::PLANET_IDS.into_iter().enumerate() {
+                    planet_maps[i] = self.world.texture(gl, id, frame.planet_maps[i].as_ref())?;
+                }
+            }
+            self.sky.paint_frame(gl, frame, earth, planet_maps);
 
             if frame.moon_view && frame.terrain.is_none() {
                 if frame.sky.is_none()

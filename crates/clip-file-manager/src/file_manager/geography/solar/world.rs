@@ -169,9 +169,9 @@ impl World {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
         let pose = frame.pose;
-        let neighbors = self.paint_bodies(ui, rect, frame, day, &lights, cache)?;
+        let (neighbors, distant) = self.paint_bodies(ui, rect, frame, day, &lights, cache)?;
         label_major_moons(&painter, &neighbors);
-        let target = pick_nearby(neighbors.iter(), pose, response)
+        let target = pick_nearby(neighbors.iter().chain(&distant), pose, response)
             .or_else(|| pick_sun(pose, sun, response));
         if target.is_none() {
             let exposed = |point: Pos2| {
@@ -191,11 +191,31 @@ impl World {
         day: f64,
         lights: &Backdrop,
         cache: &Arc<assets::MapCache>,
-    ) -> Result<Vec<Nearby>, String> {
+    ) -> Result<(Vec<Nearby>, Vec<Nearby>), String> {
         let neighbors = surroundings(self.body, frame.pose, rect, day);
+        let distant = distant_planets(self.body, frame.pose, rect, day);
+        if self.neighbors.is_none() {
+            cache.request_distant(
+                ui.ctx(),
+                distant
+                    .iter()
+                    .filter(|item| item.radius >= 2.5 && !item.occluded)
+                    .map(|item| item.body.id),
+            );
+        }
         let pose = frame.pose;
         let clock = frame.clock;
         gpu::paint_space(ui, rect, lights.clone())?;
+        for planet in &distant {
+            planet.paint(
+                ui,
+                pose,
+                rect,
+                sunlight(planet.body, day).0,
+                clock,
+                cache.preview(planet.body.id).as_ref(),
+            )?;
+        }
         let paint_side = |behind| {
             for moon in neighbors.iter().filter(|moon| moon.behind == behind) {
                 moon.paint(
@@ -215,7 +235,7 @@ impl World {
         paint_side(true)?;
         gpu::paint_world(ui, rect, frame)?;
         paint_side(false)?;
-        Ok(neighbors)
+        Ok((neighbors, distant))
     }
 
     pub fn texture(&self) -> Option<sky::Texture> {
@@ -423,6 +443,31 @@ fn project_moon(
             .radius
             .is_some_and(|radius| radius >= (primary_km * 0.001).max(3.0));
     project_body(moon, position, display_radius, major, pose, rect)
+}
+
+fn distant_planets(primary: &Body, pose: Perspective, rect: Rect, day: f64) -> Vec<Nearby> {
+    if primary.id == SUN {
+        return Vec::new();
+    }
+    let origin = super::position_au(primary, day);
+    let mut planets: Vec<_> = satellites(SUN)
+        .filter(|planet| {
+            planet.kind() == super::Kind::Planet
+                && planet.id != primary.id
+                && Some(planet.id) != primary.parent
+        })
+        .filter_map(|planet| {
+            let target = super::position_au(planet, day);
+            let delta: [f64; 3] = std::array::from_fn(|i| target[i] - origin[i]);
+            let au = delta.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let angular = (planet.radius? / (149_597_870.7 * au) * 120.0).min(0.045);
+            let sky_distance = 1e6;
+            let position = delta.map(|v| v * sky_distance / au);
+            project_body(planet, position, angular * sky_distance, false, pose, rect)
+        })
+        .collect();
+    planets.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+    planets
 }
 
 fn project_body(
