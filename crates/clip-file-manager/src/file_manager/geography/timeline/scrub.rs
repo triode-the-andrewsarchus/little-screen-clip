@@ -2,7 +2,8 @@ use crate::file_manager::geography::interpolate_instant;
 use chrono::{DateTime, TimeDelta, Utc};
 
 const LOCAL_STEP: TimeDelta = TimeDelta::minutes(12);
-const FADE_OUT_SECONDS: f64 = 0.15;
+const FAST_SCRUB_CONTRAST: f32 = 0.28;
+const FADE_OUT_SECONDS: f64 = 0.12;
 const FADE_IN_SECONDS: f64 = 0.32;
 const QUIET_SECONDS: f64 = 0.20;
 
@@ -51,8 +52,8 @@ impl Scrub {
         (self.target - self.displayed).abs() > LOCAL_STEP
     }
 
-    /// Traverse short intervals normally. For distant dates, remove directional
-    /// lighting before moving the clock so a scrub cannot play days in fast forward.
+    /// Traverse short intervals normally. For distant dates, soften the contrast
+    /// before following the playhead so the changing phase stays visible.
     pub fn frame(&mut self, now: f64) -> Preview {
         let dt = (now - self.updated).clamp(0.0, 0.05);
         self.updated = now;
@@ -69,7 +70,8 @@ impl Scrub {
             };
             self.light = (self.light + dt / FADE_IN_SECONDS).min(1.0);
         }
-        let directional_light = (self.light * self.light * (3.0 - 2.0 * self.light)) as f32;
+        let eased = (self.light * self.light * (3.0 - 2.0 * self.light)) as f32;
+        let directional_light = FAST_SCRUB_CONTRAST + (1.0 - FAST_SCRUB_CONTRAST) * eased;
         Preview {
             time: self.displayed,
             directional_light,
@@ -86,22 +88,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rapid_scrub_skips_whole_days_only_with_directional_lighting_muted() {
+    fn rapid_scrub_follows_changes_of_day_at_reduced_contrast_then_restores_it() {
         let start = DateTime::UNIX_EPOCH;
         let mut scrub = Scrub::new(start, 0.0);
         let mut target = start;
         for frame in 1..=22 {
             let now = f64::from(frame) / 60.0;
-            target = start + TimeDelta::days(i64::from(frame) * 37);
+            target = start + TimeDelta::hours(i64::from(frame) * 30);
             scrub.retarget(target, now);
             let preview = scrub.frame(now);
-            if preview.directional_light > 0.0 {
+            if preview.directional_light > FAST_SCRUB_CONTRAST {
                 assert_eq!(preview.time, start);
             } else {
                 assert_eq!(preview.time, target);
             }
         }
-        let mut previous = 0.0;
+        let mut previous = FAST_SCRUB_CONTRAST;
         for frame in 23..=70 {
             let preview = scrub.frame(f64::from(frame) / 60.0);
             assert_eq!(preview.time, target);

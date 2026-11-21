@@ -276,12 +276,14 @@ def check_world_view(root, width, height, output):
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 3)
         return np.frombuffer(GL.glReadPixels(0, 0, width, height,
             GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height, width, 4)
-    GL.glUniform1f(loc("u_timeline_light"), 0.0)
-    neutral = draw([])
+    day = draw([]).astype(int)
+    GL.glUniform1f(loc("u_timeline_light"), 0.28)
+    soft_day = draw([]).astype(int)
     GL.glUniform3f(loc("u_sun_direction"), -.811, -.324, -.487)
-    assert np.array_equal(neutral, draw([])), "World lighting changed during a muted time jump"
+    soft_contrast = np.abs(soft_day - draw([])).max()
     GL.glUniform1f(loc("u_timeline_light"), 1.0)
-    assert not np.array_equal(neutral, draw([])), "World lighting did not return at full strength"
+    full_contrast = np.abs(day - draw([])).max()
+    assert 0 < soft_contrast < 0.4 * full_contrast, "World scrub contrast should be reduced but visible"
     GL.glUniform3f(loc("u_sun_direction"), .811, .324, .487)
     globe = draw([])
     ringed = draw([(1.28, 1.58, .41), (1.58, 2.02, .74), (2.10, 2.32, .52)])
@@ -880,11 +882,12 @@ def main():
         assert 0 < faded[center, 0] < .5 * (lit[center, 0] - unlit[center, 0])
         assert np.array_equal(lit_exposure(-150e6, 1, zoom=10), lit_exposure(-150e6, 0, zoom=10))
 
-        GL.glUniform1f(uniform("u_timeline_light"), 0.0)
-        neutral = lit_exposure(-150e6, 1)
-        assert np.array_equal(neutral, lit_exposure(150e6, 1)), "Earth flashed across a muted day/night jump"
-        GL.glUniform1f(uniform("u_timeline_light"), 0.5)
-        assert np.all(np.abs(lit_exposure(-150e6, 1) - (neutral + lit) / 2) <= 1)
+        day = lit_exposure(150e6, 1)
+        GL.glUniform1f(uniform("u_timeline_light"), 0.28)
+        soft_night = lit_exposure(-150e6, 1)
+        soft_day = lit_exposure(150e6, 1)
+        assert not np.array_equal(soft_night, soft_day), "Earth's day and night must remain distinct during fast scrubs"
+        assert np.all(np.abs((soft_night - soft_day) - 0.28 * (lit - day)) <= 2)
         GL.glUniform1f(uniform("u_timeline_light"), 1.0)
         assert np.array_equal(lit, lit_exposure(-150e6, 1))
 
