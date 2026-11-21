@@ -27,6 +27,7 @@ pub(in crate::file_manager::geography) struct System {
     texture_job: Option<Task<HashMap<Id, sky::Texture>>>,
     textures_checked: bool,
     earth_checked: bool,
+    flight: Option<FlyIn>,
 }
 
 impl System {
@@ -44,6 +45,7 @@ impl System {
             texture_job: None,
             textures_checked: false,
             earth_checked: false,
+            flight: None,
         }
     }
 
@@ -92,14 +94,15 @@ impl System {
         response: &egui::Response,
         time: DateTime<Utc>,
         stars: Option<Arc<sky::Assets>>,
-    ) -> Option<Id> {
-        self.navigate(response);
+    ) -> Option<Selection> {
+        let animation = ui.input(|input| input.time);
+        let zooming_in = self.navigate(response);
+        let arrived = self.advance_flight(response, animation);
         let rect = response.rect;
         let painter = ui.painter_at(rect);
         let primary = body(self.center)?;
         let heliocentric = primary.id == SUN;
         let day = scene_day(time);
-        let animation = ui.input(|input| input.time);
         let clock = clock(time, animation);
         let projection = self.projection(rect, animation, primary.id);
         self.paint_backdrop(ui, &painter, projection, clock, stars);
@@ -114,15 +117,25 @@ impl System {
             zoom: self.zoom,
         };
         self.paint_orbits(&mut layout, projection, primary.id);
-        paint_marks(
-            ui,
-            &painter,
-            response,
-            layout.marks,
-            camera,
-            clock,
-            &self.textures,
-        )
+        if zooming_in
+            && self.flight.is_none()
+            && arrived.is_none()
+            && let Some(pointer) = response.hover_pos()
+        {
+            self.start_flight(rect, pointer, &layout.marks, animation);
+        }
+        let clicked = paint_marks(ui, &layout, response, camera, clock, &self.textures);
+        if let Some(id) = arrived {
+            let mut camera = camera;
+            camera.zoom = world::initial_zoom(id);
+            return Some(Selection {
+                id,
+                camera: Some(camera),
+            });
+        }
+        clicked
+            .filter(|_| self.flight.is_none())
+            .map(|id| Selection { id, camera: None })
     }
 
     fn projection(&mut self, rect: Rect, animation: f64, center: Id) -> Projection {
@@ -180,12 +193,13 @@ impl System {
             paint_stars(painter, rect);
         }
         let visible_sun = self.center == SUN && rect.contains(projection.center);
-        if visible_sun
-            || self
-                .opened_at
-                .is_some_and(|start| ui.input(|i| i.time) - start < 0.28)
-        {
-            ui.ctx().request_repaint_after(Duration::from_millis(33));
+        let opening = self
+            .opened_at
+            .is_some_and(|start| ui.input(|i| i.time) - start < 0.28);
+        if opening {
+            ui.ctx().request_repaint();
+        } else if visible_sun {
+            ui.ctx().request_repaint_after(Duration::from_millis(66));
         }
     }
 
@@ -230,23 +244,98 @@ impl System {
         }
     }
 
-    fn navigate(&mut self, response: &egui::Response) {
-        if let Some(delta) = self.middle.update(response) {
+    fn navigate(&mut self, response: &egui::Response) -> bool {
+        let scroll = response.ctx.input(|input| input.smooth_scroll_delta.y);
+        let middle = self.middle.update(response);
+        let pan = response.dragged_by(egui::PointerButton::Primary);
+        let cancel = response
+            .ctx
+            .input(|input| input.key_pressed(egui::Key::Escape));
+        if self.flight.is_some() {
+            if middle.is_none() && !pan && scroll >= -0.01 && !cancel {
+                return false;
+            }
+            self.flight = None;
+        }
+        if let Some(delta) = middle {
             self.yaw -= f64::from(delta.x) * 0.008;
             self.elevation = (self.elevation + f64::from(delta.y) * 0.007).clamp(0.04, 1.56);
-        } else if response.dragged_by(egui::PointerButton::Primary) {
+        } else if pan {
             self.pan += response.drag_delta();
         }
-        if let Some(pointer) = response.hover_pos() {
-            let scroll = response.ctx.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.01 {
-                let next = (self.zoom * (scroll * 0.004).exp()).clamp(0.55, 18.0);
-                let anchor = pointer - response.rect.center();
-                self.pan = anchor + (self.pan - anchor) * (next / self.zoom);
-                self.zoom = next;
-                response.ctx.request_repaint();
-            }
+        if let Some(pointer) = response.hover_pos()
+            && scroll.abs() > 0.01
+        {
+            let next = (self.zoom * (scroll * 0.004).exp()).clamp(0.55, 80.0);
+            let anchor = pointer - response.rect.center();
+            self.pan = anchor + (self.pan - anchor) * (next / self.zoom);
+            self.zoom = next;
+            response.ctx.request_repaint();
+            return scroll > 0.0;
         }
+        false
+    }
+
+    fn start_flight(&mut self, rect: Rect, pointer: Pos2, marks: &[Mark], now: f64) {
+        let Some(mark) = mark_at(marks, pointer) else {
+            return;
+        };
+        let target_radius =
+            (world::initial_zoom(mark.body.id) * 0.43) as f32 * rect.width().min(rect.height());
+        // Begin from the pointed-at disk, preserving an ordinary zoom into
+        // empty orbital space even when a large world is elsewhere on screen.
+        if mark.radius < (target_radius * 0.56).max(26.0) {
+            return;
+        }
+        let zoom_factor = (target_radius / mark.radius).powf(1.0 / 1.12);
+        let screen_offset = mark.point - rect.center();
+        self.flight = Some(FlyIn {
+            id: mark.body.id,
+            began: now,
+            from_zoom: self.zoom,
+            zoom_factor,
+            screen_offset,
+            orbit_offset: screen_offset - self.pan,
+        });
+    }
+
+    fn advance_flight(&mut self, response: &egui::Response, now: f64) -> Option<Id> {
+        let flight = self.flight.as_ref()?;
+        let (zoom, pan, arrived) = flight.sample(now);
+        self.zoom = zoom;
+        self.pan = pan;
+        if arrived {
+            return self.flight.take().map(|flight| flight.id);
+        }
+        response.ctx.request_repaint();
+        None
+    }
+}
+
+pub(in crate::file_manager::geography) struct Selection {
+    pub id: Id,
+    pub camera: Option<GlobeCamera>,
+}
+
+struct FlyIn {
+    id: Id,
+    began: f64,
+    from_zoom: f32,
+    zoom_factor: f32,
+    screen_offset: Vec2,
+    orbit_offset: Vec2,
+}
+
+impl FlyIn {
+    fn sample(&self, now: f64) -> (f32, Vec2, bool) {
+        let progress = ((now - self.began) / 0.28).clamp(0.0, 1.0) as f32;
+        let ease = progress * progress * (3.0 - 2.0 * progress);
+        let scale = self.zoom_factor.powf(ease);
+        (
+            self.from_zoom * scale,
+            self.screen_offset * (1.0 - ease) - self.orbit_offset * scale,
+            progress >= 1.0,
+        )
     }
 }
 
@@ -412,6 +501,9 @@ fn paint_icon(
             (f64::from(band[1]) / mark.body.radius.unwrap_or(1.0)) as f32 * 1.08
         });
     let rect = Rect::from_center_size(mark.point, Vec2::splat(mark.radius * size_ratio * 2.0));
+    if !painter.clip_rect().intersects(rect) {
+        return;
+    }
     camera.zoom = 1.0 / (0.86 * f64::from(size_ratio));
     let mut frame = world::Frame::new(
         mark.body,
@@ -427,30 +519,39 @@ fn paint_icon(
     }
 }
 
+fn mark_at(marks: &[Mark], pointer: Pos2) -> Option<&Mark> {
+    marks
+        .iter()
+        .filter(|mark| mark.point.distance(pointer) <= mark.radius.max(6.0))
+        .min_by(|a, b| {
+            let a_in_front = pointer.distance_sq(a.point) <= a.radius * a.radius;
+            let b_in_front = pointer.distance_sq(b.point) <= b.radius * b.radius;
+            b_in_front
+                .cmp(&a_in_front)
+                .then_with(|| a.depth.total_cmp(&b.depth))
+                .then_with(|| {
+                    pointer
+                        .distance_sq(a.point)
+                        .total_cmp(&pointer.distance_sq(b.point))
+                })
+        })
+}
+
 fn paint_marks(
     ui: &egui::Ui,
-    painter: &egui::Painter,
+    layout: &OrbitLayout<'_>,
     response: &egui::Response,
-    mut marks: Vec<Mark>,
     camera: GlobeCamera,
     clock: [f32; 2],
     images: &HashMap<Id, sky::Texture>,
 ) -> Option<Id> {
+    let painter = layout.painter;
+    let mut marks: Vec<_> = layout.marks.iter().collect();
     marks.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     let pointer = response
         .hover_pos()
         .or_else(|| response.interact_pointer_pos());
-    let mut hit = pointer.and_then(|point| {
-        marks
-            .iter()
-            .filter(|mark| mark.point.distance(point) <= mark.radius.max(6.0))
-            .min_by(|a, b| {
-                a.point
-                    .distance_sq(point)
-                    .total_cmp(&b.point.distance_sq(point))
-            })
-            .map(|mark| mark.body.id)
-    });
+    let mut hit = pointer.and_then(|point| mark_at(&layout.marks, point).map(|mark| mark.body.id));
     for mark in &marks {
         paint_icon(ui, painter, mark, camera, clock, images);
     }
@@ -587,5 +688,38 @@ fn paint_belts(painter: &egui::Painter, projection: Projection, zoom: f32) {
                 colors[belt as usize].gamma_multiply(0.22 + 0.64 * bright),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_flight_keeps_its_anchor_and_hands_off_centered() {
+        let flight = FlyIn {
+            id: 599,
+            began: 1.0,
+            from_zoom: 4.0,
+            zoom_factor: 2.0,
+            screen_offset: vec2(130.0, -55.0),
+            orbit_offset: vec2(-240.0, 156.0),
+        };
+        let (start_zoom, start_pan, started) = flight.sample(1.0);
+        assert!(!started);
+        assert_eq!(start_pan + flight.orbit_offset, flight.screen_offset);
+        assert_eq!(start_zoom, 4.0);
+        let (zoom, pan, arrived) = flight.sample(1.3);
+        assert!(arrived);
+        assert_eq!(zoom, 8.0);
+        assert_eq!(pan + flight.orbit_offset * (zoom / start_zoom), Vec2::ZERO);
+    }
+
+    #[test]
+    fn pointer_picks_the_nearer_world_when_disks_overlap() {
+        let here = Pos2::ZERO;
+        let distant = Mark::new(body(599).unwrap(), here, 1.0, false, 1.0);
+        let nearer = Mark::new(body(501).unwrap(), here, 0.0, false, 1.0);
+        assert_eq!(mark_at(&[distant, nearer], here).unwrap().body.id, 501);
     }
 }

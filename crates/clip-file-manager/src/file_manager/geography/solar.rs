@@ -3,7 +3,7 @@ pub(in crate::file_manager) mod assets;
 mod view;
 pub(super) mod world;
 
-pub(super) use view::{System, paint_stars};
+pub(super) use view::{Selection, System, paint_stars};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -180,6 +180,13 @@ pub(super) fn satellites(id: Id) -> impl Iterator<Item = &'static Body> + Clone 
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn apparent_sun_shrinks_from_mercury_to_neptune() {
+        let sizes = [199, 399, 599, 899].map(|id| sunlight(body(id).unwrap(), 9_600.0).1);
+        assert!(sizes.windows(2).all(|pair| pair[0] > pair[1]));
+        assert!(sizes[3] > 0.005);
+    }
 
     #[test]
     fn bundled_catalog_has_valid_orbits_and_unique_targets() {

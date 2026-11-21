@@ -649,13 +649,13 @@ impl Viewer {
         } else if let Some(system) = self.solar_system.as_mut() {
             system.poll_maps(ui.ctx(), &self.downloader.assets_dir, self.assets.clone());
             let recorded = recorded_scene_time(&self.document, self.selected, None);
-            if let Some(id) = system.paint(
+            if let Some(selection) = system.paint(
                 ui,
                 &response,
                 recorded.unwrap_or_else(|| live_scene_time(ui.ctx())),
                 self.sky.assets.clone(),
             ) {
-                self.select_solar_target(id, ui.ctx());
+                self.arrive_at_world(selection, ui.ctx());
             }
         } else if let Some(world) = self.world.as_mut() {
             world.navigate(&response);
@@ -1306,6 +1306,21 @@ impl Viewer {
         self.found_place = None;
         self.tiles.suspend();
         ctx.request_repaint();
+    }
+
+    fn arrive_at_world(&mut self, selection: solar::Selection, ctx: &egui::Context) {
+        self.select_solar_target(selection.id, ctx);
+        if let Some(camera) = selection.camera {
+            match selection.id {
+                solar::EARTH => self.camera = camera,
+                solar::MOON => self.moon_camera = Some(camera),
+                _ => {
+                    if let Some(world) = &mut self.world {
+                        world.camera = camera;
+                    }
+                }
+            }
+        }
     }
 
     fn select_solar_target(&mut self, id: solar::Id, ctx: &egui::Context) {
