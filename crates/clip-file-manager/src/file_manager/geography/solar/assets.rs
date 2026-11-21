@@ -70,8 +70,15 @@ impl Download {
             })
             .collect::<Vec<_>>()
             .join("%20");
+        // Horizons interprets an unqualified number as a major-body index.
+        // Designation syntax selects a small body by its cataloged SPK ID.
+        let target = if id > 2_000_000 {
+            format!("DES%3D{id}%3B")
+        } else {
+            id.to_string()
+        };
         let url = format!(
-            "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27{id}%27&CENTER=%27500%40{center}%27&EPHEM_TYPE=VECTORS&MAKE_EPHEM=YES&VEC_TABLE=1&CSV_FORMAT=YES&REF_PLANE=ECLIPTIC&OUT_UNITS=KM-S&TLIST_TYPE=JD&TLIST={epochs}"
+            "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%27{target}%27&CENTER=%27500%40{center}%27&EPHEM_TYPE=VECTORS&MAKE_EPHEM=YES&VEC_TABLE=1&CSV_FORMAT=YES&REF_PLANE=ECLIPTIC&OUT_UNITS=KM-S&TLIST_TYPE=JD&TLIST={epochs}"
         );
         Some(Self {
             folder,
@@ -286,6 +293,8 @@ mod tests {
         for id in [2_136_108, 2_136_199, 2_136_472, -1, -2, -3, -4] {
             assert!(image(id).is_none());
         }
+        let haumea = Download::for_body(2_136_108).unwrap();
+        assert!(haumea.url.contains("COMMAND=%27DES%3D2136108%3B%27"));
     }
 
     #[test]
