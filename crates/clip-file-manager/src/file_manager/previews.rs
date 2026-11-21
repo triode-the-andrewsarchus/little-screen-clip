@@ -196,7 +196,8 @@ impl EntryPreviews {
                             *revision,
                             ready.data.document.is_some()
                                 || ready.data.binary.is_some()
-                                || ready.data.multisample.is_some(),
+                                || ready.data.multisample.is_some()
+                                || ready.data.solar_trajectory,
                         ),
                     );
                 }
@@ -637,6 +638,14 @@ impl EntryPreviews {
     ) -> Option<usize> {
         let id = self.identity(entry);
         self.listing(entry);
+        if let Some(ready) = self
+            .cache
+            .get(id)
+            .filter(|ready| ready.data.solar_trajectory)
+        {
+            show_trajectory_strip(ui, row, entry, columns, colors, ready);
+            return None;
+        }
         if self.is_binary(entry) {
             let document = self
                 .cache
@@ -1029,6 +1038,30 @@ impl EntryPreviews {
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
+}
+
+fn show_trajectory_strip(
+    ui: &egui::Ui,
+    row: egui::Rect,
+    entry: &Entry,
+    columns: Option<super::ui::ListColumns>,
+    colors: crate::ui_appearance::WorkbenchColors,
+    ready: &super::shelf::preview::Ready,
+) {
+    let strip = super::ui::information_strip(ui, row, entry, &ready.data.detail, columns, colors);
+    let thumbnail = egui::Rect::from_min_size(
+        strip.min,
+        egui::vec2(240.0_f32.min(strip.width()), strip.height()),
+    );
+    super::ui::model_thumbnail(ui, thumbnail, ready.texture.as_ref(), colors);
+    let caption = egui::pos2(thumbnail.right() + 10.0, strip.center().y);
+    ui.painter_at(strip).text(
+        caption,
+        egui::Align2::LEFT_CENTER,
+        &ready.data.text,
+        egui::TextStyle::Body.resolve(ui.style()),
+        colors.text_secondary,
+    );
 }
 
 fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {

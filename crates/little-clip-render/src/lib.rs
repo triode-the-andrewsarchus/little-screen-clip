@@ -418,6 +418,7 @@ mod cards;
 mod file_preview;
 mod fonts;
 mod map_preview;
+pub use map_preview::render_trajectory_thumbnail;
 pub mod primitives;
 
 pub use fontdue;

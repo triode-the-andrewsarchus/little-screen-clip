@@ -99,48 +99,48 @@ impl Map {
             }
             city.name.to_owned()
         });
-        Some(Self::finish(pixmap, label))
+        Some(Self {
+            thumbnail: thumbnail(pixmap),
+            label,
+        })
     }
+}
 
-    pub fn solar(path: &Trajectory) -> Option<Self> {
-        let mut pixmap = Pixmap::new(WIDTH, HEIGHT)?;
-        pixmap.fill(Color::from_rgba8(12, 21, 35, 255));
-        let projected =
-            |[x, y, z]: [f64; 3]| [x * 0.98 + y * 0.20, -(y * 0.58 - x * 0.12 + z * 0.80)];
-        let mut min = [0.0_f64; 2];
-        let mut max = [0.0_f64; 2];
-        for point in path.positions().map(projected) {
-            for (i, axis) in point.into_iter().enumerate() {
-                min[i] = min[i].min(axis);
-                max[i] = max[i].max(axis);
-            }
+fn thumbnail(pixmap: Pixmap) -> ImageThumbnail {
+    ImageThumbnail {
+        width: WIDTH,
+        height: HEIGHT,
+        premultiplied_rgba: pixmap.take(),
+    }
+}
+
+/// Renders an oblique view of a heliocentric trajectory and the Sun for a thumbnail.
+pub fn render_trajectory_thumbnail(path: &Trajectory) -> Option<ImageThumbnail> {
+    let mut pixmap = Pixmap::new(WIDTH, HEIGHT)?;
+    pixmap.fill(Color::from_rgba8(12, 21, 35, 255));
+    let projected = |[x, y, z]: [f64; 3]| [x * 0.98 + y * 0.20, -(y * 0.58 - x * 0.12 + z * 0.80)];
+    let mut min = [0.0_f64; 2];
+    let mut max = [0.0_f64; 2];
+    for point in path.positions().map(projected) {
+        for (i, axis) in point.into_iter().enumerate() {
+            min[i] = min[i].min(axis);
+            max[i] = max[i].max(axis);
         }
-        let span = std::array::from_fn::<_, 2, _>(|i| (max[i] - min[i]).max(0.001));
-        let scale = (f64::from(SIZE[0] - 36.0) / span[0]).min(f64::from(SIZE[1] - 36.0) / span[1]);
-        let project = |point| {
-            let xy = projected(point);
-            std::array::from_fn(|i| {
-                SIZE[i] * 0.5 + ((xy[i] - min[i].midpoint(max[i])) * scale) as f32
-            })
-        };
-        draw_track(&mut pixmap, path.positions().map(project), false);
-        draw_dot(
-            &mut pixmap,
-            project([0.0; 3]),
-            Color::from_rgba8(255, 169, 73, 255),
-            5.0,
-        );
-        Some(Self::finish(pixmap, Some(path.name.clone())))
     }
-
-    fn finish(pixmap: Pixmap, label: Option<String>) -> Self {
-        let thumbnail = ImageThumbnail {
-            width: WIDTH,
-            height: HEIGHT,
-            premultiplied_rgba: pixmap.take(),
-        };
-        Self { thumbnail, label }
-    }
+    let span = std::array::from_fn::<_, 2, _>(|i| (max[i] - min[i]).max(0.001));
+    let scale = (f64::from(SIZE[0] - 36.0) / span[0]).min(f64::from(SIZE[1] - 36.0) / span[1]);
+    let project = |point| {
+        let xy = projected(point);
+        std::array::from_fn(|i| SIZE[i] * 0.5 + ((xy[i] - min[i].midpoint(max[i])) * scale) as f32)
+    };
+    draw_track(&mut pixmap, path.positions().map(project), false);
+    draw_dot(
+        &mut pixmap,
+        project([0.0; 3]),
+        Color::from_rgba8(255, 169, 73, 255),
+        5.0,
+    );
+    Some(thumbnail(pixmap))
 }
 
 fn graticule(

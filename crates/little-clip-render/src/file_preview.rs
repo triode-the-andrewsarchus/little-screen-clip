@@ -152,7 +152,12 @@ impl crate::ScreenRenderer {
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
         {
-            return super::map_preview::Map::solar(&trajectory).map(Preview::Map);
+            return crate::render_trajectory_thumbnail(&trajectory).map(|thumbnail| {
+                Preview::Map(super::map_preview::Map {
+                    thumbnail,
+                    label: Some(trajectory.name),
+                })
+            });
         }
         load(path, kind, extension)
     }

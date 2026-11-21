@@ -1078,6 +1078,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn horizons_text_uses_orbit_preview_while_plain_text_keeps_its_summary() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons/4-Vesta.txt");
+        let token = AtomicBool::new(false);
+        let orbit = Source::Text(path).load(&token);
+        assert!(orbit.solar_trajectory);
+        assert!(orbit.image.is_some());
+        assert!(orbit.document.is_none());
+        assert!(orbit.detail.contains("Vesta"));
+
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("ordinary.txt");
+        std::fs::write(&file, "Some notes on Vesta").unwrap();
+        let text = Source::Text(file).load(&token);
+        assert!(!text.solar_trajectory);
+        assert!(text.document.is_some());
+    }
+
+    #[test]
     fn ambiguous_sampler_preview_uses_worker_evidence_and_rejects_protected_aliases() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("instrument.xml");
@@ -1292,6 +1311,16 @@ mod gallery_completion_tests {
 fn document_preview(path: &Path, token: &AtomicBool) -> Data {
     if let Some(document) = super::super::multisample::read_if_identified(path, token) {
         return super::super::multisample::preview(document);
+    }
+    if let Ok(Some(trajectory)) =
+        little_clip_core::geography::trajectory::Trajectory::read_if_identified(path, token)
+    {
+        let [start, end] = trajectory.range();
+        let mut data = Data::new(display_path(path), trajectory.name.clone(), Icon::Globe);
+        data.text = format!("{} to {} UTC", start.date_naive(), end.date_naive());
+        data.image = little_clip_render::render_trajectory_thumbnail(&trajectory);
+        data.solar_trajectory = true;
+        return data;
     }
     if little_clip_core::document::is_office_document(path) {
         let mut data = Data::new(display_path(path), "Document".into(), Icon::Pdf);
