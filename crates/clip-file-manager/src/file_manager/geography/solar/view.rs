@@ -53,6 +53,12 @@ impl System {
         self.ephemeris = Some((id, positions.to_vec()));
     }
 
+    pub fn reload_maps(&mut self) {
+        self.texture_job = None;
+        self.textures_checked = false;
+        self.earth_checked = false;
+    }
+
     pub fn poll_maps(
         &mut self,
         ctx: &egui::Context,

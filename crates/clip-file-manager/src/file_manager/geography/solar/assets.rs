@@ -121,6 +121,23 @@ pub(in crate::file_manager::geography) fn information(
     Some(("Orbital data", "JPL Horizons", HORIZONS, EPHEMERIS_LIMIT))
 }
 
+pub(in crate::file_manager) fn bulk_worlds() -> impl Iterator<Item = (Id, u64)> {
+    images()
+        .iter()
+        .filter(|image| image.id != super::MOON)
+        .map(|image| (image.id, image.bytes))
+        .chain(
+            super::bodies()
+                .iter()
+                .filter(|body| image(body.id).is_none() && orbital_pack(body).is_some())
+                .map(|body| (body.id, EPHEMERIS_LIMIT)),
+        )
+}
+
+pub(in crate::file_manager) fn name(id: Id) -> Option<&'static str> {
+    super::body(id).map(|body| body.name)
+}
+
 fn orbital_pack(body: &Body) -> Option<(Orbit, Id)> {
     (body.id > 0).then_some(())?;
     body.orbit.zip(body.parent)

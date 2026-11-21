@@ -47,6 +47,7 @@ pub enum DownloadPack {
     Sky,
     StarCatalog,
     MoonRelief,
+    SolarSystem,
     World(solar::Id),
     DetailedTransportation,
     All,
@@ -68,7 +69,8 @@ impl DownloadPack {
             Self::Sky => "Sky and Earth Lighting",
             Self::StarCatalog => "Constellations and Star Catalog",
             Self::MoonRelief => "Moon Elevation (NASA LOLA)",
-            Self::World(_) => "World Assets",
+            Self::SolarSystem => "Solar System Offline Data",
+            Self::World(id) => solar::assets::name(id).unwrap_or("World Assets"),
             Self::DetailedTransportation => "Detailed Transportation",
             Self::All => "Base Offline Maps",
         }
@@ -92,6 +94,27 @@ const BASE_PACKS: [DownloadPack; 9] = [
     DownloadPack::LandCover,
     DownloadPack::HydroRivers,
 ];
+fn solar_packs() -> &'static [(DownloadPack, u64)] {
+    static PACKS: LazyLock<Vec<(DownloadPack, u64)>> = LazyLock::new(|| {
+        [
+            (DownloadPack::Sky, sky::PACK_BYTES),
+            (
+                DownloadPack::StarCatalog,
+                sky::catalog::DOWNLOAD_BYTES as u64,
+            ),
+            (DownloadPack::MoonRelief, lunar_terrain::BYTES),
+        ]
+        .into_iter()
+        .chain(solar::assets::bulk_worlds().map(|(id, bytes)| (DownloadPack::World(id), bytes)))
+        .collect()
+    });
+    &PACKS
+}
+
+pub(super) fn solar_download_bytes() -> u64 {
+    solar_packs().iter().map(|(_, bytes)| bytes).sum()
+}
+
 struct AssetFile<'a> {
     folder: &'static str,
     name: &'static str,
@@ -114,6 +137,7 @@ impl DownloadPack {
             Self::Sky
             | Self::StarCatalog
             | Self::MoonRelief
+            | Self::SolarSystem
             | Self::World(_)
             | Self::DetailedTransportation => true, // Verified by their own loaders.
             Self::All => BASE_PACKS.into_iter().all(|p| p.installed(status)),
@@ -244,7 +268,10 @@ struct DownloadOutcome {
 
 enum DownloadResult {
     Earth(DownloadOutcome),
-    World { disk_usage_bytes: u64 },
+    World {
+        disk_usage_bytes: u64,
+        solar_errors: Option<Vec<String>>,
+    },
 }
 impl DownloadSession<'_> {
     fn download(
@@ -252,19 +279,8 @@ impl DownloadSession<'_> {
         queue: &[DownloadPack],
         override_dir: Option<&Path>,
     ) -> Result<DownloadOutcome, String> {
-        let mut failures = Vec::new();
-        for (i, &pack) in queue.iter().enumerate() {
-            if let Err(error) = self.run(
-                pack,
-                i as f32 / queue.len() as f32,
-                0.95 / queue.len() as f32,
-            ) {
-                failures.push((pack, error));
-            }
-            if self.cancelled.load(Ordering::Relaxed) {
-                return Err("Download cancelled".into());
-            }
-        }
+        let mut failures =
+            self.transfer_queue(queue.iter().map(|&pack| (pack, 0.95 / queue.len() as f32)))?;
         self.report(0.96, "Loading offline basemap assets…");
         let assets = Arc::new(BasemapAssets::load_with_cancel(
             &self.root.path(),
@@ -288,6 +304,45 @@ impl DownloadSession<'_> {
                 .into_iter()
                 .map(|(pack, error)| format!("{}: {error}", pack.label()))
                 .collect(),
+        })
+    }
+
+    fn transfer_queue(
+        &self,
+        queue: impl IntoIterator<Item = (DownloadPack, f32)>,
+    ) -> Result<Vec<(DownloadPack, String)>, String> {
+        let mut failures = Vec::new();
+        let mut base = 0.0;
+        for (pack, span) in queue {
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("Download cancelled".into());
+            }
+            self.report(base, pack.label());
+            if let Err(error) = self.run(pack, base, span) {
+                failures.push((pack, error));
+            }
+            base += span;
+        }
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("Download cancelled".into());
+        }
+        Ok(failures)
+    }
+
+    fn solar(&self) -> Result<DownloadResult, String> {
+        let bytes = solar_download_bytes() as f32;
+        let errors = self
+            .transfer_queue(
+                solar_packs()
+                    .iter()
+                    .map(|&(pack, size)| (pack, 0.98 * size as f32 / bytes)),
+            )?
+            .into_iter()
+            .map(|(pack, error)| format!("{} · {error}", pack.label()))
+            .collect();
+        Ok(DownloadResult::World {
+            disk_usage_bytes: dir_size(&self.root.path()),
+            solar_errors: Some(errors),
         })
     }
 
@@ -407,20 +462,32 @@ impl DownloadSession<'_> {
         let required: u64 = files.iter().map(|(_, _, sizes)| *sizes.end()).sum();
         require_space(self.root, required)?;
         let count = files.len().max(1) as f32;
+        let mut failures = Vec::new();
         for (i, (name, url, sizes)) in files.into_iter().enumerate() {
-            let downloaded =
-                download_to_file(&root, name, url, *sizes.end(), self.cancelled, |f, m| {
-                    self.report(base + span * (i as f32 + f) / count, m)
-                })?;
-            let bytes = downloaded.file.metadata().map_err(|e| e.to_string())?.len();
-            if !sizes.contains(&bytes) {
-                return Err(format!("Unexpected source size for {name}"));
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err("Download cancelled".into());
             }
-            if !verify(name, &downloaded.file) {
-                return Err(format!("Unexpected source contents for {name}"));
+            let frame = |f, msg: &str| self.report(base + span * (i as f32 + f) / count, msg);
+            let transfer = download_to_file(&root, name, url, *sizes.end(), self.cancelled, frame)
+                .and_then(|downloaded| {
+                    let bytes = downloaded.file.metadata().map_err(|e| e.to_string())?.len();
+                    if !sizes.contains(&bytes) {
+                        return Err("Unexpected source size".into());
+                    }
+                    if !verify(name, &downloaded.file) {
+                        return Err("Unexpected source contents".into());
+                    }
+                    Ok(())
+                });
+            if let Err(error) = transfer {
+                failures.push(format!("{name} · {error}"));
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("\n"))
+        }
     }
 
     fn transportation(&self, base: f32, span: f32) -> Result<(), String> {
@@ -582,6 +649,7 @@ pub struct AssetDownloader {
     pub status: AssetStatus,
     pub active: Option<DownloadPack>,
     pub last_error: Option<String>,
+    pub solar_errors: Option<Vec<String>>,
     progress: Arc<Mutex<DownloadProgress>>,
     cancelled: Arc<AtomicBool>,
     job: Option<Task<Result<DownloadResult, String>>>,
@@ -602,6 +670,7 @@ impl AssetDownloader {
             status,
             active: None,
             last_error: None,
+            solar_errors: None,
             progress: Arc::new(Mutex::new(DownloadProgress {
                 fraction: 0.0,
                 message: String::new(),
@@ -643,6 +712,9 @@ impl AssetDownloader {
             return;
         }
         self.last_error = None;
+        if pack == DownloadPack::SolarSystem {
+            self.solar_errors = None;
+        }
         self.active = Some(pack);
         self.cancelled = Arc::new(AtomicBool::new(false));
         if let Ok(mut p) = self.progress.lock() {
@@ -655,7 +727,10 @@ impl AssetDownloader {
         let progress = self.progress.clone();
         let previous = self.status.clone();
         let override_dir = self.terrain_override_dir.clone();
-        let job = Task::start_unbounded(asset_workers(), move |cancelled| {
+        // Asset readers can show already installed globes during a long download.
+        static DOWNLOAD_WORKERS: LazyLock<BackgroundJobs> =
+            LazyLock::new(|| BackgroundJobs::new(1, 2));
+        let job = Task::start_unbounded(&DOWNLOAD_WORKERS, move |cancelled| {
             let root = AssetDirectory::create(&assets_dir).map_err(|e| e.to_string())?;
             let _owner = download_owner(&root)?;
             let all_ceiling = (pack == DownloadPack::All)
@@ -669,10 +744,14 @@ impl AssetDownloader {
                 viewfinder: plan.as_ref(),
                 all_ceiling,
             };
+            if pack == DownloadPack::SolarSystem {
+                return session.solar();
+            }
             if matches!(pack, DownloadPack::World(_) | DownloadPack::MoonRelief) {
                 session.run(pack, 0.0, 0.98)?;
                 return Ok(DownloadResult::World {
                     disk_usage_bytes: dir_size(&root.path()),
+                    solar_errors: None,
                 });
             }
             let queue: Vec<_> = if pack == DownloadPack::All {
@@ -696,11 +775,17 @@ impl AssetDownloader {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
         let result = self.job.as_ref()?.poll()?;
-        self.active = None;
+        let solar = self.active.take() == Some(DownloadPack::SolarSystem);
         self.job = None;
         match result {
-            Ok(Ok(DownloadResult::World { disk_usage_bytes })) => {
+            Ok(Ok(DownloadResult::World {
+                disk_usage_bytes,
+                solar_errors,
+            })) => {
                 self.disk_usage_bytes = disk_usage_bytes;
+                if solar {
+                    self.solar_errors = solar_errors;
+                }
                 None
             }
             Ok(Ok(DownloadResult::Earth(outcome))) => {
@@ -711,12 +796,17 @@ impl AssetDownloader {
                     .then(|| format!("Unavailable map layers:\n{}", outcome.errors.join("\n")));
                 Some(outcome.assets)
             }
-            Ok(Err(error)) => {
-                self.last_error = Some(error);
-                None
-            }
-            Err(error) => {
-                self.last_error = Some(format!("Asset worker failed: {error:?}"));
+            error => {
+                let error = match error {
+                    Ok(Err(error)) => error,
+                    Err(error) => format!("Asset worker failed: {error:?}"),
+                    Ok(Ok(_)) => unreachable!("handled completed assets"),
+                };
+                if solar {
+                    self.solar_errors = Some(vec![error]);
+                } else {
+                    self.last_error = Some(error);
+                }
                 None
             }
         }
@@ -1252,6 +1342,73 @@ mod tests {
             root.open_file(states).unwrap().metadata().unwrap().len(),
             payload.len() as u64
         );
+    }
+
+    #[test]
+    fn solar_plan_covers_every_available_world_and_shared_sky_pack() {
+        use std::collections::HashSet;
+        let planned: HashSet<_> = solar_packs()
+            .iter()
+            .filter_map(|(pack, _)| match pack {
+                DownloadPack::World(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let expected: HashSet<_> = solar::assets::bulk_worlds().map(|(id, _)| id).collect();
+        assert_eq!(planned, expected);
+        assert_eq!(planned.len(), solar_packs().len() - 3);
+        assert!(planned.contains(&399) && planned.contains(&599) && planned.contains(&505));
+        assert!(
+            !planned.contains(&301),
+            "the sky pack already owns the lunar surface map"
+        );
+        assert!(
+            solar_download_bytes() > lunar_terrain::BYTES && solar_download_bytes() < 4_000_000_000
+        );
+    }
+
+    #[test]
+    fn checked_bulk_assets_continue_after_a_missing_source_and_retry_only_missing_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = AssetDirectory::create(&temp.path().join("assets")).unwrap();
+        let config = AppConfig::default();
+        let cancelled = AtomicBool::new(false);
+        let progress = Mutex::new(DownloadProgress {
+            fraction: 0.0,
+            message: String::new(),
+        });
+        let session = DownloadSession {
+            root: &root,
+            config: &config,
+            cancelled: &cancelled,
+            progress: &progress,
+            viewfinder: None,
+            all_ceiling: None,
+        };
+        let first = temp.path().join("first-source");
+        let second = temp.path().join("second-source");
+        fs::write(&second, b"map").unwrap();
+        let first_url = format!("file://{}", first.display());
+        let second_url = format!("file://{}", second.display());
+        let run = || {
+            session.download_checked_files(
+                Path::new("worlds-v1"),
+                [
+                    ("first", first_url.as_str(), 3..=3),
+                    ("second", second_url.as_str(), 3..=3),
+                ],
+                |_, _| true,
+                0.0,
+                1.0,
+            )
+        };
+        assert!(run().unwrap_err().contains("first"));
+        let installed = root.path().join("worlds-v1");
+        assert_eq!(fs::read(installed.join("second")).unwrap(), b"map");
+        fs::remove_file(second).unwrap();
+        fs::write(first, b"dem").unwrap();
+        run().unwrap();
+        assert_eq!(fs::read(installed.join("first")).unwrap(), b"dem");
     }
 
     #[test]

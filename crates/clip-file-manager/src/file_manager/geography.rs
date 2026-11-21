@@ -16,7 +16,9 @@ mod tiles;
 
 use super::{
     filesystem::Entry,
-    geography_downloader::{AssetDownloader, DownloadPack, asset_workers, dir_size},
+    geography_downloader::{
+        AssetDownloader, DownloadPack, asset_workers, dir_size, solar_download_bytes,
+    },
     media::PreviewData,
     shelf::preview::Ready,
 };
@@ -448,18 +450,8 @@ impl Viewer {
         self.sky.poll(ctx);
         let active = self.downloader.active;
         let downloaded = self.downloader.poll(ctx);
-        if active == Some(DownloadPack::MoonRelief) && self.downloader.active.is_none() {
-            self.tiles.notice_lunar_assets();
-        }
-        if let Some(DownloadPack::World(id)) = active
-            && self.downloader.active.is_none()
-        {
-            if let Some(world) = self.world.as_mut().filter(|world| world.body.id == id) {
-                world.reload();
-            }
-            if id == solar::MOON {
-                self.sky.reload(&self.downloader.assets_dir);
-            }
+        if self.downloader.active.is_none() {
+            self.refresh_downloaded_astronomy(active);
         }
         if let Some(downloaded) = downloaded {
             self.terrain_download.invalidate_coverage();
@@ -471,11 +463,42 @@ impl Viewer {
         }
     }
 
+    fn refresh_downloaded_astronomy(&mut self, finished: Option<DownloadPack>) {
+        match finished {
+            Some(DownloadPack::MoonRelief) => self.tiles.notice_lunar_assets(),
+            Some(DownloadPack::SolarSystem) => {
+                self.tiles.notice_lunar_assets();
+                self.sky.reload(&self.downloader.assets_dir);
+                if let Some(world) = &mut self.world {
+                    world.reload();
+                }
+                if let Some(system) = &mut self.solar_system {
+                    system.reload_maps();
+                }
+            }
+            Some(DownloadPack::World(id)) => {
+                if let Some(world) = &mut self.world {
+                    world.reload();
+                }
+                if let Some(system) = &mut self.solar_system {
+                    system.reload_maps();
+                }
+                if id == solar::MOON {
+                    self.sky.reload(&self.downloader.assets_dir);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
         self.finder.shortcut(ui.ctx());
         StudioShell::new("Geography", Icon::Image, palette, close).render_header(ui, |ui| {
             if ui.button("Find").on_hover_text("Ctrl+F").clicked() {
                 self.finder.open();
+            }
+            if self.downloader.active == Some(DownloadPack::SolarSystem) {
+                self.download_progress(ui);
             }
         });
 
@@ -1383,6 +1406,47 @@ impl Viewer {
                         }
                     }
                 });
+            if center == solar::SUN {
+                self.solar_offline_data(ui);
+            }
+        });
+    }
+
+    fn solar_offline_data(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Offline Data…", |ui| {
+            ui.label(
+                "Surface maps, orbital samples, Moon elevation, stars, and Earth night lighting.",
+            );
+            let total_gb = solar_download_bytes() as f64 / 1_000_000_000.0;
+            ui.label(format!(
+                "Up to {total_gb:.2} GB. Installed files are reused."
+            ));
+            if ui
+                .add_enabled(
+                    self.downloader.active.is_none(),
+                    egui::Button::new("Get all Solar System data"),
+                )
+                .clicked()
+            {
+                self.downloader
+                    .start(DownloadPack::SolarSystem, &self.config);
+                ui.close();
+            }
+            if let Some(errors) = &self.downloader.solar_errors {
+                if errors.is_empty() {
+                    ui.label("All Solar System data is installed.");
+                } else {
+                    ui.collapsing(format!("Download issues ({})", errors.len()), |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                for error in errors {
+                                    ui.label(error);
+                                }
+                            });
+                    });
+                }
+            }
         });
     }
 
