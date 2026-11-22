@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/neocturne/MinedMap"
+
+[package]
+name = "minedmap-render"
+version = "2.9.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1"
+fastnbt = "2.4.4"
+image = { version = "0.25.1", default-features = false }
+indexmap = "2"
+minedmap-nbt = { path = "crates/nbt" }
+minedmap-resource = "=0.11.0"
+minedmap-types = "=0.3.1"
+num-integer = "0.1"
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"

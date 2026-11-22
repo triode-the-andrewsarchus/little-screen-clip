@@ -18,7 +18,7 @@ fn main() -> Result<(), eframe::Error> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: clip-file-manager [DIRECTORY | FILE]\n       clip-file-manager --map-location LOCATION\n\nBrowse folders or open a file in its viewer.\nDefaults to your home directory. Ctrl+Q closes the application.\n\nDownload elevation data: --download-nasadem [--config FILE] [--plan] [--limit N]"
+            "Usage: clip-file-manager [DIRECTORY | FILE]\n       clip-file-manager --map-location LOCATION\n       clip-file-manager --map-file PATH\n\nBrowse folders or open a file in its viewer.\nDefaults to your home directory. Ctrl+Q closes the application.\n\nDownload elevation data: --download-nasadem [--config FILE] [--plan] [--limit N]"
         );
         return Ok(());
     }
@@ -30,6 +30,13 @@ fn main() -> Result<(), eframe::Error> {
             return clip_file_manager::file_manager::run_location(location);
         }
         eprintln!("Expected a coordinate pair or a recognizable place name");
+        std::process::exit(2);
+    }
+    if first.as_deref().is_some_and(|arg| arg == "--map-file") {
+        if let Some(path) = args.next().filter(|_| args.next().is_none()) {
+            return clip_file_manager::file_manager::run_file(PathBuf::from(path));
+        }
+        eprintln!("Expected a map file or Minecraft Java save folder");
         std::process::exit(2);
     }
     if args.next().is_some() {

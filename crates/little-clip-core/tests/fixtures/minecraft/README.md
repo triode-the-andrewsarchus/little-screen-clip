@@ -1,0 +1,1 @@
+Synthetic Java Anvil terrain for preview tests. The region has three modern palette chunks (grass, sand, and stone) and one deliberately unreadable chunk. The gzip-compressed level marker places spawn in the negative-X region.

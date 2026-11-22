@@ -3700,6 +3700,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
+name = "fastnbt"
+version = "2.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9dcc36fee27b17c9c183294d6e739cf218b01ce0fc545c31d8be3913d961731"
+dependencies = [
+ "byteorder",
+ "cesu8",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4547,6 +4559,12 @@ checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "glam"
+version = "0.34.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "627003914c6057c9c8f0832ee4f870b5a4f599d0cfa83f4072675114860cd0ff"
 
 [[package]]
 name = "glib"
@@ -6577,6 +6595,7 @@ dependencies = [
  "merman-model",
  "midly",
  "mime_guess",
+ "minedmap-render",
  "ncw",
  "oneyaml",
  "oxideav-pcx",
@@ -7342,6 +7361,56 @@ dependencies = [
  "phf 0.11.3",
  "phf_shared 0.11.3",
  "unicase",
+]
+
+[[package]]
+name = "minedmap-nbt"
+version = "0.3.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "fastnbt",
+ "flate2",
+ "minedmap-types",
+ "serde",
+]
+
+[[package]]
+name = "minedmap-render"
+version = "2.9.0"
+dependencies = [
+ "anyhow",
+ "fastnbt",
+ "image 0.25.10",
+ "indexmap",
+ "minedmap-nbt",
+ "minedmap-resource",
+ "minedmap-types",
+ "num-integer",
+ "rustc-hash 2.1.3",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "minedmap-resource"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65836451ba704af09d8bcec9b1c3c3b47680811c3c68d733052586687d11bc51"
+dependencies = [
+ "enumflags2",
+ "glam 0.34.3",
+ "serde",
+]
+
+[[package]]
+name = "minedmap-types"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eac528277953620c21bf5b7d4665360d29042c2d4f6c6e74b7aaa5f58bb6374f"
+dependencies = [
+ "itertools 0.15.0",
+ "serde",
 ]
 
 [[package]]

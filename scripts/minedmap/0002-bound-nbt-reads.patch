@@ -1,0 +1,292 @@
+diff --git a/crates/nbt/src/bounds.rs b/crates/nbt/src/bounds.rs
+new file mode 100644
+index 0000000..3d521f9
+--- /dev/null
++++ b/crates/nbt/src/bounds.rs
+@@ -0,0 +1,70 @@
++//! Checks the nesting depth before handing a document to the recursive deserializer.
++use anyhow::{Result, ensure};
++use serde::de::DeserializeOwned;
++
++pub(crate) const MAX_NBT_BYTES: u64 = 16 * 1024 * 1024;
++const MAX_DEPTH: u8 = 64;
++const MAX_ELEMENTS: usize = 1 << 20;
++
++pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
++	let mut input = bytes;
++	ensure!(
++		read::<1>(&mut input) == Some([10])
++			&& skip_string(&mut input).is_some()
++			&& skip_payload(&mut input, 10, 0).is_some(),
++		"Malformed NBT or nesting limit exceeded"
++	);
++	let options = fastnbt::DeOpts::new().max_seq_len(MAX_ELEMENTS);
++	Ok(fastnbt::from_bytes_with_opts(bytes, options)?)
++}
++
++fn read<const N: usize>(input: &mut &[u8]) -> Option<[u8; N]> {
++	let (value, rest) = input.split_first_chunk()?;
++	*input = rest;
++	Some(*value)
++}
++
++fn skip(input: &mut &[u8], count: usize) -> Option<()> {
++	*input = input.get(count..)?;
++	Some(())
++}
++
++fn skip_string(input: &mut &[u8]) -> Option<()> {
++	let length = u16::from_be_bytes(read(input)?);
++	skip(input, usize::from(length))
++}
++
++fn skip_payload(input: &mut &[u8], tag: u8, depth: u8) -> Option<()> {
++	if depth > MAX_DEPTH {
++		return None;
++	}
++	match tag {
++		1..=6 => skip(input, [1, 2, 4, 8, 4, 8][usize::from(tag - 1)]),
++		7 | 11 | 12 => {
++			let length = usize::try_from(i32::from_be_bytes(read(input)?)).ok()?;
++			let width = [1, 4, 8][(tag as usize).saturating_sub(10)];
++			skip(input, length.checked_mul(width)?)
++		}
++		8 => skip_string(input),
++		9 => {
++			let [tag] = read(input)?;
++			let length = i32::from_be_bytes(read(input)?).max(0) as usize;
++			if length > MAX_ELEMENTS {
++				return None;
++			}
++			for _ in 0..length {
++				skip_payload(input, tag, depth + 1)?;
++			}
++			Some(())
++		}
++		10 => loop {
++			let [tag] = read(input)?;
++			if tag == 0 {
++				break Some(());
++			}
++			skip_string(input)?;
++			skip_payload(input, tag, depth + 1)?;
++		},
++		_ => None,
++	}
++}
+diff --git a/crates/nbt/src/data.rs b/crates/nbt/src/data.rs
+index bb2ac3b..9577db9 100644
+--- a/crates/nbt/src/data.rs
++++ b/crates/nbt/src/data.rs
+@@ -2,7 +2,8 @@
+
+ use std::{fs::File, io::prelude::*, path::Path};
+
+-use anyhow::{Context, Result};
++use crate::bounds::{MAX_NBT_BYTES, decode};
++use anyhow::{Context, Result, bail};
+ use flate2::read::GzDecoder;
+ use serde::de::DeserializeOwned;
+
+@@ -12,13 +13,16 @@ where
+ 	R: Read,
+ 	T: DeserializeOwned,
+ {
+-	let mut decoder = GzDecoder::new(reader);
++	let mut decoder = GzDecoder::new(reader).take(MAX_NBT_BYTES + 1);
+ 	let mut buf = vec![];
+ 	decoder
+ 		.read_to_end(&mut buf)
+ 		.context("Failed to read file")?;
+
+-	fastnbt::from_bytes(&buf).context("Failed to decode NBT data")
++	if buf.len() as u64 > MAX_NBT_BYTES {
++		bail!("NBT data exceeds the decompression limit");
++	}
++	decode(&buf).context("Failed to decode NBT data")
+ }
+
+ /// Reads compressed NBT data from a file and deserializes to a given data structure
+diff --git a/crates/nbt/src/lib.rs b/crates/nbt/src/lib.rs
+index 98e6d1b..781afe0 100644
+--- a/crates/nbt/src/lib.rs
++++ b/crates/nbt/src/lib.rs
+@@ -2,5 +2,6 @@
+ #![warn(missing_docs)]
+ #![warn(clippy::missing_docs_in_private_items)]
+
++mod bounds;
+ pub mod data;
+ pub mod region;
+diff --git a/crates/nbt/src/region.rs b/crates/nbt/src/region.rs
+index 6a79a39..9a8da81 100644
+--- a/crates/nbt/src/region.rs
++++ b/crates/nbt/src/region.rs
+@@ -6,8 +6,9 @@ use std::{
+ 	path::Path,
+ };
+
++use crate::bounds::{MAX_NBT_BYTES, decode};
+ use anyhow::{Context, Result, bail};
+-use flate2::read::ZlibDecoder;
++use flate2::read::{GzDecoder, ZlibDecoder};
+ use serde::de::DeserializeOwned;
+
+ use minedmap_types::*;
+@@ -61,18 +62,25 @@ fn decode_chunk<T>(buf: &[u8]) -> Result<T>
+ where
+ 	T: DeserializeOwned,
+ {
+-	let (format, buf) = buf.split_at(1);
+-	if format[0] != 2 {
+-		bail!("Unknown chunk format");
++	let (&format, buf) = buf
++		.split_first()
++		.context("Missing chunk compression type")?;
++	let mut decode_buffer = Vec::new();
++	let decode_bytes = match format {
++		1 => GzDecoder::new(buf)
++			.take(MAX_NBT_BYTES + 1)
++			.read_to_end(&mut decode_buffer),
++		2 => ZlibDecoder::new(buf)
++			.take(MAX_NBT_BYTES + 1)
++			.read_to_end(&mut decode_buffer),
++		3 => return decode(buf).context("Failed to decode NBT data"),
++		_ => bail!("Unsupported chunk compression type {format}"),
+ 	}
+-
+-	let mut decoder = ZlibDecoder::new(buf);
+-	let mut decode_buffer = vec![];
+-	decoder
+-		.read_to_end(&mut decode_buffer)
+-		.context("Failed to decompress chunk data")?;
+-
+-	fastnbt::from_bytes(&decode_buffer).context("Failed to decode NBT data")
++	.context("Failed to decompress chunk data")?;
++	if decode_bytes as u64 > MAX_NBT_BYTES {
++		bail!("Chunk exceeds the decompression limit");
++	}
++	decode(&decode_buffer).context("Failed to decode NBT data")
+ }
+
+ /// Wraps a reader used to read a region data file
+@@ -83,65 +91,64 @@ pub struct Region<R: Read + Seek> {
+ }
+
+ impl<R: Read + Seek> Region<R> {
+-	/// Iterates over the chunks of the region data
+-	///
+-	/// The order of iteration is based on the order the chunks appear in the
+-	/// data file.
+-	pub fn foreach_chunk<T, F>(self, mut f: F) -> Result<()>
+-	where
+-		R: Read + Seek,
+-		T: DeserializeOwned,
+-		F: FnMut(ChunkCoords, T) -> Result<()>,
+-	{
++	/// Iterates over chunks in file order, leaving error handling to the caller.
++	pub fn foreach_chunk_result<T: DeserializeOwned>(
++		self,
++		mut check: impl FnMut() -> Result<()>,
++		mut visit: impl FnMut(ChunkCoords, Result<T>) -> Result<()>,
++	) -> Result<()> {
+ 		let Region { mut reader } = self;
+-
+-		let chunks = {
+-			let mut header = ChunkArray::<u32>::default();
+-			reader
+-				.read_exact(bytemuck::cast_mut::<_, [u8; BLOCKSIZE]>(&mut header.0))
+-				.context("Failed to read region header")?;
+-
+-			parse_header(&header)
+-		};
+-
+-		let mut seen = ChunkArray::<bool>::default();
+-
+-		for ChunkDesc {
+-			offset,
+-			len,
+-			coords,
+-		} in chunks
+-		{
+-			if seen[coords] {
+-				bail!("Duplicate chunk {:?}", coords);
+-			}
+-			seen[coords] = true;
+-
+-			reader
+-				.seek(SeekFrom::Start(offset as u64 * BLOCKSIZE as u64))
+-				.context("Failed to seek chunk data")?;
+-
+-			let mut len_buf = [0u8; 4];
+-			reader
+-				.read_exact(&mut len_buf)
+-				.with_context(|| format!("Failed to read length for chunk {coords:?}"))?;
+-			let byte_len = u32::from_be_bytes(len_buf) as usize;
+-			if byte_len < 1 || byte_len > (len as usize) * BLOCKSIZE - 4 {
+-				bail!("Invalid length for chunk {:?}", coords);
+-			}
+-
+-			let mut buffer = vec![0; byte_len];
+-			reader
+-				.read_exact(&mut buffer)
+-				.with_context(|| format!("Failed to read data for chunk {coords:?}"))?;
+-			let chunk = decode_chunk(&buffer)
+-				.with_context(|| format!("Failed to decode data for chunk {coords:?}"))?;
+-
+-			f(coords, chunk)?;
++		let mut header = ChunkArray::<u32>::default();
++		reader
++			.read_exact(bytemuck::cast_mut::<_, [u8; BLOCKSIZE]>(&mut header.0))
++			.context("Failed to read region header")?;
++		let mut previous_end = 2;
++		for chunk in parse_header(&header) {
++			check()?;
++			let result = if chunk.offset < previous_end {
++				Err(anyhow::anyhow!("Overlapping chunk sectors"))
++			} else {
++				previous_end = chunk.offset + u32::from(chunk.len);
++				read_chunk(&mut reader, &chunk)
++			};
++			visit(
++				chunk.coords,
++				result.with_context(|| format!("Chunk {:?}", chunk.coords)),
++			)?;
+ 		}
+-
+ 		Ok(())
+ 	}
++
++	/// Iterates over readable chunks, returning the first decoding error.
++	pub fn foreach_chunk<T: DeserializeOwned>(
++		self,
++		mut visit: impl FnMut(ChunkCoords, T) -> Result<()>,
++	) -> Result<()> {
++		self.foreach_chunk_result(|| Ok(()), |coords, chunk| visit(coords, chunk?))
++	}
++}
++
++/// Reads the bounded payload identified by one location table entry.
++fn read_chunk<T: DeserializeOwned>(
++	reader: &mut (impl Read + Seek),
++	chunk: &ChunkDesc,
++) -> Result<T> {
++	reader
++		.seek(SeekFrom::Start(u64::from(chunk.offset) * BLOCKSIZE as u64))
++		.context("Failed to seek chunk data")?;
++	let mut len_buf = [0u8; 4];
++	reader
++		.read_exact(&mut len_buf)
++		.context("Failed to read chunk length")?;
++	let byte_len = u32::from_be_bytes(len_buf) as usize;
++	if byte_len < 1 || byte_len > usize::from(chunk.len) * BLOCKSIZE - 4 {
++		bail!("Invalid chunk length");
++	}
++	let mut buffer = vec![0; byte_len];
++	reader
++		.read_exact(&mut buffer)
++		.context("Failed to read chunk data")?;
++	decode_chunk(&buffer)
+ }
+
+ /// Creates a new [Region] from a reader

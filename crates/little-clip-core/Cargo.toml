@@ -13,6 +13,7 @@ harness = false
 test-support = []
 
 [dependencies]
+minedmap-render = { path = "../../vendor/minedmap" }
 rustix.workspace = true
 clip-media-protocol = { path = "../clip-media-protocol" }
 libc = "0.2"

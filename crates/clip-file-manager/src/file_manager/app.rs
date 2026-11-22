@@ -866,10 +866,14 @@ enum Startup {
 
 pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
     let initial = match initial {
-        Some(path) if path.is_file() => Startup::File(std::path::absolute(&path).unwrap_or(path)),
+        Some(path) if path.is_file() => return run_file(path),
         path => Startup::Browse(path),
     };
     run_with(initial)
+}
+
+pub fn run_file(path: PathBuf) -> Result<(), eframe::Error> {
+    run_with(Startup::File(std::path::absolute(&path).unwrap_or(path)))
 }
 
 pub fn run_location(

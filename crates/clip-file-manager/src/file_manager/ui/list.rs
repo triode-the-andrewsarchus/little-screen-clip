@@ -149,7 +149,11 @@ impl<'a> ListPreviews<'a> {
             actions.video_click(ui, &response, entry, time, self.video_start);
         } else {
             let position = self.passive_row(ui, rect, entry, colors, palette);
-            if response.double_clicked() {
+            if position == Some(super::super::DocumentPosition::MinecraftMap) {
+                actions.selection = Some((entry.path.clone(), false, false));
+                actions.open = Some(entry.path.clone());
+                actions.open_position = position;
+            } else if response.double_clicked() {
                 actions.open_position = position;
             }
         }
@@ -246,6 +250,19 @@ impl<'a> ListPreviews<'a> {
         colors: WorkbenchColors,
         palette: &AppPalette,
     ) -> Option<super::super::DocumentPosition> {
+        if entry.is_minecraft() {
+            self.paths.insert(entry.path.clone());
+            let ready = self.files.listing(entry);
+            return super::super::minecraft::show_strip(
+                ui,
+                rect,
+                entry,
+                self.columns,
+                ready,
+                colors,
+            )
+            .then_some(super::super::DocumentPosition::MinecraftMap);
+        }
         if entry.system.is_some() {
             self.paths.insert(entry.path.clone());
             self.files

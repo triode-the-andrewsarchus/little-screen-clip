@@ -31,6 +31,8 @@ pub(in crate::file_manager) struct PreviewData {
     pub detail: String,
     pub text: String,
     pub image: Option<ImageThumbnail>,
+    // Native block pixels are owned by the map texture once uploaded.
+    pub minecraft_terrain: Option<ImageThumbnail>,
     pub rendered_diagram: bool,
     pub diagram_vector: Option<std::sync::Arc<clip_ui::vectors::svg::Scene>>,
     pub markdown: Option<std::sync::Arc<clip_studios::text_preview::MarkdownExcerptData>>,
@@ -75,6 +77,7 @@ impl PreviewData {
             icon,
             text: String::new(),
             image: None,
+            minecraft_terrain: None,
             rendered_diagram: false,
             diagram_vector: None,
             markdown: None,

@@ -1,0 +1,595 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index f65af52..8aaef8f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4,70 +4,25 @@ members = ["crates/*"]
+ [workspace.package]
+ edition = "2024"
+ license = "MIT"
+-readme = "README.md"
+ repository = "https://github.com/neocturne/MinedMap"
+
+-[workspace.metadata.release]
+-consolidate-commits = false
+-pre-release-commit-message = "{{crate_name}} {{version}}"
+-
+ [package]
+-name = "minedmap"
++name = "minedmap-render"
+ version = "2.9.0"
+-description = "Generate browsable maps from Minecraft save data"
+ edition.workspace = true
+ license.workspace = true
+-readme.workspace = true
+ repository.workspace = true
+-exclude = [
+-  "/.github/",
+-  "/docs/",
+-  "/viewer/",
+-  "/resource/",
+-]
+-
+-[package.metadata.release]
+-tag-message = "{{crate_name}} {{version}}"
+-pre-release-replacements = [
+-  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}"},
+-  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+-  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}"},
+-  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n\n## [Unreleased] - ReleaseDate", exactly=1},
+-  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/neocturne/MinedMap/compare/{{tag_name}}...HEAD", exactly=1},
+-]
++publish = false
+
+ [dependencies]
+-anyhow = "1.0.68"
+-clap = { version = "4.1.4", features = ["derive", "wrap_help"] }
+-enum-map = "3.1.0"
+-fastnbt = "2.3.2"
+-flate2 = { version = "1.1.0", features = ["zlib-rs"] }
+-futures-util = "0.3.28"
+-git-version = "0.3.5"
+-humantime = "2.1.0"
+-image = { version = "0.25.1", default-features = false, features = ["png", "webp"] }
+-indexmap = "2.0.0"
+-lru = "0.19.0"
+-minedmap-default-alloc = { version = "0.1.1", path = "crates/default-alloc", optional = true }
+-minedmap-nbt = { version = "0.3.1", path = "crates/nbt", default-features = false }
+-minedmap-resource = { version = "0.11.0", path = "crates/resource" }
+-minedmap-types = { version = "0.3.1", path = "crates/types" }
+-notify = "8.0.0"
+-num-integer = "0.1.45"
+-num_cpus = "1.16.0"
+-phf = { version = "0.14.0", features = ["macros"] }
+-postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+-rayon = "1.7.0"
+-regex = "1.10.2"
+-rustc-hash = "2.0.0"
+-serde = { version = "1.0.152", features = ["derive"] }
+-serde_json = "1.0.99"
+-tokio = { version = "1.31.0", features = ["rt", "parking_lot", "sync"] }
+-tracing = "0.1.37"
+-tracing-subscriber = "0.3.17"
+-zstd = "0.14.3"
+-
+-[features]
+-default = ["jemalloc-auto"]
+-jemalloc-auto = ["dep:minedmap-default-alloc"]
+-jemalloc = ["jemalloc-auto", "minedmap-default-alloc/jemalloc"]
++anyhow = "1"
++fastnbt = "2.4.4"
++image = { version = "0.25.1", default-features = false }
++indexmap = "2"
++minedmap-nbt = { path = "crates/nbt" }
++minedmap-resource = "=0.11.0"
++minedmap-types = "=0.3.1"
++num-integer = "0.1"
++rustc-hash = "2"
++serde = { version = "1", features = ["derive"] }
++tracing = "0.1"
+diff --git a/crates/nbt/Cargo.toml b/crates/nbt/Cargo.toml
+index 3d4d110..17c794c 100644
+--- a/crates/nbt/Cargo.toml
++++ b/crates/nbt/Cargo.toml
+@@ -4,7 +4,6 @@ version = "0.3.1"
+ description = "MinedMap's handling of Minecraft NBT data and region files"
+ edition.workspace = true
+ license.workspace = true
+-readme.workspace = true
+ repository.workspace = true
+
+ [dependencies]
+@@ -12,7 +11,7 @@ anyhow = "1.0.75"
+ bytemuck = "1.13.1"
+ fastnbt = "2.4.4"
+ flate2 = "1.1.0"
+-minedmap-types = { version = "0.3.1", path = "../types" }
++minedmap-types = "=0.3.1"
+ serde = "1.0.183"
+
+ [dev-dependencies]
+diff --git a/src/lib.rs b/src/lib.rs
+new file mode 100644
+index 0000000..86d1331
+--- /dev/null
++++ b/src/lib.rs
+@@ -0,0 +1,224 @@
++//! In-memory tile rendering adapted from MinedMap.
++mod util;
++mod world;
++
++use std::{
++	io::{Read, Seek},
++	sync::LazyLock,
++};
++
++use anyhow::{Context, Result, bail};
++use indexmap::IndexSet;
++use minedmap_resource as resource;
++use minedmap_types as types;
++use resource::{Biome, Colorf, block_color, needs_biome};
++use types::*;
++use util::coord_offset;
++use world::layer;
++
++pub use minedmap_nbt::data;
++pub use world::de::{LevelDat, LevelDatData};
++
++pub const TILE_SIZE: u32 = (BLOCKS_PER_CHUNK * CHUNKS_PER_REGION) as u32;
++
++static BLOCKS: LazyLock<resource::BlockTypes> = LazyLock::new(resource::BlockTypes::default);
++static BIOMES: LazyLock<resource::BiomeTypes> = LazyLock::new(resource::BiomeTypes::default);
++
++/// Renders the Java Anvil region terrain from an already opened seekable input.
++pub fn render_region(
++	reader: impl Read + Seek,
++	mut cancelled: impl FnMut() -> bool,
++) -> Result<image::RgbaImage> {
++	let mut check = || {
++		if cancelled() {
++			bail!("Minecraft map rendering cancelled");
++		}
++		Ok(())
++	};
++	let mut region = ProcessedRegion::default();
++	let mut biomes = IndexSet::new();
++	let mut first_error = None;
++	minedmap_nbt::region::from_reader(reader).foreach_chunk_result(
++		&mut check,
++		|coords, result| {
++			let result = result.and_then(|data: world::de::Chunk| {
++				let (chunk, _) = world::chunk::Chunk::new(&data, &BLOCKS, &BIOMES)?;
++				layer::top_layer(&mut biomes, &chunk)
++			});
++			match result {
++				Ok(Some(layer::LayerData {
++					blocks,
++					biomes,
++					depths,
++					..
++				})) => {
++					region.chunks[coords] = Some(Box::new(ProcessedChunk {
++						blocks,
++						biomes,
++						depths,
++					}));
++				}
++				Ok(None) => {}
++				Err(error) => {
++					first_error.get_or_insert(error);
++				}
++			}
++			Ok(())
++		},
++	)?;
++	region.biome_list = biomes.into_iter().collect();
++
++	let mut image = image::RgbaImage::new(TILE_SIZE, TILE_SIZE);
++	for (coords, chunk) in region.chunks.iter() {
++		if let Some(chunk) = chunk {
++			check()?;
++			render_chunk(&mut image, &region, chunk, coords);
++		}
++	}
++	if !image.as_raw().chunks_exact(4).any(|rgba| rgba[3] != 0) {
++		if let Some(error) = first_error {
++			return Err(error).context("No renderable Minecraft chunks");
++		}
++		bail!("No renderable Minecraft chunks");
++	}
++	Ok(image)
++}
++
++/// Data structure for storing chunk data between processing and rendering steps
++#[derive(Debug)]
++struct ProcessedChunk {
++	/// Block type data
++	pub blocks: Box<layer::BlockArray>,
++	/// Biome data
++	pub biomes: Box<layer::BiomeArray>,
++	/// Block height/depth data
++	pub depths: Box<layer::DepthArray>,
++}
++
++/// Data structure for storing region data between processing and rendering steps
++#[derive(Debug, Default)]
++struct ProcessedRegion {
++	/// List of biomes used in the region
++	///
++	/// Indexed by [ProcessedChunk] biome data
++	pub biome_list: Vec<Biome>,
++	/// Processed chunk data
++	pub chunks: ChunkArray<Option<Box<ProcessedChunk>>>,
++}
++
++/// Returns the index of the biome at a block coordinate
++///
++/// The passed chunk and block coordinates relative to the center of the
++/// region group is offset by *dx* and *dz*.
++///
++/// Returns the biome index within this tile, if the offset stays in the region.
++fn biome_at(
++	region: &ProcessedRegion,
++	chunk: ChunkCoords,
++	block: LayerBlockCoords,
++	dx: i32,
++	dz: i32,
++) -> Option<u16> {
++	let (region_x, chunk_x, block_x) = coord_offset(chunk.x, block.x, dx);
++	let (region_z, chunk_z, block_z) = coord_offset(chunk.z, block.z, dz);
++	let chunk = ChunkCoords {
++		x: chunk_x,
++		z: chunk_z,
++	};
++	let block = LayerBlockCoords {
++		x: block_x,
++		z: block_z,
++	};
++	if (region_x, region_z) != (0, 0) {
++		return None;
++	}
++	Some(region.chunks[chunk].as_ref()?.biomes[block]?.get() - 1)
++}
++
++/// Computes the color of a tile pixel
++fn block_color_at(
++	region: &ProcessedRegion,
++	chunk: &ProcessedChunk,
++	chunk_coords: ChunkCoords,
++	block_coords: LayerBlockCoords,
++) -> Option<Colorf> {
++	/// One quadrant of the kernel used to smooth biome edges
++	///
++	/// The kernel is mirrored in X und Z direction to build the full 5x5
++	/// smoothing kernel.
++	const SMOOTH: [[f32; 3]; 3] = [[41.0, 26.0, 7.0], [26.0, 16.0, 4.0], [7.0, 4.0, 1.0]];
++	/// Maximum X coordinate offset to take into account for biome smoothing
++	const X: isize = SMOOTH[0].len() as isize - 1;
++	/// Maximum Z coordinate offset to take into account for biome smoothing
++	const Z: isize = SMOOTH.len() as isize - 1;
++
++	let block = chunk.blocks[block_coords]?;
++	let depth = chunk.depths[block_coords]?;
++
++	if !needs_biome(block) {
++		return Some(block_color(block, None, depth.0 as f32));
++	}
++
++	let mut weights = rustc_hash::FxHashMap::<u16, f32>::default();
++	for dz in -Z..=Z {
++		for dx in -X..=X {
++			let w = SMOOTH[dz.unsigned_abs()][dx.unsigned_abs()];
++			if w == 0.0 {
++				continue;
++			}
++
++			let Some(biome) = biome_at(region, chunk_coords, block_coords, dx as i32, dz as i32)
++			else {
++				continue;
++			};
++
++			*weights.entry(biome).or_default() += w;
++		}
++	}
++
++	if weights.is_empty() {
++		return None;
++	}
++
++	let mut color = Colorf::ZERO;
++	let mut total = 0.0;
++
++	for (index, w) in weights {
++		let biome = region.biome_list.get(usize::from(index))?;
++
++		total += w;
++		color += w * block_color(block, Some(biome), depth.0 as f32);
++	}
++
++	Some(color / total)
++}
++
++/// Renders a chunk subtile into a region tile image
++fn render_chunk(
++	image: &mut image::RgbaImage,
++	region: &ProcessedRegion,
++	chunk: &ProcessedChunk,
++	chunk_coords: ChunkCoords,
++) {
++	/// Width/height of a chunk subtile
++	const N: u32 = BLOCKS_PER_CHUNK as u32;
++
++	let chunk_image = image::RgbaImage::from_fn(N, N, |x, z| {
++		let block_coords = LayerBlockCoords {
++			x: BlockX::new(x),
++			z: BlockZ::new(z),
++		};
++		let color = block_color_at(region, chunk, chunk_coords, block_coords);
++		image::Rgba(
++			color
++				.map(|c| [c[0] as u8, c[1] as u8, c[2] as u8, 255])
++				.unwrap_or_default(),
++		)
++	});
++	image::imageops::overlay(
++		image,
++		&chunk_image,
++		i64::from(chunk_coords.x.0) * BLOCKS_PER_CHUNK as i64,
++		i64::from(chunk_coords.z.0) * BLOCKS_PER_CHUNK as i64,
++	);
++}
+diff --git a/src/world/chunk.rs b/src/world/chunk.rs
+index 581a831..ba0a1f4 100644
+--- a/src/world/chunk.rs
++++ b/src/world/chunk.rs
+@@ -10,11 +10,10 @@ use std::{
+
+ use anyhow::{Context, Result, bail};
+
+-use super::{block_entity::BlockEntity, de, section::*};
++use super::{de, section::*};
+ use crate::{
+-	resource::{BiomeTypes, BlockType, BlockTypes},
++	resource::{BiomeTypes, BlockTypes},
+ 	types::*,
+-	util::{self, ShiftMask},
+ };
+
+ /// Version-specific part of [Chunk]
+@@ -56,10 +55,6 @@ pub enum ChunkInner<'a> {
+ pub struct Chunk<'a> {
+ 	/// Version-specific data
+ 	inner: ChunkInner<'a>,
+-	/// Unprocessed block entities
+-	block_entities: &'a Vec<de::BlockEntity>,
+-	/// Chunk data version
+-	data_version: u32,
+ }
+
+ impl<'a> Chunk<'a> {
+@@ -71,28 +66,15 @@ impl<'a> Chunk<'a> {
+ 	) -> Result<(Self, bool)> {
+ 		let data_version = data.data_version.unwrap_or_default();
+
+-		let ((inner, has_unknown), block_entities) = match &data.chunk {
+-			de::ChunkVariant::V1_18 {
+-				sections,
+-				block_entities,
+-			} => (
+-				Self::new_v1_18(data_version, sections, block_types, biome_types)?,
+-				block_entities,
+-			),
+-			de::ChunkVariant::V0 { level } => (
+-				Self::new_v0(data_version, level, block_types, biome_types)?,
+-				&level.tile_entities,
+-			),
++		let (inner, has_unknown) = match &data.chunk {
++			de::ChunkVariant::V1_18 { sections } => {
++				Self::new_v1_18(data_version, sections, block_types, biome_types)?
++			}
++			de::ChunkVariant::V0 { level } => {
++				Self::new_v0(data_version, level, block_types, biome_types)?
++			}
+ 		};
+-
+-		Ok((
+-			Chunk {
+-				inner,
+-				block_entities,
+-				data_version,
+-			},
+-			has_unknown,
+-		))
++		Ok((Chunk { inner }, has_unknown))
+ 	}
+
+ 	/// [Chunk::new] implementation for Minecraft v1.18+ chunks
+@@ -246,64 +228,6 @@ impl<'a> Chunk<'a> {
+ 			},
+ 		}
+ 	}
+-
+-	/// Returns the section at a [SectionY] coordinate
+-	fn section_at(&self, y: SectionY) -> Option<&dyn Section> {
+-		match &self.inner {
+-			ChunkInner::V1_18 { section_map } => section_map
+-				.get(&y)
+-				.map(|(section, _, _)| -> &dyn Section { section }),
+-			ChunkInner::V1_13 { section_map, .. } => section_map
+-				.get(&y)
+-				.map(|(section, _)| -> &dyn Section { section }),
+-			ChunkInner::V0 { section_map, .. } => section_map
+-				.get(&y)
+-				.map(|(section, _)| -> &dyn Section { section }),
+-			ChunkInner::Empty => None,
+-		}
+-	}
+-
+-	/// Returns the [BlockType] at a given coordinate
+-	fn block_type_at(&self, y: SectionY, coords: SectionBlockCoords) -> Result<Option<&BlockType>> {
+-		let Some(section) = self.section_at(y) else {
+-			return Ok(None);
+-		};
+-		section.block_at(coords)
+-	}
+-
+-	/// Returns the [BlockType] at the coordinates of a [de::BlockEntity]
+-	fn block_type_at_block_entity(
+-		&self,
+-		block_entity: &de::BlockEntity,
+-	) -> Result<Option<&BlockType>> {
+-		let x: BlockX = util::from_flat_coord(block_entity.x).2;
+-		let z: BlockZ = util::from_flat_coord(block_entity.z).2;
+-		let (section_y, block_y) = block_entity.y.shift_mask(BLOCK_BITS);
+-
+-		let coords = SectionBlockCoords {
+-			xz: LayerBlockCoords { x, z },
+-			y: BlockY::new(block_y),
+-		};
+-
+-		self.block_type_at(SectionY(section_y), coords)
+-	}
+-
+-	/// Processes all of the chunk's block entities
+-	pub fn block_entities(&self) -> Result<Vec<BlockEntity>> {
+-		let entities: Vec<Option<BlockEntity>> = self
+-			.block_entities
+-			.iter()
+-			.map(|block_entity| {
+-				let block_type = self.block_type_at_block_entity(block_entity)?;
+-				Ok(BlockEntity::new(
+-					block_entity,
+-					block_type,
+-					self.data_version,
+-				))
+-			})
+-			.collect::<Result<_>>()?;
+-		Ok(entities.into_iter().flatten().collect())
+-	}
+ }
+
+ /// Reference to block, biome and block light data of a section
+diff --git a/src/world/de.rs b/src/world/de.rs
+index 48cec8c..8f83f40 100644
+--- a/src/world/de.rs
++++ b/src/world/de.rs
+@@ -2,8 +2,6 @@
+
+ use serde::Deserialize;
+
+-use super::text_value::TextValue;
+-
+ /// Element of the `palette` list of 1.18+ [block states](BlockStatesV1_18)
+ #[derive(Debug, Deserialize)]
+ #[serde(untagged)]
+@@ -122,77 +120,6 @@ pub enum BiomesV0 {
+ 	ByteArray(fastnbt::ByteArray),
+ }
+
+-/// Front/back text of a Minecraft 1.20+ sign block entry
+-#[derive(Debug, Deserialize)]
+-pub struct BlockEntitySignV1_20Text {
+-	/// Lines of sign text
+-	pub messages: Vec<TextValue>,
+-	/// Default text color
+-	pub color: Option<String>,
+-}
+-
+-/// A sign (standing or hanging) block entity
+-#[derive(Debug, Deserialize)]
+-#[serde(untagged)]
+-pub enum BlockEntitySign {
+-	/// Pre-1.20 sign block entity
+-	///
+-	/// Pre-1.20 signs only have front text.
+-	#[serde(rename_all = "PascalCase")]
+-	V0 {
+-		/// Line 1 of the sign text
+-		text1: TextValue,
+-		/// Line 2 of the sign text
+-		text2: TextValue,
+-		/// Line 3 of the sign text
+-		text3: TextValue,
+-		/// Line 4 of the sign text
+-		text4: TextValue,
+-		/// Default text color
+-		color: Option<String>,
+-	},
+-	/// 1.20+ sign block entity
+-	V1_20 {
+-		/// The sign's front text
+-		front_text: BlockEntitySignV1_20Text,
+-		/// The sign's back text
+-		back_text: BlockEntitySignV1_20Text,
+-	},
+-}
+-
+-/// Data for different kinds of block entities
+-#[derive(Debug, Deserialize)]
+-#[serde(tag = "id")]
+-pub enum BlockEntityData {
+-	/// Regular sign
+-	///
+-	/// This includes standing signs and signs attached to the side of blocks
+-	#[serde(rename = "minecraft:sign", alias = "minecraft:standing_sign")]
+-	Sign(BlockEntitySign),
+-	/// Hanging sign
+-	#[serde(rename = "minecraft:hanging_sign")]
+-	HangingSign(BlockEntitySign),
+-	/// Other block entity types not handled by MinedMap
+-	#[serde(other)]
+-	Other,
+-}
+-
+-/// A block entity
+-///
+-/// Block entities were called tile entities pre-1.18
+-#[derive(Debug, Deserialize)]
+-pub struct BlockEntity {
+-	/// Entity global X coordinate
+-	pub x: i32,
+-	/// Entity global Y coordinate
+-	pub y: i32,
+-	/// Entity global Z coordinate
+-	pub z: i32,
+-	/// Kind-specific entity data
+-	#[serde(flatten)]
+-	pub data: BlockEntityData,
+-}
+-
+ /// `Level` compound element found in pre-1.18 [chunks](Chunk)
+ #[derive(Debug, Deserialize)]
+ #[serde(rename_all = "PascalCase")]
+@@ -203,9 +130,6 @@ pub struct LevelV0 {
+ 	/// Biome data
+ 	#[serde(default)]
+ 	pub biomes: Option<BiomesV0>,
+-	/// List of block entities
+-	#[serde(default)]
+-	pub tile_entities: Vec<BlockEntity>,
+ }
+
+ /// Version-specific part of a [Chunk] compound
+@@ -216,9 +140,6 @@ pub enum ChunkVariant {
+ 	V1_18 {
+ 		/// List of chunk sections
+ 		sections: Vec<SectionV1_18>,
+-		/// List of block entities
+-		#[serde(default)]
+-		block_entities: Vec<BlockEntity>,
+ 	},
+ 	/// Pre-1.18 chunk data
+ 	#[serde(rename_all = "PascalCase")]
+diff --git a/src/world/mod.rs b/src/world/mod.rs
+index 8a2e9be..57aa7ed 100644
+--- a/src/world/mod.rs
++++ b/src/world/mod.rs
+@@ -1,9 +1,6 @@
+ //! Data structures describing Minecraft save data
+
+-pub mod block_entity;
+ pub mod chunk;
+ pub mod de;
+ pub mod layer;
+ pub mod section;
+-pub mod sign;
+-pub mod text_value;

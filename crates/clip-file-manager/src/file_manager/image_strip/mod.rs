@@ -145,6 +145,7 @@ mod tests {
             name: "test.png".into(),
             directory: false,
             regular_file: true,
+            minecraft_world: None,
             system: None,
             typescript: false,
             symlink: false,

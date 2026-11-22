@@ -60,6 +60,7 @@ pub(in crate::file_manager) enum Source {
     Database(PathBuf),
     Spreadsheet(PathBuf, u64),
     Geography(PathBuf),
+    Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -143,6 +144,7 @@ impl Source {
         match self {
             Self::Checked { source, .. } => source.execution(),
             Self::ArchiveMember(_) => (&super::super::container_preview::archive::JOBS, 2, 10),
+            Self::Minecraft(..) => (&super::super::minecraft::PREVIEW_JOBS, 2, 30),
             Self::System(_) => (super::super::system::jobs(), 2, 3),
             Self::Music(..) | Self::Dadaspec { .. } => {
                 (music_preview_jobs(), music_preview_workers(), 30)
@@ -293,6 +295,9 @@ impl Source {
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
+            Source::Minecraft(path, revision) => {
+                super::super::minecraft::preview(&path, revision, token)
+            }
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Spreadsheet(path, revision) => {
                 use little_clip_core::geography::trajectory::Trajectory;
@@ -641,15 +646,21 @@ impl Previews {
         {
             Arc::make_mut(current).inherit_retained_provenance(previous);
         }
-        let options =
-            if data.document.is_some() && !data.rendered_diagram || data.midi_document.is_some() {
-                egui::TextureOptions::NEAREST
-            } else {
-                egui::TextureOptions::LINEAR
-            };
-        let texture = data
-            .image
+        let terrain = data.minecraft_terrain.take();
+        let options = if terrain.is_some() {
+            egui::TextureOptions {
+                magnification: egui::TextureFilter::Nearest,
+                ..egui::TextureOptions::LINEAR
+            }
+        } else if data.document.is_some() && !data.rendered_diagram || data.midi_document.is_some()
+        {
+            egui::TextureOptions::NEAREST
+        } else {
+            egui::TextureOptions::LINEAR
+        };
+        let texture = terrain
             .as_ref()
+            .or(data.image.as_ref())
             .map(|image| upload_texture(ctx, format!("shelf_preview_{id}"), image, options));
         let spectrum_texture = data.spectrum.as_ref().map(|image| {
             upload_texture(

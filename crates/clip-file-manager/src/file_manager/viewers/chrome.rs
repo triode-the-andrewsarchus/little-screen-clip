@@ -240,6 +240,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Font(_)
         | ViewerSession::Notebook(_)
         | ViewerSession::Geography(_)
+        | ViewerSession::Minecraft(_)
         | ViewerSession::Toolpath(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)

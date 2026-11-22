@@ -3,14 +3,16 @@ use little_clip_core::{
     ClipItem, ClipPayload, ImageThumbnail,
     brushes::BrushLibrary,
     file_format::Format,
+    file_inventory::Identity,
     file_source::FileSource,
     geography::{Document, places, trajectory::Trajectory},
     midi::MidiData,
+    minecraft,
     spreadsheet::{self, SpreadsheetSheet},
 };
 use std::{
     collections::VecDeque,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
@@ -61,24 +63,46 @@ struct Entry {
 
 type CachedPreview = Option<Arc<Preview>>;
 
+struct MinecraftEntry {
+    path: PathBuf,
+    revision: Identity,
+    prepared: Instant,
+    preview: CachedPreview,
+}
+
 #[derive(Default)]
 pub(crate) struct Cache {
     files: VecDeque<Entry>,
     locations: VecDeque<(String, CachedPreview)>,
+    minecraft: VecDeque<MinecraftEntry>,
+}
+
+impl Cache {
+    fn has_minecraft_map(&self, path: &Path) -> bool {
+        self.minecraft
+            .iter()
+            .any(|entry| entry.path == path && entry.preview.is_some())
+    }
 }
 
 impl crate::ScreenRenderer {
     /// Reports whether the last card render prepared a map for this path.
     pub fn cached_map_for_file(&self, path: &Path) -> bool {
+        let cache = self
+            .file_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cache.files.iter().any(|entry| {
+            entry.source.path() == path && matches!(entry.preview.as_deref(), Some(Preview::Map(_)))
+        }) || cache.has_minecraft_map(path)
+    }
+
+    /// Reports whether a Minecraft save or region has a prepared preview.
+    pub fn cached_minecraft_map_for_file(&self, path: &Path) -> bool {
         self.file_previews
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .files
-            .iter()
-            .any(|entry| {
-                entry.source.path() == path
-                    && matches!(entry.preview.as_deref(), Some(Preview::Map(_)))
-            })
+            .has_minecraft_map(path)
     }
 
     pub(crate) fn file_preview(&self, item: &ClipItem) -> Option<Arc<Preview>> {
@@ -93,9 +117,13 @@ impl crate::ScreenRenderer {
     fn path_preview(&self, item: &ClipItem) -> Option<Arc<Preview>> {
         let (path, documents) = match &item.payload {
             ClipPayload::FileBatch(files) if files.len() == 1 => (files[0].as_path(), true),
+            ClipPayload::Directory(path) => (path.as_path(), true),
             ClipPayload::Text(text) => (Path::new(text.trim()), false),
             _ => return None,
         };
+        if minecraft::is_map_file(path) || (documents && path.is_dir()) {
+            return self.minecraft_preview(path);
+        }
         let extension = little_clip_core::diagram::Format::source_extension_hint(path);
         let kind = file_kind(path, documents, extension)?;
         let source = FileSource::capture(path).ok()?;
@@ -169,6 +197,52 @@ impl crate::ScreenRenderer {
             .unwrap_or_else(|error| error.into_inner())
             .earth(&self.config.geo_assets_dir());
         super::map_preview::Map::earth(self, document, texture.as_ref()).map(Preview::Map)
+    }
+
+    fn minecraft_preview(&self, path: &Path) -> CachedPreview {
+        let revision = minecraft::preview_revision(path)?;
+        let mut cache = self
+            .file_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = cache.minecraft.iter().position(|entry| entry.path == path)
+            && let Some(entry) = cache.minecraft.remove(index)
+            && entry.revision == revision
+            && entry.prepared.elapsed() < RETRY_AFTER
+        {
+            let preview = entry.preview.clone();
+            cache.minecraft.push_back(entry);
+            return preview;
+        }
+        drop(cache);
+
+        let cancel = AtomicBool::new(false);
+        let preview = (|| {
+            let world = minecraft::World::open(path, &cancel).ok()?;
+            let thumbnail = world.thumbnail(&cancel).ok()?;
+            Some(Arc::new(Preview::Map(super::map_preview::Map {
+                thumbnail,
+                label: Some("Minecraft".into()),
+            })))
+        })();
+        if minecraft::preview_revision(path) != Some(revision) {
+            return None;
+        }
+        let mut cache = self
+            .file_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cache.minecraft.retain(|entry| entry.path != path);
+        if cache.minecraft.len() >= MAX_ENTRIES {
+            cache.minecraft.pop_front();
+        }
+        cache.minecraft.push_back(MinecraftEntry {
+            path: path.to_owned(),
+            revision,
+            prepared: Instant::now(),
+            preview: preview.clone(),
+        });
+        preview
     }
 
     fn location_preview(&self, text: &str) -> CachedPreview {
@@ -297,6 +371,50 @@ fn load_page(path: &Path, office: bool) -> Option<Page> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minecraft_cards_put_terrain_in_the_little_screen_jpeg() {
+        let renderer = crate::ScreenRenderer::new(Default::default()).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/minecraft");
+        for item in [
+            ClipItem::from_directory(fixture.clone()),
+            ClipItem::from_files(vec![fixture.join("level.dat")]),
+            ClipItem::from_files(vec![fixture.join("region/r.-1.2.mca")]),
+        ] {
+            let path = item.file_path().unwrap();
+            let mut inventory = little_clip_core::SlotManager::new();
+            inventory.push_left(item);
+            let frame = renderer.render_frame(&inventory).unwrap();
+            let image = image::load_from_memory(&frame).unwrap().to_rgb8();
+            let image = if renderer.config.display.rotate_180 {
+                image::imageops::rotate180(&image)
+            } else {
+                image
+            };
+            assert_eq!(
+                image.dimensions(),
+                (crate::SCREEN_WIDTH, crate::SCREEN_HEIGHT)
+            );
+            let slot = crate::compute_slot_layout(3)
+                .into_iter()
+                .find(|slot| slot.slot_id == little_clip_core::SlotId::LeftHand)
+                .unwrap();
+            let grass_pixels = image
+                .enumerate_pixels()
+                .filter(|(x, _, image::Rgb([r, g, b]))| {
+                    (slot.x..slot.x + slot.width).contains(x)
+                        && *g > r.saturating_add(15)
+                        && *g > b.saturating_add(30)
+                })
+                .count();
+            assert!(
+                grass_pixels > 1_000,
+                "Missing terrain in preview for {path:?}"
+            );
+            assert!(renderer.cached_map_for_file(&path));
+        }
+    }
 
     #[test]
     fn lincoln_clipboard_map_contains_a_pin_and_an_inset_city_label() {

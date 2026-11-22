@@ -4,6 +4,13 @@ impl WorkbenchApp {
     pub(crate) fn handle_mirror_action(&mut self, action: Option<MirrorAction>) {
         match action {
             Some(MirrorAction::Click(slot) | MirrorAction::DoubleClick(slot)) => {
+                if matches!(action, Some(MirrorAction::DoubleClick(_)))
+                    && let Some(path) = self.state.get(slot).and_then(bounded_item_file_path)
+                    && self.minecraft_map_available(&path)
+                {
+                    self.open_geography_file(&path);
+                    return;
+                }
                 if slot != SlotId::Undo {
                     if let Some(index) = self
                         .selected_slots

@@ -316,6 +316,7 @@ mod tests {
             name: name.to_owned(),
             directory: false,
             regular_file: true,
+            minecraft_world: None,
             system: None,
             typescript: false,
             symlink: false,

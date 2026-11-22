@@ -36,6 +36,7 @@ enum Loaded {
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
     Geography(Box<super::geography::Viewer>),
+    Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(Box<super::multisample::Viewer>),
@@ -65,6 +66,7 @@ enum ViewerSession {
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
+    Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(super::multisample::Viewer),
@@ -395,6 +397,7 @@ impl Viewers {
             Some(
                 ViewerSession::Mail(_)
                 | ViewerSession::Calendar(_)
+                | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Sheet(_),
             )
@@ -708,7 +711,7 @@ fn load_file_session(
     } else {
         load(source, config, cancelled)?
     };
-    let identity = if matches!(&loaded, Loaded::System(_)) {
+    let identity = if matches!(&loaded, Loaded::System(_) | Loaded::Minecraft(_)) {
         None
     } else {
         let identity = identity?;
@@ -740,6 +743,13 @@ fn load(
     }
     little_clip_core::kernel_interface::require_content(path).map_err(|e| e.to_string())?;
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if little_clip_core::minecraft::is_map_file(path)
+        || (metadata.is_dir() && little_clip_core::minecraft::is_world_directory(path))
+    {
+        return super::minecraft::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::Minecraft);
+    }
     if !metadata.is_file() {
         return Err("Only regular files can be inspected".into());
     }
@@ -872,6 +882,10 @@ fn session(
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
+        Loaded::Minecraft(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::Minecraft(viewer)
+        }
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
@@ -943,6 +957,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
         ViewerSession::VcvPatch(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),
+        ViewerSession::Minecraft(state) => state.ui(ui, palette),
         ViewerSession::Database(state) => state.ui(ui, close, palette),
         ViewerSession::Calendar(state) => state.ui(ui, close, palette),
         ViewerSession::Mail(state) => state.ui(ui, close, palette),

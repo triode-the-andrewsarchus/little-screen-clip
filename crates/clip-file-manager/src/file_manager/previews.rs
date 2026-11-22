@@ -20,6 +20,12 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
         .chain((count - last + 1..=count).map(Some))
         .collect()
 }
+type EntryRevision = (u64, Option<u64>);
+
+fn entry_revision(entry: &Entry) -> EntryRevision {
+    (entry.revision, entry.minecraft_world)
+}
+
 type RasterCacheKey = (u32, u32, Vec<[u8; 3]>);
 
 #[derive(Default)]
@@ -29,7 +35,7 @@ pub(super) struct EntryPreviews {
     pub(super) multisample: super::multisample::Preview,
     audio_spectrum: bool,
     audio_dadaspec: bool,
-    identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
+    identities: BTreeMap<std::path::PathBuf, (EntryRevision, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     rasters: Previews,
     raster_sizes: BTreeMap<uuid::Uuid, (RasterCacheKey, uuid::Uuid)>,
@@ -59,7 +65,7 @@ impl EntryPreviews {
     }
     pub(super) fn cached_dhash(&self, entry: &Entry) -> Option<u64> {
         let (revision, id) = self.identities.get(&entry.path)?;
-        if *revision != entry.revision {
+        if *revision != entry_revision(entry) {
             return None;
         }
         let ready = self.cache.get(*id)?;
@@ -122,16 +128,17 @@ impl EntryPreviews {
     }
 
     fn identity(&mut self, entry: &Entry) -> uuid::Uuid {
+        let revision = entry_revision(entry);
         let (version, id) = self
             .identities
             .entry(entry.path.clone())
-            .or_insert_with(|| (entry.revision, uuid::Uuid::new_v4()));
-        if *version != entry.revision {
+            .or_insert_with(|| (revision, uuid::Uuid::new_v4()));
+        if *version != revision {
             self.cache.invalidate(*id);
             if let Some((_, raster)) = self.raster_sizes.remove(id) {
                 self.rasters.invalidate(raster);
             }
-            *version = entry.revision;
+            *version = revision;
             self.system_refresh.remove(id);
             if entry.is_brush() {
                 self.brushes.forget(*id);
@@ -193,7 +200,7 @@ impl EntryPreviews {
                     self.text_status.insert(
                         path.clone(),
                         (
-                            *revision,
+                            revision.0,
                             ready.data.document.is_some()
                                 || ready.data.binary.is_some()
                                 || ready.data.multisample.is_some()
@@ -277,7 +284,7 @@ impl EntryPreviews {
     fn cached(&self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
         self.identities
             .get(&entry.path)
-            .filter(|(revision, _)| *revision == entry.revision)
+            .filter(|(revision, _)| *revision == entry_revision(entry))
             .and_then(|(_, id)| self.cache.get(*id))
     }
     pub fn is_multisample(&self, entry: &Entry) -> bool {
@@ -331,6 +338,8 @@ impl EntryPreviews {
                 id,
                 (if entry.system.is_some() {
                     Source::System(entry.path.clone())
+                } else if entry.is_minecraft() {
+                    Source::Minecraft(entry.path.clone(), entry.revision)
                 } else if entry.regular_file && entry.is_photo() {
                     Source::Photo {
                         path: entry.path.clone(),

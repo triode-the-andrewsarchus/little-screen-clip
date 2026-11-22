@@ -23,6 +23,9 @@ pub struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub directory: bool,
+    /// Runtime-only save marker revision for directory strips.
+    #[serde(skip)]
+    pub minecraft_world: Option<u64>,
     pub regular_file: bool,
     pub system: Option<crate::kernel_interface::Kind>,
     pub typescript: bool,
@@ -48,6 +51,7 @@ impl Entry {
             || self.is_brush()
             || self.is_photo()
             || self.document_format().is_some()
+            || self.is_minecraft()
     }
 
     pub fn document_format(&self) -> Option<file_format::Format> {
@@ -69,6 +73,10 @@ impl Entry {
     pub fn is_toolpath(&self) -> bool {
         self.regular_file
             && file_format::Format::for_path(&self.path) == Some(file_format::Format::Toolpath)
+    }
+    pub fn is_minecraft(&self) -> bool {
+        self.minecraft_world.is_some()
+            || (self.regular_file && crate::minecraft::is_map_file(&self.path))
     }
     pub fn is_geography(&self) -> bool {
         self.regular_file
@@ -229,6 +237,9 @@ fn collect_directory(
     for entry in &entries {
         entry.path.hash(&mut hasher);
         entry.revision.hash(&mut hasher);
+        if let Some(world) = entry.minecraft_world {
+            world.hash(&mut hasher);
+        }
     }
     skipped.hash(&mut hasher);
     object.hash(&mut hasher);
@@ -259,11 +270,11 @@ fn collect_directory(
     })
 }
 
-/// Observes an entry; optional TypeScript probing belongs only on workers.
+/// Observes an entry, optionally probing content hints on the listing worker.
 ///
 /// Protected/nonregular sources never enter that payload probe. Failed metadata
 /// remains a warning or unavailable observation in the returned snapshot.
-pub fn read_entry(child: std::fs::DirEntry, inspect_typescript: bool) -> Entry {
+pub fn read_entry(child: std::fs::DirEntry, inspect_content_hints: bool) -> Entry {
     let path = child.path();
     let symlink = child.file_type().is_ok_and(|kind| kind.is_symlink());
     let metadata = std::fs::metadata(&path);
@@ -282,13 +293,23 @@ pub fn read_entry(child: std::fs::DirEntry, inspect_typescript: bool) -> Entry {
     let entry_identity = link_metadata.as_ref().ok().map(identity);
     entry_identity.hash(&mut hasher);
     Entry {
-        typescript: inspect_typescript
+        typescript: inspect_content_hints
             && regular_file
             && crate::text_format::is_typescript_source(&path),
         revision: hasher.finish(),
         identity: entry_identity,
         hidden: child.file_name().as_bytes().starts_with(b"."),
         name: display_path(Path::new(&child.file_name())),
+        minecraft_world: (inspect_content_hints
+            && directory
+            && route == Some(crate::kernel_interface::Kind::Content))
+        .then(|| crate::minecraft::directory_hint(&path))
+        .flatten()
+        .map(|marker| {
+            let mut revision = std::collections::hash_map::DefaultHasher::new();
+            marker.hash(&mut revision);
+            revision.finish()
+        }),
         path,
         directory,
         regular_file,

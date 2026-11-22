@@ -31,6 +31,7 @@ mod material_strip;
 mod media;
 mod midi_input;
 mod midi_strip;
+mod minecraft;
 pub(crate) mod mounts;
 mod multisample;
 mod music;
@@ -58,7 +59,7 @@ mod video_playback;
 mod video_timeline;
 mod view_preferences;
 mod viewers;
-pub use app::{run, run_location};
+pub use app::{run, run_file, run_location};
 #[cfg(test)]
 mod tests;
 mod tree;
@@ -116,6 +117,7 @@ pub(super) enum DocumentPosition {
     CalendarEvent(usize),
     DatabaseTable(usize),
     GeographicFeature(usize),
+    MinecraftMap,
     ToolpathLine(usize),
     SampleRegion(usize, usize),
     SubtitleCue(usize),
@@ -945,6 +947,17 @@ impl FileManager {
 
     fn open_path(&mut self, path: PathBuf) {
         self.type_navigation.clear();
+        if self
+            .document_start
+            .as_ref()
+            .is_some_and(|(source, position)| {
+                source == &path && *position == DocumentPosition::MinecraftMap
+            })
+        {
+            self.archives.cancel();
+            self.open_file = Some(path);
+            return;
+        }
         if container_preview::inventory::archive(&path)
             && self
                 .displayed_entries()

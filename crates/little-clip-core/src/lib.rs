@@ -86,6 +86,7 @@ pub use staging::{ArtifactLease, ArtifactStore, StagingManager, TemporaryWorkspa
 
 pub mod gcode;
 pub mod geography;
+pub mod minecraft;
 pub mod multisample;
 pub mod vcv;
 mod xml_content;

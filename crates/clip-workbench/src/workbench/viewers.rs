@@ -380,7 +380,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
-        if geographic_path(fp) {
+        if geographic_path(fp) || self.minecraft_map_available(fp) {
             self.open_geography_file(fp);
         } else if fp
             .extension()
@@ -435,12 +435,9 @@ impl WorkbenchApp {
         self.selected_slots.iter().find_map(|slot| {
             let item = self.state.get(*slot)?;
             if let Some(path) = bounded_item_file_path(item) {
-                return (geographic_path(&path)
-                    || self
-                        .renderer
-                        .as_ref()
-                        .is_some_and(|renderer| renderer.cached_map_for_file(&path)))
-                .then_some(MapTarget::File(path));
+                return self
+                    .map_file_available(&path)
+                    .then_some(MapTarget::File(path));
             }
             let ClipPayload::Text(text) = &item.payload else {
                 return None;
@@ -462,6 +459,23 @@ impl WorkbenchApp {
         })
     }
 
+    pub(super) fn minecraft_map_available(&self, path: &std::path::Path) -> bool {
+        little_clip_core::minecraft::is_map_file(path)
+            || self
+                .renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.cached_minecraft_map_for_file(path))
+    }
+
+    fn map_file_available(&self, path: &std::path::Path) -> bool {
+        geographic_path(path)
+            || little_clip_core::minecraft::is_map_file(path)
+            || self
+                .renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.cached_map_for_file(path))
+    }
+
     pub(super) fn open_geography_file(&mut self, path: &std::path::Path) {
         self.open_map(MapTarget::File(path.to_owned()));
     }
@@ -471,7 +485,7 @@ impl WorkbenchApp {
         match target {
             MapTarget::File(path) => {
                 let absolute = std::path::absolute(&path).unwrap_or(path);
-                command.arg(absolute);
+                command.arg("--map-file").arg(absolute);
             }
             MapTarget::Location(text) => {
                 command.arg("--map-location").arg(text);

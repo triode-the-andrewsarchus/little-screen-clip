@@ -101,6 +101,7 @@ impl Node {
 pub(super) fn candidate(entry: &Entry) -> bool {
     entry.system.is_none()
         && !entry.symlink
+        && !entry.is_minecraft()
         && (entry.directory || (entry.regular_file && inventory::archive(&entry.path)))
 }
 impl Previews {
