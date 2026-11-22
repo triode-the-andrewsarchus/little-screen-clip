@@ -16,6 +16,11 @@ use super::preview_job::Task;
 static TIMELINES: LazyLock<BackgroundJobs> =
     LazyLock::new(|| BackgroundJobs::new(*dispatch::FILE_LIMIT, 4));
 
+pub(super) struct Timeline {
+    pub texture: TextureHandle,
+    pub source: selection::Source,
+}
+
 pub(super) struct Ready {
     pub metadata: Arc<VideoMetadata>,
     pub texture: Option<TextureHandle>,
@@ -100,6 +105,11 @@ impl Previews {
             .retain(|path, value| keys.get(path) == Some(&value.revision));
         self.pending
             .retain(|path, value| keys.get(path) == Some(&value.revision));
+        if self.selection.as_ref().is_some_and(|selection| {
+            keys.get(&selection.clip.source.path) != Some(&selection.revision)
+        }) {
+            self.selection = None;
+        }
         if self
             .hover
             .as_ref()
@@ -158,8 +168,23 @@ impl Previews {
         );
     }
     pub fn get(&self, entry: &Entry) -> Option<&Result<Ready, String>> {
-        self.ready.get(&entry.path).map(|r| &r.value)
+        self.ready
+            .get(&entry.path)
+            .filter(|cached| cached.revision == entry.revision)
+            .map(|cached| &cached.value)
     }
+    pub fn timeline(&self, path: &std::path::Path) -> Option<Timeline> {
+        let ready = self.ready.get(path)?.value.as_ref().ok()?;
+        Some(Timeline {
+            texture: ready.texture.clone()?,
+            source: selection::Source {
+                path: path.to_path_buf(),
+                metadata: ready.metadata.clone(),
+                context: self.context.clone(),
+            },
+        })
+    }
+
     pub fn poll(&mut self, ctx: &Context) {
         // Metadata arrives before the strip so large-file scrubbing can start immediately.
         for (path, pending) in &self.pending {

@@ -1,7 +1,10 @@
 //! Embedded video presentation; synchronized audio and decoding stay in the owned worker.
 use super::super::{
     media::{VideoMetadata as Prepared, inspect_video},
+    preview_copy::Copies,
+    ui::video::paint_timelens,
     video_playback::Session,
+    video_timeline::{Timeline, selection::FrameCopy},
 };
 use crate::file_source::FileSource;
 use clip_ui::buttons::ButtonRole;
@@ -18,7 +21,7 @@ pub(super) struct Video {
     player: Option<Session>,
     start_ms: u64,
     subtitles_enabled: bool,
-    seek_preview: Option<f64>,
+    transport: Transport,
     fullscreen: bool,
     stopped: bool,
     last_activity: f64,
@@ -46,12 +49,21 @@ impl Video {
             ),
             prepared,
             player: None,
-            seek_preview: None,
+            transport: Transport::default(),
             fullscreen: false,
             stopped: false,
             last_activity: 0.0,
             context: None,
         }
+    }
+    pub(super) fn set_timeline(&mut self, timeline: Timeline) {
+        let metadata = &timeline.source.metadata;
+        if metadata.source == self.prepared.source && metadata.stream == self.prepared.stream {
+            self.transport.timeline = Some(timeline);
+        }
+    }
+    pub(super) fn copy_pending(&self) -> bool {
+        self.transport.copies.busy()
     }
     pub(super) fn fullscreen(&self) -> bool {
         self.fullscreen
@@ -62,6 +74,7 @@ impl Video {
     pub(super) fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
         self.path = path;
         self.prepared.source = source.clone();
+        self.transport.timeline = None;
         if let Some(player) = &self.player {
             player.relocate(source);
         }
@@ -72,6 +85,7 @@ impl Video {
     }
     pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
         self.context = Some(ctx.clone());
+        self.transport.poll(ctx);
         if self.stopped {
             return;
         }
@@ -149,19 +163,13 @@ impl Video {
         }
         if self.fullscreen {
             if overlay_visible || player.error.is_some() {
-                let (back, exit) = fullscreen_controls(
-                    ui,
-                    rect,
-                    &self.path,
-                    player,
-                    &mut self.seek_preview,
-                    palette,
-                );
+                let (back, exit) =
+                    fullscreen_controls(ui, rect, &self.path, player, &mut self.transport, palette);
                 *close |= back;
                 self.fullscreen &= !exit;
             }
         } else {
-            controls(ui, player, &mut self.seek_preview, palette);
+            controls(ui, player, &mut self.transport, palette);
             if let Some(error) = &player.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             } else {
@@ -233,7 +241,7 @@ fn fullscreen_controls(
     rect: egui::Rect,
     path: &std::path::Path,
     player: &mut Session,
-    seek_preview: &mut Option<f64>,
+    transport: &mut Transport,
     palette: &little_clip_core::palette::AppPalette,
 ) -> (bool, bool) {
     let mut back = false;
@@ -272,7 +280,7 @@ fn fullscreen_controls(
             overlay_frame().show(ui, |ui| {
                 ui.set_width((rect.width() - 48.0).max(100.0));
                 ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
-                controls(ui, player, seek_preview, palette);
+                controls(ui, player, transport, palette);
                 if let Some(error) = &player.error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -303,7 +311,7 @@ fn shortcuts(ui: &mut Ui, player: &mut Session, fullscreen: &mut bool) {
 fn controls(
     ui: &mut Ui,
     player: &mut Session,
-    seek_preview: &mut Option<f64>,
+    transport: &mut Transport,
     palette: &little_clip_core::palette::AppPalette,
 ) {
     ui.horizontal(|ui| {
@@ -325,28 +333,123 @@ fn controls(
         {
             player.set_playing(!player.playing());
         }
-        let mut seconds = (*seek_preview).unwrap_or(player.position_ms as f64 / 1000.0);
-        let duration = player.duration_ms as f64 / 1000.0;
-        let seek_width = (ui.available_width() - 125.0).max(40.0);
-        let slider = ui
-            .scope(|ui| {
-                ui.spacing_mut().slider_width = seek_width;
-                ui.add(egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001)).show_value(false))
-            })
-            .inner;
-        if slider.dragged() {
-            *seek_preview = Some(seconds);
-        }
-        if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
-            player.seek((seconds * 1000.0) as u64);
-            *seek_preview = None;
-        }
+        let seconds = transport.seek_ui(ui, player);
         ui.label(format!(
             "{} / {}",
             clock((seconds * 1000.0) as u64),
             clock(player.duration_ms)
         ));
     });
+}
+
+#[derive(Default)]
+struct Transport {
+    timeline: Option<Timeline>,
+    seek_preview: Option<f64>,
+    copies: Copies,
+    notice: Option<(Result<String, String>, f64)>,
+}
+
+impl Transport {
+    fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self.copies.poll() {
+            self.notice = Some((result, ctx.input(|input| input.time) + 4.0));
+            ctx.request_repaint();
+        } else if self.copies.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
+    }
+
+    fn seek_ui(&mut self, ui: &mut Ui, player: &mut Session) -> f64 {
+        let mut seconds = self
+            .seek_preview
+            .unwrap_or(player.position_ms as f64 / 1000.0);
+        let duration = (player.duration_ms as f64 / 1000.0).max(0.001);
+        let width = (ui.available_width() - 125.0).max(40.0);
+        let seek = if let Some(timeline) = &self.timeline {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click_and_drag());
+            paint_timelens(ui, rect, &timeline.texture);
+            let (seconds_at, cursor) =
+                timeline_pointer(rect, response.interact_pointer_pos(), duration);
+            if response.secondary_clicked() {
+                let time_ms = (seconds_at.unwrap_or(seconds) * 1000.0).round() as u64;
+                let frame = match (&player.image, player.frame_position_ms) {
+                    (Some(image), Some(displayed_ms))
+                        if displayed_ms.abs_diff(time_ms) <= (duration * 1000.0 / width) as u64 =>
+                    {
+                        FrameCopy::Displayed(image.clone(), displayed_ms)
+                    }
+                    _ => FrameCopy::Position(timeline.source.clone(), time_ms),
+                };
+                self.copies
+                    .start(ui.ctx(), move |cancel| frame.copy(cancel));
+            } else if let Some(value) = seconds_at.filter(|_| {
+                response.clicked()
+                    || response.dragged_by(egui::PointerButton::Primary)
+                    || response.drag_stopped_by(egui::PointerButton::Primary)
+            }) {
+                seconds = value;
+            }
+            paint_playhead(ui, rect, (seconds / duration) as f32, cursor);
+            response.surrender_focus();
+            let notice = self
+                .notice
+                .as_ref()
+                .filter(|(_, until)| ui.input(|input| input.time < *until))
+                .map(|(result, _)| result.as_ref().unwrap_or_else(|error| error).as_str());
+            let hint = if self.copies.busy() {
+                "Copying frame…"
+            } else {
+                "Click or drag to seek · Right-click to copy a frame"
+            };
+            let changed = response.clicked();
+            let response = response.on_hover_text(notice.unwrap_or(hint));
+            (response, changed)
+        } else {
+            let response = ui
+                .scope(|ui| {
+                    ui.spacing_mut().slider_width = width;
+                    ui.add(egui::Slider::new(&mut seconds, 0.0..=duration).show_value(false))
+                })
+                .inner;
+            let changed = response.changed();
+            (response, changed)
+        };
+        let (response, changed) = seek;
+        let dragging = response.dragged_by(egui::PointerButton::Primary);
+        if dragging {
+            self.seek_preview = Some(seconds);
+        }
+        if response.drag_stopped_by(egui::PointerButton::Primary) || (changed && !dragging) {
+            player.seek((seconds * 1000.0).round() as u64);
+            self.seek_preview = None;
+        }
+        seconds
+    }
+}
+
+fn timeline_pointer(
+    rect: egui::Rect,
+    pointer: Option<egui::Pos2>,
+    duration: f64,
+) -> (Option<f64>, Option<f32>) {
+    let fraction = pointer.map(|point| ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+    (fraction.map(|x| f64::from(x) * duration), fraction)
+}
+
+fn paint_playhead(ui: &Ui, rect: egui::Rect, fraction: f32, cursor: Option<f32>) {
+    for (position, color, width) in cursor
+        .map(|x| (x, egui::Color32::WHITE, 1.0))
+        .into_iter()
+        .chain([(fraction, ui.visuals().selection.stroke.color, 2.0)])
+    {
+        let x = egui::lerp(rect.x_range(), position.clamp(0.0, 1.0));
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(width, color),
+        );
+    }
 }
 
 impl Drop for Video {

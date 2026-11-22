@@ -536,6 +536,7 @@ impl FileManagerApp {
                         .video_start
                         .take()
                         .filter(|(source, _)| source == &path);
+                    let timeline = self.browser.video_previews.timeline(&path);
                     let explicit_inspection =
                         self.browser.inspect_file.take().as_ref() == Some(&path);
                     let system = explicit_inspection
@@ -556,6 +557,7 @@ impl FileManagerApp {
                         let guards = self.browser.search_source_guards(&collection);
                         self.viewers.open_collection(path, collection, guards);
                     }
+                    self.viewers.video_timeline = timeline;
                 }
             }
         });
