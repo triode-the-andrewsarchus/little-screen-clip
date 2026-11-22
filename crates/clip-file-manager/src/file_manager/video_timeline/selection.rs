@@ -19,7 +19,6 @@ use std::{
 static FRAMES: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 2));
 const LARGE_CLIP: u64 = 1_000_000_000;
 const AUDIO_RATE: u64 = 192_000;
-const TRIM_CONTEXT_MS: u64 = 30_000;
 
 pub(in crate::file_manager) fn focus_id() -> Id {
     Id::unique("files_video_timeline_focus")
@@ -294,10 +293,11 @@ pub(in crate::file_manager) struct Selection {
 
 impl Selection {
     pub fn new(clip: Clip, revision: u64) -> Self {
-        let window = clip.start_ms.saturating_sub(TRIM_CONTEXT_MS)
+        let context_ms = ((clip.end_ms - clip.start_ms) / 10).clamp(2_000, 30_000);
+        let window = clip.start_ms.saturating_sub(context_ms)
             ..clip
                 .end_ms
-                .saturating_add(TRIM_CONTEXT_MS)
+                .saturating_add(context_ms)
                 .min(clip.source.metadata.duration_ms);
         Self {
             clip,
@@ -444,6 +444,26 @@ impl Selection {
 mod tests {
     use super::*;
     use crate::file_manager::{FileManager, filesystem, media};
+
+    #[test]
+    fn trim_context_scales_with_the_original_selection_and_stops_at_file_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source(dir.path());
+        for (range, expected) in [
+            (10_000..20_000, 8_000..22_000),
+            (60_000..100_000, 56_000..104_000),
+            (90_000..490_000, 60_000..520_000),
+            (500..10_500, 0..12_500),
+            (3_589_500..3_599_500, 3_587_500..3_600_000),
+        ] {
+            let clip = Clip {
+                source: source.clone(),
+                start_ms: range.start,
+                end_ms: range.end,
+            };
+            assert_eq!(Selection::new(clip, 1).window, expected, "{range:?}");
+        }
+    }
 
     #[test]
     fn trimming_uses_the_original_context_and_keeps_one_frame_between_edges() {
