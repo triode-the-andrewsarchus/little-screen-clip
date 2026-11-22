@@ -102,14 +102,19 @@ fn grid_cell_rect(
     )
 }
 
+struct GridCellText<'a> {
+    value: &'a str,
+    font: FontId,
+    color: egui::Color32,
+    align: egui::Align,
+}
+
 fn paint_grid_cell(
     painter: &egui::Painter,
     rect: egui::Rect,
     fill: egui::Color32,
     border: egui::Color32,
-    value: &str,
-    font: FontId,
-    text: egui::Color32,
+    text: GridCellText<'_>,
 ) {
     let painter = painter.with_clip_rect(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, fill);
@@ -119,14 +124,16 @@ fn paint_grid_cell(
         Stroke::new(0.5, border),
         egui::StrokeKind::Inside,
     );
-    if !value.is_empty() {
-        painter.text(
-            rect.left_center() + egui::vec2(6.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            value,
-            font,
-            text,
-        );
+    if !text.value.is_empty() {
+        let galley = painter.layout_no_wrap(text.value.to_owned(), text.font, text.color);
+        let left = rect.left() + 6.0;
+        let x = if text.align == egui::Align::Center {
+            (rect.center().x - galley.size().x / 2.0).max(left)
+        } else {
+            left
+        };
+        let y = rect.center().y - galley.size().y / 2.0;
+        painter.galley(egui::pos2(x, y), galley, text.color);
     }
 }
 

@@ -475,9 +475,12 @@ impl SpreadsheetViewerState {
                                     rect,
                                     fill,
                                     b_med,
-                                    value,
-                                    font_id.clone(),
-                                    text,
+                                    GridCellText {
+                                        value,
+                                        font: font_id.clone(),
+                                        color: text,
+                                        align: egui::Align::Center,
+                                    },
                                 );
                                 let response = ui.interact(
                                     rect,

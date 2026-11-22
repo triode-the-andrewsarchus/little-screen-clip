@@ -35,9 +35,12 @@ pub fn paint_sheet_corner(
             cell_rect,
             fill,
             colors.border,
-            inline_cell_display_text(value).as_ref(),
-            font.clone(),
-            crate::contrast_text_c32(fill, Some(colors.text_primary), palette),
+            GridCellText {
+                value: inline_cell_display_text(value).as_ref(),
+                font: font.clone(),
+                color: crate::contrast_text_c32(fill, Some(colors.text_primary), palette),
+                align: egui::Align::Min,
+            },
         );
     }
 }
