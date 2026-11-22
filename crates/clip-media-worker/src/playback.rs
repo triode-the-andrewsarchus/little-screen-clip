@@ -287,8 +287,9 @@ impl Engine {
                 gst::MessageView::Error(error) => {
                     return Err(format!("{} ({:?})", error.error(), error.debug()));
                 }
-                gst::MessageView::Eos(_) if self.options.looping && self.window.is_none() => {
-                    self.seek(0, output)?;
+                gst::MessageView::Eos(_) if self.options.looping => {
+                    let start = self.window.as_ref().map_or(0, |window| window.start);
+                    self.seek(start, output)?;
                     self.player
                         .set_state(gst::State::Playing)
                         .map_err(message)?;

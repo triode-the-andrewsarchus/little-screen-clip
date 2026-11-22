@@ -185,14 +185,13 @@ impl Viewers {
         }
     }
     fn open_on(&mut self, path: PathBuf, system: bool) {
-        self.open_mode(path, system, false, None);
+        self.open_mode(path, system, None);
     }
     fn open_mode(
         &mut self,
         path: PathBuf,
         system: bool,
-        video_audio: bool,
-        archive_revision: Option<u64>,
+        position: Option<super::DocumentPosition>,
     ) {
         if self.active() {
             return;
@@ -215,7 +214,7 @@ impl Viewers {
                     super::system::collect(&source, &worker)
                         .map(|document| (Loaded::System(Box::new(document)), None))
                 } else {
-                    load_file_session(&source, &config, video_audio, archive_revision, &worker)
+                    load_file_session(&source, &config, position, &worker)
                 }
             })
         });
@@ -239,13 +238,7 @@ impl Viewers {
         if self.active() {
             return;
         }
-        if position == super::DocumentPosition::VideoAudioTrack {
-            self.open_mode(path, false, true, None);
-        } else if let super::DocumentPosition::ArchiveMember(_, revision) = position {
-            self.open_mode(path, false, false, Some(revision));
-        } else {
-            self.open(path);
-        }
+        self.open_mode(path, false, Some(position));
         self.document_start = Some(position);
     }
     fn poll(&mut self, ctx: &Context) {
@@ -709,18 +702,30 @@ fn kind(path: &Path) -> Kind {
 fn load_file_session(
     source: &Path,
     config: &AppConfig,
-    video_audio: bool,
-    archive_revision: Option<u64>,
+    position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    if let Some(revision) = archive_revision {
+    use super::DocumentPosition::{ArchiveMember, VideoAudioRange, VideoAudioTrack};
+    let revision = match position {
+        Some(ArchiveMember(_, revision) | VideoAudioRange { revision, .. }) => Some(revision),
+        _ => None,
+    };
+    if let Some(revision) = revision {
         super::filesystem::check_revision(source, revision)?;
     }
     let identity = FileSource::capture(source);
-    let loaded = if video_audio {
-        Loaded::VideoAudio(video_audio::Prepared::load(source, cancelled)?)
-    } else {
-        load(source, config, cancelled)?
+    let loaded = match position {
+        Some(VideoAudioTrack) => {
+            Loaded::VideoAudio(video_audio::Prepared::load(source, None, cancelled)?)
+        }
+        Some(VideoAudioRange {
+            start_ms, end_ms, ..
+        }) => Loaded::VideoAudio(video_audio::Prepared::load(
+            source,
+            Some((start_ms, end_ms)),
+            cancelled,
+        )?),
+        _ => load(source, config, cancelled)?,
     };
     let identity = if matches!(&loaded, Loaded::System(_)) {
         None
@@ -732,7 +737,7 @@ fn load_file_session(
             return Err("Archive changed during opening".into());
         }
         identity.check()?;
-        if let Some(revision) = archive_revision {
+        if let Some(revision) = revision {
             super::filesystem::check_revision(source, revision)?;
         }
         Some(identity)

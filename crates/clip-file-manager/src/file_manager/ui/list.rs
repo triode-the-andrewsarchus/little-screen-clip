@@ -145,6 +145,7 @@ impl<'a> ListPreviews<'a> {
                 self.can_request,
                 colors,
                 &mut response,
+                actions,
             );
             engaged = active;
             self.hovered_video |= time.is_some();

@@ -106,6 +106,11 @@ impl LastStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DocumentPosition {
     VideoAudioTrack,
+    VideoAudioRange {
+        start_ms: u64,
+        end_ms: u64,
+        revision: u64,
+    },
     ArchiveMember(usize, u64),
     TextLine(usize),
     PdfPage(usize),

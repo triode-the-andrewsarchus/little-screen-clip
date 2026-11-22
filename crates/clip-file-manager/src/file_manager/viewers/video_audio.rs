@@ -14,7 +14,11 @@ pub(super) struct Prepared {
     save_directory: PathBuf,
 }
 impl Prepared {
-    pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
+    pub fn load(
+        path: &Path,
+        range: Option<(u64, u64)>,
+        cancel: &AtomicBool,
+    ) -> Result<Self, String> {
         let (input, observed) = ReadCheck::default().open(path, None, cancel)?;
         let workspace = ArtifactStore::new()
             .map_err(|e| e.to_string())?
@@ -47,6 +51,7 @@ impl Prepared {
         );
         settings.codec = Some("pcm_f32le".into());
         settings.channels = Some(2);
+        settings.range = range.map(|(start, end)| (start as f64 / 1000.0, end as f64 / 1000.0));
         let result = media_backend::render_audio_to_request(&settings, &output)?
             .arg_owned_content_file(input.try_clone().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?
@@ -99,7 +104,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../little-clip-core/tests/fixtures/video/playback-tracks.mkv");
         let original = std::fs::read(&path).unwrap();
-        let prepared = Prepared::load(&path, &AtomicBool::new(false)).unwrap();
+        let prepared = Prepared::load(&path, None, &AtomicBool::new(false)).unwrap();
         assert_eq!(prepared.metadata.as_ref().unwrap().channels, 2);
         let extracted = prepared.source.path().to_path_buf();
         assert_ne!(extracted, path);
@@ -126,10 +131,34 @@ mod tests {
         drop(studio);
     }
     #[test]
+    fn selected_video_audio_opens_as_a_zero_based_wav_of_the_requested_length() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/video/playback-tracks.mkv");
+        let prepared = Prepared::load(&path, Some((650, 1375)), &AtomicBool::new(false)).unwrap();
+        let mut wav = hound::WavReader::open(prepared.source.path()).unwrap();
+        let expected = (f64::from(wav.spec().sample_rate) * 0.725).round() as u32;
+        assert!(wav.duration().abs_diff(expected) <= 2, "{}", wav.duration());
+        assert!(
+            wav.samples::<f32>()
+                .take(2048)
+                .any(|sample| sample.unwrap().abs() > 0.05)
+        );
+    }
+
+    #[test]
     fn extraction_honors_cancellation_and_reports_video_without_audio() {
         let root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../little-clip-core/tests/fixtures/video");
-        assert!(Prepared::load(&root.join("playback-tracks.mkv"), &AtomicBool::new(true)).is_err());
-        assert!(Prepared::load(&root.join("with-cover.mp4"), &AtomicBool::new(false)).is_err());
+        assert!(
+            Prepared::load(
+                &root.join("playback-tracks.mkv"),
+                None,
+                &AtomicBool::new(true)
+            )
+            .is_err()
+        );
+        assert!(
+            Prepared::load(&root.join("with-cover.mp4"), None, &AtomicBool::new(false)).is_err()
+        );
     }
 }

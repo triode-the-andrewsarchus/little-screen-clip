@@ -610,12 +610,42 @@ fn executable_timeline_reduces_each_column_at_the_requested_resolution() {
     let settings = VideoTimeline {
         frame: VideoFrame::new("gif", 1, 64),
         columns: 16,
+        start_ms: None,
         duration_ms: 1000,
     };
+    let jpeg = timeline_jpeg(&input, &settings);
+    assert!(jpeg.starts_with(&[0xff, 0xd8]));
+    assert!(jpeg.ends_with(&[0xff, 0xd9]));
+}
+
+#[test]
+fn localized_timeline_starts_at_the_requested_source_time() {
+    use clip_media_protocol::{VideoFrame, VideoTimeline};
+    let source = File::open(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../little-clip-core/tests/fixtures/video/playback-colors.mp4"
+    ))
+    .unwrap();
+    let settings = VideoTimeline {
+        frame: VideoFrame::new("mov", 1, 16),
+        columns: 32,
+        start_ms: Some(1100),
+        duration_ms: 1700,
+    };
+    let pixels = reference_rgba(&timeline_jpeg(&source, &settings));
+    assert_eq!(pixels.len(), 32 * 16 * 4);
+    let at = |x: usize| &pixels[4 * (32 * 8 + x)..][..3];
+    let [r, g, b] = at(2) else { unreachable!() };
+    assert!(*g > 100 && *r < 30 && *b < 30);
+    let [r, g, b] = at(29) else { unreachable!() };
+    assert!(*b > 200 && *r < 30 && *g < 30);
+}
+
+fn timeline_jpeg(source: &File, settings: &clip_media_protocol::VideoTimeline) -> Vec<u8> {
     let result = command(
-        &[&input],
+        &[source],
         "video-timeline",
-        &serde_json::to_string(&settings).unwrap(),
+        &serde_json::to_string(settings).unwrap(),
     )
     .output()
     .unwrap();
@@ -624,8 +654,7 @@ fn executable_timeline_reduces_each_column_at_the_requested_resolution() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(result.stdout.starts_with(&[0xff, 0xd8]));
-    assert!(result.stdout.ends_with(&[0xff, 0xd9]));
+    result.stdout
 }
 
 fn reference_rgba(bytes: &[u8]) -> Vec<u8> {
@@ -691,6 +720,7 @@ fn library_av1_timeline_matches_the_existing_sequential_reference() {
     let settings = VideoTimeline {
         frame: VideoFrame::new("matroska", 1, 16),
         columns: 48,
+        start_ms: None,
         duration_ms: 3000,
     };
     let result = command(
@@ -896,6 +926,27 @@ mod playback {
             deadline: Instant::now() + Duration::from_secs(2),
         };
         assert_eq!(reader.read(&mut data).unwrap(), 0);
+    }
+
+    #[test]
+    fn bounded_loop_returns_to_the_selected_start_without_crossing_the_end() {
+        let span = 720..1550;
+        let mut settings = Player::settings(span.start);
+        settings.end_ms = Some(span.end);
+        settings.options.looping = true;
+        let mut player = Player::open(settings);
+        let in_range = |packet: &Update| {
+            assert!(!packet.ended);
+            if packet.bytes == 0 {
+                return false;
+            }
+            assert!(span.contains(&packet.position_ms), "{packet:?}");
+            true
+        };
+        for _ in 0..2 {
+            player.until(|packet| in_range(packet) && packet.position_ms >= span.end - 100);
+            player.until(|packet| in_range(packet) && packet.position_ms < span.start + 100);
+        }
     }
 
     #[test]

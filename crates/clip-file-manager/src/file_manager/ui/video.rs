@@ -1,4 +1,6 @@
 //! Timelens rows use ordinary file selection/actions and a playing hover preview.
+mod trim;
+
 use super::super::{
     filesystem::Entry,
     preview_copy,
@@ -43,6 +45,7 @@ pub(super) fn preview_row(
     can_request: bool,
     colors: WorkbenchColors,
     row_response: &mut egui::Response,
+    actions: &mut ListActions,
 ) -> (Option<u64>, bool) {
     let thumbnail = if entry.is_video() {
         let thumbnail = previews.show_video(
@@ -76,11 +79,19 @@ pub(super) fn preview_row(
             video_previews.source(entry, metadata.clone()),
             video_previews,
             row_response,
+            actions,
         ),
         _ => (false, None),
     };
     if active {
         return (None, true);
+    }
+    if video_previews
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.preview_open)
+    {
+        return (click_time, false);
     }
     let time = video_hover(
         ui,
@@ -101,6 +112,7 @@ fn timeline_interaction(
     source: super::super::video_timeline::selection::Source,
     previews: &mut super::super::video_timeline::Previews,
     row: &mut egui::Response,
+    actions: &mut ListActions,
 ) -> (bool, Option<u64>) {
     if rect.width() <= 0.0 || source.metadata.duration_ms == 0 {
         return (false, None);
@@ -139,12 +151,24 @@ fn timeline_interaction(
     if !dragging {
         *row = row.union(response.clone());
     }
-    if let Some(selection) = previews
-        .selection
-        .as_mut()
-        .filter(|selection| selection.matches(&entry.path, entry.revision))
-    {
-        previews.copy_clip |= show_selection(ui, &response, selection);
+    if let Some(mut selection) = previews.selection.take() {
+        if selection.matches(&entry.path, entry.revision) {
+            let overview = previews
+                .get(entry)
+                .and_then(|ready| ready.as_ref().ok())
+                .and_then(|ready| ready.texture.as_ref());
+            let (copy, edit) = show_selection(ui, &response, &mut selection, overview);
+            previews.copy_clip |= copy;
+            if edit {
+                actions.open = Some(selection.clip.source.path.clone());
+                actions.open_position = Some(super::super::DocumentPosition::VideoAudioRange {
+                    start_ms: selection.clip.start_ms,
+                    end_ms: selection.clip.end_ms,
+                    revision: selection.revision,
+                });
+            }
+        }
+        previews.selection = Some(selection);
     }
     let click_time = if response.clicked() {
         response.interact_pointer_pos().map(at)
@@ -154,7 +178,12 @@ fn timeline_interaction(
     (dragging, click_time)
 }
 
-fn show_selection(ui: &Ui, response: &egui::Response, selection: &mut Selection) -> bool {
+fn show_selection(
+    ui: &Ui,
+    response: &egui::Response,
+    selection: &mut Selection,
+    overview: Option<&egui::TextureHandle>,
+) -> (bool, bool) {
     let clip = &selection.clip;
     let duration = clip.source.metadata.duration_ms as f64;
     preview_copy::paint_range(
@@ -173,41 +202,46 @@ fn show_selection(ui: &Ui, response: &egui::Response, selection: &mut Selection)
         .min((screen.width() - 24.0).max(1.0));
     let height = (width * 0.24).min(screen.height() * 0.35);
     let mut open = selection.preview_open;
-    let copy = egui::Popup::from_response(response)
+    let (copy, edit) = egui::Popup::from_response(response)
         .open_bool(&mut open)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .gap(4.0)
         .show(|ui| {
             ui.set_width(width);
-            ui.columns_const(|[start, preview, end]| {
+            let edit = ui.columns_const(|[start, preview, end]| {
                 show_endpoint(
                     start,
                     height,
                     "Start",
                     selection.frames.as_ref().map(|[start, _]| start),
                 );
-                show_playback(preview, height, selection);
+                let edit = show_playback(preview, height, selection);
                 show_endpoint(
                     end,
                     height,
                     "End",
                     selection.frames.as_ref().map(|[_, end]| end),
                 );
+                edit
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.button("Copy clip").clicked()
-            })
-            .inner
+            trim::show(ui, selection, overview);
+            let copy = ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.button("Copy clip").clicked()
+                })
+                .inner;
+            (copy, edit)
         })
-        .is_some_and(|popup| popup.inner);
+        .map(|popup| popup.inner)
+        .unwrap_or_default();
     selection.preview_open = open;
     if !open {
-        selection.hover_preview(ui.ctx(), None);
+        selection.close_preview();
     }
     if copy {
         ui.memory_mut(|memory| memory.request_focus(focus_id()));
     }
-    copy
+    (copy, edit)
 }
 
 fn show_endpoint(
@@ -227,18 +261,19 @@ fn show_endpoint(
     paint_preview(ui, rect, texture, status);
 }
 
-fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) {
+fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) -> bool {
     ui.label("Preview");
     let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let has_audio = selection.clip.source.metadata.audio_tracks > 0;
     let width = (rect.width().max(rect.height() * 16.0 / 9.0) * ui.ctx().pixels_per_point())
         .ceil()
         .clamp(128.0, 768.0) as u32;
-    let player = selection.hover_preview(ui.ctx(), response.hovered().then_some(width));
+    let player = selection.looping_preview(ui.ctx(), width);
     let status = match player {
         Some(player) if player.error.is_some() => "Unavailable",
         Some(_) => "Opening…",
-        None => "Hover to play",
+        None => "Adjusting…",
     };
     paint_preview(
         ui,
@@ -246,6 +281,17 @@ fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) {
         player.and_then(|player| player.texture.as_ref()),
         status,
     );
+    let mut edit = false;
+    response.context_menu(|ui| {
+        edit = ui
+            .add_enabled(has_audio, egui::Button::new("Edit audio track"))
+            .on_disabled_hover_text("This video has no audio track")
+            .clicked();
+        if edit {
+            ui.close();
+        }
+    });
+    edit
 }
 
 fn paint_preview(ui: &Ui, rect: Rect, texture: Option<&egui::TextureHandle>, status: &str) {

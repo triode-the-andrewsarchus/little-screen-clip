@@ -1,5 +1,5 @@
 //! Source-relative timeline selections and guarded, bounded frame reads.
-use super::{VideoMetadata, texture};
+use super::{VideoMetadata, backend, texture};
 use crate::file_manager::{
     preview_copy,
     preview_job::Task,
@@ -10,6 +10,7 @@ use egui::{Context, Id, TextureHandle};
 use little_clip_core::{BackgroundJobs, media_backend, process::CommandRequest};
 use std::{
     fs::File,
+    ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, atomic::AtomicBool},
     time::Duration,
@@ -18,6 +19,7 @@ use std::{
 static FRAMES: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 2));
 const LARGE_CLIP: u64 = 1_000_000_000;
 const AUDIO_RATE: u64 = 192_000;
+const TRIM_CONTEXT_MS: u64 = 30_000;
 
 pub(in crate::file_manager) fn focus_id() -> Id {
     Id::unique("files_video_timeline_focus")
@@ -270,24 +272,45 @@ pub(in crate::file_manager) fn timestamp(ms: u64) -> String {
 }
 
 type Endpoints = [Result<little_clip_core::ImageThumbnail, String>; 2];
+#[derive(Clone, Copy)]
+pub(in crate::file_manager) enum Edge {
+    Start,
+    End,
+}
+
 pub(in crate::file_manager) struct Selection {
     pub clip: Clip,
     pub revision: u64,
     pub preview_open: bool,
+    pub window: Range<u64>,
+    pub adjusting: bool,
     pending: Option<Task<Endpoints>>,
     pub frames: Option<[Result<TextureHandle, String>; 2]>,
     playback: Option<Session>,
+    detail: Option<Task<Result<little_clip_core::ImageThumbnail, String>>>,
+    detail_width: u32,
+    pub detail_texture: Option<TextureHandle>,
 }
 
 impl Selection {
     pub fn new(clip: Clip, revision: u64) -> Self {
+        let window = clip.start_ms.saturating_sub(TRIM_CONTEXT_MS)
+            ..clip
+                .end_ms
+                .saturating_add(TRIM_CONTEXT_MS)
+                .min(clip.source.metadata.duration_ms);
         Self {
             clip,
             revision,
             preview_open: false,
+            window,
+            adjusting: false,
             pending: None,
             frames: None,
             playback: None,
+            detail: None,
+            detail_width: 0,
+            detail_texture: None,
         }
     }
 
@@ -295,11 +318,10 @@ impl Selection {
         self.clip.source.path == path && self.revision == revision
     }
 
-    pub fn hover_preview(&mut self, ctx: &Context, width: Option<u32>) -> Option<&Session> {
-        let Some(width) = width else {
-            self.playback = None;
+    pub fn looping_preview(&mut self, ctx: &Context, width: u32) -> Option<&Session> {
+        if self.adjusting {
             return None;
-        };
+        }
         Some(self.playback.get_or_insert_with(|| {
             let clip = &self.clip;
             Session::new(
@@ -309,13 +331,71 @@ impl Selection {
                 width,
                 ctx.clone(),
                 clip.source.context.clone(),
-                Default::default(),
+                media_backend::playback::Options {
+                    looping: true,
+                    ..Default::default()
+                },
             )
         }))
     }
 
+    pub fn set_edge(&mut self, edge: Edge, time: u64) {
+        let metadata = &self.clip.source.metadata;
+        let interval = metadata.frame_interval_ms.clamp(1, metadata.duration_ms);
+        let (position, time) = match edge {
+            Edge::Start => (
+                &mut self.clip.start_ms,
+                time.clamp(self.window.start, self.clip.end_ms - interval),
+            ),
+            Edge::End => (
+                &mut self.clip.end_ms,
+                time.clamp(self.clip.start_ms + interval, self.window.end),
+            ),
+        };
+        if *position != time {
+            *position = time;
+            self.adjusting = true;
+            self.playback = None;
+        }
+    }
+
+    pub fn finish_adjustment(&mut self, ctx: &Context) {
+        if std::mem::take(&mut self.adjusting) {
+            self.prepare_frames(ctx);
+        }
+    }
+
+    pub fn close_preview(&mut self) {
+        self.playback = None;
+        self.pending = None;
+        self.detail = None;
+        self.adjusting = false;
+    }
+
+    pub fn request_detail(&mut self, ctx: &Context, width: u32) {
+        if width <= self.detail_width {
+            return;
+        }
+        self.detail_width = width;
+        let source = self.clip.source.clone();
+        let window = self.window.clone();
+        let ctx = ctx.clone();
+        self.detail = Some(Task::start(
+            &FRAMES,
+            Duration::from_secs(26),
+            move |cancel| {
+                let result = source.read(cancel, |input| {
+                    backend::detail_timeline(&source.metadata, input, width, window, cancel)
+                });
+                ctx.request_repaint();
+                result
+            },
+        ));
+    }
+
     pub fn prepare_frames(&mut self, ctx: &Context) {
         self.preview_open = true;
+        self.frames = None;
         let clip = self.clip.clone();
         let ctx = ctx.clone();
         self.pending = Some(Task::start(
@@ -340,6 +420,13 @@ impl Selection {
         if let Some(player) = &mut self.playback {
             player.poll(ctx);
         }
+        if let Some(result) = self.detail.as_ref().and_then(Task::poll) {
+            self.detail = None;
+            if let Ok(Ok(image)) = result {
+                self.detail_texture = Some(texture(ctx, "video_clip_detail".into(), image));
+                ctx.request_repaint();
+            }
+        }
         let Some(result) = self.pending.as_ref().and_then(Task::poll) else {
             return;
         };
@@ -359,9 +446,26 @@ mod tests {
     use crate::file_manager::{FileManager, filesystem, media};
 
     #[test]
-    fn one_gigabyte_warning_retains_clip_without_starting_export() {
+    fn trimming_uses_the_original_context_and_keeps_one_frame_between_edges() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("movie.mp4");
+        let mut selection = Selection::new(Clip::new(source(dir.path()), (0.25, 0.5)).unwrap(), 1);
+        let original_window = 870_000..1_830_000;
+        assert_eq!(selection.window, original_window);
+        selection.set_edge(Edge::Start, 0);
+        selection.set_edge(Edge::End, u64::MAX);
+        assert_eq!(
+            selection.clip.start_ms..selection.clip.end_ms,
+            original_window
+        );
+        selection.set_edge(Edge::End, 0);
+        assert_eq!(selection.clip.end_ms, selection.clip.start_ms + 40);
+        selection.set_edge(Edge::Start, u64::MAX);
+        assert_eq!(selection.clip.start_ms, original_window.start);
+        assert_eq!(selection.window, original_window);
+    }
+
+    fn source(directory: &Path) -> Source {
+        let path = directory.join("movie.mp4");
         std::fs::write(&path, b"identity fixture").unwrap();
         let metadata = Arc::new(VideoMetadata {
             source: crate::file_source::FileSource::capture(&path).unwrap(),
@@ -375,11 +479,17 @@ mod tests {
             description: String::new(),
             audio_tracks: 1,
         });
-        let source = Source {
+        Source {
             path,
             metadata,
             context: PreviewContext::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn one_gigabyte_warning_retains_clip_without_starting_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = source(dir.path());
         let short = Clip::new(source.clone(), (0.1, 0.2)).unwrap();
         let long = Clip::new(source, (0.25, 0.75)).unwrap();
         assert!(short.large_estimate().is_none());
