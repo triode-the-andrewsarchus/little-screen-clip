@@ -289,7 +289,7 @@ impl Previews {
             self.clear_hover();
             self.frame = Some(super::video_playback::Session::new(
                 &metadata,
-                key.time_ms,
+                super::video_playback::Span::From(key.time_ms),
                 true,
                 key.width,
                 ctx.clone(),

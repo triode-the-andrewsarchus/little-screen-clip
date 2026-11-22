@@ -90,6 +90,9 @@ pub struct Settings {
     pub fps: u32,
     /// Initial source-relative position.
     pub start_ms: u64,
+    /// Exclusive source-relative stop for a one-shot preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
     /// Probed source-relative end; zero means unknown.
     pub duration_ms: u64,
     /// Disable audio decoding and device acquisition for hover previews.

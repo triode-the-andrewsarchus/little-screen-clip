@@ -11,6 +11,7 @@ use little_clip_core::{
 use std::{
     fs::File,
     io::{self, Read, Write},
+    ops::Range,
     process::{Child, ChildStdin, ChildStdout, Stdio},
     sync::{
         Arc, LazyLock, Mutex,
@@ -25,6 +26,11 @@ struct Delivery {
     state: Option<Update>,
     tracks: Option<Tracks>,
     frame: Option<(Update, Vec<u8>)>,
+}
+
+pub(super) enum Span {
+    From(u64),
+    Selection(Range<u64>),
 }
 
 pub(super) struct Session {
@@ -50,18 +56,24 @@ pub(super) struct Session {
 impl Session {
     pub fn new(
         metadata: &VideoMetadata,
-        start_ms: u64,
+        span: Span,
         silent: bool,
         width: u32,
         ctx: egui::Context,
         context: PreviewContext,
         options: Options,
     ) -> Self {
-        let start_ms = start_ms.min(
-            metadata
-                .duration_ms
-                .saturating_sub(metadata.frame_interval_ms),
-        );
+        let (start_ms, end_ms) = match span {
+            Span::From(start) => (
+                start.min(
+                    metadata
+                        .duration_ms
+                        .saturating_sub(metadata.frame_interval_ms),
+                ),
+                None,
+            ),
+            Span::Selection(range) => (range.start, Some(range.end)),
+        };
         let pending = Arc::new(Mutex::new(None));
         let delivery = Arc::new(Mutex::new(Delivery::default()));
         let source = Arc::new(Mutex::new(metadata.source.clone()));
@@ -71,6 +83,7 @@ impl Session {
             height: width * 9 / 16,
             fps: if silent { 20 } else { 30 },
             start_ms,
+            end_ms,
             duration_ms: metadata.duration_ms,
             silent,
             options: options.clone(),
@@ -244,6 +257,7 @@ impl Worker {
         while !cancel.load(Ordering::Relaxed) {
             let packet = Update::read(&mut reader).map_err(|error| error.to_string())?;
             self.check(&pin, cancel)?;
+            let completed = self.settings.end_ms.is_some() && packet.0.ended;
             let mut delivery = self.delivery.lock().unwrap();
             if let Some(tracks) = &packet.0.tracks {
                 delivery.tracks = Some(tracks.clone());
@@ -254,6 +268,9 @@ impl Worker {
             }
             drop(delivery);
             self.ctx.request_repaint();
+            if completed {
+                break;
+            }
         }
         Ok(())
     }
@@ -415,7 +432,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut player = Session::new(
             &metadata(),
-            100,
+            Span::From(100),
             true,
             320,
             ctx.clone(),
@@ -469,7 +486,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut player = Session::new(
             &metadata(),
-            0,
+            Span::From(0),
             true,
             320,
             ctx.clone(),

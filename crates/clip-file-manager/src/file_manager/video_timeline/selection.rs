@@ -1,6 +1,11 @@
 //! Source-relative timeline selections and guarded, bounded frame reads.
 use super::{VideoMetadata, texture};
-use crate::file_manager::{preview_copy, preview_job::Task, search::PreviewContext};
+use crate::file_manager::{
+    preview_copy,
+    preview_job::Task,
+    search::PreviewContext,
+    video_playback::{Session, Span},
+};
 use egui::{Context, Id, TextureHandle};
 use little_clip_core::{BackgroundJobs, media_backend, process::CommandRequest};
 use std::{
@@ -271,6 +276,7 @@ pub(in crate::file_manager) struct Selection {
     pub preview_open: bool,
     pending: Option<Task<Endpoints>>,
     pub frames: Option<[Result<TextureHandle, String>; 2]>,
+    playback: Option<Session>,
 }
 
 impl Selection {
@@ -281,11 +287,31 @@ impl Selection {
             preview_open: false,
             pending: None,
             frames: None,
+            playback: None,
         }
     }
 
     pub fn matches(&self, path: &Path, revision: u64) -> bool {
         self.clip.source.path == path && self.revision == revision
+    }
+
+    pub fn hover_preview(&mut self, ctx: &Context, width: Option<u32>) -> Option<&Session> {
+        let Some(width) = width else {
+            self.playback = None;
+            return None;
+        };
+        Some(self.playback.get_or_insert_with(|| {
+            let clip = &self.clip;
+            Session::new(
+                &clip.source.metadata,
+                Span::Selection(clip.start_ms..clip.end_ms),
+                true,
+                width,
+                ctx.clone(),
+                clip.source.context.clone(),
+                Default::default(),
+            )
+        }))
     }
 
     pub fn prepare_frames(&mut self, ctx: &Context) {
@@ -311,6 +337,9 @@ impl Selection {
     }
 
     pub fn poll(&mut self, ctx: &Context) {
+        if let Some(player) = &mut self.playback {
+            player.poll(ctx);
+        }
         let Some(result) = self.pending.as_ref().and_then(Task::poll) else {
             return;
         };

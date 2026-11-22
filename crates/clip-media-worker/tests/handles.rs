@@ -756,8 +756,7 @@ mod playback {
         output: ChildStdout,
     }
     impl Player {
-        fn open() -> Self {
-            let settings = Self::settings(1200);
+        fn open(settings: Settings) -> Self {
             Self::source(
                 std::path::Path::new(concat!(
                     env!("CARGO_MANIFEST_DIR"),
@@ -773,6 +772,7 @@ mod playback {
                 height: 180,
                 fps: 20,
                 start_ms,
+                end_ms: None,
                 duration_ms: 3000,
                 silent: true,
                 options: Default::default(),
@@ -863,21 +863,44 @@ mod playback {
         let mut player = Player::source(
             path,
             Settings {
-                stream: 0,
                 width: 160,
                 height: 160,
-                fps: 20,
-                start_ms: 0,
                 duration_ms: 1000,
-                silent: true,
-                options: Default::default(),
+                ..Player::settings(0)
             },
         );
         player.until(|packet| packet.bytes > 0)
     }
     #[test]
+    fn one_shot_playback_stops_at_the_exclusive_selection_edge() {
+        let span = 720..1550;
+        let mut player = Player::open(Settings {
+            end_ms: Some(span.end),
+            ..Player::settings(span.start)
+        });
+        let (first, _) = player.until(|packet| packet.bytes > 0);
+        assert!((span.start..span.start + 100).contains(&first.position_ms));
+        let last = std::cell::Cell::new(first.position_ms);
+        let (finished, _) = player.until(|packet| {
+            if packet.bytes > 0 {
+                assert!(span.contains(&packet.position_ms), "{packet:?}");
+                last.set(packet.position_ms);
+            }
+            packet.ended
+        });
+        assert!(!finished.playing);
+        assert!((span.end - 100..span.end).contains(&last.get()));
+        let mut data = [0];
+        let mut reader = Timed {
+            output: &mut player.output,
+            deadline: Instant::now() + Duration::from_secs(2),
+        };
+        assert_eq!(reader.read(&mut data).unwrap(), 0);
+    }
+
+    #[test]
     fn fast_rate_switches_keep_delivering_frames_and_resume_after_pause() {
-        let mut player = Player::open();
+        let mut player = Player::open(Player::settings(1200));
         player.until(|p| p.bytes > 0);
         for (index, rate) in [10.0, 4.0, 10.0, 2.0, 4.0, 1.5, 10.0, 4.0]
             .into_iter()
@@ -985,7 +1008,7 @@ mod playback {
 
     #[test]
     fn player_clocks_frames_pauses_seeks_with_epochs_and_reports_eof_without_a_window() {
-        let mut player = Player::open();
+        let mut player = Player::open(Player::settings(1200));
         let (start, pixels) = player.until(|packet| packet.bytes > 0);
         assert!((1200..1400).contains(&start.position_ms), "{start:?}");
         assert!(

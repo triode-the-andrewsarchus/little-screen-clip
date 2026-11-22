@@ -537,7 +537,7 @@ mod format_tests {
             let ctx = egui::Context::default();
             let mut player = crate::file_manager::video_playback::Session::new(
                 &metadata,
-                500,
+                crate::file_manager::video_playback::Span::From(500),
                 true,
                 96,
                 ctx.clone(),

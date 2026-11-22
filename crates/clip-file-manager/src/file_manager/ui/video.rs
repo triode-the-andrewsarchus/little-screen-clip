@@ -169,26 +169,30 @@ fn show_selection(ui: &Ui, response: &egui::Response, selection: &mut Selection)
     let width = response
         .rect
         .width()
-        .clamp(320.0, 720.0)
+        .clamp(360.0, 960.0)
         .min((screen.width() - 24.0).max(1.0));
-    let height = (width * 0.32).min(screen.height() * 0.35);
+    let height = (width * 0.24).min(screen.height() * 0.35);
+    let mut open = selection.preview_open;
     let copy = egui::Popup::from_response(response)
-        .open_bool(&mut selection.preview_open)
+        .open_bool(&mut open)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .gap(4.0)
         .show(|ui| {
             ui.set_width(width);
-            ui.columns_const(|[left, right]| {
-                for (index, (column, label)) in
-                    [(left, "Start"), (right, "End")].into_iter().enumerate()
-                {
-                    show_endpoint(
-                        column,
-                        height,
-                        label,
-                        selection.frames.as_ref().map(|frames| &frames[index]),
-                    );
-                }
+            ui.columns_const(|[start, preview, end]| {
+                show_endpoint(
+                    start,
+                    height,
+                    "Start",
+                    selection.frames.as_ref().map(|[start, _]| start),
+                );
+                show_playback(preview, height, selection);
+                show_endpoint(
+                    end,
+                    height,
+                    "End",
+                    selection.frames.as_ref().map(|[_, end]| end),
+                );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.button("Copy clip").clicked()
@@ -196,6 +200,10 @@ fn show_selection(ui: &Ui, response: &egui::Response, selection: &mut Selection)
             .inner
         })
         .is_some_and(|popup| popup.inner);
+    selection.preview_open = open;
+    if !open {
+        selection.hover_preview(ui.ctx(), None);
+    }
     if copy {
         ui.memory_mut(|memory| memory.request_focus(focus_id()));
     }
@@ -210,9 +218,40 @@ fn show_endpoint(
 ) {
     ui.label(label);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let texture = frame.and_then(|frame| frame.as_ref().ok());
+    let status = if frame.is_some() {
+        "Unavailable"
+    } else {
+        "Loading…"
+    };
+    paint_preview(ui, rect, texture, status);
+}
+
+fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) {
+    ui.label("Preview");
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let width = (rect.width().max(rect.height() * 16.0 / 9.0) * ui.ctx().pixels_per_point())
+        .ceil()
+        .clamp(128.0, 768.0) as u32;
+    let player = selection.hover_preview(ui.ctx(), response.hovered().then_some(width));
+    let status = match player {
+        Some(player) if player.error.is_some() => "Unavailable",
+        Some(_) => "Opening…",
+        None => "Hover to play",
+    };
+    paint_preview(
+        ui,
+        rect,
+        player.and_then(|player| player.texture.as_ref()),
+        status,
+    );
+}
+
+fn paint_preview(ui: &Ui, rect: Rect, texture: Option<&egui::TextureHandle>, status: &str) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-    if let Some(Ok(texture)) = frame {
+    if let Some(texture) = texture {
         let size = texture.size_vec2();
         let scale = (rect.width() / size.x).min(rect.height() / size.y);
         painter.image(
@@ -225,11 +264,7 @@ fn show_endpoint(
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            if frame.is_some() {
-                "Unavailable"
-            } else {
-                "Loading…"
-            },
+            status,
             FontId::proportional(13.0),
             ui.visuals().text_color(),
         );

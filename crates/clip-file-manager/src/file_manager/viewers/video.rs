@@ -3,7 +3,7 @@ use super::super::{
     media::{VideoMetadata as Prepared, inspect_video},
     preview_copy::Copies,
     ui::video::paint_timelens,
-    video_playback::Session,
+    video_playback::{Session, Span},
     video_timeline::{Timeline, selection::FrameCopy},
 };
 use crate::file_source::FileSource;
@@ -91,7 +91,7 @@ impl Video {
         if self.player.is_none() {
             self.player = Some(Session::new(
                 &self.prepared,
-                self.start_ms,
+                Span::From(self.start_ms),
                 false,
                 1280,
                 ctx.clone(),
