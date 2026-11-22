@@ -55,23 +55,17 @@ def encode(pattern):
         if command in (stitch.STITCH, stitch.SEQUIN_EJECT):
             sewn_in_block = True
             color = pattern.threadlist[thread] if 0 <= thread < len(pattern.threadlist) else None
-            if color is None:
-                result += RECORD.pack(round(x), round(y), 0, 0, 0, 1)
-            else:
-                rgb = color.color
-                result += RECORD.pack(round(x), round(y), (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 0)
-        elif command == stitch.NEEDLE_SET:
-            if extension == "tbf":
+            rgb = (color.color & 0xFFFFFF).to_bytes(3, "big") if color is not None else b"\0\0\0"
+            result += RECORD.pack(round(x), round(y), *rgb, int(color is None))
+        elif command in (stitch.COLOR_CHANGE, stitch.COLOR_BREAK, stitch.NEEDLE_SET):
+            next_thread = command != stitch.NEEDLE_SET or sewn_in_block
+            if command == stitch.NEEDLE_SET and extension == "tbf":
                 # TBF selects a one-based needle in its embedded thread table.
                 thread = ((flags >> 16) & 255) - 2
-            elif sewn_in_block:
-                thread += 1
-            result += RECORD.pack(0, 0, 0, 0, 0, 3 if sewn_in_block else 2)
+            else:
+                thread += next_thread
+            result += RECORD.pack(0, 0, 0, 0, 0, 2 + next_thread)
             sewn_in_block = False
-        elif command in (stitch.COLOR_CHANGE, stitch.COLOR_BREAK):
-            thread += 1
-            sewn_in_block = False
-            result += RECORD.pack(0, 0, 0, 0, 0, 3)
         elif command in (stitch.JUMP, stitch.TRIM):
             result += RECORD.pack(0, 0, 0, 0, 0, 2)
         elif command == stitch.END:

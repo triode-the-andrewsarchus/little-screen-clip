@@ -182,7 +182,12 @@ impl Viewer {
         ui.add(
             egui::Slider::new(&mut self.frame, 0..=self.layout.colors().len())
                 .text("Stitch progress")
-                .custom_formatter(|frame, _| self.layout.stitches_at(frame as usize).to_string()),
+                .custom_formatter(|frame, _| self.layout.stitches_at(frame as usize).to_string())
+                .custom_parser(|value| {
+                    let stitches = value.parse::<usize>().ok()?;
+                    let fraction = stitches as f32 / self.layout.stitch_count as f32;
+                    Some(self.layout.frame(fraction) as f64)
+                }),
         );
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         if let Some(texture) = &self.texture {
