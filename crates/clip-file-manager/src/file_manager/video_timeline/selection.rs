@@ -86,10 +86,15 @@ impl FrameCopy {
         use image::ImageEncoder;
         let frame = match self {
             Self::Displayed(image, time_ms) => {
+                let rgba: Vec<_> = image
+                    .pixels
+                    .iter()
+                    .flat_map(egui::Color32::to_srgba_unmultiplied)
+                    .collect();
                 let mut png = Vec::new();
                 image::codecs::png::PngEncoder::new(&mut png)
                     .write_image(
-                        image.as_raw(),
+                        &rgba,
                         image.width() as u32,
                         image.height() as u32,
                         image::ExtendedColorType::Rgba8,
