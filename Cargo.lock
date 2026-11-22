@@ -6550,6 +6550,7 @@ dependencies = [
  "calamine",
  "chrono",
  "clip-media-protocol",
+ "csv",
  "excalidraw-document",
  "fearless_simd 1.2.0",
  "fearless_simd_macros",

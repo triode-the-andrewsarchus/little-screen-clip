@@ -47,6 +47,7 @@ pub(crate) mod search;
 mod selection;
 mod shelf;
 mod sorting;
+mod spreadsheet_strip;
 mod subtitle_strip;
 pub(crate) mod system;
 mod system_route;

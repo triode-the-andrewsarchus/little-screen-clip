@@ -396,8 +396,16 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<super::DocumentPosition> {
         if entry.is_spreadsheet() {
-            self.show_spreadsheet(ui, row, entry, columns, colors, palette)
-                .map(super::DocumentPosition::SpreadsheetSheet)
+            super::spreadsheet_strip::show(
+                ui,
+                row,
+                entry,
+                columns,
+                colors,
+                palette,
+                self.listing(entry),
+            )
+            .map(super::DocumentPosition::SpreadsheetSheet)
         } else if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
@@ -472,40 +480,6 @@ impl EntryPreviews {
                 .map(super::DocumentPosition::TextLine)
         }
     }
-    fn show_spreadsheet(
-        &mut self,
-        ui: &mut egui::Ui,
-        row: egui::Rect,
-        entry: &Entry,
-        columns: super::ui::ListColumns,
-        colors: crate::ui_appearance::WorkbenchColors,
-        palette: &little_clip_core::palette::AppPalette,
-    ) -> Option<usize> {
-        let ready = self.listing(entry);
-        let detail = ready.map_or("Spreadsheet", |ready| ready.data.detail.as_str());
-        let rect = super::ui::information_strip(ui, row, entry, detail, Some(columns), colors);
-        if !rect.is_positive() || !ui.is_rect_visible(rect) {
-            return None;
-        }
-        let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 3.0, colors.recessed);
-        if let Some(sheet) = ready.and_then(|ready| ready.data.spreadsheet.as_ref()) {
-            if sheet.is_empty() {
-                paint_spreadsheet_status(&painter, rect, "Empty sheet", colors);
-            } else {
-                clip_studios::spreadsheet_view::paint_sheet_corner(ui, rect, sheet, palette);
-            }
-            return Some(sheet.workbook_index);
-        }
-        let status = if ready.is_none() {
-            "Loading sheet…"
-        } else {
-            "Sheet preview unavailable"
-        };
-        paint_spreadsheet_status(&painter, rect, status, colors);
-        None
-    }
-
     pub fn show_visual(
         &mut self,
         ui: &mut egui::Ui,
@@ -1115,21 +1089,6 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
             .ceil()
             .clamp(1.0, 128.0) as u32,
     )
-}
-
-fn paint_spreadsheet_status(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    text: &str,
-    colors: crate::ui_appearance::WorkbenchColors,
-) {
-    painter.text(
-        rect.left_center() + egui::vec2(8.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        text,
-        egui::FontId::proportional(12.0),
-        colors.text_secondary,
-    );
 }
 
 fn text_candidate(entry: &Entry) -> bool {

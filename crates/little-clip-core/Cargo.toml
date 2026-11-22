@@ -50,6 +50,7 @@ lopdf = "0.47"
 chrono = "0.4"
 hifitime = { version = "4.3.2", default-features = false, features = ["std"] }
 calamine = "0.36.1"
+csv = "1.4"
 midly = "0.5"
 scenix-loader = "1.10.0"
 gltf = "1.4"

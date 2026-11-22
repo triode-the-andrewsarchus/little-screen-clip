@@ -164,7 +164,10 @@ impl SpreadsheetSheet {
 
 /// Parses a delimiter-separated text string (auto-detecting comma, tab, or semicolon delimiters) into rows.
 pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
-    delimited_rows(csv_text, detect_delimiter(csv_text)).collect()
+    delimited_rows(csv_text, detect_delimiter(csv_text))
+        .filter_map(Result::ok)
+        .map(|row| row.iter().map(str::to_owned).collect())
+        .collect()
 }
 
 fn detect_delimiter(text: &str) -> char {
@@ -195,40 +198,14 @@ fn detect_delimiter(text: &str) -> char {
     }
 }
 
-fn delimited_rows(text: &str, delimiter: char) -> impl Iterator<Item = Vec<String>> {
-    let mut chars = text.trim_start_matches('\u{feff}').chars().peekable();
-    std::iter::from_fn(move || {
-        loop {
-            let mut row = Vec::new();
-            let mut field = String::new();
-            let mut quoted = false;
-            let mut explicit_field = false;
-            while let Some(c) = chars.next() {
-                match c {
-                    '"' if quoted && chars.peek() == Some(&'"') => {
-                        chars.next();
-                        field.push('"');
-                    }
-                    '"' if quoted => quoted = false,
-                    '"' if field.trim().is_empty() => {
-                        quoted = true;
-                        explicit_field = true;
-                    }
-                    c if c == delimiter && !quoted => {
-                        row.push(field.trim().to_owned());
-                        field.clear();
-                    }
-                    '\n' if !quoted => break,
-                    _ => field.push(c),
-                }
-            }
-            if !row.is_empty() || !field.trim().is_empty() || explicit_field {
-                row.push(field.trim().to_owned());
-                return Some(row);
-            }
-            chars.peek()?;
-        }
-    })
+fn delimited_rows(text: &str, delimiter: char) -> csv::StringRecordsIntoIter<&[u8]> {
+    csv::ReaderBuilder::new()
+        .delimiter(delimiter as u8)
+        .has_headers(false)
+        .flexible(true)
+        .trim(csv::Trim::All)
+        .from_reader(text.as_bytes())
+        .into_records()
 }
 
 /// Fast first-pass check for delimited clipboard text. Full parsing and shape
@@ -405,16 +382,17 @@ fn load_delimited(
     };
     let (row_limit, column_limit) = preview.unwrap_or((usize::MAX, usize::MAX));
     let mut sheet = SpreadsheetSheet::new("Sheet1".to_owned(), Vec::new());
-    for (index, mut row) in delimited_rows(&content, delimiter).enumerate() {
+    for (index, row) in delimited_rows(&content, delimiter).enumerate() {
         check_cancelled(cancelled)?;
+        let row = row.map_err(|error| error.to_string())?;
         sheet.total_rows = index + 1;
         sheet.total_cols = sheet.total_cols.max(row.len());
         if index < row_limit {
-            row.truncate(column_limit);
+            let mut values: Vec<_> = row.iter().take(column_limit).map(str::to_owned).collect();
             if preview.is_some() {
-                row.iter_mut().for_each(limit_preview_text);
+                values.iter_mut().for_each(limit_preview_text);
             }
-            sheet.rows.push(row);
+            sheet.rows.push(values);
         }
     }
     Ok(sheet)

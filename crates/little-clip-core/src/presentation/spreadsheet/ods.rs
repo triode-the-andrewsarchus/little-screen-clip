@@ -26,23 +26,22 @@ pub(super) fn read_merges(
         check_cancelled(cancelled)?;
         match reader.read_event().map_err(|error| error.to_string())? {
             Event::Start(tag) if tag.name().as_ref() == b"table:table" => {
-                let name = tag
+                let Some(name) = tag
                     .try_get_attribute("table:name")
                     .map_err(|err| err.to_string())?
-                    .map(|name| {
-                        name.decoded_and_normalized_value(
-                            quick_xml::XmlVersion::Implicit1_0,
-                            reader.decoder(),
-                        )
-                        .map(|name| name.into_owned())
-                    })
-                    .transpose()
-                    .map_err(|err| err.to_string())?;
+                else {
+                    continue;
+                };
+                let name = name
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        reader.decoder(),
+                    )
+                    .map_err(|err| err.to_string())?
+                    .into_owned();
                 let merges = read_table(&mut reader, remaining, cancelled)?;
                 remaining -= merges.len();
-                if let Some(name) = name {
-                    sheets.insert(name, merges);
-                }
+                sheets.insert(name, merges);
             }
             Event::Eof => break,
             _ => (),

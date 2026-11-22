@@ -295,32 +295,7 @@ impl Source {
             Source::VcvRaster(request) => request.load(token),
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Spreadsheet(path, revision) => {
-                let mut data =
-                    Data::new(display_path(&path), "Spreadsheet".into(), Icon::Spreadsheet);
-                let loaded = (|| {
-                    use super::super::filesystem::check_revision;
-                    check_revision(&path, revision)?;
-                    let workbook = little_clip_core::spreadsheet::load_spreadsheet_preview(
-                        &path, 8, 32, token,
-                    )?;
-                    check_revision(&path, revision)?;
-                    workbook
-                        .sheets
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| "No sheet data".to_owned())
-                })();
-                match loaded {
-                    Ok(sheet) => {
-                        data.detail = format!(
-                            "{} · {} rows × {} columns",
-                            sheet.name, sheet.total_rows, sheet.total_cols
-                        );
-                        data.spreadsheet = Some(sheet);
-                    }
-                    Err(error) => data.text = error,
-                }
-                data
+                super::super::spreadsheet_strip::load(&path, revision, token)
             }
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),
