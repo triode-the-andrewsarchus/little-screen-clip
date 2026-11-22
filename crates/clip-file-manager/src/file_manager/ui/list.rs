@@ -474,11 +474,9 @@ impl FileManager {
             previews.files.retain(&previews.paths);
         }
         previews.music.retain(&previews.music_paths);
-        let keep_video_hover =
-            previews.hovered_video || ui.input(|input| input.pointer.secondary_down());
         previews
             .videos
-            .retain(&previews.visible_videos, keep_video_hover);
+            .retain(&previews.visible_videos, previews.hovered_video, ui.ctx());
         previews
             .containers
             .finish_frame(&mut previews.container_paths);

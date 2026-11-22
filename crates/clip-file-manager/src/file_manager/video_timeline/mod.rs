@@ -95,7 +95,7 @@ impl Previews {
         self.hover = None;
         self.frame = None;
     }
-    pub fn retain(&mut self, entries: &[&Entry], keep_hover: bool) {
+    pub fn retain(&mut self, entries: &[&Entry], hovered: bool, ctx: &Context) {
         self.visible_jobs = entries.len().clamp(1, *dispatch::FILE_LIMIT);
         let keys: BTreeMap<_, _> = entries
             .iter()
@@ -110,6 +110,8 @@ impl Previews {
         }) {
             self.selection = None;
         }
+        // Keep the pixels from the last painted hover through a secondary press.
+        let keep_hover = hovered || ctx.input(|input| input.pointer.secondary_down());
         if !keep_hover
             || self
                 .hover
@@ -436,7 +438,7 @@ mod tests {
             .unwrap();
         assert_eq!(texture.id(), first);
         assert_eq!(texture.size(), [2, 64]);
-        previews.retain(&[], false);
+        previews.retain(&[], false, &ctx);
         assert!(previews.ready.is_empty());
         assert!(previews.pending.is_empty());
         assert!(cancelled.load(Ordering::Relaxed));
