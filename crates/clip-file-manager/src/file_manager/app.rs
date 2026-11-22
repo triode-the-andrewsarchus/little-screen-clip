@@ -767,7 +767,7 @@ impl eframe::App for FileManagerApp {
                 .tick(ctx, &mut self.browser.music_selection);
         }
         self.browser.midi.tick(ctx);
-        if let Some(result) = self.browser.preview_copies.poll() {
+        if let Some(result) = self.browser.preview_copies.poll(ctx) {
             match result {
                 Ok(text) => self
                     .browser

@@ -163,7 +163,7 @@ fn timeline_interaction(
 fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
     let clip = &selection.clip;
     let duration = clip.source.metadata.duration_ms as f64;
-    let label = preview_copy::paint_range(
+    let copy = preview_copy::paint_range(
         ui,
         rect,
         (
@@ -175,6 +175,7 @@ fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
             timestamp(clip.start_ms),
             timestamp(clip.end_ms)
         ),
+        "Copy clip",
     );
     for (index, label) in ["Start", "End"].into_iter().enumerate() {
         let width = (rect.width() * 0.23).clamp(1.0, 110.0);
@@ -194,16 +195,10 @@ fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
             selection.frames.as_ref().map(|frames| &frames[index]),
         );
     }
-    label.width() >= 290.0
-        && ui
-            .put(
-                Rect::from_min_max(
-                    pos2(label.right() - 66.0, label.top() + 1.0),
-                    label.right_bottom(),
-                ),
-                egui::Button::new("Copy clip").small(),
-            )
-            .clicked()
+    if copy {
+        ui.memory_mut(|memory| memory.request_focus(focus_id()));
+    }
+    copy
 }
 
 fn paint_endpoint(

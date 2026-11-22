@@ -1,6 +1,6 @@
 //! Selection follows the same source bins as the painted minimap.
 use super::Document;
-use crate::file_manager::{filesystem::Entry, search::PreviewContext};
+use crate::file_manager::{filesystem::Entry, preview_copy, search::PreviewContext};
 use egui::{Id, Rect, Response, Sense, Ui};
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -31,6 +31,10 @@ pub(in crate::file_manager) struct Selected {
 }
 
 impl Selection {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The strip needs its display width, source observation and parent row response"
+    )]
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -41,123 +45,122 @@ impl Selection {
         row: &mut Response,
         context: &PreviewContext,
     ) -> bool {
-        let Some(source) = document.source.as_ref().filter(|_| document.lines > 0) else {
+        if document.lines == 0 || !rect.is_positive() {
             return false;
-        };
+        }
         let interaction = ui.interact(
             rect,
             Id::unique(("text_minimap", &entry.path)),
             Sense::click_and_drag(),
         );
         let modified = ui.input(|i| i.modifiers.ctrl || i.modifiers.command || i.modifiers.shift);
-        let dragging = interaction.dragged_by(egui::PointerButton::Primary)
-            || interaction.drag_stopped_by(egui::PointerButton::Primary);
-        if !modified && dragging {
+        let dragging = !modified
+            && (interaction.dragged_by(egui::PointerButton::Primary)
+                || interaction.drag_stopped_by(egui::PointerButton::Primary));
+        if dragging {
             ui.memory_mut(|memory| memory.request_focus(focus_id()));
-            if let Some((start, end)) =
-                crate::file_manager::preview_copy::drag_fractions(ui, &interaction)
-            {
+            if let Some((start, end)) = preview_copy::drag_fractions(ui, &interaction) {
                 let bins = document.display_range(start, width).start
                     ..document.display_range(end, width).end;
-                let first = &document.bins[bins.start];
-                let last = &document.bins[bins.end - 1];
-                self.range = Some(Selected {
-                    path: entry.path.clone(),
-                    revision: entry.revision,
-                    source: source.clone(),
-                    bins,
-                    bytes: first.bytes.start..last.bytes.end,
-                    lines: (first.start + 1, last.end),
-                    context: context.clone(),
-                });
+                self.range = Some(Selected::new(entry, document, bins, context));
             }
         }
-        if let Some(range) = self.range.as_ref().filter(|range| {
-            range.path == entry.path
-                && range.revision == entry.revision
-                && range.source == *source
-                && range.bins.end <= document.bins.len()
-        }) {
-            let first = &document.bins[range.bins.start];
-            let last = &document.bins[range.bins.end - 1];
-            let extent = document.display_extent(&range.bins, width);
-            let label = crate::file_manager::preview_copy::paint_range(
-                ui,
-                rect,
-                extent,
-                &format!("Lines {}–{}  ·  Ctrl+C", first.start + 1, last.end),
-            );
-            if label.width() >= 290.0
-                && ui
-                    .put(
-                        Rect::from_min_max(
-                            egui::pos2(label.right() - 74.0, label.top() + 1.0),
-                            label.right_bottom(),
-                        ),
-                        egui::Button::new("Copy lines").small(),
-                    )
-                    .clicked()
-            {
-                self.copy = true;
-            }
-            interaction.context_menu(|ui| {
-                if ui.button("Copy selected lines").clicked() {
-                    self.copy = true;
-                    ui.close();
-                }
-                ui.separator();
-                let first_text = first
-                    .excerpt
-                    .first()
-                    .into_iter()
-                    .flat_map(|line| &line.runs)
-                    .map(|(text, _)| text.as_str())
-                    .collect::<String>();
-                ui.label(format!(
-                    "Start · {}  {}",
-                    first.start + 1,
-                    first_text.trim_end()
-                ));
-                ui.label(format!("End · {}  {}", last.end, last.last_line));
-            });
-            if interaction.secondary_clicked() {
-                return true;
-            }
-        }
-        if !dragging || modified {
+        let selected = self
+            .range
+            .as_ref()
+            .filter(|range| range.matches(entry, document));
+        let handled = selected.is_some_and(|range| {
+            let (copy, menu) = range.show(ui, width, document, &interaction);
+            self.copy |= copy;
+            menu
+        });
+        if !dragging && !handled {
             *row = row.union(interaction);
         }
-        !modified && dragging
+        dragging || handled
     }
 }
 
 impl Selected {
+    fn new(
+        entry: &Entry,
+        document: &Document,
+        bins: Range<usize>,
+        context: &PreviewContext,
+    ) -> Self {
+        let first = &document.bins[bins.start];
+        let last = &document.bins[bins.end - 1];
+        Self {
+            path: entry.path.clone(),
+            revision: entry.revision,
+            source: document.source.clone(),
+            bins,
+            bytes: first.bytes.start..last.bytes.end,
+            lines: (first.start + 1, last.end),
+            context: context.clone(),
+        }
+    }
+
+    fn matches(&self, entry: &Entry, document: &Document) -> bool {
+        self.path == entry.path && self.revision == entry.revision && self.source == document.source
+    }
+
+    fn show(
+        &self,
+        ui: &mut Ui,
+        width: usize,
+        document: &Document,
+        interaction: &Response,
+    ) -> (bool, bool) {
+        let (first, last) = self.lines;
+        let extent = document.display_extent(&self.bins, width);
+        let mut copy = preview_copy::paint_range(
+            ui,
+            interaction.rect,
+            extent,
+            &format!("Lines {first}–{last}  ·  Ctrl+C"),
+            "Copy lines",
+        );
+        let menu = interaction.context_menu(|ui| {
+            if ui.button("Copy selected lines").clicked() {
+                copy = true;
+                ui.close();
+            }
+            ui.separator();
+            let first_line = document.bins[self.bins.start]
+                .excerpt
+                .first()
+                .into_iter()
+                .flat_map(|line| &line.runs)
+                .map(|(text, _)| text.as_str())
+                .collect::<String>();
+            let last_line = &document.bins[self.bins.end - 1].last_line;
+            ui.label(format!("Start · {first}  {}", first_line.trim_end()));
+            ui.label(format!("End · {last}  {last_line}"));
+        });
+        if copy {
+            ui.memory_mut(|memory| memory.request_focus(focus_id()));
+        }
+        (copy, menu.is_some())
+    }
+
     pub fn export(&self, cancel: &AtomicBool) -> Result<String, String> {
         let (first, last) = self.lines;
         let label = format!("lines-{first}-{last}");
-        crate::file_manager::preview_copy::copy_file(&self.path, &label, None, |output| {
+        preview_copy::copy_file(&self.path, &label, None, |output| {
             self.write(output, cancel)
         })?;
         Ok(format!("Copied lines {first}–{last} as a file"))
     }
     fn write(&self, output: &mut impl std::io::Write, cancel: &AtomicBool) -> Result<(), String> {
-        self.context.read(&self.path, cancel, || {
-            let (mut input, _) = crate::file_source::ReadCheck::default().open(
-                &self.path,
-                Some(&self.source),
-                cancel,
-            )?;
+        preview_copy::read_range(&self.context, &self.path, &self.source, cancel, |input| {
             input
                 .seek(SeekFrom::Start(self.bytes.start))
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| error.to_string())?;
             let length = self.bytes.end - self.bytes.start;
-            let copied = std::io::copy(&mut (&mut input).take(length), output)
+            let copied = std::io::copy(&mut input.take(length), output)
                 .map_err(|error| error.to_string())?;
             if copied != length {
-                return Err("Text source changed while copying".into());
-            }
-            self.source.check_file(&input)?;
-            if crate::file_source::FileSource::capture(&self.path)? != self.source {
                 return Err("Text source changed while copying".into());
             }
             Ok(())

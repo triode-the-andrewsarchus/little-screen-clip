@@ -336,49 +336,17 @@ impl FileManager {
         }
         self.music_previews.poll(ui.ctx());
         self.video_previews.poll(ui.ctx());
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            music::waveform_id(),
-            Sense::focusable_noninteractive(),
-        );
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            super::super::midi_strip::focus_id(),
-            Sense::focusable_noninteractive(),
-        );
-        self.midi.render_feedback(ui, palette);
-        let scroll = self.list_scroll(ui, ROW_HEIGHT);
-        let Some(directory) = &self.directory else {
-            ui.label(if self.pending.is_some() {
-                "Loading folder…"
-            } else {
-                "Choose a folder or enter a path."
-            });
-            return;
-        };
-        if self.visible.is_empty() {
-            ui.label(if self.search.applied.is_some() {
-                "No matching files."
-            } else if directory.entries.is_empty() {
-                "This folder is empty."
-            } else {
-                "No visible items. Enable hidden files to see this folder's contents."
-            });
+        for id in strip_focus_ids() {
+            ui.interact(
+                ui.available_rect_before_wrap(),
+                id,
+                Sense::focusable_noninteractive(),
+            );
         }
         let selected = self
             .index
             .and_then(|index| self.history.get(index))
             .map(|location| &location.selection);
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            minimap_id(),
-            Sense::focusable_noninteractive(),
-        );
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            timeline_id(),
-            Sense::focusable_noninteractive(),
-        );
         let mut actions = ListActions::for_browser(self);
         let can_edit = self.can_edit();
         let selection_count = self.selection_count();
@@ -500,19 +468,23 @@ impl FileManager {
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.clamped_offset().y, &background);
         self.list_audio(play);
-        if std::mem::take(&mut self.video_previews.copy_clip) {
-            self.copy_video_range(ui.ctx());
-        }
-        if let Some(frame) = self.video_previews.copy_frame.take() {
-            self.preview_copies
-                .start(ui.ctx(), move |cancel| frame.copy(cancel));
-        }
-        if std::mem::take(&mut self.previews.text_selection.copy) {
-            self.copy_text_range(ui.ctx());
-        }
+        self.list_copy_requests(ui.ctx());
         if let Some(column) = output.inner {
             column.apply(self);
             self.focus_list = true;
+        }
+    }
+
+    fn list_copy_requests(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.video_previews.copy_clip) {
+            self.copy_video_range(ctx);
+        }
+        if let Some(frame) = self.video_previews.copy_frame.take() {
+            self.preview_copies
+                .start(ctx, move |cancel| frame.copy(cancel));
+        }
+        if std::mem::take(&mut self.previews.text_selection.copy) {
+            self.copy_text_range(ctx);
         }
     }
 

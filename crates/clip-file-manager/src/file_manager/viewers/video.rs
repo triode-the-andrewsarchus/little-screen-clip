@@ -352,11 +352,9 @@ struct Transport {
 
 impl Transport {
     fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(result) = self.copies.poll() {
+        if let Some(result) = self.copies.poll(ctx) {
             self.notice = Some((result, ctx.input(|input| input.time) + 4.0));
             ctx.request_repaint();
-        } else if self.copies.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(40));
         }
     }
 

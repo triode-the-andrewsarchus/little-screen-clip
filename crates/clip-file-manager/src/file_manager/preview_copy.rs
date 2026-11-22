@@ -1,5 +1,6 @@
 //! Clipboard exports outlive the preview that requested them.
-use super::preview_job::Task;
+use super::{preview_job::Task, search::PreviewContext};
+use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::{HandSide, clipboard::ClipboardError, ipc::IpcRequest};
 use std::{
     fs::File,
@@ -38,8 +39,11 @@ impl Copies {
         ));
     }
 
-    pub fn poll(&mut self) -> Option<Result<String, String>> {
-        let result = self.job.as_ref()?.poll()?;
+    pub fn poll(&mut self, ctx: &egui::Context) -> Option<Result<String, String>> {
+        let Some(result) = self.job.as_ref()?.poll() else {
+            ctx.request_repaint_after(Duration::from_millis(40));
+            return None;
+        };
         self.job = None;
         Some(
             result
@@ -47,6 +51,24 @@ impl Copies {
                 .and_then(|result| result),
         )
     }
+}
+
+pub(super) fn read_range<T>(
+    context: &PreviewContext,
+    path: &Path,
+    source: &FileSource,
+    cancel: &AtomicBool,
+    read: impl FnOnce(&mut File) -> Result<T, String>,
+) -> Result<T, String> {
+    context.read(path, cancel, || {
+        let (mut file, _) = ReadCheck::default().open(path, Some(source), cancel)?;
+        let result = read(&mut file)?;
+        source.check_file(&file)?;
+        if FileSource::capture(path)? != *source {
+            return Err("Source changed while reading the selection".into());
+        }
+        Ok(result)
+    })
 }
 
 pub(super) fn copy_file(
@@ -78,7 +100,7 @@ pub(super) fn copy_file(
         .tempfile_in(&anchor)
         .map_err(|error| error.to_string())?;
     write(output.as_file_mut())?;
-    let published = crate::file_source::FileSource::capture_file(output.as_file())?;
+    let published = FileSource::capture_file(output.as_file())?;
     published.check()?;
     let path = published.path().to_path_buf();
     let clipboard =
@@ -122,7 +144,8 @@ pub(super) fn paint_range(
     rect: egui::Rect,
     (start, end): (f32, f32),
     label: &str,
-) -> egui::Rect {
+    action: &str,
+) -> bool {
     use egui::{Align2, FontId, Rect, Stroke, pos2, vec2};
     let painter = ui.painter_at(rect);
     let selection = Rect::from_min_max(
@@ -142,12 +165,27 @@ pub(super) fn paint_range(
         vec2(rect.width(), 21.0),
     );
     painter.rect_filled(label_rect, 0.0, ui.visuals().extreme_bg_color);
-    painter.text(
-        label_rect.center(),
+    let has_button = label_rect.width() >= 290.0;
+    let text_area = if has_button {
+        Rect::from_min_max(label_rect.min, label_rect.right_bottom() - vec2(82.0, 0.0))
+    } else {
+        label_rect
+    };
+    painter.with_clip_rect(text_area).text(
+        text_area.center(),
         Align2::CENTER_CENTER,
         label,
         FontId::monospace(12.0),
         ui.visuals().text_color(),
     );
-    label_rect
+    has_button
+        && ui
+            .put(
+                Rect::from_min_max(
+                    pos2(text_area.right() + 4.0, label_rect.top() + 1.0),
+                    label_rect.right_bottom(),
+                ),
+                egui::Button::new(action).small(),
+            )
+            .clicked()
 }

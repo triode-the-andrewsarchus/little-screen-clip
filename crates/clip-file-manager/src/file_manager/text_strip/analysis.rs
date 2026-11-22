@@ -33,7 +33,7 @@ pub(in crate::file_manager) fn load(
     }
     let neutral =
         bytes > 16 * 1024 * 1024 || shape.lines > 250_000 || shape.longest > stream::LINE_LIMIT;
-    let (mut document, syntax, markdown) = prepare(path, &shape, neutral);
+    let (mut document, syntax, markdown) = prepare(path, source.clone(), &shape, neutral);
     document.diagram = super::super::diagram_strip::Document::read(
         path,
         &mut file,
@@ -43,7 +43,6 @@ pub(in crate::file_manager) fn load(
         shape.lossy,
         &mut document.note,
     )?;
-    document.source = Some(source.clone());
     document.markdown = (markdown && document.diagram.is_none()).then(|| source.clone());
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     summarize(&mut document, file, syntax, neutral, cancelled)?;
@@ -53,6 +52,7 @@ pub(in crate::file_manager) fn load(
 
 fn prepare(
     path: &Path,
+    source: FileSource,
     shape: &stream::Shape,
     neutral: bool,
 ) -> (Document, &'static syntect::parsing::SyntaxReference, bool) {
@@ -114,7 +114,7 @@ fn prepare(
         },
         diagram: None,
         markdown: None,
-        source: None,
+        source,
         metadata: markdown
             .then(|| super::metadata::Summary::parse(&shape.prefix))
             .flatten(),

@@ -31,17 +31,13 @@ impl Source {
         cancel: &AtomicBool,
         work: impl FnOnce(File) -> Result<T, String>,
     ) -> Result<T, String> {
-        self.context.read(&self.path, cancel, || {
-            let source = &self.metadata.source;
-            let (file, _) =
-                crate::file_source::ReadCheck::default().open(&self.path, Some(source), cancel)?;
-            let result = work(file.try_clone().map_err(|error| error.to_string())?)?;
-            source.check_file(&file)?;
-            if crate::file_source::FileSource::capture(&self.path)? != *source {
-                return Err("Video source changed; select it again".into());
-            }
-            Ok(result)
-        })
+        preview_copy::read_range(
+            &self.context,
+            &self.path,
+            &self.metadata.source,
+            cancel,
+            |file| work(file.try_clone().map_err(|error| error.to_string())?),
+        )
     }
 
     fn frame(
@@ -413,9 +409,18 @@ mod tests {
             context: PreviewContext::default(),
         };
         let clip = Clip::new(source, (0.25, 0.75)).unwrap();
+        let begin = clip.source.frame(0.5, [96, 64], &cancel, false).unwrap();
+        let end = clip
+            .source
+            .frame(1.499999, [96, 64], &cancel, true)
+            .unwrap();
+        assert_eq!(
+            (begin.time_ms, end.time_ms),
+            (500_u64.div_ceil(40) * 40, 1480)
+        );
         let output = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
         clip.write(output.as_file(), &cancel).unwrap();
-        let rendered = media::inspect_video(output.path()).unwrap();
+        let rendered = Arc::new(media::inspect_video(output.path()).unwrap());
         assert!(
             (960..=1040).contains(&rendered.duration_ms),
             "{}",
@@ -425,7 +430,7 @@ mod tests {
         for (time, expected) in [(0, 0), (800, 2)] {
             let clip = Source {
                 path: output.path().to_owned(),
-                metadata: Arc::new(media::inspect_video(output.path()).unwrap()),
+                metadata: rendered.clone(),
                 context: PreviewContext::default(),
             };
             let frame = clip

@@ -81,7 +81,7 @@ pub(in crate::file_manager) struct Document {
     pub metadata: Option<metadata::Summary>,
     pub diagram: Option<super::diagram_strip::Document>,
     pub markdown: Option<crate::file_source::FileSource>,
-    source: Option<crate::file_source::FileSource>,
+    source: crate::file_source::FileSource,
     columns: usize,
     bins: Vec<Bin>,
 }

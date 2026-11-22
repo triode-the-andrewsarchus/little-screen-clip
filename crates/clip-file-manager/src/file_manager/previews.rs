@@ -388,6 +388,10 @@ impl EntryPreviews {
     ) {
         self.scenes.show(ui, row, entry, columns, colors, palette);
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Shared row geometry and responses stay with the caller"
+    )]
     pub fn show_document(
         &mut self,
         ui: &mut egui::Ui,
@@ -636,7 +640,11 @@ impl EntryPreviews {
         }
         selected
     }
-    pub fn show_listing(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The strip preserves the row response for non-range actions"
+    )]
+    fn show_listing(
         &mut self,
         ui: &mut egui::Ui,
         row: egui::Rect,

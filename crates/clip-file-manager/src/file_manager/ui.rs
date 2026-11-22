@@ -33,6 +33,15 @@ fn tree_id() -> Id {
     Id::unique("file_manager_tree_focus")
 }
 
+fn strip_focus_ids() -> [Id; 4] {
+    [
+        music::waveform_id(),
+        super::midi_strip::focus_id(),
+        minimap_id(),
+        timeline_id(),
+    ]
+}
+
 pub(super) fn key(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
     ctx.input_mut(|input| input.consume_key(modifiers, key))
 }
@@ -82,14 +91,7 @@ impl FileManager {
             }
         }
         ui.memory_mut(|memory| {
-            for id in [
-                tree_id(),
-                list_id(),
-                music::waveform_id(),
-                minimap_id(),
-                timeline_id(),
-                super::midi_strip::focus_id(),
-            ] {
+            for id in [tree_id(), list_id()].into_iter().chain(strip_focus_ids()) {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
@@ -105,17 +107,13 @@ impl FileManager {
         self.transfer_windows(ui.ctx(), palette);
         self.search_settings_ui(ui.ctx(), palette);
         self.large_video_copy_ui(ui.ctx(), palette);
-        let file_clipboard = ui.memory(|memory| {
-            [
-                list_id(),
-                music::waveform_id(),
-                minimap_id(),
-                timeline_id(),
-                super::midi_strip::focus_id(),
-            ]
-            .into_iter()
-            .any(|id| memory.has_focus(id))
-        }) && !self.browser_modal();
+        let file_clipboard = !self.browser_modal()
+            && ui.memory(|memory| {
+                memory.has_focus(list_id())
+                    || memory
+                        .focused()
+                        .is_some_and(|id| strip_focus_ids().contains(&id))
+            });
         let text_focus_shortcuts = if ui.memory(|memory| memory.has_focus(list_id())) {
             vec![egui::KeyboardShortcut::new(Modifiers::CTRL, Key::F)]
         } else {
@@ -154,7 +152,6 @@ impl FileManager {
             || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
-            || self.preview_copies.busy()
             || self.archives.busy()
             || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
@@ -311,14 +308,8 @@ impl FileManager {
         ) && focused.is_none();
         let requested = self.was_modal || self.focus_list || default_list;
         self.was_modal = modal;
-        let owns_arrows = [
-            Some(tree_id()),
-            Some(music::waveform_id()),
-            Some(minimap_id()),
-            Some(timeline_id()),
-            Some(super::midi_strip::focus_id()),
-        ]
-        .contains(&focused);
+        let owns_arrows =
+            focused.is_some_and(|id| id == tree_id() || strip_focus_ids().contains(&id));
         // Explicit sidebar/strip focus, clicks and Tab choose their own target.
         if owns_arrows
             || ctx.input(|input| {
@@ -381,30 +372,11 @@ impl FileManager {
         }
         if ctx.memory(|memory| memory.has_focus(tree_id())) {
             self.tree_shortcuts(ctx);
-        } else if ctx.memory(|memory| {
-            [
-                super::midi_strip::focus_id(),
-                music::waveform_id(),
-                minimap_id(),
-                timeline_id(),
-            ]
-            .into_iter()
-            .any(|id| memory.has_focus(id))
-        }) {
-            let focused = ctx.memory(|memory| memory.focused());
-            if [Some(minimap_id()), Some(timeline_id())].contains(&focused)
-                && key(ctx, Modifiers::NONE, Key::Escape)
-            {
-                self.previews.text_selection.range = None;
-                self.video_previews.selection = None;
-                self.focus_list = true;
-            }
-            if key(ctx, Modifiers::CTRL, Key::C) {
-                self.copy_strip_selection(ctx);
-            }
-            if key(ctx, Modifiers::CTRL, Key::V) {
-                self.paste_files();
-            }
+        } else if let Some(id) = ctx
+            .memory(|memory| memory.focused())
+            .filter(|id| strip_focus_ids().contains(id))
+        {
+            self.strip_shortcuts(ctx, id);
         } else if ctx.memory(|memory| memory.has_focus(list_id())) {
             self.list_shortcuts(ctx);
             if self.edits.dialog.is_some() {
@@ -419,6 +391,20 @@ impl FileManager {
             if key(ctx, Modifiers::NONE, Key::Enter) {
                 self.open_selected();
             }
+        }
+    }
+
+    fn strip_shortcuts(&mut self, ctx: &egui::Context, id: Id) {
+        if [minimap_id(), timeline_id()].contains(&id) && key(ctx, Modifiers::NONE, Key::Escape) {
+            self.previews.text_selection.range = None;
+            self.video_previews.selection = None;
+            self.focus_list = true;
+        }
+        if key(ctx, Modifiers::CTRL, Key::C) {
+            self.copy_strip_selection(ctx);
+        }
+        if key(ctx, Modifiers::CTRL, Key::V) {
+            self.paste_files();
         }
     }
 
