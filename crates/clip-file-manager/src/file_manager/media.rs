@@ -315,11 +315,12 @@ pub(super) fn inspect_video_header(
     path: &std::path::Path,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<VideoMetadata, String> {
-    let source = FileSource::capture(path)?;
+    let (input, source) = crate::file_source::ReadCheck::default().open(path, None, cancel)?;
+    let size_bytes = input.metadata().map_err(|error| error.to_string())?.len();
     let probe = little_clip_core::media_backend::probe_request(
         little_clip_core::media_backend::VIDEO_FORMATS,
     )
-    .arg_content_file(path)
+    .arg_owned_content_file(input)
     .map_err(|e| e.to_string())?
     .timeout(Duration::from_secs(3))
     .max_output_bytes(64 * 1024)
@@ -342,10 +343,7 @@ pub(super) fn inspect_video_header(
         dimensions: (width, height),
         duration_ms,
         stream,
-        size_bytes: value["format"]["size"]
-            .as_str()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
+        size_bytes,
         codec: video["codec_name"].as_str().unwrap_or_default().into(),
         frame_interval_ms: video_details::frame_rate(video)
             .map(|fps| (1000.0 / fps).ceil().clamp(1.0, 60_000.0) as u64)
