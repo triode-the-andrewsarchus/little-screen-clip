@@ -33,10 +33,9 @@ def read_pattern(source):
     signatures = {"pes": b"#PES", "pec": b"#PEC0001", "vp3": b"%vsm%\x00"}
     if extension in signatures and not source.startswith(signatures[extension]):
         raise ValueError("missing embroidery signature")
-    if extension in ("jef", "jpx"):
-        offset, flag = struct.unpack_from("<II", source)
-        # JPX also names a JPEG 2000 container. Require a Janome header.
-        if flag not in (1, 10) or not 0x74 <= offset < len(source):
+    if extension == "jef":
+        (offset,) = struct.unpack_from("<I", source)
+        if not 0x74 <= offset < len(source):
             raise ValueError("missing Janome header")
     if extension == "exp" and (len(source) < 4 or len(source) % 2):
         raise ValueError("incomplete EXP commands")

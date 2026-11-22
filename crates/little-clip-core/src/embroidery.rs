@@ -131,7 +131,7 @@ impl Design {
             read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
         check_cancelled(cancelled)?;
         let mut builder = StitchBuilder::default();
-        if matches!(extension.as_str(), "vip" | "jef+")
+        if matches!(extension.as_str(), "vip" | "jef+" | "jpx")
             || (extension == "jef" && bytes.get(4..8) == Some(&1_u32.to_le_bytes()))
         {
             read_native(&extension, &bytes, &mut builder)?;
@@ -290,8 +290,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/embroidery");
         let cancelled = AtomicBool::new(false);
         for extension in [
-            "dst", "exp", "hus", "jef", "jef+", "pec", "pes", "ptn", "tbf", "u01", "vip", "vp3",
-            "xxx",
+            "dst", "exp", "hus", "jef", "jef+", "jpx", "pec", "pes", "ptn", "tbf", "u01", "vip",
+            "vp3", "xxx",
         ] {
             let path = root.join(format!("Wildflower.{extension}"));
             assert_eq!(Format::for_path(&path), Some(Format::Embroidery));
