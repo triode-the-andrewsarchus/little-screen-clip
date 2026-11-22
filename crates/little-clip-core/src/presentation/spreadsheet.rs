@@ -679,14 +679,15 @@ mod tests {
             xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
             <office:body><office:spreadsheet><table:table table:name="Forecast">
             <table:table-row table:number-rows-repeated="2"><table:table-cell/></table:table-row>
-            <table:table-row><table:table-cell table:number-columns-repeated="2"/>
-              <table:table-cell table:number-columns-spanned="3" table:number-rows-spanned="2" office:value-type="string"><text:p>Quarterly forecast</text:p></table:table-cell>
-              <table:covered-table-cell table:number-columns-repeated="2"/>
-            </table:table-row>
+            <table:table-row><table:table-cell table:number-columns-repeated="2"/><table:table-cell table:number-columns-spanned="3" table:number-rows-spanned="2" office:value-type="string"><text:p>Quarterly forecast</text:p></table:table-cell><table:covered-table-cell table:number-columns-repeated="2"/></table:table-row>
             <table:table-row><table:table-cell table:number-columns-repeated="2"/><table:covered-table-cell table:number-columns-repeated="3"/></table:table-row>
             </table:table></office:spreadsheet></office:body></office:document-content>"#;
         for (name, content) in [
             ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+            (
+                "META-INF/manifest.xml",
+                r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#,
+            ),
             ("content.xml", worksheet),
         ] {
             zip.start_file(name, zip::write::SimpleFileOptions::default())

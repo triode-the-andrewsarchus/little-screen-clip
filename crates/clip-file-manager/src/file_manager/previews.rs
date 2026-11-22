@@ -1158,20 +1158,18 @@ mod tests {
         let row = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(520.0, 108.0));
         let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
             ctx.root_ui(|ui| {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    let position = previews.show_document(
-                        ui,
-                        row,
-                        &entry,
-                        super::super::ui::ListColumns::new(row),
-                        colors,
-                        &palette,
-                    );
-                    assert_eq!(
-                        position,
-                        Some(super::super::DocumentPosition::SpreadsheetSheet(0))
-                    );
-                });
+                let position = previews.show_document(
+                    ui,
+                    row,
+                    &entry,
+                    super::super::ui::ListColumns::new(row),
+                    colors,
+                    &palette,
+                );
+                assert_eq!(
+                    position,
+                    Some(super::super::DocumentPosition::SpreadsheetSheet(0))
+                );
             });
         });
         let painted: Vec<_> = output

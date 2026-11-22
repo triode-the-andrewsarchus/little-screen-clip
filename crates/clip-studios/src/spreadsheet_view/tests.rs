@@ -33,13 +33,7 @@ fn clicking_the_far_corner_of_a_merge_copies_its_anchor() {
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        viewer.render_ui(ui, ctx, &palette, &mut false);
-                    });
-                });
-            },
+            |ctx| ctx.root_ui(|ui| viewer.render_ui(ui, ctx, &palette, &mut false)),
         )
     };
     let output = render(Vec::new(), 0.0);
