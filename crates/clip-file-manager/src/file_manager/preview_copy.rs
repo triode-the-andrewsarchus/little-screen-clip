@@ -139,6 +139,8 @@ pub(super) fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option
     Some((start.min(end), start.max(end)))
 }
 
+pub(super) const RANGE_FOOTER_HEIGHT: f32 = 24.0;
+
 pub(super) fn paint_range(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -161,13 +163,13 @@ pub(super) fn paint_range(
         );
     }
     let label_rect = Rect::from_min_size(
-        rect.left_bottom() - vec2(0.0, 21.0),
-        vec2(rect.width(), 21.0),
+        rect.left_bottom() - vec2(0.0, RANGE_FOOTER_HEIGHT),
+        vec2(rect.width(), RANGE_FOOTER_HEIGHT),
     );
     painter.rect_filled(label_rect, 0.0, ui.visuals().extreme_bg_color);
     let has_button = label_rect.width() >= 290.0;
     let text_area = if has_button {
-        Rect::from_min_max(label_rect.min, label_rect.right_bottom() - vec2(82.0, 0.0))
+        Rect::from_min_max(label_rect.min, label_rect.right_bottom() - vec2(100.0, 0.0))
     } else {
         label_rect
     };
@@ -185,7 +187,9 @@ pub(super) fn paint_range(
                     pos2(text_area.right() + 4.0, label_rect.top() + 1.0),
                     label_rect.right_bottom(),
                 ),
-                egui::Button::new(action).small(),
+                egui::Button::new(action)
+                    .small()
+                    .wrap_mode(egui::TextWrapMode::Extend),
             )
             .clicked()
 }

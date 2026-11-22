@@ -186,7 +186,10 @@ fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
         };
         let frame = Rect::from_min_max(
             pos2(left, rect.top()),
-            pos2(left + width, (rect.bottom() - 21.0).max(rect.top() + 1.0)),
+            pos2(
+                left + width,
+                (rect.bottom() - preview_copy::RANGE_FOOTER_HEIGHT).max(rect.top() + 1.0),
+            ),
         );
         paint_endpoint(
             ui,
