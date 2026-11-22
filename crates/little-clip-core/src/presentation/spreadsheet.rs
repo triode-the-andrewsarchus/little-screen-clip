@@ -13,6 +13,8 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod ods;
+
 /// A merged range in sheet-relative, zero-based coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergedCell {
@@ -376,6 +378,13 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
     Ok(())
 }
 
+fn limit_preview_text(value: &mut String) {
+    if let Some((end, _)) = value.char_indices().nth(256) {
+        value.truncate(end);
+        value.push('…');
+    }
+}
+
 fn load_delimited(
     path: &Path,
     tsv: bool,
@@ -397,6 +406,9 @@ fn load_delimited(
         sheet.total_cols = sheet.total_cols.max(row.len());
         if index < row_limit {
             row.truncate(column_limit);
+            if preview.is_some() {
+                row.iter_mut().for_each(limit_preview_text);
+            }
             sheet.rows.push(row);
         }
     }
@@ -413,6 +425,11 @@ fn load_workbook(
     check_cancelled(cancelled)?;
     let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes.as_slice()))
         .map_err(|error| format!("Failed to open workbook: {error}"))?;
+    let mut ods_merges = if matches!(workbook, Sheets::Ods(_)) {
+        ods::read_merges(&bytes, cancelled).unwrap_or_default()
+    } else {
+        Default::default()
+    };
     let metadata = workbook.sheets_metadata().to_vec();
     let mut sheets = Vec::new();
     for (index, info) in metadata.into_iter().enumerate() {
@@ -421,7 +438,8 @@ fn load_workbook(
             continue;
         }
         let name = info.name;
-        let sheet = read_workbook_sheet(&mut workbook, name, preview, cancelled);
+        let merges = ods_merges.remove(&name).unwrap_or_default();
+        let sheet = read_workbook_sheet(&mut workbook, name, merges, preview, cancelled);
         check_cancelled(cancelled)?;
         if let Ok(mut sheet) = sheet {
             sheet.workbook_index = index;
@@ -443,13 +461,15 @@ fn load_workbook(
 fn read_workbook_sheet(
     workbook: &mut Sheets<Cursor<&[u8]>>,
     name: String,
+    ods_merges: Vec<Dimensions>,
     preview: Option<(usize, usize)>,
     cancelled: &AtomicBool,
 ) -> Result<SpreadsheetSheet, String> {
     let mut merges = match workbook {
         Sheets::Xlsx(book) => book.merge_cells_by_sheet_name(&name).unwrap_or_default(),
         Sheets::Xls(book) => book.merge_cells_by_sheet_name(&name).unwrap_or_default(),
-        _ => Vec::new(),
+        Sheets::Ods(_) => ods_merges,
+        Sheets::Xlsb(_) => Vec::new(),
     };
     merges.retain(|span| span.start.0 <= span.end.0 && span.start.1 <= span.end.1);
     if let Some(limits) = preview {
@@ -525,8 +545,10 @@ fn stream_preview<'a, E: std::fmt::Display>(
             cells.retain(|cell| in_window(cell.get_position()));
         }
         if in_window(position) {
-            let value = Data::from(cell.get_value().clone()).to_string();
-            cells.push(Cell::new(position, value.trim().to_owned()));
+            let display = Data::from(cell.get_value().clone()).to_string();
+            let mut value = display.trim().to_owned();
+            limit_preview_text(&mut value);
+            cells.push(Cell::new(position, value));
         }
     }
     let range = WorksheetRange::from_sparse(cells);
@@ -576,11 +598,13 @@ fn workbook_sheet(
             rows.resize_with(row_offset, Vec::new);
             for row in range.rows().take(row_limit - row_offset) {
                 let mut values = vec![String::new(); column_offset];
-                values.extend(
-                    row.iter()
-                        .take(column_limit - column_offset)
-                        .map(|cell| cell.to_string().trim().to_owned()),
-                );
+                values.extend(row.iter().take(column_limit - column_offset).map(|cell| {
+                    let mut value = cell.to_string().trim().to_owned();
+                    if preview.is_some() {
+                        limit_preview_text(&mut value);
+                    }
+                    value
+                }));
                 rows.push(values);
             }
         }
@@ -665,6 +689,46 @@ mod tests {
                 anchor: (0, 0),
                 rows: 0..2,
                 columns: 0..4
+            }]
+        );
+    }
+
+    #[test]
+    fn opendocument_merges_follow_repeated_rows_and_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("merged.ods");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let worksheet = r#"<office:document-content
+            xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+            xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+            xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+            <office:body><office:spreadsheet><table:table table:name="Forecast">
+            <table:table-row table:number-rows-repeated="2"><table:table-cell/></table:table-row>
+            <table:table-row><table:table-cell table:number-columns-repeated="2"/>
+              <table:table-cell table:number-columns-spanned="3" table:number-rows-spanned="2" office:value-type="string"><text:p>Quarterly forecast</text:p></table:table-cell>
+              <table:covered-table-cell table:number-columns-repeated="2"/>
+            </table:table-row>
+            <table:table-row><table:table-cell table:number-columns-repeated="2"/><table:covered-table-cell table:number-columns-repeated="3"/></table:table-row>
+            </table:table></office:spreadsheet></office:body></office:document-content>"#;
+        for (name, content) in [
+            ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+            ("content.xml", worksheet),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(content.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let data = load_spreadsheet(&path).unwrap();
+        let sheet = &data.sheets[0];
+        assert_eq!(sheet.origin, (2, 2));
+        assert_eq!(sheet.cell(0, 0), "Quarterly forecast");
+        assert_eq!(
+            sheet.merges,
+            [MergedCell {
+                rows: 0..2,
+                columns: 0..3
             }]
         );
     }
