@@ -1,27 +1,93 @@
 //! Text-only decoding of the same embedded subtitle ordinals used by playback.
+mod ebml;
+mod matroska;
+
 use super::{Result, message, stream_time};
 use clip_media_protocol::{
     VIDEO_FORMATS,
-    playback::{MAX_SUBTITLE_BYTES, SubtitleCue},
+    playback::{MAX_SUBTITLE_BYTES, SUBTITLE_READ_TIMEOUT, SubtitleCue},
 };
 use gstreamer::{self as gst, prelude::*};
 use std::{
     fs::File,
     io::{Seek, Write},
-    os::fd::AsRawFd,
+    os::{fd::AsRawFd, unix::fs::MetadataExt},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
-pub(crate) fn read(mut file: File, track: u32, output: &mut impl Write) -> Result<()> {
+const MAX_CUE_BYTES: usize = 16 * 1024;
+
+pub(crate) fn read(
+    mut file: File,
+    track: u32,
+    output: &mut impl Write,
+    progress: Option<File>,
+) -> Result<()> {
     if track >= 64 || !file.metadata().map_err(message)?.is_file() {
         return Err("Invalid embedded subtitle source or track".into());
     }
+    let progress = progress.map(Progress::new).transpose()?;
     // Use playback's ordinary media admission before handing the pinned URI to GStreamer.
-    crate::probe::probe(file.try_clone().map_err(message)?, VIDEO_FORMATS)?;
+    let metadata = crate::probe::probe(file.try_clone().map_err(message)?, VIDEO_FORMATS)?;
+    if metadata["format"]["start_time"].as_str() == Some("0")
+        && let Some(cues) = matroska::try_read(
+            &file,
+            track,
+            Instant::now() + SUBTITLE_READ_TIMEOUT,
+            progress.as_ref(),
+        )?
+    {
+        return write_transcript(cues, output);
+    }
     file.rewind().map_err(message)?;
     gst::init().map_err(message)?;
     let reader = Reader::new(&file, track)?;
     reader.write_cues(output)
+}
+
+fn write_transcript(cues: Vec<SubtitleCue>, output: &mut impl Write) -> Result<()> {
+    output.write_all(b"[").map_err(message)?;
+    let mut total = 2;
+    for cue in cues {
+        write_subtitle(&cue, output, &mut total)?;
+    }
+    output.write_all(b"]").map_err(message)?;
+    output.flush().map_err(message)
+}
+
+struct Progress(Mutex<(File, usize)>);
+
+impl Progress {
+    fn new(file: File) -> Result<Self> {
+        let metadata = file.metadata().map_err(message)?;
+        if !metadata.is_file() || metadata.nlink() != 0 || metadata.len() != 0 {
+            return Err("Subtitle progress requires an empty private output".into());
+        }
+        Ok(Self(Mutex::new((file, 0))))
+    }
+
+    fn publish(&self, cues: &[SubtitleCue]) -> ebml::Result<()> {
+        if cues.is_empty() {
+            return Ok(());
+        }
+        let mut batch = Vec::new();
+        for cue in cues {
+            serde_json::to_writer(&mut batch, cue).map_err(|_| ebml::Error::Unsupported)?;
+            batch.push(b'\n');
+            if batch.len() > MAX_SUBTITLE_BYTES {
+                return Err(ebml::Error::Limit);
+            }
+        }
+        let mut state = self.0.lock().map_err(|_| ebml::Error::Unsupported)?;
+        let (file, written) = &mut *state;
+        if *written + batch.len() > MAX_SUBTITLE_BYTES {
+            return Err(ebml::Error::Limit);
+        }
+        file.write_all(&batch)?;
+        *written += batch.len();
+        Ok(())
+    }
 }
 
 struct Reader {
@@ -134,7 +200,7 @@ fn select_stream(values: &[gst::glib::Value], track: u32) -> Option<bool> {
 fn write_cue(sample: &gst::Sample, output: &mut impl Write, total: &mut usize) -> Result<()> {
     let start_ms = stream_time(sample).ok_or("Subtitle timestamp unavailable")?;
     let buffer = sample.buffer().ok_or("Missing subtitle text")?;
-    if buffer.size() > 16 * 1024 {
+    if buffer.size() > MAX_CUE_BYTES {
         return Err("A subtitle cue exceeds the search limit".into());
     }
     let map = buffer.map_readable().map_err(message)?;
@@ -156,12 +222,19 @@ fn write_cue(sample: &gst::Sample, output: &mut impl Write, total: &mut usize) -
     } else {
         text.into()
     };
-    let cue = serde_json::to_vec(&SubtitleCue {
-        start_ms,
-        text,
-        markup,
-    })
-    .map_err(message)?;
+    write_subtitle(
+        &SubtitleCue {
+            start_ms,
+            text,
+            markup,
+        },
+        output,
+        total,
+    )
+}
+
+fn write_subtitle(cue: &SubtitleCue, output: &mut impl Write, total: &mut usize) -> Result<()> {
+    let cue = serde_json::to_vec(cue).map_err(message)?;
     let separator = usize::from(*total > 2);
     if *total + cue.len() + separator > MAX_SUBTITLE_BYTES {
         return Err("The subtitle track exceeds the search limit".into());

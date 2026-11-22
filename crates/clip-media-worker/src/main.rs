@@ -28,7 +28,10 @@ fn run() -> Result<(), String> {
 }
 
 fn visual_command(arguments: &[String]) -> Result<(), String> {
-    if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+    let progress = arguments.len() == 4 && arguments[0] == "subtitle-track";
+    if (arguments.len() != 3 && !progress)
+        || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES
+    {
         return Err("Invalid video/playback request".into());
     }
     let input = inherited_input(&arguments[2])?;
@@ -45,6 +48,10 @@ fn visual_command(arguments: &[String]) -> Result<(), String> {
             input,
             serde_json::from_str(settings).map_err(|error| error.to_string())?,
             &mut output,
+            arguments
+                .get(3)
+                .map(|descriptor| inherited_input(descriptor))
+                .transpose()?,
         ),
         "video-frame" => video::snapshot(
             input,

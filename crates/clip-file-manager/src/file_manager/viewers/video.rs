@@ -113,6 +113,12 @@ impl Video {
         }
         if let Some(player) = &mut self.player {
             player.poll(ctx);
+            self.dialogue.tick(
+                ctx,
+                &self.prepared.source,
+                &self.read_check,
+                dialogue::selected_track(player).map(|track| track.index),
+            );
         }
     }
 
@@ -194,8 +200,7 @@ impl Video {
             }
         }
         if self.dialogue.open {
-            self.dialogue
-                .show(ui.ctx(), player, &self.prepared.source, &self.read_check);
+            self.dialogue.show(ui.ctx(), player);
         } else {
             dismiss_key(ui, &mut self.fullscreen, close, menu_was_open);
         }
@@ -320,7 +325,7 @@ fn shortcuts(
     }
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
         egui::Popup::close_all(ui.ctx());
-        dialogue.open();
+        dialogue.open(ui.ctx());
     }
     if dialogue.open || ui.ctx().egui_wants_keyboard_input() {
         return;
@@ -508,7 +513,7 @@ fn playback_menu(ui: &mut Ui, player: &mut Session, dialogue: &mut dialogue::Fin
         return;
     }
     if ui.button("Find dialogue…  Ctrl+F").clicked() {
-        dialogue.open();
+        dialogue.open(ui.ctx());
         ui.close();
     }
     let selected_subtitle = dialogue::selected_track(player).map(|track| track.index);

@@ -42,6 +42,7 @@ clip-media-worker video-frame SETTINGS_JSON /proc/self/fd/N
 clip-media-worker video-preview SETTINGS_JSON /proc/self/fd/N
 clip-media-worker video-timeline SETTINGS_JSON /proc/self/fd/N
 clip-media-worker playback SETTINGS_JSON /proc/self/fd/N
+clip-media-worker subtitle-track TRACK_ORDINAL /proc/self/fd/N [/proc/self/fd/M]
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -141,3 +142,12 @@ at 64 KiB independently of the raw frame budget. Subtitle rendering requires the
 GStreamer text/subtitle overlay plugins and fonts (including `pango` for text
 tracks). The optional `scaletempo` audio filter preserves pitch at changed rates
 when the audiofx plugin is installed. Options never write application settings.
+
+`subtitle-track` reads one zero-based embedded text track and emits a bounded
+JSON array of `playback::SubtitleCue` values. The Matroska fast path skips
+audio and video block payloads. On CIFS it uses aligned positioned reads and
+the container's cue index to divide the scan into contiguous ranges with
+complete coverage. An optional inherited unlinked output descriptor receives
+newline-delimited cues from completed ranges while the scan is in progress.
+Both outputs are capped independently. The complete array on stdout supplies
+the final result. Other supported subtitle formats use the GStreamer reader.

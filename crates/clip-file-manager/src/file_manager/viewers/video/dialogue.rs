@@ -1,4 +1,6 @@
 //! Search the selected embedded transcript without blocking playback or the UI.
+mod reader;
+
 use super::{Session, clock};
 use crate::file_source::{FileSource, ReadCheck};
 use clip_search::name_match::{name_rank, navigation_rank};
@@ -6,7 +8,6 @@ use egui::{Context, Id, Key, Modifiers, Ui};
 use little_clip_core::{
     BackgroundJobs, html_preview,
     jobs::task::Task,
-    media_backend,
     media_backend::playback::{SubtitleCue, Track},
 };
 use std::{
@@ -26,12 +27,13 @@ pub(super) struct Find {
     focus: bool,
     query: String,
     track: Option<u32>,
-    loading: Option<Task<Result<Arc<[Line]>, String>>>,
+    loading: Option<reader::Loading>,
     transcript: Option<Result<Arc<[Line]>, String>>,
     searching: Option<Task<Matches>>,
     matches: Option<Matches>,
 }
 
+#[derive(Clone)]
 struct Line {
     start_ms: u64,
     text: String,
@@ -44,20 +46,14 @@ struct Matches {
 }
 
 impl Find {
-    pub fn open(&mut self) {
+    pub fn open(&mut self, ctx: &Context) {
         self.open = true;
         self.focus = true;
+        ctx.request_repaint();
     }
 
-    pub fn show(
-        &mut self,
-        ctx: &Context,
-        player: &mut Session,
-        source: &FileSource,
-        check: &ReadCheck,
-    ) {
+    pub fn show(&mut self, ctx: &Context, player: &mut Session) {
         let track = selected_track(player);
-        self.update(ctx, source, check, track.map(|track| track.index));
         let dialogue = egui::Modal::new(Id::unique("video_dialogue_find")).show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 40.0).clamp(180.0, 550.0));
             ui.horizontal(|ui| {
@@ -82,12 +78,11 @@ impl Find {
         }
         if dialogue.inner.is_some() || dialogue.should_close() {
             self.open = false;
-            self.loading = None;
             self.searching = None;
         }
     }
 
-    fn update(
+    pub fn tick(
         &mut self,
         ctx: &Context,
         source: &FileSource,
@@ -100,31 +95,40 @@ impl Find {
             self.transcript = None;
             self.invalidate_matches();
         }
-        if let Some(track) = self.track
+        if self.open
+            && let Some(track) = self.track
             && self.transcript.is_none()
             && self.loading.is_none()
         {
-            let source = source.clone();
-            let check = check.clone();
-            self.loading = Some(Task::start(&JOBS, Duration::from_secs(36), move |cancel| {
-                read_transcript(&source, &check, track, cancel)
-            }));
+            self.loading = Some(reader::Loading::start(source.clone(), check.clone(), track));
         }
-        if let Some(result) = self.loading.as_ref().and_then(Task::poll) {
+        self.poll_loading();
+        if let Some(result) = self.searching.as_ref().and_then(Task::poll) {
+            self.searching = None;
+            self.matches = result.ok();
+        }
+        if self.loading.is_some() || self.open && self.searching.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        }
+    }
+
+    fn poll_loading(&mut self) {
+        let Some(loading) = &self.loading else {
+            return;
+        };
+        if let Some(result) = loading.task.poll() {
             self.loading = None;
             self.transcript = Some(
                 result
                     .map_err(|error| error.to_string())
                     .and_then(|result| result),
             );
+        } else if let Ok(lines) = loading.progress.try_recv() {
+            self.transcript = Some(Ok(lines));
+        } else {
+            return;
         }
-        if let Some(result) = self.searching.as_ref().and_then(Task::poll) {
-            self.searching = None;
-            self.matches = result.ok();
-        }
-        if self.loading.is_some() || self.searching.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(25));
-        }
+        self.invalidate_matches();
     }
 
     fn invalidate_matches(&mut self) {
@@ -175,6 +179,9 @@ impl Find {
             }
             Some(Ok(lines)) => lines,
         };
+        if self.loading.is_some() {
+            ui.weak("Reading subtitle track…");
+        }
         let query = normalize(&self.query);
         if query.is_empty() {
             return None;
@@ -190,7 +197,7 @@ impl Find {
             ui.label("Searching…");
             return None;
         };
-        show_results(ui, lines, matches).or_else(|| {
+        show_results(ui, lines, matches, self.loading.is_some()).or_else(|| {
             enter
                 .then(|| matches.rows.first().map(|&row| lines[row].start_ms))
                 .flatten()
@@ -207,9 +214,11 @@ pub(super) fn selected_track(player: &Session) -> Option<&Track> {
     )
 }
 
-fn show_results(ui: &mut Ui, lines: &[Line], matches: &Matches) -> Option<u64> {
+fn show_results(ui: &mut Ui, lines: &[Line], matches: &Matches, loading: bool) -> Option<u64> {
     if matches.rows.is_empty() {
-        ui.label("No matching dialogue.");
+        if !loading {
+            ui.label("No matching dialogue.");
+        }
         return None;
     }
     if matches.truncated {
@@ -232,39 +241,6 @@ fn show_results(ui: &mut Ui, lines: &[Line], matches: &Matches) -> Option<u64> {
             jump
         })
         .inner
-}
-
-fn read_transcript(
-    source: &FileSource,
-    check: &ReadCheck,
-    track: u32,
-    cancel: &AtomicBool,
-) -> Result<Arc<[Line]>, String> {
-    let (input, _) = check.open(source.path(), Some(source), cancel)?;
-    let output = media_backend::subtitle_track_request(track)?
-        .arg_owned_content_file(input.try_clone().map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?
-        .timeout(Duration::from_secs(35))
-        .run_cancellable(cancel)
-        .map_err(|error| error.to_string())?;
-    source.check_file(&input)?;
-    check.validate(cancel)?;
-    if output.stdout_truncated {
-        return Err("The subtitle track exceeds the search limit.".into());
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "Cannot read subtitle track. {}",
-            output.stderr_lossy().trim()
-        ));
-    }
-    let cues: Vec<SubtitleCue> = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Cannot read subtitle track. {error}"))?;
-    Ok(cues
-        .into_iter()
-        .take_while(|_| !cancel.load(Ordering::Relaxed))
-        .filter_map(line_from_cue)
-        .collect())
 }
 
 fn line_from_cue(cue: SubtitleCue) -> Option<Line> {
