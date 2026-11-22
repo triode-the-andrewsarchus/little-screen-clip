@@ -175,43 +175,31 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
 
     let secondary = egui::PointerButton::Secondary;
     click(&mut state, secondary);
-    assert!(
-        state
-            .creative_fx_state
-            .byte_bend
-            .params
-            .active_edit(first.address)
-            .is_none()
-    );
-    assert!(
-        !state.creative_fx_state.byte_bend.params.edits.is_empty(),
-        "the rest of the span survives"
-    );
+    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
     assert!(state.creative_fx_state.byte_bend.audition.is_none());
-    state.creative_fx_state.byte_bend.params.clear_edits();
 
     let cell_width = map.width() / 28.0;
     let shifted = |cells| point + Vec2::new(cells * cell_width, 0.0);
-    let mut thin_edits = vec![ByteBendEdit { span: 0, ..first }];
+    let mut edits = vec![first];
     for cells in [4.0, 7.0] {
         frame(&mut state, vec![egui::Event::PointerMoved(shifted(cells))]);
         let sampled = state.creative_fx_state.byte_bend.audition.unwrap();
-        thin_edits.push(ByteBendEdit { span: 0, ..sampled });
+        edits.push(sampled);
     }
-    state.creative_fx_state.byte_bend.params.edits = thin_edits.clone();
+    state.creative_fx_state.byte_bend.params.edits = edits.clone();
     frame(&mut state, button(point, secondary, true));
-    assert_eq!(
-        state.creative_fx_state.byte_bend.params.edits,
-        thin_edits[1..]
-    );
+    assert_eq!(state.creative_fx_state.byte_bend.params.edits, edits[1..]);
     frame(&mut state, vec![egui::Event::PointerMoved(shifted(5.0))]);
-    assert_eq!(
-        state.creative_fx_state.byte_bend.params.edits,
-        thin_edits[2..]
-    );
-    frame(&mut state, button(shifted(5.0), secondary, false));
+    assert_eq!(state.creative_fx_state.byte_bend.params.edits, edits[2..]);
+    frame(&mut state, button(shifted(7.0), secondary, false));
+    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
     assert!(state.creative_fx_state.byte_bend.audition.is_none());
-    state.creative_fx_state.byte_bend.params.clear_edits();
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    assert_eq!(
+        state.creative_fx_state.preview_rgba.as_ref(),
+        Some(source.as_ref())
+    );
 
     frame(&mut state, button(point, primary, true));
     let held_address = state.creative_fx_state.byte_bend.audition.unwrap().address;
@@ -220,15 +208,33 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
     let held = state.creative_fx_state.byte_bend.audition.unwrap();
     assert_eq!(held.address, held_address);
     assert!((1_700..2_400).contains(&held.span));
-    let upper_right = map.right_top() - Vec2::new(16.0, -3.0);
-    frame(&mut state, vec![egui::Event::PointerMoved(upper_right)]);
+    let upper_left = map.left_top() + Vec2::new(4.0, 3.0);
+    frame(&mut state, vec![egui::Event::PointerMoved(upper_left)]);
     let adjusted = state.creative_fx_state.byte_bend.audition.unwrap();
     assert_eq!(adjusted.address, held_address);
     assert!(adjusted.span > 3_500);
-    assert_eq!(adjusted.variation, 7);
+    assert_eq!(adjusted.variation, 0);
+    let wheel = |y| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, y),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let cycled = ByteBendEdit {
+        mode: adjusted.mode.next(),
+        ..adjusted
+    };
+    frame(&mut state, vec![wheel(-1.0)]);
+    assert_eq!(state.creative_fx_state.byte_bend.audition, Some(cycled));
+    frame(&mut state, Vec::new());
+    assert_eq!(state.creative_fx_state.byte_bend.audition, Some(cycled));
+    frame(&mut state, vec![wheel(1.0)]);
+    assert_eq!(state.creative_fx_state.byte_bend.audition, Some(adjusted));
+    frame(&mut state, vec![wheel(-1.0)]);
     assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
-    frame(&mut state, button(upper_right, primary, false));
-    assert_eq!(state.creative_fx_state.byte_bend.params.edits, [adjusted]);
+    frame(&mut state, button(upper_left, primary, false));
+    assert_eq!(state.creative_fx_state.byte_bend.params.edits, [cycled]);
     frame(&mut state, Vec::new());
     assert!(state.creative_fx_state.byte_bend.audition.is_none());
 

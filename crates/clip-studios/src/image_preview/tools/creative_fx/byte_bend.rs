@@ -17,6 +17,28 @@ struct HeldEdit {
     edit: ByteBendEdit,
     started: f64,
     adjusting: bool,
+    wheel_steps: f32,
+}
+
+impl HeldEdit {
+    fn cycle_mutation(&mut self, ctx: &egui::Context) {
+        let points_per_step = ctx
+            .options(|options| options.input_options.line_scroll_speed)
+            .max(1.0);
+        self.wheel_steps -= clip_ui::ui_ext::wheel_delta_including_start(ctx).y / points_per_step;
+        let steps = self.wheel_steps.trunc();
+        self.wheel_steps -= steps;
+        if steps != 0.0 {
+            let modes = ByteBendMode::ALL;
+            let count = modes.len() as i32;
+            let current = modes
+                .iter()
+                .position(|mode| *mode == self.edit.mode)
+                .unwrap_or_default();
+            let next = (current as i32 + steps as i32 % count).rem_euclid(count);
+            self.edit.mode = modes[next as usize];
+        }
+    }
 }
 
 pub(in crate::image_preview) struct ByteBendEditor {
@@ -252,6 +274,7 @@ impl ByteBendEditor {
             edit,
             started,
             adjusting: false,
+            wheel_steps: 0.0,
         })
     }
 
@@ -279,6 +302,7 @@ impl ByteBendEditor {
         hold.adjusting |= until_adjusting <= 0.0 || response.dragged_by(primary);
         if hold.adjusting {
             adjust_edit(&mut hold.edit, visible, point);
+            hold.cycle_mutation(ui.ctx());
         }
         if down {
             if !hold.adjusting {
@@ -301,8 +325,8 @@ impl ByteBendEditor {
 fn adjust_edit(edit: &mut ByteBendEdit, rect: Rect, point: Pos2) {
     let x = ((point.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
     let y = ((rect.bottom() - point.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
-    edit.span = egui::lerp(f32::from(MIN_SPAN)..=f32::from(MAX_SPAN), x).round() as u16;
-    edit.variation = (7.0 * y).round() as u8;
+    edit.span = egui::lerp(f32::from(MIN_SPAN)..=f32::from(MAX_SPAN), y).round() as u16;
+    edit.variation = (7.0 * x).round() as u8;
 }
 
 fn cell_address(cell: usize) -> u16 {

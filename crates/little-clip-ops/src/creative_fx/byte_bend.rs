@@ -136,7 +136,7 @@ impl ByteBendParams {
         self.erased.clear();
     }
 
-    /// Restores regions of the modeled byte stream, clipping any overlapping edits.
+    /// Removes edits started in the brush and clips overlapping edits from outside it.
     pub fn erase_ranges(&mut self, image: &RgbaImage, ranges: Vec<Range<u32>>) -> bool {
         if image.is_empty() || self.edits.is_empty() {
             return false;
@@ -152,6 +152,13 @@ impl ByteBendParams {
             .collect();
         let mut changed = false;
         self.edits.retain(|edit| {
+            if ranges
+                .iter()
+                .any(|range| range.contains(&u32::from(edit.address)))
+            {
+                changed = true;
+                return false;
+            }
             let window = edit.window(len);
             let holes = self
                 .erased
@@ -487,13 +494,13 @@ mod tests {
             ByteBendProfile::WebP,
         ] {
             let edit = ByteBendEdit {
-                address: 20_000,
+                address: 18_800,
                 span: 4_096,
                 mode: ByteBendMode::FlipBits,
                 variation: 0,
             };
             let neighbor = ByteBendEdit {
-                address: 20_200,
+                address: 21_200,
                 ..edit
             };
             let untouched = ByteBendEdit {
@@ -518,8 +525,36 @@ mod tests {
             assert!(edits.overlaps(erased.start - 1..erased.start));
             assert!(edits.overlaps(erased.end..erased.end + 1));
             assert!(edits.overlaps(untouched.window(len)));
-            assert!(params.active_edit(edit.address).is_none());
+            assert_eq!(params.active_edit(edit.address), Some(&edit));
+            assert_eq!(params.active_edit(neighbor.address), Some(&neighbor));
             assert_eq!(params.active_edit(untouched.address), Some(&untouched));
+        }
+    }
+
+    #[test]
+    fn brushing_over_staged_cells_restores_the_original_image() {
+        let source = RgbaImage::from_pixel(64, 64, Rgba([60, 90, 120, 255]));
+        for profile in [
+            ByteBendProfile::Png,
+            ByteBendProfile::Jpeg,
+            ByteBendProfile::WebP,
+        ] {
+            let mut params = flip(profile, 20_000, 4);
+            params.edits[0].span = 600;
+            params.stage_edit(ByteBendEdit {
+                address: 20_200,
+                ..params.edits[0]
+            });
+            assert_ne!(
+                apply_byte_bend_cancellable(&source, &params, None).unwrap(),
+                source
+            );
+            assert!(params.erase_ranges(&source, vec![19_960..20_040, 20_160..20_240]));
+            assert!(params.edits.is_empty());
+            assert_eq!(
+                apply_byte_bend_cancellable(&source, &params, None),
+                Some(source.clone())
+            );
         }
     }
 
