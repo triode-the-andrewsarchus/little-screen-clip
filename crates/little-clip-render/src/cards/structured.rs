@@ -416,69 +416,72 @@ impl ScreenRenderer {
         );
         y += 22.0;
 
-        let max_rows = if is_hero { 9 } else { 7 };
-        let max_cols = if is_hero { 4 } else { 3 };
-        let slice = sheet.upper_left_slice(max_rows, max_cols);
-        if slice.is_empty() {
+        let available_width = clip_right - content_x;
+        let row_height = if is_hero { 23.0 } else { 20.0 };
+        let font_size = if is_hero { 14.0 } else { 12.0 };
+        let rows = (((ry + rh - 28.0 - y) / row_height) as usize)
+            .min(if is_hero { 9 } else { 7 })
+            .min(sheet.total_rows);
+        let columns = ((available_width / 78.0).floor().max(1.0) as usize)
+            .min(if is_hero { 10 } else { 5 })
+            .min(sheet.total_cols);
+        if rows == 0 || columns == 0 || available_width <= 0.0 {
             return;
         }
 
-        let num_cols = slice[0].len().max(1);
-        let avail_w = clip_right - content_x;
-        let col_w = avail_w / num_cols as f32;
-        let row_h = if is_hero { 26.0 } else { 22.0 };
-        let font_size = if is_hero { 14.0 } else { 12.0 };
-
-        for (r_idx, row) in slice.iter().enumerate() {
-            let row_y = y + (r_idx as f32 * row_h);
-            if row_y + row_h > ry + rh - 30.0 {
-                break;
-            }
-
-            let is_header = r_idx == 0;
-            let row_bg = if is_header {
-                self.color_from_hex(&self.palette.colors.surface_panel)
-            } else if r_idx % 2 == 1 {
-                self.color_from_hex(&self.palette.colors.surface_recessed)
+        let column_width = available_width / columns as f32;
+        let row_indices: Vec<_> = (0..rows).collect();
+        let panel = self.color_from_hex(&self.palette.colors.surface_panel);
+        let canvas = self.color_from_hex(&self.palette.colors.canvas);
+        let recessed = self.color_from_hex(&self.palette.colors.surface_recessed);
+        let foreground = self.color_from_hex(&self.palette.colors.text_primary);
+        let accent = self.color_from_hex(&self.palette.harmonies.base);
+        let mut border = Paint::default();
+        border.set_color(self.color_from_hex(&self.palette.chrome_border));
+        let stroke = Stroke {
+            width: 0.7,
+            ..Default::default()
+        };
+        for cell in sheet.grid_cells(&row_indices, 0..rows, 0..columns) {
+            let (row, column) = cell.anchor;
+            let width = (cell.columns.end.min(columns) - column) as f32 * column_width;
+            let height = cell.rows.len() as f32 * row_height;
+            let left = content_x + column as f32 * column_width;
+            let top = y + cell.rows.start as f32 * row_height;
+            let is_header = row == 0;
+            let fill = if is_header {
+                panel
+            } else if row % 2 == 1 {
+                recessed
             } else {
-                self.color_from_hex(&self.palette.colors.canvas)
+                canvas
             };
-
-            if let Some(rect) = Rect::from_xywh(content_x, row_y, avail_w, row_h) {
+            if let Some(rect) = Rect::from_xywh(left, top, width, height) {
                 let mut paint = Paint::default();
-                paint.set_color(row_bg);
+                paint.set_color(fill);
                 pixmap.fill_rect(rect, &paint, Transform::identity(), None);
-
-                let stroke = Stroke {
-                    width: 0.5,
-                    ..Default::default()
-                };
-                let mut stroke_paint = Paint::default();
-                stroke_paint.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
-                let path = PathBuilder::from_rect(rect);
-                pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
-            }
-
-            for (c_idx, cell_val) in row.iter().enumerate() {
-                let cell_x = content_x + (c_idx as f32 * col_w) + 4.0;
-                let cell_clip = content_x + ((c_idx + 1) as f32 * col_w) - 2.0;
-                let cell_color = if is_header {
-                    self.contrast_color(
-                        row_bg,
-                        Some(self.color_from_hex(&self.palette.harmonies.base)),
-                    )
-                } else {
-                    self.contrast_color(
-                        row_bg,
-                        Some(self.color_from_hex(&self.palette.colors.text_primary)),
-                    )
-                };
-
-                let cell_y = row_y + (row_h - font_size) / 2.0 - 1.0;
-                self.draw_text_clipped(
-                    pixmap, cell_val, cell_x, cell_y, font_size, cell_color, is_header, cell_clip,
+                pixmap.stroke_path(
+                    &PathBuilder::from_rect(rect),
+                    &border,
+                    &stroke,
+                    Transform::identity(),
+                    None,
                 );
             }
+
+            let value = sheet.cell(row, column).lines().next().unwrap_or_default();
+            let text_color =
+                self.contrast_color(fill, Some(if is_header { accent } else { foreground }));
+            self.draw_text_clipped(
+                pixmap,
+                value,
+                left + 4.0,
+                top + (height - font_size) / 2.0 - 1.0,
+                font_size,
+                text_color,
+                is_header,
+                left + width - 3.0,
+            );
         }
 
         let footer_y = ry + rh - 22.0;

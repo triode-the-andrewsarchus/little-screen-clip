@@ -5,13 +5,13 @@
 mod inline_preview;
 mod studio;
 
+pub use inline_preview::paint_sheet_corner;
+
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, StatusToast};
 use egui::{self, CornerRadius, FontId, Stroke, TextStyle, Vec2};
-use little_clip_ops::spreadsheet::SpreadsheetData;
-#[cfg(any(test, feature = "test-support"))]
-use little_clip_ops::spreadsheet::SpreadsheetSheet;
+use little_clip_ops::spreadsheet::{GridCell, SpreadsheetData, SpreadsheetSheet};
 use std::borrow::Cow;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -80,6 +80,54 @@ pub struct InlineSpreadsheetPreview {
     active_sheet_idx: usize,
     selected_cell: Option<(usize, usize)>,
     scroll_offset: Vec2,
+}
+
+fn grid_cell_rect(
+    origin: egui::Pos2,
+    offsets: &[f32],
+    row_stride: f32,
+    spacing: Vec2,
+    cell: &GridCell,
+) -> egui::Rect {
+    let last_column = offsets.len() - 1;
+    let end = cell.columns.end.min(last_column);
+    let right = offsets[end] - if end < last_column { spacing.x } else { 0.0 };
+    egui::Rect::from_min_max(
+        origin
+            + egui::vec2(
+                offsets[cell.columns.start],
+                cell.rows.start as f32 * row_stride,
+            ),
+        origin + egui::vec2(right, cell.rows.end as f32 * row_stride - spacing.y),
+    )
+}
+
+fn paint_grid_cell(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    fill: egui::Color32,
+    border: egui::Color32,
+    value: &str,
+    font: FontId,
+    text: egui::Color32,
+) {
+    let painter = painter.with_clip_rect(rect);
+    painter.rect_filled(rect, CornerRadius::ZERO, fill);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(0.5, border),
+        egui::StrokeKind::Inside,
+    );
+    if !value.is_empty() {
+        painter.text(
+            rect.left_center() + egui::vec2(6.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            value,
+            font,
+            text,
+        );
+    }
 }
 
 fn visible_row_range(offset: f32, viewport_height: f32, total: usize, stride: f32) -> Range<usize> {

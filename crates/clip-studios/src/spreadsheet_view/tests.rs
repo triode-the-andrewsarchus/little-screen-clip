@@ -1,5 +1,70 @@
 use super::*;
 
+#[test]
+fn clicking_the_far_corner_of_a_merge_copies_its_anchor() {
+    let mut sheet = SpreadsheetSheet::new(
+        "Forecast".into(),
+        vec![vec!["Quarterly forecast".into(), "".into(), "".into()]],
+    );
+    sheet.origin = (2, 1);
+    sheet.total_rows = 2;
+    sheet.merges.push(little_clip_ops::spreadsheet::MergedCell {
+        rows: 0..2,
+        columns: 0..3,
+    });
+    let mut viewer = SpreadsheetViewerState::new(
+        SpreadsheetData {
+            title: "Forecast".into(),
+            sheets: vec![sheet],
+        },
+        None,
+    );
+    let ctx = egui::Context::default();
+    let palette = little_clip_core::palette::AppPalette::default();
+    let mut render = |events, time| {
+        clip_ui::test_support::run_frame(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(780.0, 520.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        viewer.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                });
+            },
+        )
+    };
+    let output = render(Vec::new(), 0.0);
+    let cell = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Quarterly forecast" => {
+                Some(shape.clip_rect)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(cell.width() >= 270.0);
+    assert!(cell.height() >= 52.0);
+    let point = cell.max - Vec2::splat(4.0);
+    render(pointer_click_events(point, true), 0.1);
+    let copied = render(pointer_click_events(point, false), 0.2);
+    assert_eq!(viewer.selected_cell, Some((0, 0)));
+    assert_eq!(
+        clip_ui::test_support::copied_text(&copied.platform_output),
+        "Quarterly forecast"
+    );
+}
+
 fn inline_preview_data() -> Arc<SpreadsheetData> {
     let mut first_rows = vec![vec!["first-sheet".to_owned()]];
     let mut second_rows = vec![vec!["choose-b".to_owned()]];

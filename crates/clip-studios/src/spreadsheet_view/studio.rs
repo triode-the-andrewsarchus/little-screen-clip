@@ -61,14 +61,13 @@ impl SpreadsheetViewerState {
 
                 if let Some((r, c)) = self.selected_cell
                     && let Some(sheet) = self.data.sheets.get(self.active_sheet_idx)
-                    && let Some(row) = sheet.rows.get(r)
-                    && let Some(val) = row.get(c)
+                    && let Some(val) = sheet.rows.get(r).and_then(|row| row.get(c))
                 {
                     shell = shell.with_footer_readout(format!(
                         "Selected R{} C{} [{}]: {}",
-                        r + 1,
-                        c + 1,
-                        col_label(c),
+                        r + sheet.origin.0 + 1,
+                        c + sheet.origin.1 + 1,
+                        col_label(c + sheet.origin.1),
                         val
                     ));
                 }
@@ -163,7 +162,7 @@ impl SpreadsheetViewerState {
                     return;
                 };
 
-                if sheet.rows.is_empty() {
+                if sheet.total_rows == 0 || sheet.total_cols == 0 {
                     ui.label("Sheet is empty.");
                     let toast_tuple = self.status_toast.active(now).cloned();
                     shell.render_footer(ui, &toast_tuple, now);
@@ -174,15 +173,15 @@ impl SpreadsheetViewerState {
                 if self.filtered_sheet_idx != Some(self.active_sheet_idx)
                     || self.filtered_query != query
                 {
-                    self.filtered_rows = sheet
-                        .rows
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(row_idx, row)| {
-                            (query.is_empty()
-                                || row_idx == 0
-                                || row.iter().any(|cell| cell.to_lowercase().contains(&query)))
-                            .then_some(row_idx)
+                    self.filtered_rows = (0..sheet.total_rows)
+                        .filter(|&row| {
+                            query.is_empty()
+                                || row == 0
+                                || sheet.rows.get(row).is_some_and(|cells| {
+                                    cells
+                                        .iter()
+                                        .any(|cell| cell.to_lowercase().contains(&query))
+                                })
                         })
                         .collect();
                     self.filtered_sheet_idx = Some(self.active_sheet_idx);
@@ -310,7 +309,8 @@ impl SpreadsheetViewerState {
                             crate::contrast_text_c32(col_bg, Some(f_high), palette)
                         };
 
-                        let col_title = format!("{} ({})", col_label(c_idx), c_idx + 1);
+                        let source_col = c_idx + sheet.origin.1;
+                        let col_title = format!("{} ({})", col_label(source_col), source_col + 1);
                         let col_btn = egui::Button::new(
                             egui::RichText::new(col_title)
                                 .small()
@@ -335,8 +335,8 @@ impl SpreadsheetViewerState {
                         }
                         resp.on_hover_text(format!(
                             "Column {} ({})\nWidth: {:.0}px\nClick to copy column",
-                            c_idx + 1,
-                            col_label(c_idx),
+                            source_col + 1,
+                            col_label(source_col),
                             cell_w
                         ));
                     }
@@ -383,7 +383,7 @@ impl SpreadsheetViewerState {
 
                     row_child_ui.skip_ahead_auto_ids(gutter_rows.start);
                     for &r_idx in &visible_rows[gutter_rows] {
-                        let row = &sheet.rows[r_idx];
+                        let source_row = r_idx + sheet.origin.0 + 1;
                         let is_selected_row =
                             self.selected_cell.map(|(r, _)| r == r_idx).unwrap_or(false);
                         let row_bg = if is_selected_row { accent } else { b_low };
@@ -398,7 +398,7 @@ impl SpreadsheetViewerState {
                         };
 
                         let row_btn = egui::Button::new(
-                            egui::RichText::new(format!("{}", r_idx + 1))
+                            egui::RichText::new(source_row.to_string())
                                 .small()
                                 .strong()
                                 .color(text_color),
@@ -410,9 +410,10 @@ impl SpreadsheetViewerState {
 
                         let resp = row_child_ui.add(row_btn);
                         if resp.clicked() {
-                            clicked_row = Some((r_idx, row.clone()));
+                            clicked_row =
+                                Some((r_idx, sheet.rows.get(r_idx).cloned().unwrap_or_default()));
                         }
-                        resp.on_hover_text(format!("Row {}\nClick to copy row", r_idx + 1));
+                        resp.on_hover_text(format!("Row {source_row}\nClick to copy row"));
                     }
 
                     // Main Data Grid (ScrollArea::both)
@@ -422,6 +423,7 @@ impl SpreadsheetViewerState {
                     });
 
                     let scroll_output = egui::ScrollArea::both()
+                        .id_salt(("sheet_grid", self.active_sheet_idx, &query))
                         .auto_shrink([false, false])
                         .max_width(grid_w)
                         .max_height(avail_h)
@@ -439,99 +441,73 @@ impl SpreadsheetViewerState {
                                 viewport.width(),
                                 &col_offsets,
                             );
-                            let row_rect = egui::Rect::from_min_size(
-                                egui::pos2(
-                                    ui.max_rect().left(),
-                                    ui.max_rect().top() + rows.start as f32 * row_stride,
-                                ),
-                                Vec2::new(total_content_width, rows.len() as f32 * row_stride),
-                            );
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-                                ui.spacing_mut().item_spacing = table_spacing;
-                                ui.skip_ahead_auto_ids(rows.start);
-                                ui.vertical(|ui| {
-                                    for &r_idx in &visible_rows[rows] {
-                                        let row = &sheet.rows[r_idx];
-                                        let is_header = r_idx == 0;
-                                        let row_bg = if is_header {
-                                            b_med
-                                        } else if r_idx % 2 == 1 {
-                                            b_low
-                                        } else {
-                                            bg
-                                        };
-
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing = table_spacing;
-                                            if columns.start > 0 {
-                                                ui.add_space(
-                                                    col_offsets[columns.start] - table_spacing.x,
-                                                );
-                                            }
-                                            for c_idx in columns.clone() {
-                                                let cell_val = row
-                                                    .get(c_idx)
-                                                    .map(|s| s.as_str())
-                                                    .unwrap_or("");
-                                                let cell_w =
-                                                    col_widths.get(c_idx).copied().unwrap_or(90.0);
-
-                                                let is_selected =
-                                                    self.selected_cell == Some((r_idx, c_idx));
-                                                let is_match = !query.is_empty()
-                                                    && cell_val.to_lowercase().contains(&query);
-
-                                                let cell_bg = if is_selected {
-                                                    accent
-                                                } else if is_match {
-                                                    warn_accent
-                                                } else {
-                                                    row_bg
-                                                };
-
-                                                let pref_text_color = if is_header {
-                                                    accent
-                                                } else if is_selected {
-                                                    crate::hex_to_c32(&palette.colors.text_inverse)
-                                                } else {
-                                                    f_high
-                                                };
-                                                let text_color = crate::contrast_text_c32(
-                                                    cell_bg,
-                                                    Some(pref_text_color),
-                                                    palette,
-                                                );
-
-                                                let btn = egui::Button::new(
-                                                    egui::RichText::new(cell_val)
-                                                        .small()
-                                                        .strong()
-                                                        .color(text_color),
-                                                )
-                                                .fill(cell_bg)
-                                                .min_size(Vec2::new(cell_w, row_height))
-                                                .stroke(Stroke::new(0.5_f32, b_med))
-                                                .corner_radius(CornerRadius::ZERO);
-
-                                                let resp = ui.add(btn);
-                                                if resp.clicked() {
-                                                    clicked_cell =
-                                                        Some((r_idx, c_idx, cell_val.to_string()));
-                                                }
-                                                if !cell_val.is_empty() {
-                                                    resp.on_hover_text(format!(
-                                                        "Row {}, Col {} ({})\nClick to copy: {}",
-                                                        r_idx + 1,
-                                                        c_idx + 1,
-                                                        col_label(c_idx),
-                                                        cell_val
-                                                    ));
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
-                            });
+                            let origin = ui.max_rect().min;
+                            for cell in sheet.grid_cells(visible_rows, rows, columns) {
+                                let (row, column) = cell.anchor;
+                                let rect = grid_cell_rect(
+                                    origin,
+                                    &col_offsets,
+                                    row_stride,
+                                    table_spacing,
+                                    &cell,
+                                );
+                                if !ui.is_rect_visible(rect) {
+                                    continue;
+                                }
+                                let value = sheet.cell(row, column);
+                                let selected = self.selected_cell == Some(cell.anchor);
+                                let matching =
+                                    !query.is_empty() && value.to_lowercase().contains(&query);
+                                let fill = if selected {
+                                    accent
+                                } else if matching {
+                                    warn_accent
+                                } else if row == 0 {
+                                    b_med
+                                } else if row % 2 == 1 {
+                                    b_low
+                                } else {
+                                    bg
+                                };
+                                let text = crate::contrast_text_c32(fill, Some(f_high), palette);
+                                paint_grid_cell(
+                                    ui.painter(),
+                                    rect,
+                                    fill,
+                                    b_med,
+                                    value,
+                                    font_id.clone(),
+                                    text,
+                                );
+                                let response = ui.interact(
+                                    rect,
+                                    ui.id().with(("cell", row, column)),
+                                    egui::Sense::click(),
+                                );
+                                if response.clicked() {
+                                    clicked_cell = Some((row, column, value.to_owned()));
+                                }
+                                if !value.is_empty() {
+                                    let address = format!(
+                                        "{}{}",
+                                        col_label(column + sheet.origin.1),
+                                        row + sheet.origin.0 + 1
+                                    );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::Role::Button,
+                                            response.enabled(),
+                                            format!(
+                                                "{address} {}",
+                                                inline_cell_display_text(value)
+                                            ),
+                                        )
+                                    });
+                                    response.on_hover_text(format!(
+                                        "{address}\nClick to copy: {value}"
+                                    ));
+                                }
+                            }
                         });
 
                     // Restore horizontal scroll delta
@@ -567,7 +543,11 @@ impl SpreadsheetViewerState {
                         .join("\n");
                     ui.ctx().copy_text(col_text);
                     self.status_toast.set(
-                        format!("Copied Column {} ({})", c_idx + 1, col_label(c_idx)),
+                        format!(
+                            "Copied Column {} ({})",
+                            c_idx + sheet.origin.1 + 1,
+                            col_label(c_idx + sheet.origin.1)
+                        ),
                         now,
                     );
                 }
@@ -577,7 +557,7 @@ impl SpreadsheetViewerState {
                     let tsv = row_cells.join("\t");
                     ui.ctx().copy_text(tsv);
                     self.status_toast
-                        .set(format!("Copied Row {}", r_idx + 1), now);
+                        .set(format!("Copied Row {}", r_idx + sheet.origin.0 + 1), now);
                 }
 
                 if let Some((r_idx, c_idx, val)) = clicked_cell {

@@ -1,5 +1,47 @@
 use super::*;
 
+/// Paints a passive sheet corner inside a file row.
+pub fn paint_sheet_corner(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    sheet: &SpreadsheetSheet,
+    palette: &little_clip_core::palette::AppPalette,
+) {
+    const ROW_HEIGHT: f32 = 16.0;
+    const TARGET_COLUMN_WIDTH: f32 = 112.0;
+    let painter = ui.painter().with_clip_rect(rect);
+    let colors = clip_ui::ui_appearance::WorkbenchColors::from_palette(palette);
+    let font = TextStyle::Small.resolve(ui.style());
+    let row_count = ((rect.height() / ROW_HEIGHT).floor().max(1.0) as usize).min(sheet.total_rows);
+    let column_count = ((rect.width() / TARGET_COLUMN_WIDTH).ceil() as usize)
+        .min(sheet.total_cols)
+        .min(INLINE_SPREADSHEET_MAX_COLUMNS);
+    let column_width = (rect.width() / column_count.max(1) as f32).min(184.0);
+    let offsets = column_offsets(&vec![column_width; column_count], 0.0);
+    let rows: Vec<_> = (0..row_count).collect();
+    for cell in sheet.grid_cells(&rows, 0..row_count, 0..column_count) {
+        let (row, column) = cell.anchor;
+        let fill = if row == 0 {
+            colors.panel
+        } else if row % 2 == 1 {
+            colors.recessed
+        } else {
+            colors.canvas
+        };
+        let cell_rect = grid_cell_rect(rect.min, &offsets, ROW_HEIGHT, Vec2::ZERO, &cell);
+        let value = sheet.cell(row, column).lines().next().unwrap_or_default();
+        paint_grid_cell(
+            &painter,
+            cell_rect,
+            fill,
+            colors.border,
+            inline_cell_display_text(value).as_ref(),
+            font.clone(),
+            crate::contrast_text_c32(fill, Some(colors.text_primary), palette),
+        );
+    }
+}
+
 impl InlineSpreadsheetPreview {
     /// Creates a compact preview with a fixed finite host size.
     pub fn new(data: Arc<SpreadsheetData>, host_size: Vec2) -> Self {

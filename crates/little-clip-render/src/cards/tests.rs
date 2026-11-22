@@ -2,6 +2,30 @@ use super::*;
 use little_clip_core::config::AppConfig;
 
 #[test]
+fn spreadsheet_card_paints_one_surface_across_a_merge() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+    let mut sheet = spreadsheet::SpreadsheetSheet::new(
+        "Forecast".into(),
+        vec![
+            vec!["Quarterly forecast".into(), "".into(), "".into()],
+            vec!["".into(); 3],
+        ],
+    );
+    let mut unmerged = Pixmap::new(360, 300).unwrap();
+    renderer.draw_spreadsheet_card(&mut unmerged, "Test", &sheet, 0.0, 0.0, 360.0, 300.0, true);
+    sheet.merges.push(spreadsheet::MergedCell {
+        rows: 0..2,
+        columns: 0..3,
+    });
+    let mut merged = Pixmap::new(360, 300).unwrap();
+    renderer.draw_spreadsheet_card(&mut merged, "Test", &sheet, 0.0, 0.0, 360.0, 300.0, true);
+
+    // Sample away from the title glyphs and across the internal row boundary.
+    assert_ne!(unmerged.pixel(300, 180), unmerged.pixel(300, 210));
+    assert_eq!(merged.pixel(300, 180), merged.pixel(300, 210));
+}
+
+#[test]
 fn code_file_extension_takes_precedence_over_spreadsheet_heuristics() {
     let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
     // Semicolons in consecutive imports satisfy the table shape heuristic.

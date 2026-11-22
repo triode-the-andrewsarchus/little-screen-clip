@@ -230,10 +230,14 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
         Kind::Geography | Kind::Trajectory => None,
         Kind::Pdf | Kind::Office => load_page(path, kind == Kind::Office).map(Preview::Page),
         Kind::Spreadsheet => {
-            let data = spreadsheet::load_spreadsheet(path).ok()?;
-            let mut sheet = data.sheets.into_iter().next()?;
-            // Only the visible corner belongs to the card cache. Keep original dimensions.
-            sheet.rows = sheet.upper_left_slice(9, 4);
+            let data = spreadsheet::load_spreadsheet_preview(
+                path,
+                9,
+                10,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .ok()?;
+            let sheet = data.sheets.into_iter().next()?;
             Some(Preview::Spreadsheet {
                 title: data.title,
                 sheet,
