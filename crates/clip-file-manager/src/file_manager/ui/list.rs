@@ -504,6 +504,9 @@ impl FileManager {
         if std::mem::take(&mut self.previews.text_selection.copy) {
             self.copy_text_range(ctx);
         }
+        if self.previews.pdf_pages.selection.requested.is_some() {
+            self.copy_pdf_pages(ctx);
+        }
     }
 
     fn list_audio(&mut self, play: Option<(PathBuf, f32)>) {

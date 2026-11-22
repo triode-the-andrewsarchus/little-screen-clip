@@ -454,6 +454,7 @@ impl FileManager {
             self.video_start = None;
             self.music_selection = None;
             self.previews.text_selection = Default::default();
+            self.previews.pdf_pages.selection = Default::default();
             self.midi.selection = None;
             self.stop_previews();
         }

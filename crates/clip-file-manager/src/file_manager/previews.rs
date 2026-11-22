@@ -39,7 +39,7 @@ pub(super) struct EntryPreviews {
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
     brushes: super::brush_strip::Previews,
-    pdf_pages: super::pdf_strip::Pages,
+    pub(super) pdf_pages: super::pdf_strip::Pages,
     pub(super) geography: super::geography::Strips,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
     pub(super) text_selection: super::text_strip::selection::Selection,
@@ -468,9 +468,11 @@ impl EntryPreviews {
                 .listing(entry)
                 .is_some_and(|ready| ready.data.handwritten_info.is_some())
         {
-            Some(super::DocumentPosition::PdfPage(
-                self.show_pdf(ui, row, entry, colors, palette).unwrap_or(1),
-            ))
+            let (page, engaged) = self.show_pdf(ui, row, entry, colors, palette, response);
+            return (
+                Some(super::DocumentPosition::PdfPage(page.unwrap_or(1))),
+                engaged,
+            );
         } else {
             let (line, engaged) =
                 self.show_listing(ui, row, entry, Some(columns), colors, palette, response);
@@ -599,14 +601,15 @@ impl EntryPreviews {
             );
         }
     }
-    pub fn show_pdf(
+    fn show_pdf(
         &mut self,
         ui: &mut egui::Ui,
         row: egui::Rect,
         entry: &Entry,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
-    ) -> Option<usize> {
+        response: &mut egui::Response,
+    ) -> (Option<usize>, bool) {
         let id = self.identity(entry);
         let (pdf_count, notebook) = self
             .listing(entry)
@@ -625,7 +628,7 @@ impl EntryPreviews {
         }
         let selected = self
             .pdf_pages
-            .show(ui, preview_row, entry, id, count, colors);
+            .show(ui, preview_row, entry, id, count, colors, response);
         if let Some(info) = notice {
             let rect = egui::Rect::from_min_size(
                 row.right_top() + egui::vec2(-148.0, 32.0),

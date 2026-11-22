@@ -54,16 +54,11 @@ impl Selection {
             Sense::click_and_drag(),
         );
         let modified = ui.input(|i| i.modifiers.ctrl || i.modifiers.command || i.modifiers.shift);
-        let dragging = !modified
-            && (interaction.dragged_by(egui::PointerButton::Primary)
-                || interaction.drag_stopped_by(egui::PointerButton::Primary));
-        if dragging {
-            ui.memory_mut(|memory| memory.request_focus(focus_id()));
-            if let Some((start, end)) = preview_copy::drag_fractions(ui, &interaction) {
-                let bins = document.display_range(start, width).start
-                    ..document.display_range(end, width).end;
-                self.range = Some(Selected::new(entry, document, bins, context));
-            }
+        let (dragging, range) = preview_copy::drag_range(ui, &interaction, focus_id(), modified);
+        if let Some((start, end)) = range {
+            let bins =
+                document.display_range(start, width).start..document.display_range(end, width).end;
+            self.range = Some(Selected::new(entry, document, bins, context));
         }
         let selected = self
             .range

@@ -119,8 +119,24 @@ pub(super) fn copy_file(
     Ok(())
 }
 
+/// Claims a primary-button range gesture for the strip and its keyboard focus.
+pub(super) fn drag_range(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    focus: egui::Id,
+    modified: bool,
+) -> (bool, Option<(f32, f32)>) {
+    use egui::PointerButton::Primary;
+    let dragging = !modified && (response.dragged_by(Primary) || response.drag_stopped_by(Primary));
+    if !dragging {
+        return (false, None);
+    }
+    ui.memory_mut(|memory| memory.request_focus(focus));
+    (true, drag_fractions(ui, response))
+}
+
 /// Ascending fractions, including the final pointer movement on release.
-pub(super) fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
+fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
     let fraction = |x: f32| ((x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
     let point = response.interact_pointer_pos()?;
     let origin = ui.input(|input| input.pointer.press_origin());
@@ -148,7 +164,7 @@ pub(super) fn paint_range(
     label: &str,
     action: &str,
 ) -> bool {
-    use egui::{Align2, FontId, Rect, Stroke, pos2, vec2};
+    use egui::{Rect, Stroke, pos2};
     let painter = ui.painter_at(rect);
     let selection = Rect::from_min_max(
         pos2(egui::lerp(rect.x_range(), start), rect.top()),
@@ -162,6 +178,17 @@ pub(super) fn paint_range(
             Stroke::new(2.0, accent),
         );
     }
+    paint_range_footer(ui, rect, label, action)
+}
+
+pub(super) fn paint_range_footer(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    action: &str,
+) -> bool {
+    use egui::{Align2, FontId, Rect, pos2, vec2};
+    let painter = ui.painter_at(rect);
     let label_rect = Rect::from_min_size(
         rect.left_bottom() - vec2(0.0, RANGE_FOOTER_HEIGHT),
         vec2(rect.width(), RANGE_FOOTER_HEIGHT),

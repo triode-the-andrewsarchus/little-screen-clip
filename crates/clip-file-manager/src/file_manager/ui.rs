@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{
-    text_strip::selection::focus_id as minimap_id,
+    pdf_strip::focus_id as pdf_id, text_strip::selection::focus_id as minimap_id,
     video_timeline::selection::focus_id as timeline_id,
 };
 use egui::{Color32, FontId, Id, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
@@ -33,12 +33,13 @@ fn tree_id() -> Id {
     Id::unique("file_manager_tree_focus")
 }
 
-fn strip_focus_ids() -> [Id; 4] {
+fn strip_focus_ids() -> [Id; 5] {
     [
         music::waveform_id(),
         super::midi_strip::focus_id(),
         minimap_id(),
         timeline_id(),
+        pdf_id(),
     ]
 }
 
@@ -167,6 +168,8 @@ impl FileManager {
             self.midi.copy_selection(ctx.input(|input| input.time));
         } else if ctx.memory(|memory| memory.has_focus(minimap_id())) {
             self.copy_text_range(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(pdf_id())) {
+            self.copy_pdf_pages(ctx);
         } else if ctx.memory(|memory| memory.has_focus(timeline_id())) {
             self.copy_video_range(ctx);
         } else {
@@ -177,6 +180,19 @@ impl FileManager {
         if let Some(selection) = self.previews.text_selection.range.clone() {
             self.preview_copies
                 .start(ctx, move |cancel| selection.export(cancel));
+        }
+    }
+
+    fn copy_pdf_pages(&mut self, ctx: &egui::Context) {
+        let selection = &mut self.previews.pdf_pages.selection;
+        if let Some(pages) = selection
+            .requested
+            .take()
+            .or_else(|| selection.selected.clone())
+        {
+            let context = self.search_preview_context();
+            self.preview_copies
+                .start(ctx, move |cancel| pages.export(&context, cancel));
         }
     }
 
@@ -395,9 +411,13 @@ impl FileManager {
     }
 
     fn strip_shortcuts(&mut self, ctx: &egui::Context, id: Id) {
-        if [minimap_id(), timeline_id()].contains(&id) && key(ctx, Modifiers::NONE, Key::Escape) {
+        if [minimap_id(), timeline_id(), pdf_id()].contains(&id)
+            && !popup_open(ctx)
+            && key(ctx, Modifiers::NONE, Key::Escape)
+        {
             self.previews.text_selection.range = None;
             self.video_previews.selection = None;
+            self.previews.pdf_pages.selection.selected = None;
             self.focus_list = true;
         }
         if key(ctx, Modifiers::CTRL, Key::C) {

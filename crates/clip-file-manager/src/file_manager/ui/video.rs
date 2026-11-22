@@ -128,21 +128,15 @@ fn timeline_interaction(
     }
     let modified =
         ui.input(|input| input.modifiers.ctrl || input.modifiers.command || input.modifiers.shift);
-    let dragging = !modified
-        && (response.dragged_by(egui::PointerButton::Primary)
-            || response.drag_stopped_by(egui::PointerButton::Primary));
-    if dragging {
-        ui.memory_mut(|memory| memory.request_focus(focus_id()));
-        if let Some(clip) =
-            preview_copy::drag_fractions(ui, &response).and_then(|range| Clip::new(source, range))
-        {
-            let mut selection = Selection::new(clip, entry.revision);
-            if response.drag_stopped() {
-                selection.prepare_frames(ui.ctx());
-            }
-            previews.selection = Some(selection);
+    let (dragging, range) = preview_copy::drag_range(ui, &response, focus_id(), modified);
+    if let Some(clip) = range.and_then(|range| Clip::new(source, range)) {
+        let mut selection = Selection::new(clip, entry.revision);
+        if response.drag_stopped() {
+            selection.prepare_frames(ui.ctx());
         }
-    } else {
+        previews.selection = Some(selection);
+    }
+    if !dragging {
         *row = row.union(response.clone());
     }
     if let Some(selection) = previews
