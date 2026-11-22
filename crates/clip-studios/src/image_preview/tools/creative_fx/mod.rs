@@ -1,6 +1,7 @@
 use super::super::*;
 
 mod basic_controls;
+mod byte_bend;
 mod cmyk_halftone;
 mod dither_palette;
 mod lens_aberration;
@@ -96,6 +97,7 @@ fn creative_fx_icon(effect: CreativeFxType) -> crate::icons::Icon {
         CreativeFxType::DitherPalette => Icon::Grid,
         CreativeFxType::Ntsc => Icon::Tv,
         CreativeFxType::Structure => Icon::ShapeRect,
+        CreativeFxType::ByteBend => Icon::Code,
     }
 }
 
@@ -142,6 +144,7 @@ pub struct CreativeFxState {
     pub dither_params: DitherPaletteParams,
     pub ntsc_params: NtscParams,
     pub structure_params: StructureParams,
+    pub(in crate::image_preview) byte_bend: byte_bend::ByteBendEditor,
 
     pub selected_preset_name: String,
     params_revision: u64,
@@ -225,6 +228,7 @@ impl Default for CreativeFxState {
             dither_params: DitherPaletteParams::default(),
             ntsc_params: NtscParams::default(),
             structure_params: StructureParams::default(),
+            byte_bend: byte_bend::ByteBendEditor::default(),
             selected_preset_name: "Default".to_string(),
             params_revision: 0,
             selection_revision: 0,
@@ -285,6 +289,14 @@ impl Default for CreativeFxState {
 }
 
 impl CreativeFxState {
+    pub(in crate::image_preview) fn clear_byte_bend_audition(&mut self) {
+        self.byte_bend.audition = None;
+    }
+
+    fn show_full_effect(&self) -> bool {
+        self.selected_fx == CreativeFxType::ByteBend && self.byte_bend.full_preview
+    }
+
     fn mark_custom(&mut self) {
         self.selected_preset_name = "Custom".to_string();
         self.mark_dirty();
@@ -315,6 +327,7 @@ impl CreativeFxState {
     pub(in crate::image_preview) fn select_fx(&mut self, fx_type: CreativeFxType) {
         if self.selected_fx != fx_type {
             self.selected_fx = fx_type;
+            self.byte_bend.audition = None;
             self.selection_revision = self.selection_revision.wrapping_add(1);
             self.mark_dirty();
         }
@@ -330,6 +343,7 @@ impl CreativeFxState {
             CreativeFxType::DitherPalette => &self.dither_params.depth_mask,
             CreativeFxType::Ntsc => &self.ntsc_params.depth_mask,
             CreativeFxType::Structure => &self.structure_params.depth_mask,
+            CreativeFxType::ByteBend => &self.byte_bend.params.depth_mask,
         }
     }
 
@@ -343,6 +357,7 @@ impl CreativeFxState {
             CreativeFxType::DitherPalette => &mut self.dither_params.depth_mask,
             CreativeFxType::Ntsc => &mut self.ntsc_params.depth_mask,
             CreativeFxType::Structure => &mut self.structure_params.depth_mask,
+            CreativeFxType::ByteBend => &mut self.byte_bend.params.depth_mask,
         }
     }
 
@@ -360,6 +375,7 @@ impl CreativeFxState {
             CreativeFxType::DitherPalette => CreativeFxParams::DitherPalette(self.dither_params),
             CreativeFxType::Ntsc => CreativeFxParams::Ntsc(self.ntsc_params),
             CreativeFxType::Structure => CreativeFxParams::Structure(self.structure_params),
+            CreativeFxType::ByteBend => CreativeFxParams::ByteBend(self.byte_bend.preview_params()),
         }
     }
 
@@ -392,6 +408,7 @@ impl CreativeFxState {
             &mut self.dither_params.depth_mask,
             &mut self.ntsc_params.depth_mask,
             &mut self.structure_params.depth_mask,
+            &mut self.byte_bend.params.depth_mask,
         ];
         configs.into_iter().fold(false, |changed, config| {
             if config.enabled && config.source == source {

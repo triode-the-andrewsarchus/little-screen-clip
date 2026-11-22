@@ -249,7 +249,10 @@ impl ImagePreviewState {
                     } else {
                         false
                     };
-                    if near_split && response.drag_started() {
+                    if near_split
+                        && response.drag_started()
+                        && !self.creative_fx_state.show_full_effect()
+                    {
                         self.creative_fx_state.is_dragging_split = true;
                     }
 
@@ -312,7 +315,9 @@ impl ImagePreviewState {
                     }
 
                     // Rendering spinner overlay
-                    if self.creative_fx_state.is_rendering {
+                    if self.creative_fx_state.is_rendering
+                        && self.creative_fx_state.selected_fx != CreativeFxType::ByteBend
+                    {
                         let spinner_pos = canvas_rect.center();
                         let spin_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
                         let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
@@ -423,6 +428,9 @@ impl ImagePreviewState {
                                         CreativeFxParams::Ntsc(p) => {
                                             self.creative_fx_state.ntsc_params = *p;
                                         }
+                                        CreativeFxParams::ByteBend(p) => {
+                                            self.creative_fx_state.byte_bend.params = p.clone();
+                                        }
                                         CreativeFxParams::Structure(p) => {
                                             self.creative_fx_state.structure_params = *p;
                                         }
@@ -469,6 +477,9 @@ impl ImagePreviewState {
                                 CreativeFxType::Ntsc => {
                                     self.render_ntsc_controls(ui, palette, slider_w)
                                 }
+                                CreativeFxType::ByteBend => {
+                                    self.render_byte_bend_controls(ui, palette)
+                                }
                                 CreativeFxType::Structure => {
                                     self.render_structure_controls(ui, palette, slider_w)
                                 }
@@ -478,10 +489,17 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
                             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                            self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
-                            self.render_creative_fx_mask_options(
-                                ui, palette, cur_fx, full_w, slider_w,
-                            );
+                            let mut mask_controls = |ui: &mut egui::Ui| {
+                                self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
+                                self.render_creative_fx_mask_options(
+                                    ui, palette, cur_fx, full_w, slider_w,
+                                );
+                            };
+                            if cur_fx == CreativeFxType::ByteBend {
+                                ui.collapsing("Mask", mask_controls);
+                            } else {
+                                mask_controls(ui);
+                            }
 
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
@@ -496,9 +514,7 @@ impl ImagePreviewState {
                                 )
                                 .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
-                            let apply_enabled = self.creative_fx_state.preview_rgba.is_some()
-                                && self.creative_fx_state.preview_stamp.as_ref()
-                                    == Some(&self.creative_fx_render_stamp());
+                            let apply_enabled = self.can_apply_creative_fx();
                             if ui
                                 .add_enabled(apply_enabled, apply_btn)
                                 .on_hover_text(
@@ -552,6 +568,10 @@ impl ImagePreviewState {
                                     CreativeFxType::Ntsc => {
                                         self.creative_fx_state.ntsc_params = NtscParams::default();
                                     }
+                                    CreativeFxType::ByteBend => {
+                                        self.creative_fx_state.byte_bend =
+                                            byte_bend::ByteBendEditor::default();
+                                    }
                                     CreativeFxType::Structure => {
                                         self.creative_fx_state.structure_params =
                                             StructureParams::default();
@@ -604,42 +624,61 @@ impl ImagePreviewState {
         let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
 
-        // Render split comparison using unified SplitCompareView
-        let split_view = crate::shell::SplitCompareView::new(
-            orig_tex,
-            if self.creative_fx_state.preview_stamp.as_ref()
-                == Some(&self.creative_fx_render_stamp())
-            {
-                self.creative_fx_state.preview_texture.as_ref()
-            } else {
-                None
-            },
-            &mut self.creative_fx_state.comparison_split,
-            &mut self.creative_fx_state.is_dragging_split,
-        );
-        split_view.paint(ui, response, painter, img_rect, palette);
+        let preview = self.creative_fx_state.preview_texture.as_ref().filter(|_| {
+            self.creative_fx_preview_is_current()
+                || self
+                    .creative_fx_state
+                    .preview_stamp
+                    .as_ref()
+                    .is_some_and(|stamp| {
+                        stamp.pixel_revision == self.pixel_revision
+                            && stamp.fx_type == CreativeFxType::ByteBend
+                            && self.creative_fx_state.selected_fx == CreativeFxType::ByteBend
+                            && (!self.creative_fx_state.byte_bend.params.edits.is_empty()
+                                || self.creative_fx_state.byte_bend.audition.is_some())
+                    })
+        });
+        let full = self.creative_fx_state.show_full_effect();
+        if full {
+            painter.image(
+                preview.unwrap_or(orig_tex).id(),
+                img_rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else {
+            crate::shell::SplitCompareView::new(
+                orig_tex,
+                preview,
+                &mut self.creative_fx_state.comparison_split,
+                &mut self.creative_fx_state.is_dragging_split,
+            )
+            .paint(ui, response, painter, img_rect, palette);
+        }
 
         // HUD badges
         let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
 
-        let orig_rect = Rect::from_min_size(
-            Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
-            Vec2::new(100.0, 22.0),
-        );
-        painter.rect_filled(orig_rect, CornerRadius::same(4), badge_bg);
-        painter.rect_stroke(
-            orig_rect,
-            CornerRadius::same(4),
-            Stroke::new(1.0_f32, b_med),
-            egui::StrokeKind::Middle,
-        );
-        painter.text(
-            orig_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "ORIGINAL",
-            egui::FontId::proportional(11.0),
-            hex_to_c32(&palette.colors.text_secondary),
-        );
+        if !full {
+            let orig_rect = Rect::from_min_size(
+                Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
+                Vec2::new(100.0, 22.0),
+            );
+            painter.rect_filled(orig_rect, CornerRadius::same(4), badge_bg);
+            painter.rect_stroke(
+                orig_rect,
+                CornerRadius::same(4),
+                Stroke::new(1.0_f32, b_med),
+                egui::StrokeKind::Middle,
+            );
+            painter.text(
+                orig_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "ORIGINAL",
+                egui::FontId::proportional(11.0),
+                hex_to_c32(&palette.colors.text_secondary),
+            );
+        }
 
         let cur_fx = self.creative_fx_state.selected_fx;
         let fx_label = if self.creative_fx_state.is_rendering {

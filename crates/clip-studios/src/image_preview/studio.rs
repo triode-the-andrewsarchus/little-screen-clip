@@ -178,7 +178,11 @@ impl ImagePreviewState {
             if let Some(dirty_at) = self.creative_fx_state.params_dirty_at
                 && !self.creative_fx_state.is_rendering
             {
-                let debounce = std::time::Duration::from_millis(150);
+                let debounce = if self.creative_fx_state.selected_fx == CreativeFxType::ByteBend {
+                    std::time::Duration::ZERO
+                } else {
+                    std::time::Duration::from_millis(150)
+                };
                 if dirty_at.elapsed() >= debounce {
                     self.creative_fx_state.params_dirty_at = None;
                     self.run_creative_fx_render();
@@ -710,6 +714,7 @@ impl ImagePreviewState {
             self.film_sim_state.cancel_thumbnail_batch();
         }
         if prev_mode == ImageToolMode::CreativeFx && target_mode != ImageToolMode::CreativeFx {
+            self.creative_fx_state.clear_byte_bend_audition();
             self.creative_fx_state.cancel_render();
             self.cancel_creative_fx_thumbnail_batch();
         }

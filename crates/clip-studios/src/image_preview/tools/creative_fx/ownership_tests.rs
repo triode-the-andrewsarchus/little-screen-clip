@@ -33,6 +33,73 @@ fn wait_render(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
     }
 }
 
+#[test]
+fn byte_map_hover_previews_and_click_stages_an_undoable_effect() {
+    let jobs = BackgroundJobs::new(1, 4);
+    let mut state = state();
+    let source = Arc::new(RgbaImage::from_pixel(
+        64,
+        64,
+        image::Rgba([60, 90, 120, 255]),
+    ));
+    state.current_rgba = source.clone();
+    state.creative_fx_state.select_fx(CreativeFxType::ByteBend);
+    let ctx = egui::Context::default();
+    let palette = AppPalette::default();
+    let frame = |state: &mut ImagePreviewState, events| {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 512.0))),
+            events,
+            ..Default::default()
+        };
+        clip_ui::test_support::run_frame(&ctx, input, |ctx| {
+            ctx.root_ui(|ui| state.render_byte_bend_controls(ui, &palette));
+        })
+    };
+    let output = frame(&mut state, Vec::new());
+    let point = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) if mesh.calc_bounds().height() == 82.0 => {
+                Some(mesh.calc_bounds().center())
+            }
+            _ => None,
+        })
+        .expect("byte map should be visible");
+    frame(&mut state, vec![egui::Event::PointerMoved(point)]);
+    let audition = state.creative_fx_state.byte_bend.audition.unwrap();
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    assert_ne!(
+        state.creative_fx_state.preview_rgba.as_ref(),
+        Some(source.as_ref())
+    );
+    state.apply_creative_fx();
+    assert!(Arc::ptr_eq(&state.current_rgba, &source));
+
+    for pressed in [true, false] {
+        frame(
+            &mut state,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+    assert_eq!(state.creative_fx_state.byte_bend.params.edits, [audition]);
+    assert!(state.creative_fx_state.byte_bend.audition.is_none());
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    assert!(state.can_apply_creative_fx());
+    state.apply_creative_fx();
+    assert_ne!(state.current_rgba, source);
+    assert_eq!(state.undo_stack.last(), Some(&source));
+    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
+}
+
 fn occupy_executor(jobs: &BackgroundJobs) -> std::sync::mpsc::Sender<()> {
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();

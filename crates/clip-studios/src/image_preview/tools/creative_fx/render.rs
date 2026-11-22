@@ -237,10 +237,18 @@ impl ImagePreviewState {
         }
     }
 
+    pub(super) fn can_apply_creative_fx(&self) -> bool {
+        let state = &self.creative_fx_state;
+        (state.selected_fx != CreativeFxType::ByteBend
+            || (state.byte_bend.audition.is_none() && !state.byte_bend.params.edits.is_empty()))
+            && state.preview_rgba.is_some()
+            && self.creative_fx_preview_is_current()
+    }
+
     /// Commit creative FX result into current_rgba and push to undo stack.
     pub fn apply_creative_fx(&mut self) {
         self.invalidate_stale_creative_fx_masks();
-        if self.creative_fx_state.preview_stamp.as_ref() != Some(&self.creative_fx_render_stamp()) {
+        if !self.can_apply_creative_fx() {
             return;
         }
         let preview = match self.creative_fx_state.preview_rgba.take() {
