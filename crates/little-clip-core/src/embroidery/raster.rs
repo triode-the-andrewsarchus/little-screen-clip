@@ -1,12 +1,18 @@
 use super::{Design, Stitch, check_cancelled};
 use crate::ImageThumbnail;
-use resvg::tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use resvg::tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use std::sync::atomic::AtomicBool;
+
+mod bands;
 
 const FABRIC: [u8; 3] = [191, 187, 178];
 const MARGIN: f32 = 4.0;
 const MAX_FRAMES: usize = 64;
 const COLUMNS: usize = 8;
+const MAX_DETAIL_EDGE: u32 = 4096;
+const MAX_DETAIL_PIXELS: f32 = 8_388_608.0;
+const SHADOW_WIDTH: f32 = 2.2;
+const THREAD_WIDTH: f32 = 1.3;
 
 /// Stitch-order previews packed into one bounded premultiplied texture.
 pub struct Timeline {
@@ -20,6 +26,8 @@ pub struct TimelineLayout {
     pub height: u32,
     colors: Vec<[u8; 3]>,
     pub stitch_count: usize,
+    /// Width and height of the stitches in millimeters, excluding raster padding.
+    pub design_size_mm: [f32; 2],
 }
 
 impl TimelineLayout {
@@ -61,8 +69,30 @@ impl Design {
         max: [u32; 2],
         cancelled: &AtomicBool,
     ) -> Result<ImageThumbnail, String> {
-        let mut canvas = Canvas::new(self, max)?;
+        let mut canvas = Canvas::new(self, max, None, FABRIC)?;
         canvas.sew(&self.stitches, cancelled)?;
+        Ok(thumbnail(canvas.pixmap))
+    }
+
+    /// Renders the first `stitches` stitches at the requested size within the raster budget.
+    ///
+    /// `reference` is the size limit of the timeline tile whose framing and thread weights
+    /// should be preserved. Only the selected prefix is rasterized.
+    pub fn detailed_prefix(
+        &self,
+        reference: [u32; 2],
+        max: [u32; 2],
+        stitches: usize,
+        cancelled: &AtomicBool,
+    ) -> Result<ImageThumbnail, String> {
+        check_cancelled(cancelled)?;
+        let mut canvas = Canvas::new(self, reference, Some(max), FABRIC)?;
+        let stitches = &self.stitches[..stitches.min(self.stitch_count())];
+        if bands::worth_parallelizing(&canvas.pixmap, stitches.len()) {
+            bands::sew(&mut canvas, stitches, cancelled)?;
+        } else {
+            canvas.sew(stitches, cancelled)?;
+        }
         Ok(thumbnail(canvas.pixmap))
     }
 
@@ -73,7 +103,18 @@ impl Design {
         samples: usize,
         cancelled: &AtomicBool,
     ) -> Result<Timeline, String> {
-        let mut canvas = Canvas::new(self, max)?;
+        self.timeline_on(max, samples, FABRIC, cancelled)
+    }
+
+    /// Rasterizes a stitch timeline on the given opaque RGB background.
+    pub fn timeline_on(
+        &self,
+        max: [u32; 2],
+        samples: usize,
+        background: [u8; 3],
+        cancelled: &AtomicBool,
+    ) -> Result<Timeline, String> {
+        let mut canvas = Canvas::new(self, max, None, background)?;
         let samples = samples.clamp(1, MAX_FRAMES - 1).min(self.stitch_count());
         let [columns, rows] = grid(samples + 1);
         let [width, height] = [canvas.pixmap.width(), canvas.pixmap.height()];
@@ -83,6 +124,7 @@ impl Design {
             height,
             colors: Vec::with_capacity(samples),
             stitch_count: self.stitch_count(),
+            design_size_mm: self.size_mm(),
         };
         let mut previous = 0;
         for frame in 0..=samples {
@@ -122,11 +164,17 @@ struct Canvas {
     origin: [i32; 2],
     scale: f32,
     offset: [f32; 2],
+    raster_transform: Transform,
 }
 
 impl Canvas {
-    fn new(design: &Design, max: [u32; 2]) -> Result<Self, String> {
-        let max = max.map(|n| n.clamp(16, 512));
+    fn new(
+        design: &Design,
+        reference: [u32; 2],
+        target: Option<[u32; 2]>,
+        [r, g, b]: [u8; 3],
+    ) -> Result<Self, String> {
+        let max = reference.map(|n| n.clamp(16, 512));
         let span: [f32; 2] = std::array::from_fn(|axis| {
             (i64::from(design.max[axis]) - i64::from(design.min[axis])) as f32
         });
@@ -135,15 +183,18 @@ impl Canvas {
         let size: [u32; 2] = std::array::from_fn(|axis| {
             ((span[axis] * scale + 2.0 * MARGIN).ceil() as u32).clamp(16, max[axis])
         });
-        let mut pixmap = pixmap(size[0], size[1])?;
-        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(
-            FABRIC[0], FABRIC[1], FABRIC[2], 255,
-        ));
+        let output = target.map_or(size, |target| detail_size(size, target));
+        let mut pixmap = pixmap(output[0], output[1])?;
+        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(r, g, b, 255));
         Ok(Self {
             pixmap,
             origin: design.min,
             scale,
             offset: std::array::from_fn(|axis| (size[axis] as f32 - span[axis] * scale) * 0.5),
+            raster_transform: Transform::from_scale(
+                output[0] as f32 / size[0] as f32,
+                output[1] as f32 / size[1] as f32,
+            ),
         })
     }
 
@@ -156,44 +207,90 @@ impl Canvas {
 
     fn sew(&mut self, stitches: &[Stitch], cancelled: &AtomicBool) -> Result<(), String> {
         check_cancelled(cancelled)?;
-        for run in stitches.chunk_by(|a, b| a.color == b.color) {
-            for group in run.chunks(2048) {
-                check_cancelled(cancelled)?;
-                self.stroke(group);
-            }
+        for group in stitch_groups(stitches) {
+            check_cancelled(cancelled)?;
+            self.stroke(group);
         }
         Ok(())
     }
 
-    fn stroke(&mut self, stitches: &[Stitch]) {
+    fn path(&self, stitches: &[Stitch]) -> Option<Path> {
         let mut path = PathBuilder::new();
+        let mut previous = None;
         for stitch in stitches {
             let [x1, y1] = self.project(stitch.from);
-            let [mut x2, y2] = self.project(stitch.to);
+            let [x2, y2] = self.project(stitch.to);
             if x1 == x2 && y1 == y2 {
-                // A stationary needle entry still leaves a visible point.
-                x2 += 0.01;
+                path.move_to(x1, y1);
+                path.line_to(x2 + 0.01, y2);
+                previous = None;
+                continue;
             }
-            path.move_to(x1, y1);
+            // Join only touching stitches. Travel gaps still start a fresh contour.
+            if previous != Some(stitch.from) {
+                path.move_to(x1, y1);
+            }
             path.line_to(x2, y2);
+            previous = Some(stitch.to);
         }
-        let Some(path) = path.finish() else { return };
-        let [red, green, blue] = stitches[0].color;
-        let mut paint = Paint::default();
-        let mut stroke = Stroke {
-            width: 2.2,
-            line_cap: LineCap::Round,
-            line_join: LineJoin::Round,
-            ..Default::default()
-        };
-        paint.set_color_rgba8(27, 24, 21, 155);
-        self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-        stroke.width = 1.3;
-        paint.set_color_rgba8(red, green, blue, 255);
-        self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        path.finish()
     }
+
+    fn stroke(&mut self, stitches: &[Stitch]) {
+        let Some(path) = self.path(stitches) else {
+            return;
+        };
+        self.pixmap.stroke_path(
+            &path,
+            &shadow_paint(),
+            &stroke_style(SHADOW_WIDTH),
+            self.raster_transform,
+            None,
+        );
+        self.pixmap.stroke_path(
+            &path,
+            &thread_paint(stitches[0].color),
+            &stroke_style(THREAD_WIDTH),
+            self.raster_transform,
+            None,
+        );
+    }
+}
+
+fn stitch_groups(stitches: &[Stitch]) -> impl Iterator<Item = &[Stitch]> {
+    stitches
+        .chunk_by(|a, b| a.color == b.color)
+        .flat_map(|run| run.chunks(2048))
+}
+
+fn stroke_style(width: f32) -> Stroke {
+    Stroke {
+        width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Default::default()
+    }
+}
+
+fn shadow_paint() -> Paint<'static> {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(27, 24, 21, 155);
+    paint
+}
+
+fn thread_paint([r, g, b]: [u8; 3]) -> Paint<'static> {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(r, g, b, 255);
+    paint
+}
+
+fn detail_size(reference: [u32; 2], target: [u32; 2]) -> [u32; 2] {
+    let [width, height] = reference.map(|n| n as f32);
+    let [max_width, max_height] = target.map(|n| n.clamp(1, MAX_DETAIL_EDGE) as f32);
+    let scale = (max_width / width)
+        .min(max_height / height)
+        .min((MAX_DETAIL_PIXELS / (width * height)).sqrt());
+    reference.map(|n| (n as f32 * scale).floor().max(1.0) as u32)
 }
 
 fn pixmap(width: u32, height: u32) -> Result<Pixmap, String> {
@@ -244,5 +341,69 @@ mod tests {
         assert_eq!(pixel(1, 60, 32), FABRIC);
         assert_eq!(pixel(2, 32, 32), FABRIC);
         assert_ne!(pixel(2, 60, 32), FABRIC);
+
+        let detail = design
+            .detailed_prefix([64, 64], [768, 512], 1, &cancelled)
+            .unwrap();
+        assert_eq!([detail.width, detail.height], [512, 512]);
+        let detail_pixel = |x: usize, y: usize| {
+            let offset = (y * detail.width as usize + x) * 4;
+            &detail.premultiplied_rgba[offset..offset + 3]
+        };
+        assert_eq!(detail_pixel(32, 256), [160, 22, 58]);
+        assert_eq!(detail_pixel(46, 256), FABRIC);
+        assert_eq!(detail_pixel(480, 256), FABRIC);
+    }
+
+    #[test]
+    fn parallel_bands_keep_travel_gaps_and_order_across_row_boundaries() {
+        let design = Design::from_stitches(vec![
+            Stitch {
+                from: [0, 0],
+                to: [0, 50],
+                color: [160, 22, 58],
+            },
+            Stitch {
+                from: [0, 50],
+                to: [0, 100],
+                color: [160, 22, 58],
+            },
+            Stitch {
+                from: [100, 0],
+                to: [100, 100],
+                color: [160, 22, 58],
+            },
+            Stitch {
+                from: [0, 62],
+                to: [100, 62],
+                color: [20, 77, 119],
+            },
+        ])
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let mut canvas = Canvas::new(&design, [64, 64], Some([512, 512]), FABRIC).unwrap();
+        let path = canvas.path(&design.stitches[..3]).unwrap();
+        assert_eq!(
+            path.segments()
+                .filter(|op| matches!(op, resvg::tiny_skia::PathSegment::MoveTo(_)))
+                .count(),
+            2
+        );
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        pool.install(|| bands::sew(&mut canvas, &design.stitches, &cancelled))
+            .unwrap();
+        let pixel = |x: usize, y: usize| {
+            let start = (y * 512 + x) * 4;
+            &canvas.pixmap.data()[start..start + 3]
+        };
+        for y in [127, 128, 255, 256, 383, 384] {
+            assert_eq!(pixel(32, y), [160, 22, 58]);
+            assert_eq!(pixel(256, y), FABRIC);
+        }
+        assert_eq!(pixel(32, 310), [20, 77, 119]);
     }
 }

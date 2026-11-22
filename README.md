@@ -64,12 +64,13 @@ Files can plot dated heliocentric paths in its Solar System view. The
 [Solar System import guide](docs/examples/solar-system/README.md) has supported
 formats, working sample files, and coverage by workflow.
 
-Machine embroidery files show the finished design in List and Columns. Move the
-pointer across the strip to reveal the design in stitch order, or open the file
-for a larger preview with a stitch slider. Copy an embroidery file to a hand
-slot to see the completed design on the little screen. Formats include PES,
-PEC, DST, EXP, JEF, VP3, HUS, VIP, and XXX. Embroidery decoding runs in Rust.
-Files without thread colors use a repeatable palette.
+Machine embroidery files show a sequence of stitch previews in List and Columns.
+Wide designs use a hover scrubber. Open the file for a full-size preview, then
+drag the thread-color bar or scroll over the artwork to change stitch progress.
+Copy an embroidery file to a hand slot to see the completed design on the little
+screen. Formats include PES, PEC, DST, EXP, JEF, VP3, HUS, VIP, and XXX.
+Embroidery decoding runs in Rust. Files without thread colors use a repeatable
+palette.
 
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
 folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,

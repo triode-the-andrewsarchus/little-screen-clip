@@ -60,6 +60,15 @@ pub const COMPACT_CONTROL_HEIGHT: f32 = 24.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 /// Returns the unfiltered wheel movement for a canvas gesture.
 pub fn wheel_delta(ctx: &egui::Context) -> Vec2 {
+    wheel_movement(ctx, false)
+}
+
+/// Returns wheel movement including any delta sent with the start of a gesture.
+pub fn wheel_delta_including_start(ctx: &egui::Context) -> Vec2 {
+    wheel_movement(ctx, true)
+}
+
+fn wheel_movement(ctx: &egui::Context, include_start: bool) -> Vec2 {
     let options = ctx.options(|options| options.input_options);
     ctx.input(|input| {
         input.events.iter().fold(Vec2::ZERO, |total, event| {
@@ -67,13 +76,15 @@ pub fn wheel_delta(ctx: &egui::Context) -> Vec2 {
                 unit,
                 delta,
                 modifiers,
-                phase: egui::TouchPhase::Move,
+                phase,
                 ..
             } = event
             else {
                 return total;
             };
-            if modifiers.matches_any(options.zoom_modifier) {
+            let movement = *phase == egui::TouchPhase::Move
+                || include_start && *phase == egui::TouchPhase::Start;
+            if !movement || modifiers.matches_any(options.zoom_modifier) {
                 return total;
             }
             let points = match unit {
