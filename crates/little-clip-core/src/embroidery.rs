@@ -1,105 +1,23 @@
 //! Guarded machine-embroidery decoding and stitch-order previews.
 
+mod decode;
 mod raster;
 
 pub use raster::{Timeline, TimelineLayout};
 
-use crate::{CommandRequest, file_source::read_file_snapshot_with_source};
+use crate::file_source::read_file_snapshot_with_source;
 use std::{
-    io::Write,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_COMMANDS: usize = 500_000;
-const RECORD_BYTES: usize = 12;
-const COLORS: [[u8; 3]; 6] = [
-    [19, 123, 117],
-    [181, 55, 84],
-    [36, 70, 143],
-    [146, 96, 16],
-    [112, 60, 134],
-    [40, 92, 55],
-];
-const BUNDLE: &[u8] = include_bytes!("../../../vendor/pystitch/pystitch-1.0.1-py3-none-any.whl");
 
 /// Embroidery filename hints. Generic extensions such as DAT and CSV are
 /// intentionally left to their regular file handlers.
 pub fn supports_extension(extension: &str) -> bool {
-    matches!(
-        extension,
-        "10o"
-            | "dst"
-            | "dsb"
-            | "dsz"
-            | "emd"
-            | "exp"
-            | "exy"
-            | "fxy"
-            | "hus"
-            | "inb"
-            | "jef"
-            | "jef+"
-            | "jpx"
-            | "ksm"
-            | "mit"
-            | "pcq"
-            | "pcs"
-            | "pec"
-            | "pes"
-            | "phb"
-            | "phc"
-            | "pmv"
-            | "ptn"
-            | "sew"
-            | "shv"
-            | "spx"
-            | "stc"
-            | "stx"
-            | "tap"
-            | "tbf"
-            | "u01"
-            | "vip"
-            | "vp3"
-            | "xxx"
-            | "zhs"
-            | "zxy"
-    )
-}
-
-enum Event {
-    Sew([i32; 2], Option<[u8; 3]>),
-    Break,
-    ThreadChange,
-}
-
-#[derive(Default)]
-struct StitchBuilder {
-    stitches: Vec<Stitch>,
-    previous: Option<[i32; 2]>,
-    thread: usize,
-}
-
-impl StitchBuilder {
-    fn add(&mut self, event: Event) {
-        match event {
-            Event::Sew(point, color) => {
-                self.stitches.push(Stitch {
-                    from: self.previous.unwrap_or(point),
-                    to: point,
-                    color: color.unwrap_or(COLORS[self.thread % COLORS.len()]),
-                });
-                self.previous = Some(point);
-            }
-            Event::Break => self.previous = None,
-            Event::ThreadChange => {
-                self.previous = None;
-                self.thread += 1;
-            }
-        }
-    }
+    decode::reader(extension).is_some()
 }
 
 #[derive(Debug)]
@@ -123,29 +41,16 @@ impl Design {
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .filter(|ext| supports_extension(ext))
             .ok_or("Unsupported embroidery format")?;
+        let extension = extension.to_ascii_lowercase();
+        let reader = decode::reader(&extension).ok_or("Unsupported embroidery format")?;
         check_cancelled(cancelled)?;
         let (bytes, source) =
             read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
-        check_cancelled(cancelled)?;
-        let mut builder = StitchBuilder::default();
-        if matches!(extension.as_str(), "vip" | "jef+" | "jpx")
-            || (extension == "jef" && bytes.get(4..8) == Some(&1_u32.to_le_bytes()))
-        {
-            read_native(&extension, &bytes, &mut builder)?;
-        } else {
-            let reader = if extension == "ptn" {
-                "jef"
-            } else {
-                &extension
-            };
-            read_bundled(reader, bytes, cancelled, &mut builder)?;
-        }
+        let stitches = decode::read(reader, &bytes, cancelled)?;
         source.check()?;
         check_cancelled(cancelled)?;
-        Self::from_stitches(builder.stitches)
+        Self::from_stitches(stitches)
     }
 
     fn from_stitches(stitches: Vec<Stitch>) -> Result<Self, String> {
@@ -176,106 +81,6 @@ impl Design {
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
     if cancelled.load(Ordering::Relaxed) {
         return Err("Embroidery preview cancelled".into());
-    }
-    Ok(())
-}
-
-fn read_bundled(
-    extension: &str,
-    bytes: Vec<u8>,
-    cancelled: &AtomicBool,
-    builder: &mut StitchBuilder,
-) -> Result<(), String> {
-    let mut bundle = tempfile::tempfile().map_err(|error| error.to_string())?;
-    bundle
-        .write_all(BUNDLE)
-        .map_err(|error| error.to_string())?;
-    let command = CommandRequest::new("python3")
-        .arg("-I")
-        .arg("-B")
-        .arg("-S")
-        .arg("-c")
-        .arg(include_str!("embroidery/decode.py"))
-        .arg(extension)
-        .arg_owned_content_file(bundle)
-        .map_err(|error| error.to_string())?
-        .arg(MAX_COMMANDS.to_string())
-        .stdin_bytes(bytes)
-        .resource_limit(rustix::process::Resource::As, 256 * 1024 * 1024)
-        .resource_limit(rustix::process::Resource::Cpu, 3)
-        .resource_limit(rustix::process::Resource::Fsize, 0)
-        .timeout(Duration::from_secs(5))
-        .max_output_bytes(MAX_COMMANDS * RECORD_BYTES)
-        .own_process_group()
-        .die_with_parent();
-    let output = command
-        .run_cancellable(cancelled)
-        .map_err(|error| format!("Embroidery preview helper (Python 3): {error}"))?;
-    if !output.status.success() || output.stdout_truncated {
-        return Err(format!(
-            "Could not decode {} stitches within the preview limits",
-            extension.to_ascii_uppercase()
-        ));
-    }
-    let (records, remainder) = output.stdout.as_chunks::<RECORD_BYTES>();
-    if !remainder.is_empty() {
-        return Err("Invalid embroidery preview data".into());
-    }
-    for record in records {
-        let (xy, _) = record.as_chunks::<4>();
-        let point = [i32::from_le_bytes(xy[0]), i32::from_le_bytes(xy[1])];
-        let event = match record[11] {
-            0 => Event::Sew(point, Some([record[8], record[9], record[10]])),
-            1 => Event::Sew(point, None),
-            2 => Event::Break,
-            3 => Event::ThreadChange,
-            _ => return Err("Invalid embroidery preview command".into()),
-        };
-        builder.add(event);
-    }
-    Ok(())
-}
-
-fn read_native(extension: &str, bytes: &[u8], builder: &mut StitchBuilder) -> Result<(), String> {
-    use oxideav_embroidery::{Command, hus, jef};
-
-    let design = if extension == "vip" {
-        let file = hus::parse_vip(bytes).map_err(|error| error.to_string())?;
-        if file.stitch_count as usize > MAX_COMMANDS {
-            return Err("Embroidery stitch budget exceeded".into());
-        }
-        hus::decode_design(&file)
-    } else {
-        // Bound the command allocation even if the declared count is wrong.
-        let offset = bytes
-            .first_chunk::<4>()
-            .map_or(0, |offset| u32::from_le_bytes(*offset));
-        if !jef::probe(bytes) || bytes.len().saturating_sub(offset as usize) > MAX_COMMANDS * 2 {
-            return Err("Invalid or oversized JEF+ stitch stream".into());
-        }
-        jef::decode(bytes).map(|file| file.design)
-    }
-    .map_err(|error| error.to_string())?;
-
-    let (mut x, mut y) = (0i32, 0i32);
-    for command in design.commands {
-        let (dx, dy) = command.delta();
-        x = x.saturating_add(dx);
-        y = y.saturating_sub(dy);
-        let event = match command {
-            Command::Stitch { .. } => {
-                let color = design
-                    .threads
-                    .get(builder.thread)
-                    .and_then(|entry| entry.rgb);
-                Event::Sew([x, y], color)
-            }
-            Command::ColorChange { .. } => Event::ThreadChange,
-            Command::Jump { .. } | Command::Trim { .. } => Event::Break,
-            Command::End => break,
-            _ => continue,
-        };
-        builder.add(event);
     }
     Ok(())
 }
@@ -318,25 +123,6 @@ mod tests {
             crate::ClipItem::from_text(path.to_string_lossy().as_ref()).payload,
             crate::ClipPayload::FileBatch(paths) if paths == [path]
         ));
-    }
-
-    #[test]
-    fn pen_travel_and_color_changes_leave_unsewn_gaps() {
-        let mut builder = StitchBuilder::default();
-        builder.add(Event::Sew([10, 15], None));
-        builder.add(Event::Sew([30, 40], None));
-        builder.add(Event::Break);
-        builder.add(Event::Sew([65, 80], None));
-        builder.add(Event::ThreadChange);
-        builder.add(Event::Sew([120, 150], None));
-        let [start, sewn, after_jump, after_change] = builder.stitches.as_slice() else {
-            panic!("Expected four sewn records");
-        };
-        assert_eq!(sewn.from, start.to);
-        assert_eq!(after_jump.from, after_jump.to);
-        assert_eq!(after_change.from, after_change.to);
-        assert_eq!(after_jump.color, start.color);
-        assert_ne!(after_change.color, start.color);
     }
 
     #[test]
