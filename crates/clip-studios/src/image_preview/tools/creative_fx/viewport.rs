@@ -314,42 +314,7 @@ impl ImagePreviewState {
                         );
                     }
 
-                    // Rendering spinner overlay
-                    if self.creative_fx_state.is_rendering
-                        && self.creative_fx_state.selected_fx != CreativeFxType::ByteBend
-                    {
-                        let spinner_pos = canvas_rect.center();
-                        let spin_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
-                        let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
-                        painter.rect_filled(spin_rect, CornerRadius::same(8), spin_bg);
-                        painter.rect_stroke(
-                            spin_rect,
-                            CornerRadius::same(8),
-                            Stroke::new(1.0_f32, b_med),
-                            egui::StrokeKind::Middle,
-                        );
-                        crate::icons::Icon::Hourglass.paint_text(
-                            &painter,
-                            spinner_pos,
-                            egui::Align2::CENTER_CENTER,
-                            "Processing Creative FX…",
-                            egui::FontId::proportional(12.0),
-                            f_med,
-                        );
-                    }
-
-                    // Error overlay
-                    if let Some(ref err) = self.creative_fx_state.render_error.clone() {
-                        let err_pos = Pos2::new(canvas_rect.min.x + 10.0, canvas_rect.min.y + 10.0);
-                        crate::icons::Icon::Alert.paint_text(
-                            &painter,
-                            err_pos,
-                            egui::Align2::LEFT_TOP,
-                            err.to_string(),
-                            egui::FontId::proportional(11.0),
-                            hex_to_c32(&palette.diff_del),
-                        );
-                    }
+                    self.paint_creative_fx_feedback(&painter, canvas_rect, palette);
                 });
         });
 
@@ -606,6 +571,52 @@ impl ImagePreviewState {
             palette,
             "creative_fx",
         );
+    }
+
+    fn paint_creative_fx_feedback(
+        &self,
+        painter: &egui::Painter,
+        canvas_rect: Rect,
+        palette: &AppPalette,
+    ) {
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
+        // Rendering spinner overlay
+        if self.creative_fx_state.is_rendering
+            && self.creative_fx_state.selected_fx != CreativeFxType::ByteBend
+        {
+            let spinner_pos = canvas_rect.center();
+            let spin_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
+            let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
+            painter.rect_filled(spin_rect, CornerRadius::same(8), spin_bg);
+            painter.rect_stroke(
+                spin_rect,
+                CornerRadius::same(8),
+                Stroke::new(1.0_f32, b_med),
+                egui::StrokeKind::Middle,
+            );
+            crate::icons::Icon::Hourglass.paint_text(
+                painter,
+                spinner_pos,
+                egui::Align2::CENTER_CENTER,
+                "Processing Creative FX…",
+                egui::FontId::proportional(12.0),
+                f_med,
+            );
+        }
+
+        // Error overlay
+        if let Some(err) = &self.creative_fx_state.render_error {
+            let err_pos = Pos2::new(canvas_rect.min.x + 10.0, canvas_rect.min.y + 10.0);
+            crate::icons::Icon::Alert.paint_text(
+                painter,
+                err_pos,
+                egui::Align2::LEFT_TOP,
+                err,
+                egui::FontId::proportional(11.0),
+                hex_to_c32(&palette.diff_del),
+            );
+        }
     }
 
     /// Split-view comparison painter for the Creative FX tab center canvas.

@@ -97,6 +97,63 @@ impl ByteBendEditor {
         }
     }
 
+    fn show_map(
+        &mut self,
+        ui: &mut egui::Ui,
+        image: &RgbaImage,
+        revision: u64,
+        accent: Color32,
+    ) -> (Option<ByteBendEdit>, bool) {
+        ui.label("Hover to preview. Click to stage. Scroll to vary.");
+        ui.horizontal(|ui| {
+            ui.label("Map");
+            for (zoom, label) in [(1, "Full"), (4, "4×"), (16, "16×")] {
+                if ui.selectable_label(self.zoom == zoom, label).clicked() {
+                    self.zoom = zoom;
+                }
+            }
+        });
+        if self.zoom > 1 {
+            ui.add(
+                egui::Slider::new(&mut self.location, 0..=ADDRESS_SPACE - 1)
+                    .show_value(false)
+                    .text("Browse"),
+            );
+        }
+        let (start, length) = self.range();
+        let map = self.map_texture(ui.ctx(), image, revision);
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width().max(1.0), 82.0),
+            egui::Sense::click(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.image(
+            map,
+            rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        paint_staged_bytes(&painter, rect, start, length, &self.params.edits, accent);
+        self.change_variation(ui, &response);
+        let hovered = response.hover_pos().map(|point| hovered_cell(rect, point));
+        let candidate = hovered.map(|cell| self.edit_at(cell_address(start, length, cell)));
+        if let Some(edit) = candidate
+            && self.zoom == 1
+        {
+            self.location = u32::from(edit.address);
+        }
+        if let Some(cell) = hovered {
+            let outline = map_cell_rect(rect, cell);
+            painter.rect_stroke(
+                outline,
+                0,
+                Stroke::new(1.25, Color32::WHITE),
+                egui::StrokeKind::Inside,
+            );
+        }
+        (candidate, response.clicked())
+    }
+
     fn change_variation(&mut self, ui: &egui::Ui, response: &egui::Response) {
         if !response.hovered() {
             self.wheel = 0.0;
@@ -124,63 +181,17 @@ impl ImagePreviewState {
     pub(super) fn render_byte_bend_controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let editor = &mut self.creative_fx_state.byte_bend;
         let mut staged_changed = false;
-        ui.label("Hover to preview. Click to stage. Scroll to vary.");
-        ui.horizontal(|ui| {
-            ui.label("Map");
-            for (zoom, label) in [(1, "Full"), (4, "4×"), (16, "16×")] {
-                if ui.selectable_label(editor.zoom == zoom, label).clicked() {
-                    editor.zoom = zoom;
-                }
-            }
-        });
-        if editor.zoom > 1 {
-            ui.add(
-                egui::Slider::new(&mut editor.location, 0..=ADDRESS_SPACE - 1)
-                    .show_value(false)
-                    .text("Browse"),
-            );
-        }
-        let (start, length) = editor.range();
-        let map = editor.map_texture(ui.ctx(), &self.current_rgba, self.pixel_revision);
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width().max(1.0), 82.0),
-            egui::Sense::click(),
-        );
-        let painter = ui.painter_at(rect);
-        painter.image(
-            map,
-            rect,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
-        paint_staged_bytes(
-            &painter,
-            rect,
-            start,
-            length,
-            &editor.params.edits,
+        let (candidate, clicked) = editor.show_map(
+            ui,
+            &self.current_rgba,
+            self.pixel_revision,
             hex_to_c32(&palette.harmonies.base),
         );
-        editor.change_variation(ui, &response);
-        let hovered = response.hover_pos().map(|point| hovered_cell(rect, point));
-        let candidate = hovered.map(|cell| editor.edit_at(cell_address(start, length, cell)));
-        if let Some(cell) = hovered {
-            let outline = map_cell_rect(rect, cell);
-            painter.rect_stroke(
-                outline,
-                0,
-                Stroke::new(1.25, Color32::WHITE),
-                egui::StrokeKind::Inside,
-            );
-        }
-        if response.clicked()
+        if clicked
             && let Some(edit) = candidate
             && editor.params.edits.len() < MAX_BYTE_BEND_EDITS
         {
             editor.params.edits.push(edit);
-            if editor.zoom == 1 {
-                editor.location = u32::from(edit.address);
-            }
             staged_changed = true;
         }
         let audition = candidate.filter(|candidate| editor.params.edits.last() != Some(candidate));
