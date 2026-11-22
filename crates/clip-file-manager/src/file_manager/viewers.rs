@@ -941,6 +941,7 @@ fn session(
             prepared,
             video_start,
             config.file_manager.video_subtitles_enabled,
+            check,
         )),
         Loaded::VideoAudio(prepared) => ViewerSession::Audio(Box::new(prepared.studio(config))),
         Loaded::Text(state) => ViewerSession::Text(*state),

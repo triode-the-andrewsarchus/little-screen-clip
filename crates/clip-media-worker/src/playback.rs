@@ -1,4 +1,5 @@
 //! Synchronized GStreamer playback with a bounded, clocked application video sink.
+pub(super) mod subtitles;
 use clip_media_protocol::playback::{Control, Options, Settings, Track, Tracks, Update};
 use gstreamer::{self as gst, prelude::*};
 use gstreamer_video::VideoFrameExt;
@@ -331,23 +332,40 @@ impl Engine {
                 });
         // Flush the old segment before waiting for new preroll. Waiting here
         // can wait on buffers/clock state from the previous playback rate.
-        self.player
-            .seek(
-                self.options.rate,
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::SeekType::Set,
-                gst::ClockTime::from_mseconds(position),
-                stop_type,
-                stop,
-            )
-            .map_err(message)?;
-        self.wait_ready()?;
+        let event = gst::event::Seek::new(
+            self.options.rate,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            gst::ClockTime::from_mseconds(position),
+            stop_type,
+            stop,
+        );
+        if !self.player.send_event(event.clone()) && !self.seek_from_source(event) {
+            return Err("Failed to seek".into());
+        }
+        // A subtitle branch can still be prerolling during a gap in dialogue.
+        // The video sink signals when the requested frame is ready to present.
         let sample = self
             .sink
             .try_pull_preroll(gst::ClockTime::from_seconds(5))
             .ok_or("No frame at the requested position")?;
         self.ended = false;
         self.frame(sample, output)
+    }
+
+    fn seek_from_source(&self, event: gst::Event) -> bool {
+        // The video sink can reject events while the subtitle overlay relinks.
+        // The upstream video pad reaches the demuxer, which flushes all tracks.
+        self.player
+            .downcast_ref::<gst::Bin>()
+            .and_then(|player| player.by_name("uridecodebin3"))
+            .and_then(|source| {
+                source
+                    .src_pads()
+                    .into_iter()
+                    .find(|pad| pad.name().starts_with("video_"))
+            })
+            .is_some_and(|pad| pad.send_event(event))
     }
 
     fn control(&mut self, control: Control, output: &mut impl Write) -> Result<()> {

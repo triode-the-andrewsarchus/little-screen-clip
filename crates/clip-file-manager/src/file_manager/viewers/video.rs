@@ -1,4 +1,6 @@
 //! Embedded video presentation; synchronized audio and decoding stay in the owned worker.
+mod dialogue;
+
 use super::super::{
     media::{VideoMetadata as Prepared, inspect_video},
     preview_copy::Copies,
@@ -6,7 +8,7 @@ use super::super::{
     video_playback::{AudioMode, Session, Span},
     video_timeline::{Timeline, selection::FrameCopy},
 };
-use crate::file_source::FileSource;
+use crate::file_source::{FileSource, ReadCheck};
 use clip_ui::buttons::ButtonRole;
 use egui::Ui;
 use std::path::PathBuf;
@@ -26,6 +28,8 @@ pub(super) struct Video {
     stopped: bool,
     last_activity: f64,
     context: Option<egui::Context>,
+    read_check: ReadCheck,
+    dialogue: dialogue::Find,
 }
 impl Video {
     pub fn new(
@@ -33,6 +37,7 @@ impl Video {
         prepared: Prepared,
         start_seconds: f64,
         subtitles_enabled: bool,
+        read_check: ReadCheck,
     ) -> Self {
         let start_ms = if start_seconds.is_finite() {
             (start_seconds.max(0.0) * 1000.0) as u64
@@ -54,6 +59,8 @@ impl Video {
             stopped: false,
             last_activity: 0.0,
             context: None,
+            read_check,
+            dialogue: dialogue::Find::default(),
         }
     }
     pub(super) fn set_timeline(&mut self, timeline: Timeline) {
@@ -75,12 +82,14 @@ impl Video {
         self.path = path;
         self.prepared.source = source.clone();
         self.transport.timeline = None;
+        self.dialogue = dialogue::Find::default();
         if let Some(player) = &self.player {
             player.relocate(source);
         }
     }
     pub(super) fn stop(&mut self) {
         self.player = None;
+        self.dialogue = dialogue::Find::default();
         self.stopped = true;
     }
     pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
@@ -139,13 +148,11 @@ impl Video {
             shell.render_header(ui, |_| {});
         }
         let was_fullscreen = self.fullscreen;
-        if ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
-            shortcuts(ui, player, &mut self.fullscreen);
-        }
+        shortcuts(ui, player, &mut self.fullscreen, &mut self.dialogue);
         let response = picture(ui, player, self.fullscreen);
         let rect = response.rect;
         let menu_was_open = response.context_menu_opened() || egui::Popup::is_any_open(ui.ctx());
-        response.context_menu(|ui| playback_menu(ui, player));
+        response.context_menu(|ui| playback_menu(ui, player, &mut self.dialogue));
         let overlay_visible = overlay_visibility(
             ui,
             was_fullscreen != self.fullscreen,
@@ -186,7 +193,12 @@ impl Video {
                 ));
             }
         }
-        dismiss_key(ui, &mut self.fullscreen, close, menu_was_open);
+        if self.dialogue.open {
+            self.dialogue
+                .show(ui.ctx(), player, &self.prepared.source, &self.read_check);
+        } else {
+            dismiss_key(ui, &mut self.fullscreen, close, menu_was_open);
+        }
     }
 }
 fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool, menu_was_open: bool) {
@@ -297,7 +309,22 @@ fn fullscreen_controls(
     (back, exit)
 }
 
-fn shortcuts(ui: &mut Ui, player: &mut Session, fullscreen: &mut bool) {
+fn shortcuts(
+    ui: &mut Ui,
+    player: &mut Session,
+    fullscreen: &mut bool,
+    dialogue: &mut dialogue::Find,
+) {
+    if !ui.is_enabled() {
+        return;
+    }
+    if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+        egui::Popup::close_all(ui.ctx());
+        dialogue.open();
+    }
+    if dialogue.open || ui.ctx().egui_wants_keyboard_input() {
+        return;
+    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
         player.set_playing(!player.playing());
     }
@@ -475,11 +502,16 @@ fn clock(ms: u64) -> String {
     }
 }
 
-fn playback_menu(ui: &mut Ui, player: &mut Session) {
+fn playback_menu(ui: &mut Ui, player: &mut Session, dialogue: &mut dialogue::Find) {
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ui.close();
         return;
     }
+    if ui.button("Find dialogue…  Ctrl+F").clicked() {
+        dialogue.open();
+        ui.close();
+    }
+    let selected_subtitle = dialogue::selected_track(player).map(|track| track.index);
     let mut options = player.options().clone();
     ui.menu_button("Subtitles", |ui| {
         ui.checkbox(&mut options.subtitles_enabled, "Enable subtitles");
@@ -487,8 +519,7 @@ fn playback_menu(ui: &mut Ui, player: &mut Session) {
             ui.add_enabled(false, egui::Label::new("No embedded subtitle tracks"));
         }
         for track in &player.tracks.subtitles {
-            let selected =
-                options.subtitle_track.or(player.tracks.current_subtitle) == Some(track.index);
+            let selected = selected_subtitle == Some(track.index);
             if ui
                 .selectable_label(selected, format!("{} · {}", track.index + 1, track.label))
                 .clicked()

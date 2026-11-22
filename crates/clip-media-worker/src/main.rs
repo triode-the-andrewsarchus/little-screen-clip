@@ -19,9 +19,9 @@ fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
         Some("render-audio") => render_command(&arguments),
-        Some("playback" | "video-frame" | "video-preview" | "video-timeline") => {
-            visual_command(&arguments)
-        }
+        Some(
+            "playback" | "video-frame" | "video-preview" | "video-timeline" | "subtitle-track",
+        ) => visual_command(&arguments),
         Some("probe" | "decode-audio") if arguments.len() == 3 => inspect_command(&arguments),
         _ => Err("Expected a media command and an inherited content descriptor".into()),
     }
@@ -41,6 +41,11 @@ fn visual_command(arguments: &[String]) -> Result<(), String> {
     }
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
     match arguments[0].as_str() {
+        "subtitle-track" => playback::subtitles::read(
+            input,
+            serde_json::from_str(settings).map_err(|error| error.to_string())?,
+            &mut output,
+        ),
         "video-frame" => video::snapshot(
             input,
             &serde_json::from_str(settings).map_err(|error| error.to_string())?,

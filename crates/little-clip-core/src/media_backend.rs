@@ -104,6 +104,14 @@ pub fn playback_request(settings: &playback::Settings) -> Result<CommandRequest,
     settings_request("playback", settings)
 }
 
+/// Builds a bounded read request for the player's embedded subtitle ordinal.
+///
+/// # Errors
+/// Returns a settings serialization or request-budget error.
+pub fn subtitle_track_request(track: u32) -> Result<CommandRequest, String> {
+    Ok(settings_request("subtitle-track", &track)?.max_output_bytes(playback::MAX_SUBTITLE_BYTES))
+}
+
 fn settings_request(
     mode: &str,
     settings: &impl serde::Serialize,
