@@ -62,8 +62,8 @@ impl Video {
             self.transport.timeline = Some(timeline);
         }
     }
-    pub(super) fn copy_pending(&self) -> bool {
-        self.transport.copies.busy()
+    pub(super) fn notify_copy(&mut self, ctx: &egui::Context, text: &str) {
+        self.transport.notice = Some((text.to_owned(), ctx.input(|input| input.time) + 4.0));
     }
     pub(super) fn fullscreen(&self) -> bool {
         self.fullscreen
@@ -85,7 +85,6 @@ impl Video {
     }
     pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
         self.context = Some(ctx.clone());
-        self.transport.poll(ctx);
         if self.stopped {
             return;
         }
@@ -113,6 +112,7 @@ impl Video {
         ui: &mut Ui,
         close: &mut bool,
         palette: &little_clip_core::palette::AppPalette,
+        copies: &mut Copies,
     ) {
         if self.stopped {
             let mut shell =
@@ -163,13 +163,20 @@ impl Video {
         }
         if self.fullscreen {
             if overlay_visible || player.error.is_some() {
-                let (back, exit) =
-                    fullscreen_controls(ui, rect, &self.path, player, &mut self.transport, palette);
+                let (back, exit) = fullscreen_controls(
+                    ui,
+                    rect,
+                    &self.path,
+                    player,
+                    &mut self.transport,
+                    palette,
+                    copies,
+                );
                 *close |= back;
                 self.fullscreen &= !exit;
             }
         } else {
-            controls(ui, player, &mut self.transport, palette);
+            controls(ui, player, &mut self.transport, palette, copies);
             if let Some(error) = &player.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             } else {
@@ -243,6 +250,7 @@ fn fullscreen_controls(
     player: &mut Session,
     transport: &mut Transport,
     palette: &little_clip_core::palette::AppPalette,
+    copies: &mut Copies,
 ) -> (bool, bool) {
     let mut back = false;
     let mut exit = false;
@@ -280,7 +288,7 @@ fn fullscreen_controls(
             overlay_frame().show(ui, |ui| {
                 ui.set_width((rect.width() - 48.0).max(100.0));
                 ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
-                controls(ui, player, transport, palette);
+                controls(ui, player, transport, palette, copies);
                 if let Some(error) = &player.error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -313,6 +321,7 @@ fn controls(
     player: &mut Session,
     transport: &mut Transport,
     palette: &little_clip_core::palette::AppPalette,
+    copies: &mut Copies,
 ) {
     ui.horizontal(|ui| {
         let icon = if player.playing() {
@@ -333,7 +342,7 @@ fn controls(
         {
             player.set_playing(!player.playing());
         }
-        let seconds = transport.seek_ui(ui, player);
+        let seconds = transport.seek_ui(ui, player, copies);
         ui.label(format!(
             "{} / {}",
             clock((seconds * 1000.0) as u64),
@@ -346,19 +355,11 @@ fn controls(
 struct Transport {
     timeline: Option<Timeline>,
     seek_preview: Option<f64>,
-    copies: Copies,
-    notice: Option<(Result<String, String>, f64)>,
+    notice: Option<(String, f64)>,
 }
 
 impl Transport {
-    fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(result) = self.copies.poll(ctx) {
-            self.notice = Some((result, ctx.input(|input| input.time) + 4.0));
-            ctx.request_repaint();
-        }
-    }
-
-    fn seek_ui(&mut self, ui: &mut Ui, player: &mut Session) -> f64 {
+    fn seek_ui(&mut self, ui: &mut Ui, player: &mut Session, copies: &mut Copies) -> f64 {
         let mut seconds = self
             .seek_preview
             .unwrap_or(player.position_ms as f64 / 1000.0);
@@ -380,8 +381,7 @@ impl Transport {
                     }
                     _ => FrameCopy::Position(timeline.source.clone(), time_ms),
                 };
-                self.copies
-                    .start(ui.ctx(), move |cancel| frame.copy(cancel));
+                copies.start(ui.ctx(), move |cancel| frame.copy(cancel));
             } else if let Some(value) = seconds_at.filter(|_| {
                 response.clicked()
                     || response.dragged_by(egui::PointerButton::Primary)
@@ -395,8 +395,8 @@ impl Transport {
                 .notice
                 .as_ref()
                 .filter(|(_, until)| ui.input(|input| input.time < *until))
-                .map(|(result, _)| result.as_ref().unwrap_or_else(|error| error).as_str());
-            let hint = if self.copies.busy() {
+                .map(|(text, _)| text.as_str());
+            let hint = if copies.busy() {
                 "Copying frame…"
             } else {
                 "Click or drag to seek · Right-click to copy a frame"

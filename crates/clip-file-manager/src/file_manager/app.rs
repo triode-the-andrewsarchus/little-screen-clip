@@ -491,7 +491,9 @@ impl FileManagerApp {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
-                let closed = self.viewers.ui(ui, &self.palette);
+                let closed = self
+                    .viewers
+                    .ui(ui, &self.palette, &mut self.browser.preview_copies);
                 if closed {
                     self.restore_browser_after_viewer(ctx);
                 }
@@ -768,6 +770,8 @@ impl eframe::App for FileManagerApp {
         }
         self.browser.midi.tick(ctx);
         if let Some(result) = self.browser.preview_copies.poll(ctx) {
+            self.viewers
+                .notify_video_copy(ctx, result.as_ref().unwrap_or_else(|error| error));
             match result {
                 Ok(text) => self
                     .browser

@@ -23,7 +23,7 @@ fn frame(viewers: &mut Viewers, ctx: &Context, events: Vec<Event>) -> (bool, egu
         |ctx| {
             ctx.root_ui(|ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    closed = viewers.ui(ui, &AppPalette::default());
+                    closed = viewers.ui(ui, &AppPalette::default(), &mut Default::default());
                 })
             });
         },

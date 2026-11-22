@@ -135,6 +135,11 @@ impl Viewers {
     pub(super) fn video_fullscreen(&self) -> bool {
         matches!(&self.session, Some(ViewerSession::Video(video)) if video.fullscreen())
     }
+    pub(super) fn notify_video_copy(&mut self, ctx: &Context, text: &str) {
+        if let Some(ViewerSession::Video(video)) = &mut self.session {
+            video.notify_copy(ctx, text);
+        }
+    }
     pub fn active(&self) -> bool {
         self.loading.is_some() || self.session.is_some() || self.error.is_some()
     }
@@ -407,7 +412,12 @@ impl Viewers {
         self.poll_audio_return();
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut super::preview_copy::Copies,
+    ) -> bool {
         let mut close = std::mem::take(&mut self.close_requested);
         // A popup owns Escape before either the studio or the host can close.
         if egui::Popup::is_any_open(ui.ctx())
@@ -429,7 +439,7 @@ impl Viewers {
             ui.label(error);
         }
         ui.add_enabled_ui(editor_enabled, |ui| {
-            self.render_file_session(ui, palette, &mut close)
+            self.render_file_session(ui, palette, &mut close, copies)
         });
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
         self.rename_ui(ui, palette);
@@ -525,9 +535,15 @@ impl Viewers {
         }
     }
 
-    fn render_session(&mut self, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
+    fn render_session(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        close: &mut bool,
+        copies: &mut super::preview_copy::Copies,
+    ) {
         if let Some(viewer) = &mut self.session {
-            render(viewer, ui, palette, close);
+            render(viewer, ui, palette, close, copies);
         }
     }
 
@@ -931,7 +947,13 @@ fn session(
         ),
     }
 }
-fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
+fn render(
+    viewer: &mut ViewerSession,
+    ui: &mut Ui,
+    palette: &AppPalette,
+    close: &mut bool,
+    copies: &mut super::preview_copy::Copies,
+) {
     let ctx = ui.ctx().clone();
     match viewer {
         ViewerSession::Archive(state) => state.ui(ui, close, palette),
@@ -954,7 +976,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
-        ViewerSession::Video(state) => state.ui(ui, close, palette),
+        ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }
 
@@ -1233,6 +1255,7 @@ mod tests {
                                 little_clip_core::config::WorkbenchAppearance::Dark,
                             ),
                             &mut false,
+                            &mut Default::default(),
                         )
                     })
                 });
