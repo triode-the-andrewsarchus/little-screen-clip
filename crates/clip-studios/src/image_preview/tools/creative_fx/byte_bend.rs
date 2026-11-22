@@ -65,7 +65,10 @@ impl ByteBendEditor {
         params
     }
 
-    fn edit_at(&self, address: u16) -> Option<ByteBendEdit> {
+    fn candidate_at(&self, address: u16) -> Option<ByteBendEdit> {
+        if let Some(edit) = self.audition.filter(|edit| edit.address == address) {
+            return Some(edit);
+        }
         if self.params.edits.len() >= MAX_BYTE_BEND_EDITS
             && !self.params.edits.iter().any(|edit| edit.address == address)
         {
@@ -222,14 +225,7 @@ impl ByteBendEditor {
 
         self.audition = hovered
             .filter(|address| self.suppressed_hover != Some(*address))
-            .filter(|address| self.params.active_edit(*address).is_none())
-            .filter(|_| self.params.edits.len() < MAX_BYTE_BEND_EDITS)
-            .map(|address| ByteBendEdit {
-                address,
-                span: DEFAULT_SPAN,
-                mode: ByteBendMode::FlipBits,
-                variation: 4,
-            });
+            .and_then(|address| self.candidate_at(address));
         false
     }
 
@@ -251,7 +247,7 @@ impl ByteBendEditor {
             return None;
         }
         let point = pointer.filter(|point| visible.contains(*point))?;
-        let edit = self.edit_at(cell_address(map_cell(response.rect, point)))?;
+        let edit = self.candidate_at(cell_address(map_cell(response.rect, point)))?;
         Some(HeldEdit {
             edit,
             started,
@@ -369,13 +365,10 @@ impl ImagePreviewState {
                     changed = true;
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(
-                    &mut self.creative_fx_state.byte_bend.full_preview,
-                    "Show full effect",
-                );
-                self.show_byte_bend_mask(ui, palette);
-            });
+            ui.checkbox(
+                &mut self.creative_fx_state.byte_bend.full_preview,
+                "Show full effect",
+            );
             ui.horizontal(|ui| {
                 let editor = &self.creative_fx_state.byte_bend;
                 let displayed = editor.held.as_ref().map(|hold| &hold.edit).or_else(|| {
@@ -413,25 +406,6 @@ impl ImagePreviewState {
                 self.creative_fx_state.mark_dirty();
                 ui.ctx().request_repaint();
             }
-        });
-    }
-
-    fn show_byte_bend_mask(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        ui.menu_button("Mask", |ui| {
-            let ctx = ui.ctx().clone();
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    ui.set_width(230.0);
-                    self.render_creative_fx_mask_sources(ui, &ctx, palette, 230.0);
-                    self.render_creative_fx_mask_options(
-                        ui,
-                        palette,
-                        CreativeFxType::ByteBend,
-                        230.0,
-                        162.0,
-                    );
-                });
         });
     }
 }

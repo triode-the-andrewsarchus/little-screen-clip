@@ -65,11 +65,9 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
     assert!(presets_for_fx(CreativeFxType::ByteBend).is_empty());
     let jobs = BackgroundJobs::new(1, 4);
     let mut state = state();
-    let source = Arc::new(RgbaImage::from_pixel(
-        64,
-        64,
-        image::Rgba([60, 90, 120, 255]),
-    ));
+    let source = Arc::new(RgbaImage::from_fn(64, 64, |x, y| {
+        image::Rgba([(x + y * y) as u8, (2 * x + 5 * y) as u8, (x * y) as u8, 255])
+    }));
     state.current_rgba = source.clone();
     state.creative_fx_state.select_fx(CreativeFxType::ByteBend);
     let ctx = egui::Context::default();
@@ -122,7 +120,8 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
         address > initial_address,
         "wheel should browse a later part of the map"
     );
-    for _ in 0..6 {
+    // Let wheel smoothing finish before comparing an audition at a fixed cell.
+    for _ in 0..60 {
         frame(&mut state, Vec::new());
     }
 
@@ -140,10 +139,26 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
         }
     };
     let primary = egui::PointerButton::Primary;
+    let audition = state.creative_fx_state.byte_bend.audition.unwrap();
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    let preview = state.creative_fx_state.preview_rgba.clone().unwrap();
     click(&mut state, primary);
     let first = state.creative_fx_state.byte_bend.params.edits[0];
+    assert_eq!(first, audition);
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    assert_eq!(
+        state.creative_fx_state.preview_rgba.as_ref(),
+        Some(&preview)
+    );
+
+    frame(&mut state, vec![egui::Event::PointerMoved(map.left_top())]);
+    frame(&mut state, vec![egui::Event::PointerMoved(point)]);
+    let audition = state.creative_fx_state.byte_bend.audition.unwrap();
+    assert_eq!(audition.mode, first.mode.next());
     let mut previous = first;
-    for _ in ByteBendMode::ALL {
+    for index in 0..ByteBendMode::ALL.len() {
         click(&mut state, primary);
         let [current] = state.creative_fx_state.byte_bend.params.edits.as_slice() else {
             panic!("clicking again should replace the edit");
@@ -151,6 +166,9 @@ fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
         assert_eq!(current.address, first.address);
         assert_eq!(current.mode, previous.mode.next());
         assert_ne!(current.variation, previous.variation);
+        if index == 0 {
+            assert_eq!(*current, audition);
+        }
         previous = *current;
     }
     assert_eq!(previous.mode, first.mode);

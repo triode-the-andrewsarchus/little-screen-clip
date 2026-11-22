@@ -206,7 +206,7 @@ fn apply_creative_fx_with_masks_inner(
         return None;
     }
     let mask_config = params.depth_mask();
-    if mask_config.enabled {
+    if mask_config.enabled && !matches!(params, CreativeFxParams::ByteBend(_)) {
         let mask = match mask_config.source {
             CreativeFxMaskSource::DepthMap => {
                 depth.map(|image| (image, MaskValueChannel::Luminance))

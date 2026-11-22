@@ -88,7 +88,7 @@ pub struct ByteBendEdit {
     pub variation: u8,
 }
 
-/// Staged byte edits and the optional spatial mask.
+/// Staged byte edits and their erased ranges.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ByteBendParams {
     #[serde(default)]
@@ -97,6 +97,7 @@ pub struct ByteBendParams {
     /// Erased normalized ranges for each staged edit address.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub erased: BTreeMap<u16, Vec<Range<u32>>>,
+    /// Retained for compatibility with older parameter data. Byte Bend ignores it.
     pub depth_mask: DepthMaskConfig,
 }
 
@@ -451,6 +452,29 @@ mod tests {
                 variation,
             }],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn legacy_mask_settings_do_not_change_byte_bend_output() {
+        use super::super::{CreativeFxMaskSource, CreativeFxParams, apply_creative_fx_with_masks};
+
+        let source = RgbaImage::from_pixel(8, 8, Rgba([60, 90, 120, 255]));
+        let mask = RgbaImage::new(8, 8);
+        let mut params = flip(ByteBendProfile::Png, 0, 0);
+        let unmasked = apply_byte_bend_cancellable(&source, &params, None).unwrap();
+        assert_ne!(unmasked, source);
+        for mask_source in [
+            CreativeFxMaskSource::DepthMap,
+            CreativeFxMaskSource::BackgroundRemovalAlpha,
+        ] {
+            params.depth_mask.enabled = true;
+            params.depth_mask.source = mask_source;
+            let effect = CreativeFxParams::ByteBend(params.clone());
+            assert_eq!(
+                apply_creative_fx_with_masks(&source, Some(&mask), Some(&mask), &effect),
+                unmasked
+            );
         }
     }
 
