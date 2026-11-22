@@ -4,21 +4,47 @@
 //! tabular clipboard detection that guards against prose punctuation false-positives, and workbook
 //! loading for Excel / OpenDocument formats (`.xlsx`, `.xls`, `.xlsb`, `.ods`) using `calamine`.
 
-use calamine::{Reader, open_workbook_auto_from_rs};
+use calamine::{
+    Cell, CellType, Data, DataRef, DataType, Dimensions, Range as WorksheetRange, Reader,
+    SheetVisible, Sheets, open_workbook_auto_from_rs,
+};
 use std::io::Cursor;
+use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// A merged range in sheet-relative, zero-based coordinates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedCell {
+    pub rows: Range<usize>,
+    pub columns: Range<usize>,
+}
+
+/// A cell positioned within a grid, including its source anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridCell {
+    pub anchor: (usize, usize),
+    pub rows: Range<usize>,
+    pub columns: Range<usize>,
+}
 
 /// A single tabular sheet containing rows and columns of cell string values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpreadsheetSheet {
     /// Sheet name or identifier.
     pub name: String,
+    /// Position in the source workbook, including hidden sheets.
+    pub workbook_index: usize,
     /// Total row count.
     pub total_rows: usize,
     /// Total column count.
     pub total_cols: usize,
     /// 2D grid of cell values.
     pub rows: Vec<Vec<String>>,
+    /// Zero-based workbook coordinate of the grid's top-left cell.
+    pub origin: (usize, usize),
+    /// Rectangular merged cells. The top-left cell owns the value.
+    pub merges: Vec<MergedCell>,
 }
 
 /// A parsed workbook or tabular dataset containing one or more sheets.
@@ -37,88 +63,165 @@ impl SpreadsheetSheet {
         let total_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
         Self {
             name,
+            workbook_index: 0,
             total_rows,
             total_cols,
             rows,
+            origin: (0, 0),
+            merges: Vec::new(),
         }
     }
 
     /// Returns a sliced 2D grid of the upper-left cells (e.g. top 8 rows, first 5 cols).
     pub fn upper_left_slice(&self, max_rows: usize, max_cols: usize) -> Vec<Vec<String>> {
-        let r_limit = self.rows.len().min(max_rows);
-        let mut slice = Vec::with_capacity(r_limit);
+        self.rows
+            .iter()
+            .take(max_rows)
+            .map(|row| row[..row.len().min(max_cols)].to_vec())
+            .collect()
+    }
 
-        for r in 0..r_limit {
-            let row = &self.rows[r];
-            let c_limit = row.len().min(max_cols);
-            let mut row_slice = Vec::with_capacity(c_limit);
-            for sample in row.iter().take(c_limit) {
-                row_slice.push((*sample).clone());
-            }
-            slice.push(row_slice);
+    /// Returns the stored value at a sheet-relative coordinate.
+    pub fn cell(&self, row: usize, column: usize) -> &str {
+        self.rows
+            .get(row)
+            .and_then(|row| row.get(column))
+            .map_or("", String::as_str)
+    }
+
+    /// Projects sheet cells into a visible grid, emitting each merged cell once.
+    ///
+    /// `rows` maps display rows to source rows in ascending order. Cell geometry
+    /// can extend past the viewport so callers can clip it without shifting the anchor.
+    pub fn grid_cells(
+        &self,
+        rows: &[usize],
+        visible_rows: Range<usize>,
+        columns: Range<usize>,
+    ) -> Vec<GridCell> {
+        let Some(visible_source_rows) = rows.get(visible_rows.clone()).filter(|r| !r.is_empty())
+        else {
+            return Vec::new();
+        };
+        if columns.is_empty() {
+            return Vec::new();
         }
-        slice
+
+        let mut merges: Vec<_> = self
+            .merges
+            .iter()
+            .filter(|span| {
+                span.rows.start <= visible_source_rows[visible_source_rows.len() - 1]
+                    && span.rows.end > visible_source_rows[0]
+                    && span.columns.start < columns.end
+                    && span.columns.end > columns.start
+            })
+            .filter_map(|span| {
+                let start = rows.partition_point(|&row| row < span.rows.start);
+                let end = rows.partition_point(|&row| row < span.rows.end);
+                (start < end).then(|| GridCell {
+                    anchor: (span.rows.start, span.columns.start),
+                    rows: start..end,
+                    columns: span.columns.clone(),
+                })
+            })
+            .collect();
+        merges.sort_unstable_by_key(|cell| cell.columns.start);
+
+        let mut cells = Vec::new();
+        for display_row in visible_rows.clone() {
+            let mut column = columns.start;
+            for merge in merges
+                .iter()
+                .filter(|cell| cell.rows.contains(&display_row))
+            {
+                cells.extend((column..merge.columns.start).map(|col| GridCell {
+                    anchor: (rows[display_row], col),
+                    rows: display_row..display_row + 1,
+                    columns: col..col + 1,
+                }));
+                if display_row == merge.rows.start.max(visible_rows.start) {
+                    cells.push(merge.clone());
+                }
+                column = column.max(merge.columns.end);
+            }
+            cells.extend((column..columns.end).map(|col| GridCell {
+                anchor: (rows[display_row], col),
+                rows: display_row..display_row + 1,
+                columns: col..col + 1,
+            }));
+        }
+        cells
     }
 }
 
 /// Parses a delimiter-separated text string (auto-detecting comma, tab, or semicolon delimiters) into rows.
 pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
-    let mut rows = Vec::new();
-    // Detect delimiter: comma, tab, or semicolon
-    let first_few_lines: Vec<&str> = csv_text.lines().take(5).collect();
-    if first_few_lines.is_empty() {
-        return rows;
+    delimited_rows(csv_text, detect_delimiter(csv_text)).collect()
+}
+
+fn detect_delimiter(text: &str) -> char {
+    let mut counts = [0; 3];
+    let mut quoted = false;
+    let mut lines = 0;
+    for character in text.chars().take(64 * 1024) {
+        match character {
+            '"' => quoted = !quoted,
+            ',' if !quoted => counts[0] += 1,
+            '\t' if !quoted => counts[1] += 1,
+            ';' if !quoted => counts[2] += 1,
+            '\n' if !quoted => {
+                lines += 1;
+                if lines == 5 {
+                    break;
+                }
+            }
+            _ => (),
+        }
     }
-
-    let comma_count: usize = first_few_lines.iter().map(|l| l.matches(',').count()).sum();
-    let tab_count: usize = first_few_lines
-        .iter()
-        .map(|l| l.matches('\t').count())
-        .sum();
-    let semi_count: usize = first_few_lines.iter().map(|l| l.matches(';').count()).sum();
-
-    let delimiter = if tab_count > comma_count && tab_count > semi_count {
+    if counts[1] > counts[0] && counts[1] > counts[2] {
         '\t'
-    } else if semi_count > comma_count && semi_count > tab_count {
+    } else if counts[2] > counts[0] {
         ';'
     } else {
         ','
-    };
-
-    for line in csv_text.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let mut row = Vec::new();
-        let mut in_quotes = false;
-        let mut cur_field = String::new();
-
-        let chars: Vec<char> = trimmed.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            let c = chars[i];
-            if c == '"' {
-                if in_quotes && i + 1 < chars.len() && chars[i + 1] == '"' {
-                    cur_field.push('"');
-                    i += 1;
-                } else {
-                    in_quotes = !in_quotes;
-                }
-            } else if c == delimiter && !in_quotes {
-                row.push(cur_field.trim().to_string());
-                cur_field.clear();
-            } else {
-                cur_field.push(c);
-            }
-            i += 1;
-        }
-        row.push(cur_field.trim().to_string());
-        rows.push(row);
     }
+}
 
-    rows
+fn delimited_rows(text: &str, delimiter: char) -> impl Iterator<Item = Vec<String>> {
+    let mut chars = text.trim_start_matches('\u{feff}').chars().peekable();
+    std::iter::from_fn(move || {
+        loop {
+            let mut row = Vec::new();
+            let mut field = String::new();
+            let mut quoted = false;
+            let mut explicit_field = false;
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' if quoted && chars.peek() == Some(&'"') => {
+                        chars.next();
+                        field.push('"');
+                    }
+                    '"' if quoted => quoted = false,
+                    '"' if field.trim().is_empty() => {
+                        quoted = true;
+                        explicit_field = true;
+                    }
+                    c if c == delimiter && !quoted => {
+                        row.push(field.trim().to_owned());
+                        field.clear();
+                    }
+                    '\n' if !quoted => break,
+                    _ => field.push(c),
+                }
+            }
+            if !row.is_empty() || !field.trim().is_empty() || explicit_field {
+                row.push(field.trim().to_owned());
+                return Some(row);
+            }
+            chars.peek()?;
+        }
+    })
 }
 
 /// Fast first-pass check for delimited clipboard text. Full parsing and shape
@@ -219,61 +322,279 @@ pub fn detect_csv_text(text: &str) -> Option<SpreadsheetData> {
     })
 }
 
-/// Loads a spreadsheet from a file path (.csv, .tsv, .xlsx, .xls, .xlsb, .ods)
+/// Loads a spreadsheet from a guarded file source.
 pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
-    let ext = path
+    load(path, None, &AtomicBool::new(false))
+}
+
+/// Loads the upper-left cells of the first visible, populated worksheet.
+///
+/// The returned sheet keeps its full used dimensions even though only the
+/// requested cells and intersecting merges are retained.
+pub fn load_spreadsheet_preview(
+    path: &Path,
+    rows: usize,
+    columns: usize,
+    cancelled: &AtomicBool,
+) -> Result<SpreadsheetData, String> {
+    load(path, Some((rows, columns)), cancelled)
+}
+
+fn load(
+    path: &Path,
+    preview: Option<(usize, usize)>,
+    cancelled: &AtomicBool,
+) -> Result<SpreadsheetData, String> {
+    check_cancelled(cancelled)?;
+    let extension = path
         .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let title = path.file_name().map_or_else(
+        || "Spreadsheet".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
 
-    let title = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Spreadsheet".to_string());
+    let sheets = match extension.as_str() {
+        "csv" | "tsv" => vec![load_delimited(
+            path,
+            extension == "tsv",
+            preview,
+            cancelled,
+        )?],
+        "xlsx" | "xls" | "xlsb" | "ods" => load_workbook(path, preview, cancelled)?,
+        _ => return Err(format!("Unsupported spreadsheet format: .{extension}")),
+    };
+    Ok(SpreadsheetData { title, sheets })
+}
 
-    if ext == "csv" || ext == "tsv" {
-        let content =
-            crate::kernel_interface::read_content_to_string_bounded(path, 32 * 1024 * 1024)
-                .map_err(|e| e.to_string())?;
-        let rows = parse_csv_string(&content);
-        let sheet = SpreadsheetSheet::new("Sheet1".to_string(), rows);
-        return Ok(SpreadsheetData {
-            title,
-            sheets: vec![sheet],
-        });
+fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Spreadsheet preview cancelled".to_owned());
     }
+    Ok(())
+}
 
-    if ext == "xlsx" || ext == "xls" || ext == "xlsb" || ext == "ods" {
-        let bytes = crate::kernel_interface::read_content_bounded(path, 64 * 1024 * 1024)
-            .map_err(|e| format!("Failed to read workbook: {}", e))?;
-        let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
-            .map_err(|e| format!("Failed to open workbook: {}", e))?;
-        let sheet_names = workbook.sheet_names();
-        let mut sheets = Vec::new();
+fn load_delimited(
+    path: &Path,
+    tsv: bool,
+    preview: Option<(usize, usize)>,
+    cancelled: &AtomicBool,
+) -> Result<SpreadsheetSheet, String> {
+    let content = crate::kernel_interface::read_content_to_string_bounded(path, 32 * 1024 * 1024)
+        .map_err(|error| error.to_string())?;
+    let delimiter = if tsv {
+        '\t'
+    } else {
+        detect_delimiter(&content)
+    };
+    let (row_limit, column_limit) = preview.unwrap_or((usize::MAX, usize::MAX));
+    let mut sheet = SpreadsheetSheet::new("Sheet1".to_owned(), Vec::new());
+    for (index, mut row) in delimited_rows(&content, delimiter).enumerate() {
+        check_cancelled(cancelled)?;
+        sheet.total_rows = index + 1;
+        sheet.total_cols = sheet.total_cols.max(row.len());
+        if index < row_limit {
+            row.truncate(column_limit);
+            sheet.rows.push(row);
+        }
+    }
+    Ok(sheet)
+}
 
-        for name in sheet_names {
-            if let Ok(range) = workbook.worksheet_range(&name) {
-                let mut rows = Vec::new();
-                for r in range.rows() {
-                    let row_str: Vec<String> = r
-                        .iter()
-                        .map(|cell| cell.to_string().trim().to_string())
-                        .collect();
-                    rows.push(row_str);
-                }
-                sheets.push(SpreadsheetSheet::new(name, rows));
+fn load_workbook(
+    path: &Path,
+    preview: Option<(usize, usize)>,
+    cancelled: &AtomicBool,
+) -> Result<Vec<SpreadsheetSheet>, String> {
+    let bytes = crate::kernel_interface::read_content_bounded(path, 64 * 1024 * 1024)
+        .map_err(|error| format!("Failed to read workbook: {error}"))?;
+    check_cancelled(cancelled)?;
+    let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes.as_slice()))
+        .map_err(|error| format!("Failed to open workbook: {error}"))?;
+    let metadata = workbook.sheets_metadata().to_vec();
+    let mut sheets = Vec::new();
+    for (index, info) in metadata.into_iter().enumerate() {
+        check_cancelled(cancelled)?;
+        if preview.is_some() && info.visible != SheetVisible::Visible {
+            continue;
+        }
+        let name = info.name;
+        let sheet = read_workbook_sheet(&mut workbook, name, preview, cancelled);
+        check_cancelled(cancelled)?;
+        if let Ok(mut sheet) = sheet {
+            sheet.workbook_index = index;
+            if preview.is_some() && sheet.total_rows > 0 && sheet.total_cols > 0 {
+                return Ok(vec![sheet]);
+            }
+            sheets.push(sheet);
+        }
+    }
+    if sheets.is_empty() {
+        return Err("No sheets found in workbook".to_owned());
+    }
+    if preview.is_some() {
+        sheets.truncate(1);
+    }
+    Ok(sheets)
+}
+
+fn read_workbook_sheet(
+    workbook: &mut Sheets<Cursor<&[u8]>>,
+    name: String,
+    preview: Option<(usize, usize)>,
+    cancelled: &AtomicBool,
+) -> Result<SpreadsheetSheet, String> {
+    let mut merges = match workbook {
+        Sheets::Xlsx(book) => book.merge_cells_by_sheet_name(&name).unwrap_or_default(),
+        Sheets::Xls(book) => book.merge_cells_by_sheet_name(&name).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    merges.retain(|span| span.start.0 <= span.end.0 && span.start.1 <= span.end.1);
+    if let Some(limits) = preview {
+        match workbook {
+            Sheets::Xlsx(book) => {
+                let mut reader = book
+                    .worksheet_cells_reader(&name)
+                    .map_err(|err| err.to_string())?;
+                return stream_preview(name, || reader.next_cell(), merges, limits, cancelled);
+            }
+            Sheets::Xlsb(book) => {
+                let mut reader = book
+                    .worksheet_cells_reader(&name)
+                    .map_err(|err| err.to_string())?;
+                return stream_preview(name, || reader.next_cell(), merges, limits, cancelled);
+            }
+            _ => (),
+        }
+    }
+    let range = workbook
+        .worksheet_range(&name)
+        .map_err(|err| err.to_string())?;
+    let bounds = range
+        .start()
+        .zip(range.end())
+        .map(|(start, end)| Dimensions { start, end });
+    Ok(workbook_sheet(name, &range, bounds, merges, preview))
+}
+
+fn include_dimensions(bounds: &mut Option<Dimensions>, span: Dimensions) {
+    if let Some(bounds) = bounds {
+        bounds.start = (
+            bounds.start.0.min(span.start.0),
+            bounds.start.1.min(span.start.1),
+        );
+        bounds.end = (bounds.end.0.max(span.end.0), bounds.end.1.max(span.end.1));
+    } else {
+        *bounds = Some(span);
+    }
+}
+
+fn stream_preview<'a, E: std::fmt::Display>(
+    name: String,
+    mut next_cell: impl FnMut() -> Result<Option<Cell<DataRef<'a>>>, E>,
+    merges: Vec<Dimensions>,
+    limits: (usize, usize),
+    cancelled: &AtomicBool,
+) -> Result<SpreadsheetSheet, String> {
+    let mut bounds = None;
+    for &span in &merges {
+        include_dimensions(&mut bounds, span);
+    }
+    let mut cells: Vec<Cell<String>> = Vec::new();
+    while let Some(cell) = next_cell().map_err(|err| err.to_string())? {
+        check_cancelled(cancelled)?;
+        if cell.get_value().is_empty() {
+            continue;
+        }
+        let position = cell.get_position();
+        let old_start = bounds.map(|bounds| bounds.start);
+        include_dimensions(
+            &mut bounds,
+            Dimensions {
+                start: position,
+                end: position,
+            },
+        );
+        let start = bounds.map_or(position, |bounds| bounds.start);
+        let in_window = |(row, column): (u32, u32)| {
+            ((row - start.0) as usize) < limits.0 && ((column - start.1) as usize) < limits.1
+        };
+        if old_start != Some(start) {
+            cells.retain(|cell| in_window(cell.get_position()));
+        }
+        if in_window(position) {
+            let value = Data::from(cell.get_value().clone()).to_string();
+            cells.push(Cell::new(position, value.trim().to_owned()));
+        }
+    }
+    let range = WorksheetRange::from_sparse(cells);
+    Ok(workbook_sheet(name, &range, bounds, merges, Some(limits)))
+}
+
+fn workbook_sheet(
+    name: String,
+    range: &WorksheetRange<impl CellType + std::fmt::Display>,
+    mut bounds: Option<Dimensions>,
+    merges: Vec<Dimensions>,
+    preview: Option<(usize, usize)>,
+) -> SpreadsheetSheet {
+    for &span in &merges {
+        include_dimensions(&mut bounds, span);
+    }
+    let Some(Dimensions {
+        start: first,
+        end: last,
+    }) = bounds
+    else {
+        return SpreadsheetSheet::new(name, Vec::new());
+    };
+    let origin = (first.0 as usize, first.1 as usize);
+    let total_rows = last.0 as usize - origin.0 + 1;
+    let total_cols = last.1 as usize - origin.1 + 1;
+    let (max_rows, max_cols) = preview.unwrap_or((usize::MAX, usize::MAX));
+    let row_limit = total_rows.min(max_rows);
+    let column_limit = total_cols.min(max_cols);
+    let merges = merges
+        .into_iter()
+        .filter_map(|span| {
+            let row = span.start.0 as usize - origin.0;
+            let column = span.start.1 as usize - origin.1;
+            (row < row_limit && column < column_limit).then(|| MergedCell {
+                rows: row..span.end.0 as usize - origin.0 + 1,
+                columns: column..span.end.1 as usize - origin.1 + 1,
+            })
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    if let Some((row_start, column_start)) = range.start() {
+        let row_offset = row_start as usize - origin.0;
+        let column_offset = column_start as usize - origin.1;
+        if row_offset < row_limit && column_offset < column_limit {
+            rows.resize_with(row_offset, Vec::new);
+            for row in range.rows().take(row_limit - row_offset) {
+                let mut values = vec![String::new(); column_offset];
+                values.extend(
+                    row.iter()
+                        .take(column_limit - column_offset)
+                        .map(|cell| cell.to_string().trim().to_owned()),
+                );
+                rows.push(values);
             }
         }
-
-        if sheets.is_empty() {
-            return Err("No sheets found in workbook".to_string());
-        }
-
-        return Ok(SpreadsheetData { title, sheets });
     }
 
-    Err(format!("Unsupported spreadsheet format: .{}", ext))
+    SpreadsheetSheet {
+        name,
+        workbook_index: 0,
+        total_rows,
+        total_cols,
+        rows,
+        origin,
+        merges,
+    }
 }
 
 /// Returns `true` if the given path has a supported spreadsheet file extension.
@@ -292,6 +613,100 @@ pub fn is_spreadsheet_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn workbook_corner_keeps_offset_merge_and_full_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("merged.xlsx");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for (name, xml) in [
+            (
+                "_rels/.rels",
+                r#"<Relationships><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Hidden" r:id="r0" state="hidden"/><sheet name="Forecast" r:id="r1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<Relationships><Relationship Id="r0" Type="worksheet" Target="worksheets/hidden.xml"/><Relationship Id="r1" Type="worksheet" Target="worksheets/forecast.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/hidden.xml",
+                r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Hidden value</t></is></c></row></sheetData></worksheet>"#,
+            ),
+            (
+                "xl/worksheets/forecast.xml",
+                r#"<worksheet><sheetData><row r="3"><c r="B3" t="inlineStr"><is><t>Quarterly forecast</t></is></c></row><row r="8"><c r="F8"><v>7</v></c></row></sheetData><mergeCells count="1"><mergeCell ref="B3:E4"/></mergeCells></worksheet>"#,
+            ),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let full = load_spreadsheet(&path).unwrap();
+        let preview = load_spreadsheet_preview(&path, 2, 3, &AtomicBool::new(false)).unwrap();
+        let sheet = &preview.sheets[0];
+        assert_eq!(sheet.name, "Forecast");
+        assert_eq!(sheet.workbook_index, 1);
+        assert_eq!(sheet.origin, (2, 1));
+        assert_eq!((sheet.total_rows, sheet.total_cols), (6, 5));
+        assert_eq!(sheet.cell(0, 0), "Quarterly forecast");
+        assert_eq!(sheet.cell(5, 4), "");
+        assert_eq!(full.sheets[1].cell(5, 4), "7");
+        assert_eq!(sheet.merges, full.sheets[1].merges);
+        assert_eq!(
+            sheet.grid_cells(&[0, 1], 0..2, 0..3),
+            [GridCell {
+                anchor: (0, 0),
+                rows: 0..2,
+                columns: 0..4
+            }]
+        );
+    }
+
+    #[test]
+    fn merge_crossing_viewport_uses_its_anchor_in_filtered_grid() {
+        let mut sheet = SpreadsheetSheet::new("Data".into(), Vec::new());
+        sheet.merges.push(MergedCell {
+            rows: 1..9,
+            columns: 0..4,
+        });
+        let cells = sheet.grid_cells(&[1, 4, 8, 11], 1..3, 2..5);
+        assert_eq!(
+            cells[0],
+            GridCell {
+                anchor: (1, 0),
+                rows: 0..3,
+                columns: 0..4
+            }
+        );
+        assert_eq!(cells[1].anchor, (4, 4));
+        assert_eq!(cells[2].anchor, (8, 4));
+        assert_eq!(cells.len(), 3);
+    }
+
+    #[test]
+    fn delimited_corner_keeps_multiline_fields_and_trailing_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("table.TSV");
+        std::fs::write(
+            &path,
+            "Name\tComment\t\r\nAda\t\"first\nsecond, third\"\t\r\nGrace\tlast\t\r\n",
+        )
+        .unwrap();
+        let preview = load_spreadsheet_preview(&path, 2, 2, &AtomicBool::new(false)).unwrap();
+        let sheet = &preview.sheets[0];
+        assert_eq!((sheet.total_rows, sheet.total_cols), (3, 3));
+        assert_eq!(
+            sheet.rows,
+            [["Name", "Comment"], ["Ada", "first\nsecond, third"]]
+        );
+    }
 
     #[test]
     fn test_parse_csv_string() {
