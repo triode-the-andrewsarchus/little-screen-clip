@@ -21,7 +21,7 @@ pub struct Options {
     pub subtitle_track: Option<u32>,
     /// Source-time multiplier.
     pub rate: f64,
-    /// Restart this file at its end.
+    /// Restart playback at the beginning of the file or selected interval.
     pub looping: bool,
 }
 impl Default for Options {
@@ -90,10 +90,16 @@ pub struct Settings {
     pub fps: u32,
     /// Initial source-relative position.
     pub start_ms: u64,
+    /// Exclusive source-relative endpoint of a selected interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
     /// Probed source-relative end; zero means unknown.
     pub duration_ms: u64,
     /// Disable audio decoding and device acquisition for hover previews.
     pub silent: bool,
+    /// Mute audio from startup while keeping the track available.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_muted: bool,
     /// Initial session choices; absent in older requests.
     #[serde(default)]
     pub options: Options,

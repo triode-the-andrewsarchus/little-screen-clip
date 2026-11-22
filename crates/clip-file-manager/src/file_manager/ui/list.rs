@@ -98,7 +98,7 @@ impl<'a> ListPreviews<'a> {
         }
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, colors);
-        let mut engaged = false;
+        let engaged;
         if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
             self.paths.insert(entry.path.clone());
             engaged = super::super::midi_strip::show(
@@ -134,7 +134,7 @@ impl<'a> ListPreviews<'a> {
         } else if entry.is_video() {
             self.visible_videos.push(entry);
             self.paths.insert(entry.path.clone());
-            let time = video::preview_row(
+            let (time, active) = video::preview_row(
                 ui,
                 rect,
                 entry,
@@ -144,11 +144,16 @@ impl<'a> ListPreviews<'a> {
                 self.decimation,
                 self.can_request,
                 colors,
+                &mut response,
+                actions,
             );
+            engaged = active;
             self.hovered_video |= time.is_some();
             actions.video_click(ui, &response, entry, time, self.video_start);
         } else {
-            let position = self.passive_row(ui, rect, entry, colors, palette);
+            let (position, active) =
+                self.passive_row(ui, rect, entry, colors, palette, &mut response);
+            engaged = active;
             if position == Some(super::super::DocumentPosition::MinecraftMap) {
                 actions.selection = Some((entry.path.clone(), false, false));
                 actions.open = Some(entry.path.clone());
@@ -249,19 +254,15 @@ impl<'a> ListPreviews<'a> {
         entry: &Entry,
         colors: WorkbenchColors,
         palette: &AppPalette,
-    ) -> Option<super::super::DocumentPosition> {
+        response: &mut egui::Response,
+    ) -> (Option<super::super::DocumentPosition>, bool) {
         if entry.is_minecraft() {
             self.paths.insert(entry.path.clone());
             let ready = self.files.listing(entry);
-            return super::super::minecraft::show_strip(
-                ui,
-                rect,
-                entry,
-                self.columns,
-                ready,
-                colors,
-            )
-            .then_some(super::super::DocumentPosition::MinecraftMap);
+            let position =
+                super::super::minecraft::show_strip(ui, rect, entry, self.columns, ready, colors)
+                    .then_some(super::super::DocumentPosition::MinecraftMap);
+            return (position, false);
         }
         if entry.system.is_some() {
             self.paths.insert(entry.path.clone());
@@ -282,11 +283,17 @@ impl<'a> ListPreviews<'a> {
                 .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
-            return self
-                .files
-                .show_document(ui, rect, entry, self.columns, colors, palette);
+            return self.files.show_document(
+                ui,
+                rect,
+                entry,
+                self.columns,
+                colors,
+                palette,
+                response,
+            );
         }
-        None
+        (None, false)
     }
 }
 
@@ -342,16 +349,13 @@ impl FileManager {
         }
         self.music_previews.poll(ui.ctx());
         self.video_previews.poll(ui.ctx());
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            music::waveform_id(),
-            Sense::focusable_noninteractive(),
-        );
-        ui.interact(
-            ui.available_rect_before_wrap(),
-            super::super::midi_strip::focus_id(),
-            Sense::focusable_noninteractive(),
-        );
+        for id in strip_focus_ids() {
+            ui.interact(
+                ui.available_rect_before_wrap(),
+                id,
+                Sense::focusable_noninteractive(),
+            );
+        }
         self.midi.render_feedback(ui, palette);
         let scroll = self.list_scroll(ui, ROW_HEIGHT);
         let Some(directory) = &self.directory else {
@@ -483,10 +487,9 @@ impl FileManager {
             previews.files.retain(&previews.paths);
         }
         previews.music.retain(&previews.music_paths);
-        previews.videos.retain(&previews.visible_videos);
-        if !previews.hovered_video {
-            previews.videos.clear_hover();
-        }
+        previews
+            .videos
+            .retain(&previews.visible_videos, previews.hovered_video, ui.ctx());
         previews
             .containers
             .finish_frame(&mut previews.container_paths);
@@ -496,9 +499,26 @@ impl FileManager {
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.clamped_offset().y, &background);
         self.list_audio(play);
+        self.list_copy_requests(ui.ctx());
         if let Some(column) = output.inner {
             column.apply(self);
             self.focus_list = true;
+        }
+    }
+
+    fn list_copy_requests(&mut self, ctx: &egui::Context) {
+        if let Some(kind) = self.video_previews.copy_clip.take() {
+            self.copy_video_range(ctx, kind);
+        }
+        if let Some(frame) = self.video_previews.copy_frame.take() {
+            self.preview_copies
+                .start(ctx, move |cancel| frame.copy(cancel));
+        }
+        if std::mem::take(&mut self.previews.text_selection.copy) {
+            self.copy_text_range(ctx);
+        }
+        if self.previews.pdf_pages.selection.requested.is_some() {
+            self.copy_pdf_pages(ctx);
         }
     }
 

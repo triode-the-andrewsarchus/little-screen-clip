@@ -491,7 +491,9 @@ impl FileManagerApp {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
-                let closed = self.viewers.ui(ui, &self.palette);
+                let closed = self
+                    .viewers
+                    .ui(ui, &self.palette, &mut self.browser.preview_copies);
                 if closed {
                     self.restore_browser_after_viewer(ctx);
                 }
@@ -536,6 +538,7 @@ impl FileManagerApp {
                         .video_start
                         .take()
                         .filter(|(source, _)| source == &path);
+                    let timeline = self.browser.video_previews.timeline(&path);
                     let explicit_inspection =
                         self.browser.inspect_file.take().as_ref() == Some(&path);
                     let system = explicit_inspection
@@ -556,6 +559,7 @@ impl FileManagerApp {
                         let guards = self.browser.search_source_guards(&collection);
                         self.viewers.open_collection(path, collection, guards);
                     }
+                    self.viewers.video_timeline = timeline;
                 }
             }
         });
@@ -668,6 +672,7 @@ impl FileManagerApp {
             || self.browser.view_preferences.writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
+            || self.browser.preview_copies.busy()
             || self.browser.shelf.sending()
             || self.native.as_ref().is_some_and(|native| native.busy())
         {
@@ -764,6 +769,16 @@ impl eframe::App for FileManagerApp {
                 .tick(ctx, &mut self.browser.music_selection);
         }
         self.browser.midi.tick(ctx);
+        if let Some(result) = self.browser.preview_copies.poll(ctx) {
+            self.viewers
+                .notify_video_copy(ctx, result.as_ref().unwrap_or_else(|error| error));
+            match result {
+                Ok(text) => self
+                    .browser
+                    .set_status(crate::icons::Icon::Copy, text, false),
+                Err(error) => self.browser.set_error(error),
+            }
+        }
         self.browser.schedule_repaints(ctx);
 
         if ctx.input(|input| input.viewport().close_requested()) {
@@ -813,7 +828,7 @@ impl eframe::App for FileManagerApp {
                             ui.add(
                                 egui::Label::new(self.browser.selection_summary()).truncate(),
                             );
-                            if self.browser.music.busy() || self.browser.music.copying() { ui.spinner(); }
+                            if self.browser.music.busy() || self.browser.music.copying() || self.browser.preview_copies.busy() { ui.spinner(); }
                             if let Some(error) = &self.browser.music.error {
                                 ui.separator();
                                 ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text(error);

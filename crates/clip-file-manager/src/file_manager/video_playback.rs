@@ -11,6 +11,7 @@ use little_clip_core::{
 use std::{
     fs::File,
     io::{self, Read, Write},
+    ops::Range,
     process::{Child, ChildStdin, ChildStdout, Stdio},
     sync::{
         Arc, LazyLock, Mutex,
@@ -27,6 +28,17 @@ struct Delivery {
     frame: Option<(Update, Vec<u8>)>,
 }
 
+pub(super) enum Span {
+    From(u64),
+    Selection(Range<u64>),
+}
+
+pub(super) enum AudioMode {
+    Silent,
+    Muted,
+    Audible,
+}
+
 pub(super) struct Session {
     task: Task<Result<(), String>>,
     worker: Worker,
@@ -35,6 +47,7 @@ pub(super) struct Session {
     delivery: Arc<Mutex<Delivery>>,
     source: Arc<Mutex<FileSource>>,
     pub texture: Option<egui::TextureHandle>,
+    pub image: Option<Arc<egui::ColorImage>>,
     pub position_ms: u64,
     pub frame_position_ms: Option<u64>,
     frame_epoch: Option<u64>,
@@ -49,29 +62,39 @@ pub(super) struct Session {
 impl Session {
     pub fn new(
         metadata: &VideoMetadata,
-        start_ms: u64,
-        silent: bool,
+        span: Span,
+        audio: AudioMode,
         width: u32,
         ctx: egui::Context,
         context: PreviewContext,
         options: Options,
     ) -> Self {
-        let start_ms = start_ms.min(
-            metadata
-                .duration_ms
-                .saturating_sub(metadata.frame_interval_ms),
-        );
+        let (start_ms, end_ms) = match span {
+            Span::From(start) => (
+                start.min(
+                    metadata
+                        .duration_ms
+                        .saturating_sub(metadata.frame_interval_ms),
+                ),
+                None,
+            ),
+            Span::Selection(range) => (range.start, Some(range.end)),
+        };
         let pending = Arc::new(Mutex::new(None));
         let delivery = Arc::new(Mutex::new(Delivery::default()));
         let source = Arc::new(Mutex::new(metadata.source.clone()));
+        let silent = matches!(audio, AudioMode::Silent);
+        let start_muted = matches!(audio, AudioMode::Muted);
         let settings = Settings {
             stream: 0,
             width,
             height: width * 9 / 16,
-            fps: if silent { 20 } else { 30 },
+            fps: if silent || end_ms.is_some() { 20 } else { 30 },
             start_ms,
+            end_ms,
             duration_ms: metadata.duration_ms,
             silent,
+            start_muted,
             options: options.clone(),
         };
         let worker = Worker {
@@ -91,13 +114,14 @@ impl Session {
                 epoch: 0,
                 seek_ms: None,
                 playing: true,
-                volume: 1.0,
+                volume: if start_muted { 0.0 } else { 1.0 },
                 options,
             },
             pending,
             delivery,
             source,
             texture: None,
+            image: None,
             position_ms: start_ms,
             frame_position_ms: None,
             frame_epoch: None,
@@ -131,6 +155,11 @@ impl Session {
             self.send();
         }
     }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        self.control.volume = if muted { 0.0 } else { 1.0 };
+        self.send();
+    }
     pub fn options(&self) -> &Options {
         &self.control.options
     }
@@ -159,10 +188,11 @@ impl Session {
         {
             self.frame_position_ms = Some(frame.position_ms);
             self.frame_epoch = Some(frame.epoch);
-            let image = egui::ColorImage::from_rgba_unmultiplied(
+            let image = Arc::new(egui::ColorImage::from_rgba_unmultiplied(
                 [frame.width as usize, frame.height as usize],
                 &pixels,
-            );
+            ));
+            self.image = Some(image.clone());
             if let Some(texture) = &mut self.texture {
                 texture.set(image, egui::TextureOptions::LINEAR);
             } else {
@@ -241,6 +271,7 @@ impl Worker {
         while !cancel.load(Ordering::Relaxed) {
             let packet = Update::read(&mut reader).map_err(|error| error.to_string())?;
             self.check(&pin, cancel)?;
+            let completed = self.settings.end_ms.is_some() && packet.0.ended;
             let mut delivery = self.delivery.lock().unwrap();
             if let Some(tracks) = &packet.0.tracks {
                 delivery.tracks = Some(tracks.clone());
@@ -251,6 +282,9 @@ impl Worker {
             }
             drop(delivery);
             self.ctx.request_repaint();
+            if completed {
+                break;
+            }
         }
         Ok(())
     }
@@ -412,8 +446,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut player = Session::new(
             &metadata(),
-            100,
-            true,
+            Span::From(100),
+            AudioMode::Silent,
             320,
             ctx.clone(),
             Default::default(),
@@ -466,8 +500,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut player = Session::new(
             &metadata(),
-            0,
-            true,
+            Span::From(0),
+            AudioMode::Silent,
             320,
             ctx.clone(),
             PreviewContext::empty_results(),

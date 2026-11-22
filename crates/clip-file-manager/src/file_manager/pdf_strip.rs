@@ -1,10 +1,13 @@
-//! Passive, bounded page strips for visible PDF rows.
+//! Bounded previews and page selection for visible PDF rows.
+mod selection;
 use super::{
     filesystem::Entry,
     media::PreviewData,
+    preview_copy,
     shelf::preview::{HoverRaster, Previews, Source},
 };
 use crate::{file_source::FileSource, icons::Icon, ui_appearance::WorkbenchColors};
+pub(super) use selection::focus_id;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -15,6 +18,7 @@ use std::{
 pub(super) struct Pages {
     pub(in crate::file_manager) context: super::search::PreviewContext,
     cache: Previews,
+    pub(super) selection: selection::Selection,
     hover: HoverRaster,
     files: BTreeMap<PathBuf, (uuid::Uuid, u32, BTreeMap<usize, uuid::Uuid>)>,
 }
@@ -27,6 +31,7 @@ impl Pages {
         self.cache.clear();
         self.hover.clear();
         self.files.clear();
+        self.selection = Default::default();
     }
     pub fn retain(&mut self, paths: &BTreeSet<PathBuf>) {
         self.files.retain(|path, _| paths.contains(path));
@@ -40,6 +45,10 @@ impl Pages {
                 .collect(),
         );
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The strip owns rendering and shares the enclosing row response"
+    )]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -48,7 +57,8 @@ impl Pages {
         identity: uuid::Uuid,
         page_count: Option<usize>,
         colors: WorkbenchColors,
-    ) -> Option<usize> {
+        response: &mut egui::Response,
+    ) -> (Option<usize>, bool) {
         let strip = super::ui::strip_body(ui, row, Icon::Pdf, colors);
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
         let Some(page_count) = page_count else {
@@ -64,12 +74,65 @@ impl Pages {
                 egui::FontId::proportional(14.0),
                 colors.text_secondary,
             );
-            return None;
+            return (None, false);
         };
         let slots = super::previews::strip_slots(
             page_count,
             ((strip.width() / 56.0).floor() as usize).clamp(3, 64),
         );
+        let layout = selection::Layout {
+            rect: strip,
+            slots: &slots,
+            count: page_count,
+        };
+        let width = layout.width();
+        let can_select = page_count > 0
+            && strip.is_positive()
+            && little_clip_core::pdf::is_pdf_path(&entry.path);
+        let engaged = can_select && self.selection.interact(ui, &layout, entry, response);
+        let body = self.selection_body(ui, &layout, entry, colors);
+        let page = self.paint_pages(ui, body, entry, (identity, slots, width), colors, engaged);
+        (page, engaged)
+    }
+
+    fn selection_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        layout: &selection::Layout<'_>,
+        entry: &Entry,
+        colors: WorkbenchColors,
+    ) -> egui::Rect {
+        let mut body = layout.rect;
+        let Some(selected) = self
+            .selection
+            .selected
+            .as_ref()
+            .filter(|selected| selected.matches(entry))
+        else {
+            return body;
+        };
+        body.max.y -= preview_copy::RANGE_FOOTER_HEIGHT;
+        ui.painter_at(body).rect_filled(
+            layout.highlight(&selected.range, body),
+            2.0,
+            colors.accent.gamma_multiply(0.35),
+        );
+        if preview_copy::paint_range_footer(ui, layout.rect, &selected.label(), "Copy pages") {
+            self.selection.requested = Some(selected.clone());
+            ui.memory_mut(|memory| memory.request_focus(focus_id()));
+        }
+        body
+    }
+
+    fn paint_pages(
+        &mut self,
+        ui: &mut egui::Ui,
+        strip: egui::Rect,
+        entry: &Entry,
+        (identity, slots, width): (uuid::Uuid, Vec<Option<usize>>, f32),
+        colors: WorkbenchColors,
+        engaged: bool,
+    ) -> Option<usize> {
         let edge = (128.0 * ui.ctx().pixels_per_point())
             .ceil()
             .clamp(64.0, 256.0) as u32;
@@ -90,7 +153,6 @@ impl Pages {
             }
             keep
         });
-        let width = 56.0_f32.min(strip.width() / slots.len().max(1) as f32);
         let mut clicked = None;
         for (page, cell) in super::ui::strip_cells(ui, strip, slots, width, colors) {
             let id = *record.2.entry(page).or_insert_with(uuid::Uuid::new_v4);
@@ -133,7 +195,7 @@ impl Pages {
                 clicked = Some(page);
             }
         }
-        if let Some(page) = clicked {
+        if let Some(page) = clicked.filter(|_| !engaged) {
             let fallback = record
                 .2
                 .get(&page)
@@ -175,6 +237,9 @@ impl Pages {
         )
         .show(|ui| {
             ui.label(format!("{} · Page {page}", entry.name));
+            if little_clip_core::pdf::is_pdf_path(&entry.path) {
+                ui.small("Drag to select pages · Right-click to copy a page");
+            }
             if let Some(texture) = texture {
                 let screen = ui.ctx().content_rect();
                 let bounds = egui::vec2(

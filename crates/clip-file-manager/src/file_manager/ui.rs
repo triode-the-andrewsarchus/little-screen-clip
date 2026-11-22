@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use super::{
+    pdf_strip::focus_id as pdf_id, text_strip::selection::focus_id as minimap_id,
+    video_timeline::selection::focus_id as timeline_id,
+};
 use egui::{Color32, FontId, Id, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
 use little_clip_core::palette::AppPalette;
 
@@ -14,7 +18,7 @@ pub(crate) mod gallery;
 mod list;
 mod mounts;
 pub(super) mod music;
-mod video;
+pub(super) mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
 pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
@@ -27,6 +31,16 @@ pub(super) fn list_id() -> Id {
 }
 fn tree_id() -> Id {
     Id::unique("file_manager_tree_focus")
+}
+
+fn strip_focus_ids() -> [Id; 5] {
+    [
+        music::waveform_id(),
+        super::midi_strip::focus_id(),
+        minimap_id(),
+        timeline_id(),
+        pdf_id(),
+    ]
 }
 
 pub(super) fn key(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
@@ -78,12 +92,7 @@ impl FileManager {
             }
         }
         ui.memory_mut(|memory| {
-            for id in [
-                tree_id(),
-                list_id(),
-                music::waveform_id(),
-                super::midi_strip::focus_id(),
-            ] {
+            for id in [tree_id(), list_id()].into_iter().chain(strip_focus_ids()) {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
@@ -98,15 +107,14 @@ impl FileManager {
         self.naming_ui(ui.ctx(), palette);
         self.transfer_windows(ui.ctx(), palette);
         self.search_settings_ui(ui.ctx(), palette);
-        let file_clipboard = ui.memory(|memory| {
-            [
-                list_id(),
-                music::waveform_id(),
-                super::midi_strip::focus_id(),
-            ]
-            .into_iter()
-            .any(|id| memory.has_focus(id))
-        }) && !self.browser_modal();
+        self.large_video_copy_ui(ui.ctx(), palette);
+        let file_clipboard = !self.browser_modal()
+            && ui.memory(|memory| {
+                memory.has_focus(list_id())
+                    || memory
+                        .focused()
+                        .is_some_and(|id| strip_focus_ids().contains(&id))
+            });
         let text_focus_shortcuts = if ui.memory(|memory| memory.has_focus(list_id())) {
             vec![egui::KeyboardShortcut::new(Modifiers::CTRL, Key::F)]
         } else {
@@ -158,10 +166,36 @@ impl FileManager {
     fn copy_strip_selection(&mut self, ctx: &egui::Context) {
         if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
             self.midi.copy_selection(ctx.input(|input| input.time));
+        } else if ctx.memory(|memory| memory.has_focus(minimap_id())) {
+            self.copy_text_range(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(pdf_id())) {
+            self.copy_pdf_pages(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(timeline_id())) {
+            self.copy_video_range(ctx, super::video_timeline::selection::CopyKind::Video);
         } else {
             self.copy_music_range();
         }
     }
+    fn copy_text_range(&mut self, ctx: &egui::Context) {
+        if let Some(selection) = self.previews.text_selection.range.clone() {
+            self.preview_copies
+                .start(ctx, move |cancel| selection.export(cancel));
+        }
+    }
+
+    fn copy_pdf_pages(&mut self, ctx: &egui::Context) {
+        let selection = &mut self.previews.pdf_pages.selection;
+        if let Some(pages) = selection
+            .requested
+            .take()
+            .or_else(|| selection.selected.clone())
+        {
+            let context = self.search_preview_context();
+            self.preview_copies
+                .start(ctx, move |cancel| pages.export(&context, cancel));
+        }
+    }
+
     fn docked_panels(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let colors = WorkbenchColors::from_palette(palette);
         if self.shelf.open {
@@ -275,7 +309,10 @@ impl FileManager {
     }
 
     fn browser_modal(&self) -> bool {
-        self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
+        self.edits.dialog.is_some()
+            || self.transfers_modal()
+            || self.search.preferences.open
+            || self.large_video_copy.is_some()
     }
 
     fn sync_browser_focus(&mut self, ctx: &egui::Context) -> bool {
@@ -287,12 +324,8 @@ impl FileManager {
         ) && focused.is_none();
         let requested = self.was_modal || self.focus_list || default_list;
         self.was_modal = modal;
-        let owns_arrows = [
-            Some(tree_id()),
-            Some(music::waveform_id()),
-            Some(super::midi_strip::focus_id()),
-        ]
-        .contains(&focused);
+        let owns_arrows =
+            focused.is_some_and(|id| id == tree_id() || strip_focus_ids().contains(&id));
         // Explicit sidebar/strip focus, clicks and Tab choose their own target.
         if owns_arrows
             || ctx.input(|input| {
@@ -355,17 +388,11 @@ impl FileManager {
         }
         if ctx.memory(|memory| memory.has_focus(tree_id())) {
             self.tree_shortcuts(ctx);
-        } else if ctx.memory(|memory| {
-            [super::midi_strip::focus_id(), music::waveform_id()]
-                .into_iter()
-                .any(|id| memory.has_focus(id))
-        }) {
-            if key(ctx, Modifiers::CTRL, Key::C) {
-                self.copy_strip_selection(ctx);
-            }
-            if key(ctx, Modifiers::CTRL, Key::V) {
-                self.paste_files();
-            }
+        } else if let Some(id) = ctx
+            .memory(|memory| memory.focused())
+            .filter(|id| strip_focus_ids().contains(id))
+        {
+            self.strip_shortcuts(ctx, id);
         } else if ctx.memory(|memory| memory.has_focus(list_id())) {
             self.list_shortcuts(ctx);
             if self.edits.dialog.is_some() {
@@ -380,6 +407,24 @@ impl FileManager {
             if key(ctx, Modifiers::NONE, Key::Enter) {
                 self.open_selected();
             }
+        }
+    }
+
+    fn strip_shortcuts(&mut self, ctx: &egui::Context, id: Id) {
+        if [minimap_id(), timeline_id(), pdf_id()].contains(&id)
+            && !popup_open(ctx)
+            && key(ctx, Modifiers::NONE, Key::Escape)
+        {
+            self.previews.text_selection.range = None;
+            self.video_previews.selection = None;
+            self.previews.pdf_pages.selection.selected = None;
+            self.focus_list = true;
+        }
+        if key(ctx, Modifiers::CTRL, Key::C) {
+            self.copy_strip_selection(ctx);
+        }
+        if key(ctx, Modifiers::CTRL, Key::V) {
+            self.paste_files();
         }
     }
 

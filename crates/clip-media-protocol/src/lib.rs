@@ -104,6 +104,9 @@ pub struct VideoFrame {
     pub seconds: f64,
     /// Select the first frame at/after the requested time; otherwise use the seek point.
     pub accurate: bool,
+    /// Select the last decoded frame at or before the requested time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_or_before: bool,
     /// Maximum output width.
     pub width: u32,
     /// Maximum output height.
@@ -121,6 +124,7 @@ impl VideoFrame {
             stream: VideoStream::FirstNonCover,
             seconds: 0.0,
             accurate: true,
+            at_or_before: false,
             width,
             height,
             max_source_pixels: 8192 * 8192,
@@ -238,7 +242,7 @@ pub struct VideoPreview {
     pub duration: Option<f64>,
 }
 
-/// Sequential keyframe-column fallback for a long video timeline.
+/// Sequential column rendering for a source timeline or a selected interval.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VideoTimeline {
@@ -246,7 +250,10 @@ pub struct VideoTimeline {
     pub frame: VideoFrame,
     /// Exact number of output columns, one through 16384.
     pub columns: u32,
-    /// Source duration used for column sampling, in milliseconds.
+    /// Start of an interval to sample, in source-relative milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<u64>,
+    /// Length of the sampled interval or the full source, in milliseconds.
     pub duration_ms: u64,
 }
 

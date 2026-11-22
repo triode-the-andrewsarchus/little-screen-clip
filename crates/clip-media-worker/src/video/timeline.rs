@@ -1,32 +1,24 @@
-//! Sequential keyframe-column fallback, preserving the existing sampling policy.
+//! Bounded sequential timeline sampling.
 use super::*;
 use clip_media_protocol::VideoTimeline;
 
 pub(crate) fn render(file: File, job: &VideoTimeline, output: &mut impl Write) -> Result<()> {
-    validate(&job.frame)?;
-    if job.frame.seconds != 0.0
-        || !(1..=16384).contains(&job.columns)
-        || job.duration_ms == 0
-        || job.duration_ms > 9_000_000_000_000
-    {
-        return Err("Invalid keyframe timeline settings".into());
-    }
-    let mut source = VideoSource::open(
-        file,
-        &job.frame,
-        ffmpeg::Discard::NonKey,
-        std::time::Duration::from_secs(240),
-    )?;
+    let (frame, discard) = sampling(job)?;
+    let mut source = VideoSource::open(file, &frame, discard, std::time::Duration::from_secs(240))?;
     let Some(first) = source.next_frame()? else {
-        return Err("No timeline keyframes".into());
+        return Err("No timeline frames".into());
     };
     let duration = job.duration_ms as f64 / 1000.0;
-    let origin = source.origin as f64 / 1_000_000.0;
-    // Each decoded keyframe is reduced once. fps holds that column until the
-    // next keyframe; tpad supplies the final hold before tile consumes exactly
-    // the requested number of physical output columns.
+    let origin = source.origin as f64 / 1_000_000.0 + frame.seconds;
+    // A localized seek can deliver frames before its start. Align its first
+    // output column with the requested origin and hold the last sample at EOF.
+    let alignment = if job.start_ms.is_some() {
+        ":start_time=0"
+    } else {
+        ""
+    };
     let spec = format!(
-        "setpts=PTS-{origin:.9}/TB,{}scale=1:{}:flags=area,tpad=stop_mode=clone:stop_duration={duration:.9},fps={}000/{},tile={}x1,format=pix_fmts=yuvj444p",
+        "setpts=PTS-{origin:.9}/TB,{}scale=1:{}:flags=area,tpad=stop_mode=clone:stop_duration={duration:.9},fps={}000/{}{alignment},tile={}x1,format=pix_fmts=yuvj444p",
         orientation(first.matrix.as_ref())?,
         job.frame.height,
         job.columns,
@@ -48,6 +40,26 @@ pub(crate) fn render(file: File, job: &VideoTimeline, output: &mut impl Write) -
         drain(&mut graph)?.ok_or("No sampled timeline image")?,
         output,
     )
+}
+
+fn sampling(job: &VideoTimeline) -> Result<(VideoFrame, ffmpeg::Discard)> {
+    validate(&job.frame)?;
+    let start = job.start_ms.unwrap_or(0);
+    if job.frame.seconds != 0.0
+        || !(1..=16384).contains(&job.columns)
+        || job.duration_ms == 0
+        || start.saturating_add(job.duration_ms) > 9_000_000_000_000
+    {
+        return Err("Invalid timeline settings".into());
+    }
+    let mut frame = job.frame.clone();
+    frame.seconds = start as f64 / 1000.0;
+    let discard = if job.start_ms.is_some() && job.duration_ms <= 120_000 {
+        ffmpeg::Discard::Default
+    } else {
+        ffmpeg::Discard::NonKey
+    };
+    Ok((frame, discard))
 }
 
 fn drain(graph: &mut FrameFilter) -> Result<Option<frame::Video>> {

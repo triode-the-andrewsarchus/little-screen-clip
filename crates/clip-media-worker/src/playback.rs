@@ -5,6 +5,7 @@ use gstreamer_video::VideoFrameExt;
 use std::{
     fs::File,
     io::{Read, Seek, Write},
+    ops::Range,
     os::fd::AsRawFd,
     time::{Duration, Instant},
 };
@@ -118,6 +119,11 @@ fn validate(settings: &Settings) -> Result<()> {
         || settings.stream > 64
         || settings.start_ms > 9_000_000_000_000
         || settings.duration_ms > 9_000_000_000_000
+        || settings.end_ms.is_some_and(|end| {
+            end <= settings.start_ms
+                || end > 9_000_000_000_000
+                || (settings.duration_ms != 0 && end > settings.duration_ms)
+        })
     {
         return Err("Invalid playback settings".into());
     }
@@ -134,6 +140,7 @@ struct Engine {
     origin_ms: i64,
     position_ms: u64,
     duration_ms: u64,
+    window: Option<Range<u64>>,
     stream_start_ms: u64,
     options: Options,
     tracks_pending: bool,
@@ -163,6 +170,7 @@ impl Engine {
         }
         let (video, sink) = video_sink(settings, source.gpu_scale && !software)?;
         let player = gst::ElementFactory::make("playbin3")
+            .property("mute", settings.start_muted)
             .build()
             .map_err(message)?;
         // filesrc supports pull-mode indexing needed by MXF and other seek-heavy
@@ -213,6 +221,7 @@ impl Engine {
             origin_ms: 0,
             position_ms: settings.start_ms,
             duration_ms: settings.duration_ms,
+            window: settings.end_ms.map(|end| settings.start_ms..end),
             stream_start_ms: source.start_ms,
             options: settings.options.clone(),
             tracks_pending: true,
@@ -234,6 +243,9 @@ impl Engine {
                 Input::Idle => {}
             }
             self.events(output)?;
+            if self.ended && self.window.is_some() {
+                return Ok(());
+            }
             if self.playing {
                 if let Some(sample) = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(10)) {
                     self.frame(sample, output)?;
@@ -277,7 +289,8 @@ impl Engine {
                     return Err(format!("{} ({:?})", error.error(), error.debug()));
                 }
                 gst::MessageView::Eos(_) if self.options.looping => {
-                    self.seek(0, output)?;
+                    let start = self.window.as_ref().map_or(0, |window| window.start);
+                    self.seek(start, output)?;
                     self.player
                         .set_state(gst::State::Playing)
                         .map_err(message)?;
@@ -307,6 +320,15 @@ impl Engine {
 
     fn seek(&mut self, position: u64, output: &mut impl Write) -> Result<()> {
         self.player.set_state(gst::State::Paused).map_err(message)?;
+        let (stop_type, stop) =
+            self.window
+                .as_ref()
+                .map_or((gst::SeekType::None, gst::ClockTime::NONE), |window| {
+                    (
+                        gst::SeekType::Set,
+                        Some(gst::ClockTime::from_mseconds(window.end)),
+                    )
+                });
         // Flush the old segment before waiting for new preroll. Waiting here
         // can wait on buffers/clock state from the previous playback rate.
         self.player
@@ -315,8 +337,8 @@ impl Engine {
                 gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
                 gst::SeekType::Set,
                 gst::ClockTime::from_mseconds(position),
-                gst::SeekType::None,
-                gst::ClockTime::NONE,
+                stop_type,
+                stop,
             )
             .map_err(message)?;
         self.wait_ready()?;
@@ -544,6 +566,14 @@ impl Engine {
     }
 
     fn frame(&mut self, sample: gst::Sample, output: &mut impl Write) -> Result<()> {
+        let time = stream_time(&sample).map(|time| (time as i64 - self.origin_ms).max(0) as u64);
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| time.is_none_or(|time| !window.contains(&time)))
+        {
+            return Ok(());
+        }
         let buffer = sample.buffer().ok_or("Missing video buffer")?;
         let info =
             gstreamer_video::VideoInfo::from_caps(sample.caps().ok_or("Missing video caps")?)
@@ -566,7 +596,6 @@ impl Engine {
                     .ok_or("Incomplete video plane")?,
             );
         }
-        let time = stream_time(&sample).map(|time| (time as i64 - self.origin_ms).max(0) as u64);
         if let Some(time) = time {
             self.position_ms = time;
         }

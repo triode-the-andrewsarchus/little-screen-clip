@@ -8,6 +8,7 @@ use little_clip_core::{
 };
 use std::{
     hash::{Hash, Hasher},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool, mpsc},
     time::Duration,
@@ -243,19 +244,48 @@ fn generate_library_timeline(
     output: &TimelineOutput,
     token: &AtomicBool,
 ) -> Result<(), String> {
+    let request = library_timeline_request(metadata, width, None)?
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(240));
+    let bytes = collect_timeline(request, token)?;
+    metadata.source.check()?;
+    output.install(&bytes)
+}
+
+pub(super) fn detail_timeline(
+    metadata: &media::VideoMetadata,
+    input: std::fs::File,
+    width: u32,
+    window: Range<u64>,
+    token: &AtomicBool,
+) -> Result<ImageThumbnail, String> {
+    let request = library_timeline_request(metadata, width, Some(window))?
+        .arg_owned_content_file(input)
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(25));
+    decode(&collect_timeline(request, token)?, width, 64)
+}
+
+fn library_timeline_request(
+    metadata: &media::VideoMetadata,
+    width: u32,
+    window: Option<Range<u64>>,
+) -> Result<CommandRequest, String> {
     use little_clip_core::media_backend::{VideoFrame, VideoStream, VideoTimeline};
     let mut frame = VideoFrame::new(little_clip_core::media_backend::VIDEO_FORMATS, 1, 64);
     frame.stream = VideoStream::Ordinal(metadata.stream);
     frame.max_source_pixels = 4096 * 2160;
-    let settings = VideoTimeline {
+    little_clip_core::media_backend::video_timeline_request(&VideoTimeline {
         frame,
         columns: width,
-        duration_ms: metadata.duration_ms,
-    };
-    let result = little_clip_core::media_backend::video_timeline_request(&settings)?
-        .arg_content_file(path)
-        .map_err(|error| error.to_string())?
-        .timeout(Duration::from_secs(240))
+        start_ms: window.as_ref().map(|range| range.start),
+        duration_ms: window.map_or(metadata.duration_ms, |range| range.end - range.start),
+    })
+}
+
+fn collect_timeline(request: CommandRequest, token: &AtomicBool) -> Result<Vec<u8>, String> {
+    let result = request
         .run_cancellable(token)
         .map_err(|error| error.to_string())?;
     if !result.status.success() || result.stdout_truncated || result.stdout.is_empty() {
@@ -264,8 +294,7 @@ fn generate_library_timeline(
             result.stderr_lossy().trim()
         ));
     }
-    metadata.source.check()?;
-    output.install(&result.stdout)
+    Ok(result.stdout)
 }
 
 fn generate_indexed(
@@ -537,8 +566,8 @@ mod format_tests {
             let ctx = egui::Context::default();
             let mut player = crate::file_manager::video_playback::Session::new(
                 &metadata,
-                500,
-                true,
+                crate::file_manager::video_playback::Span::From(500),
+                crate::file_manager::video_playback::AudioMode::Silent,
                 96,
                 ctx.clone(),
                 Default::default(),

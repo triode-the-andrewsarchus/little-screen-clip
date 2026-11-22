@@ -88,14 +88,11 @@ pub(super) fn check_cancel(cancelled: &AtomicBool) -> io::Result<()> {
 
 pub(super) struct Lines<R> {
     reader: R,
-    skip_lf: bool,
+    pub offset: u64,
 }
 impl<R: BufRead> Lines<R> {
     pub fn new(reader: R) -> Self {
-        Self {
-            reader,
-            skip_lf: false,
-        }
+        Self { reader, offset: 0 }
     }
     pub fn next(&mut self, cancelled: &AtomicBool) -> io::Result<Option<String>> {
         let mut bytes = Vec::new();
@@ -106,13 +103,6 @@ impl<R: BufRead> Lines<R> {
             if buffer.is_empty() {
                 return Ok(seen.then(|| String::from_utf8_lossy(&bytes).into_owned()));
             }
-            if self.skip_lf {
-                self.skip_lf = false;
-                if buffer[0] == b'\n' {
-                    self.reader.consume(1);
-                    continue;
-                }
-            }
             seen = true;
             let end = buffer.iter().position(|byte| matches!(byte, b'\r' | b'\n'));
             let length = end.unwrap_or(buffer.len());
@@ -122,12 +112,18 @@ impl<R: BufRead> Lines<R> {
                     .take(LINE_LIMIT.saturating_sub(bytes.len())),
             );
             if let Some(end) = end {
-                self.skip_lf = buffer[end] == b'\r';
+                let cr = buffer[end] == b'\r';
                 self.reader.consume(end + 1);
+                self.offset += (end + 1) as u64;
+                if cr && self.reader.fill_buf()?.first() == Some(&b'\n') {
+                    self.reader.consume(1);
+                    self.offset += 1;
+                }
                 bytes.push(b'\n');
                 return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
             }
             self.reader.consume(length);
+            self.offset += length as u64;
         }
     }
 }

@@ -19,21 +19,32 @@ pub(super) fn snapshot(file: File, job: &VideoFrame, output: &mut impl Write) ->
         ffmpeg::Discard::Default,
         std::time::Duration::from_secs(30),
     )?;
+    let Some(decoded) = snapshot_frame(&mut source, job)? else {
+        return Ok(());
+    };
+    let spec = scale_spec(decoded.matrix.as_ref(), job, "rgba")?;
+    let mut graph = FrameFilter::new(&decoded.image, &source, &spec)?;
+    graph.source.source().add(&decoded.image).map_err(message)?;
+    let mut filtered = frame::Video::empty();
+    graph.sink.sink().frame(&mut filtered).map_err(message)?;
+    filtered.remove_side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix);
+    write_snapshot(&mut filtered, decoded.seconds, output)
+}
+
+fn snapshot_frame(source: &mut VideoSource, job: &VideoFrame) -> Result<Option<DecodedVideoFrame>> {
+    let mut previous = None;
     while let Some(decoded) = source.next_frame()? {
-        if job.accurate && decoded.seconds + 0.000001 < job.seconds {
-            continue;
+        if job.at_or_before {
+            if decoded.seconds > job.seconds {
+                break;
+            }
+            previous = Some(decoded);
+        } else if !job.accurate || decoded.seconds + 0.000001 >= job.seconds {
+            return Ok(Some(decoded));
         }
-        let spec = scale_spec(decoded.matrix.as_ref(), job, "rgba")?;
-        let mut graph = FrameFilter::new(&decoded.image, &source, &spec)?;
-        graph.source.source().add(&decoded.image).map_err(message)?;
-        let mut filtered = frame::Video::empty();
-        graph.sink.sink().frame(&mut filtered).map_err(message)?;
-        filtered.remove_side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix);
-        return write_snapshot(&mut filtered, decoded.seconds, output);
     }
-    // Empty success permits the caller's preceding-seek-point retry for sparse
-    // clips; it must never label a guessed frame with the requested timestamp.
-    Ok(())
+    // Empty success permits a preceding-seek-point retry for sparse clips.
+    Ok(previous)
 }
 
 fn write_snapshot(image: &mut frame::Video, seconds: f64, output: &mut impl Write) -> Result<()> {

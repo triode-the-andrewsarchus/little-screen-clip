@@ -2,6 +2,7 @@
 mod analysis;
 mod metadata;
 mod raster;
+pub(super) mod selection;
 mod stream;
 #[cfg(test)]
 mod tests;
@@ -80,12 +81,15 @@ pub(in crate::file_manager) struct Document {
     pub metadata: Option<metadata::Summary>,
     pub diagram: Option<super::diagram_strip::Document>,
     pub markdown: Option<crate::file_source::FileSource>,
+    source: crate::file_source::FileSource,
     columns: usize,
     bins: Vec<Bin>,
 }
 struct Bin {
     start: u64,
     end: u64,
+    bytes: std::ops::Range<u64>,
+    last_line: String,
     cells: Vec<[u32; COLORS.len()]>,
     excerpt: Vec<ExcerptLine>,
 }
@@ -99,9 +103,17 @@ impl Document {
         self.bins[self.display_range(fraction, width).start].start as usize + 1
     }
     fn display_range(&self, fraction: f32, width: usize) -> std::ops::Range<usize> {
-        let columns = width.max(1).min(self.bins.len());
-        let x = ((fraction.clamp(0.0, 1.0) * columns as f32) as usize).min(columns - 1);
-        x * self.bins.len() / columns..((x + 1) * self.bins.len() / columns).max(1)
+        let width = width.clamp(1, 2048);
+        let columns = width.min(self.bins.len());
+        let pixel = ((fraction.clamp(0.0, 1.0) * width as f32) as usize).min(width - 1);
+        let x = ((pixel + 1) * columns).div_ceil(width) - 1;
+        x * self.bins.len() / columns..(x + 1) * self.bins.len() / columns
+    }
+    fn display_extent(&self, bins: &std::ops::Range<usize>, width: usize) -> (f32, f32) {
+        let columns = width.min(self.bins.len());
+        let slot = |bin: usize| ((bin + 1) * columns).div_ceil(self.bins.len()) - 1;
+        let edge = |x| (x * width / columns) as f32 / width as f32;
+        (edge(slot(bins.start)), edge(slot(bins.end - 1) + 1))
     }
     pub(super) fn excerpt_ui(
         &self,

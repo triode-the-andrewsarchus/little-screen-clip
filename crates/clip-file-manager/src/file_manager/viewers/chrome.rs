@@ -132,6 +132,7 @@ impl Viewers {
         ui: &mut Ui,
         palette: &AppPalette,
         close: &mut bool,
+        copies: &mut super::super::preview_copy::Copies,
     ) {
         let source = self.editor_source().or_else(|| self.source.clone());
         let archive_label = self.archive_location.as_ref().and_then(|(root, label)| {
@@ -162,7 +163,7 @@ impl Viewers {
             ui.label("Archive snapshot · Save As outside the archive to keep edits");
         }
         let ctx = ui.ctx().clone();
-        let (_, chrome) = chrome.scope(&ctx, || self.render_session(ui, palette, close));
+        let (_, chrome) = chrome.scope(&ctx, || self.render_session(ui, palette, close, copies));
         if let Some(photo) = chrome.photo.filter(|photo| photo.changed)
             && let Some(collection) = &mut self.gallery
         {

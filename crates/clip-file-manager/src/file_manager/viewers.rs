@@ -24,7 +24,7 @@ mod escape;
 mod gallery;
 mod rename;
 mod video;
-mod video_audio;
+pub(super) mod video_audio;
 
 enum Loaded {
     Archive(super::container_preview::archive::Viewer),
@@ -125,6 +125,7 @@ pub(super) struct Viewers {
     config: AppConfig,
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
+    pub(super) video_timeline: Option<super::video_timeline::Timeline>,
     document_start: Option<super::DocumentPosition>,
     system_navigation: Option<super::system::BrowserTarget>,
 }
@@ -137,6 +138,11 @@ impl Viewers {
     }
     pub(super) fn video_fullscreen(&self) -> bool {
         matches!(&self.session, Some(ViewerSession::Video(video)) if video.fullscreen())
+    }
+    pub(super) fn notify_video_copy(&mut self, ctx: &Context, text: &str) {
+        if let Some(ViewerSession::Video(video)) = &mut self.session {
+            video.notify_copy(ctx, text);
+        }
     }
     pub fn active(&self) -> bool {
         self.loading.is_some() || self.session.is_some() || self.error.is_some()
@@ -183,14 +189,13 @@ impl Viewers {
         }
     }
     fn open_on(&mut self, path: PathBuf, system: bool) {
-        self.open_mode(path, system, false, None);
+        self.open_mode(path, system, None);
     }
     fn open_mode(
         &mut self,
         path: PathBuf,
         system: bool,
-        video_audio: bool,
-        archive_revision: Option<u64>,
+        position: Option<super::DocumentPosition>,
     ) {
         if self.active() {
             return;
@@ -213,7 +218,7 @@ impl Viewers {
                     super::system::collect(&source, &worker)
                         .map(|document| (Loaded::System(Box::new(document)), None))
                 } else {
-                    load_file_session(&source, &config, video_audio, archive_revision, &worker)
+                    load_file_session(&source, &config, position, &worker)
                 }
             })
         });
@@ -237,13 +242,7 @@ impl Viewers {
         if self.active() {
             return;
         }
-        if position == super::DocumentPosition::VideoAudioTrack {
-            self.open_mode(path, false, true, None);
-        } else if let super::DocumentPosition::ArchiveMember(_, revision) = position {
-            self.open_mode(path, false, false, Some(revision));
-        } else {
-            self.open(path);
-        }
+        self.open_mode(path, false, Some(position));
         self.document_start = Some(position);
     }
     fn poll(&mut self, ctx: &Context) {
@@ -271,6 +270,7 @@ impl Viewers {
             self.office_preview = matches!(&loaded, Loaded::OfficePdf { .. });
             loaded
         });
+        let timeline = self.video_timeline.take();
         match result {
             Ok(Loaded::External) => {
                 self.open_external();
@@ -289,6 +289,11 @@ impl Viewers {
                         .map(super::search::SourceGuard::read_check)
                         .unwrap_or_default(),
                 );
+                if let Some(timeline) = timeline
+                    && let ViewerSession::Video(state) = &mut opened
+                {
+                    state.set_timeline(timeline);
+                }
                 if self.gallery.is_some()
                     && let ViewerSession::Image(state) = &mut opened
                 {
@@ -419,7 +424,12 @@ impl Viewers {
         self.poll_audio_return();
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut super::preview_copy::Copies,
+    ) -> bool {
         let mut close = std::mem::take(&mut self.close_requested);
         // A popup owns Escape before either the studio or the host can close.
         if egui::Popup::is_any_open(ui.ctx())
@@ -441,7 +451,7 @@ impl Viewers {
             ui.label(error);
         }
         ui.add_enabled_ui(editor_enabled, |ui| {
-            self.render_file_session(ui, palette, &mut close)
+            self.render_file_session(ui, palette, &mut close, copies)
         });
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
         self.rename_ui(ui, palette);
@@ -537,9 +547,15 @@ impl Viewers {
         }
     }
 
-    fn render_session(&mut self, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
+    fn render_session(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        close: &mut bool,
+        copies: &mut super::preview_copy::Copies,
+    ) {
         if let Some(viewer) = &mut self.session {
-            render(viewer, ui, palette, close);
+            render(viewer, ui, palette, close, copies);
         }
     }
 
@@ -610,6 +626,7 @@ impl Viewers {
         self.pad_trim = None;
         self.audio_return_saving = false;
         self.video_start_seconds = 0.0;
+        self.video_timeline = None;
     }
     fn open_external(&mut self) {
         if let Some(ViewerSession::Video(state)) = &mut self.session {
@@ -701,18 +718,30 @@ fn kind(path: &Path) -> Kind {
 fn load_file_session(
     source: &Path,
     config: &AppConfig,
-    video_audio: bool,
-    archive_revision: Option<u64>,
+    position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    if let Some(revision) = archive_revision {
+    use super::DocumentPosition::{ArchiveMember, VideoAudioRange, VideoAudioTrack};
+    let revision = match position {
+        Some(ArchiveMember(_, revision) | VideoAudioRange { revision, .. }) => Some(revision),
+        _ => None,
+    };
+    if let Some(revision) = revision {
         super::filesystem::check_revision(source, revision)?;
     }
     let identity = FileSource::capture(source);
-    let loaded = if video_audio {
-        Loaded::VideoAudio(video_audio::Prepared::load(source, cancelled)?)
-    } else {
-        load(source, config, cancelled)?
+    let loaded = match position {
+        Some(VideoAudioTrack) => {
+            Loaded::VideoAudio(video_audio::Prepared::load(source, None, cancelled)?)
+        }
+        Some(VideoAudioRange {
+            start_ms, end_ms, ..
+        }) => Loaded::VideoAudio(video_audio::Prepared::load(
+            source,
+            Some((start_ms, end_ms)),
+            cancelled,
+        )?),
+        _ => load(source, config, cancelled)?,
     };
     let identity = if matches!(&loaded, Loaded::System(_) | Loaded::Minecraft(_)) {
         None
@@ -724,7 +753,7 @@ fn load_file_session(
             return Err("Archive changed during opening".into());
         }
         identity.check()?;
-        if let Some(revision) = archive_revision {
+        if let Some(revision) = revision {
             super::filesystem::check_revision(source, revision)?;
         }
         Some(identity)
@@ -954,7 +983,13 @@ fn session(
         ),
     }
 }
-fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
+fn render(
+    viewer: &mut ViewerSession,
+    ui: &mut Ui,
+    palette: &AppPalette,
+    close: &mut bool,
+    copies: &mut super::preview_copy::Copies,
+) {
     let ctx = ui.ctx().clone();
     match viewer {
         ViewerSession::Archive(state) => state.ui(ui, close, palette),
@@ -979,7 +1014,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
-        ViewerSession::Video(state) => state.ui(ui, close, palette),
+        ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }
 
@@ -1268,6 +1303,7 @@ mod tests {
                                 little_clip_core::config::WorkbenchAppearance::Dark,
                             ),
                             &mut false,
+                            &mut Default::default(),
                         )
                     })
                 });
