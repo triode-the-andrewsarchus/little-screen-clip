@@ -9,6 +9,7 @@ use little_clip_core::{
     BackgroundJobs, html_preview,
     jobs::task::Task,
     media_backend::playback::{SubtitleCue, Track},
+    palette::AppPalette,
 };
 use std::{
     sync::{
@@ -23,7 +24,7 @@ const RESULT_LIMIT: usize = 100;
 
 #[derive(Default)]
 pub(super) struct Find {
-    pub open: bool,
+    open: bool,
     focus: bool,
     query: String,
     track: Option<u32>,
@@ -46,39 +47,58 @@ struct Matches {
 }
 
 impl Find {
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn open(&mut self, ctx: &Context) {
         self.open = true;
         self.focus = true;
         ctx.request_repaint();
     }
 
-    pub fn show(&mut self, ctx: &Context, player: &mut Session) {
-        let track = selected_track(player);
-        let dialogue = egui::Modal::new(Id::unique("video_dialogue_find")).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() - 40.0).clamp(180.0, 550.0));
-            ui.horizontal(|ui| {
-                ui.heading("Find dialogue");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
-                        ui.close();
-                    }
-                });
+    pub fn close(&mut self, ctx: &Context) {
+        self.open = false;
+        self.focus = false;
+        self.searching = None;
+        ctx.memory_mut(|memory| memory.surrender_focus(Id::unique("video_dialogue_query")));
+        ctx.request_repaint();
+    }
+
+    pub fn show(&mut self, ui: &mut Ui, player: &mut Session, palette: &AppPalette) {
+        if !self.open {
+            return;
+        }
+        let available = ui.available_width();
+        let width = (available * 0.34).clamp(220.0, 360.0).min(available * 0.5);
+        let panel = egui::Panel::right("video_dialogue_sidebar")
+            .resizable(false)
+            .exact_size(width)
+            .show(ui, |ui| {
+                let close = panel_header(ui, palette);
+                let enter = self.edit_query(ui);
+                if let Some(track) = selected_track(player) {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!(
+                                "Subtitle track {} · {}",
+                                track.index + 1,
+                                track.label
+                            ))
+                            .weak(),
+                        )
+                        .truncate(),
+                    );
+                }
+                ui.separator();
+                (close, self.search_ui(ui, enter))
             });
-            if let Some(track) = track {
-                ui.weak(format!(
-                    "Subtitle track {} · {}",
-                    track.index + 1,
-                    track.label
-                ));
-            }
-            self.search_ui(ui)
-        });
-        if let Some(time) = dialogue.inner {
+        let (close, jump) = panel.inner;
+        if let Some(time) = jump {
             player.seek(time);
         }
-        if dialogue.inner.is_some() || dialogue.should_close() {
-            self.open = false;
-            self.searching = None;
+        if close {
+            self.close(ui.ctx());
         }
     }
 
@@ -158,8 +178,7 @@ impl Find {
             && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter))
     }
 
-    fn search_ui(&mut self, ui: &mut Ui) -> Option<u64> {
-        let enter = self.edit_query(ui);
+    fn search_ui(&mut self, ui: &mut Ui, enter: bool) -> Option<u64> {
         let lines = match &self.transcript {
             _ if self.track.is_none() => {
                 ui.label("No embedded subtitle track available.");
@@ -205,6 +224,33 @@ impl Find {
     }
 }
 
+fn panel_header(ui: &mut Ui, palette: &AppPalette) -> bool {
+    ui.horizontal(|ui| {
+        ui.heading("Find dialogue");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui
+                .add(crate::ui_ext::icon_button(
+                    crate::icons::Icon::Close,
+                    14.0,
+                    ui.visuals().widgets.inactive.bg_fill,
+                    None,
+                    palette,
+                ))
+                .on_hover_text("Close dialogue search");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    ui.is_enabled(),
+                    "Close dialogue search",
+                )
+            });
+            response.clicked()
+        })
+        .inner
+    })
+    .inner
+}
+
 pub(super) fn selected_track(player: &Session) -> Option<&Track> {
     let tracks = &player.tracks;
     let index = player.options().subtitle_track.or(tracks.current_subtitle);
@@ -225,7 +271,8 @@ fn show_results(ui: &mut Ui, lines: &[Line], matches: &Matches, loading: bool) -
         ui.weak(format!("Showing the first {RESULT_LIMIT} matches"));
     }
     egui::ScrollArea::vertical()
-        .max_height((ui.ctx().content_rect().height() * 0.48).min(330.0))
+        .id_salt("video_dialogue_results")
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             let mut jump = None;
             for (position, &row) in matches.rows.iter().enumerate() {
