@@ -62,6 +62,7 @@ pub(in crate::file_manager) enum Source {
     Geography(PathBuf),
     Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
+    Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
     Multisample(PathBuf),
@@ -135,6 +136,7 @@ impl Source {
             }
             super::super::document_format::Format::Geography => Source::Geography(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
+            super::super::document_format::Format::Embroidery => Source::Embroidery(path),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
             super::super::document_format::Format::Multisample => Source::Multisample(path),
             super::super::document_format::Format::Subtitle => Source::Subtitle(path),
@@ -171,6 +173,7 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
+            | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -293,6 +296,7 @@ impl Source {
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
+            Source::Embroidery(path) => super::super::embroidery::load_strip(&path, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
             Source::Minecraft(path, revision) => {
@@ -662,6 +666,10 @@ impl Previews {
             .as_ref()
             .or(data.image.as_ref())
             .map(|image| upload_texture(ctx, format!("shelf_preview_{id}"), image, options));
+        if data.embroidery.is_some() {
+            // Only the uploaded texture needs the packed stitch frames.
+            data.image = None;
+        }
         let spectrum_texture = data.spectrum.as_ref().map(|image| {
             upload_texture(
                 ctx,

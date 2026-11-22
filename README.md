@@ -59,9 +59,18 @@ smallest-first, Modified starts newest-first, and unavailable metadata stays las
 Sorting preserves selection and lasts for the current window, including refreshes
 and folder changes. The Type header is a sorting control; preview rows continue
 to identify their types through their existing names, icons and previews.
+
 Files can plot dated heliocentric paths in its Solar System view. The
 [Solar System import guide](docs/examples/solar-system/README.md) has supported
 formats, working sample files, and coverage by workflow.
+
+Machine embroidery files show the finished design in List and Columns. Move the
+pointer across the strip to reveal the design in stitch order, or open the file
+for a larger preview with a stitch slider. Copy an embroidery file to a hand
+slot to see the completed design on the little screen. Formats include PES,
+PEC, DST, EXP, JEF, VP3, HUS, VIP, and XXX. Most formats use the bundled pystitch
+reader and require Python 3. Files without thread colors use a repeatable palette.
+
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
 folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,
 Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md).

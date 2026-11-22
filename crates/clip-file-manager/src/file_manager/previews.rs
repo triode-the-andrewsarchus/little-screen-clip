@@ -442,6 +442,9 @@ impl EntryPreviews {
                 colors,
             );
             None
+        } else if entry.document_format() == Some(super::document_format::Format::Embroidery) {
+            super::embroidery::show_strip(ui, row, entry, columns, self.listing(entry), colors);
+            None
         } else if entry.is_toolpath() {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)
@@ -1237,6 +1240,40 @@ mod tests {
         );
         previews.retain(&BTreeSet::new());
         assert!(previews.cached(&revised).is_none());
+    }
+
+    #[test]
+    fn embroidery_rows_reuse_the_timeline_texture_until_retired() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("Wildflower.VP3");
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../little-clip-core/tests/fixtures/embroidery/Wildflower.vp3"),
+            &path,
+        )
+        .unwrap();
+        let entry = single_entry(root.path());
+        assert!(entry.has_content_strip());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        let ready = await_listing(&mut previews, &ctx, &entry);
+        let layout = ready.data.embroidery.as_ref().unwrap();
+        let complete = layout.frame(1.0);
+        assert_ne!(layout.uv(layout.frame(0.5)), layout.uv(complete));
+        assert_eq!(layout.stitches_at(complete), 553);
+        let texture = ready.texture.as_ref().unwrap().id();
+        assert_eq!(
+            previews
+                .listing(&entry)
+                .unwrap()
+                .texture
+                .as_ref()
+                .unwrap()
+                .id(),
+            texture
+        );
+        previews.retain(&BTreeSet::new());
+        assert!(previews.cached(&entry).is_none());
     }
 
     #[test]

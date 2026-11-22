@@ -48,6 +48,7 @@ enum Kind {
     Spreadsheet,
     Midi,
     Brush,
+    Embroidery,
     Geography,
     Trajectory,
     Text,
@@ -277,6 +278,8 @@ impl crate::ScreenRenderer {
 fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Kind> {
     let kind = if Format::for_path(path) == Some(Format::Geography) {
         Kind::Geography
+    } else if Format::for_path(path) == Some(Format::Embroidery) {
+        Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
         Kind::Spreadsheet
     } else if extension.is_some_and(|value| {
@@ -302,6 +305,16 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
 fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
     match kind {
         Kind::Geography | Kind::Trajectory => None,
+        Kind::Embroidery => {
+            let cancelled = AtomicBool::new(false);
+            let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;
+            let thumbnail = design.thumbnail([320, 220], &cancelled).ok()?;
+            Some(Preview::Page(Page {
+                width: thumbnail.width,
+                height: thumbnail.height,
+                thumbnail,
+            }))
+        }
         Kind::Pdf | Kind::Office => load_page(path, kind == Kind::Office).map(Preview::Page),
         Kind::Spreadsheet => {
             let data = spreadsheet::load_spreadsheet_preview(

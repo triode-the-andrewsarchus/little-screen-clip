@@ -143,16 +143,18 @@ impl Design {
             };
             read_bundled(reader, bytes, cancelled, &mut builder)?;
         }
-        let stitches = builder.stitches;
         source.check()?;
         check_cancelled(cancelled)?;
+        Self::from_stitches(builder.stitches)
+    }
 
+    fn from_stitches(stitches: Vec<Stitch>) -> Result<Self, String> {
         let first = stitches.first().ok_or("No stitches in design")?;
         let (mut min, mut max) = (first.from, first.from);
-        for stitch in &stitches {
+        for point in stitches.iter().flat_map(|stitch| [stitch.from, stitch.to]) {
             for axis in 0..2 {
-                min[axis] = min[axis].min(stitch.from[axis]).min(stitch.to[axis]);
-                max[axis] = max[axis].max(stitch.from[axis]).max(stitch.to[axis]);
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
             }
         }
         Ok(Self { stitches, min, max })

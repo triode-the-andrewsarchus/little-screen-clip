@@ -38,6 +38,7 @@ enum Loaded {
     Geography(Box<super::geography::Viewer>),
     Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
+    Embroidery(Box<super::embroidery::Viewer>),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(Box<super::multisample::Viewer>),
     Image(DecodedImageData, FileSource),
@@ -68,6 +69,7 @@ enum ViewerSession {
     Geography(super::geography::Viewer),
     Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
+    Embroidery(Box<super::embroidery::Viewer>),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(super::multisample::Viewer),
     Image(Box<ImagePreviewState>),
@@ -399,6 +401,7 @@ impl Viewers {
                 | ViewerSession::Calendar(_)
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
+                | ViewerSession::Embroidery(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -774,6 +777,9 @@ fn load(
         }
         Kind::Document(Format::Multisample) => super::multisample::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::Multisample(Box::new(viewer))),
+        Kind::Document(Format::Embroidery) => super::embroidery::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::Embroidery),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -879,6 +885,7 @@ fn session(
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
+        Loaded::Embroidery(viewer) => ViewerSession::Embroidery(viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -954,6 +961,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
         ViewerSession::Multisample(state) => state.ui(ui, close, palette),
+        ViewerSession::Embroidery(state) => state.ui(ui, close, palette),
         ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
         ViewerSession::VcvPatch(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),

@@ -242,6 +242,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Geography(_)
         | ViewerSession::Minecraft(_)
         | ViewerSession::Toolpath(_)
+        | ViewerSession::Embroidery(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)
         | ViewerSession::Calendar(_)

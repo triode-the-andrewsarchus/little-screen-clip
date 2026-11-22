@@ -554,3 +554,35 @@ fn brush_file_preview_prepares_and_renders_cohesive_card() {
     let (pixmap, _) = renderer.render_pixmap_with_previews(&state).unwrap();
     assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
 }
+
+#[test]
+fn embroidery_cards_render_embedded_thread_colors_and_follow_replacements() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Wildflower.PES");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../little-clip-core/tests/fixtures/embroidery/Wildflower.pes");
+    std::fs::copy(source, &path).unwrap();
+
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let item = ClipItem::from_single_file(&path);
+    let mut state = SlotManager::default();
+    state.push_left(item.clone());
+    let preview = renderer.file_preview(&item).expect("prepared embroidery");
+    assert!(std::sync::Arc::ptr_eq(
+        &renderer.file_preview(&item).unwrap(),
+        &preview
+    ));
+
+    let image = renderer.render_pixmap(&state).unwrap();
+    for rgb in [[34, 118, 90], [174, 64, 94], [227, 166, 50]] {
+        assert!(
+            image.data().chunks_exact(4).any(|pixel| pixel[..3] == rgb),
+            "missing embroidery thread color {rgb:?} on the display card"
+        );
+    }
+
+    let replacement = dir.path().join("replacement");
+    std::fs::write(&replacement, b"no stitches").unwrap();
+    std::fs::rename(replacement, path).unwrap();
+    assert!(renderer.file_preview(&item).is_none());
+}

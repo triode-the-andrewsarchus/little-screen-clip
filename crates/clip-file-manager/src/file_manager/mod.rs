@@ -16,6 +16,7 @@ use little_clip_core::file_format as document_format;
 mod ebook;
 mod edit_ui;
 mod edits;
+mod embroidery;
 mod external;
 mod filesystem;
 mod font_strip;
