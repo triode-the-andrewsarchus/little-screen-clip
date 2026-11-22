@@ -11,6 +11,7 @@ pub enum CreativeFxType {
     DitherPalette,
     Ntsc,
     Structure,
+    ByteBend,
 }
 
 impl CreativeFxType {
@@ -24,6 +25,7 @@ impl CreativeFxType {
             CreativeFxType::DitherPalette,
             CreativeFxType::Ntsc,
             CreativeFxType::Structure,
+            CreativeFxType::ByteBend,
         ]
     }
 
@@ -37,6 +39,7 @@ impl CreativeFxType {
             Self::DitherPalette => "Dither & Retro Palette",
             Self::Ntsc => "NTSC & VHS Video",
             Self::Structure => "Structure",
+            Self::ByteBend => "Byte Bend",
         }
     }
 
@@ -50,6 +53,7 @@ impl CreativeFxType {
             Self::DitherPalette => "Ordered dithering & classic hardware",
             Self::Ntsc => "Analog broadcast & magnetic tape emulation",
             Self::Structure => "Multiscale texture & edge protection",
+            Self::ByteBend => "Interactive image-data corruption",
         }
     }
 
@@ -63,6 +67,7 @@ impl CreativeFxType {
             Self::DitherPalette => "RETRO HARDWARE",
             Self::Ntsc => "ANALOG VIDEO",
             Self::Structure => "DETAIL & TEXTURE",
+            Self::ByteBend => "GLITCH ART",
         }
     }
 
@@ -99,6 +104,7 @@ impl CreativeFxType {
                  recording artifacts, including RF static snow, luma smear, chroma bleed, tracking bars, \
                  and head-switching jitter."
             }
+            Self::ByteBend => "Change prediction bytes to make streaks, echoes, and color breaks.",
             Self::Structure => {
                 "Selectively amplifies naturally occurring fine-to-medium surface textures \
                  (fabric, foliage, stone, skin detail) while protecting high-contrast object \

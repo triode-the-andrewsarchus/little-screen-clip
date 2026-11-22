@@ -1,6 +1,7 @@
 //! Creative FX image manipulation algorithms.
 
 mod basic_controls;
+mod byte_bend;
 mod cmyk_halftone;
 mod color;
 mod common;
@@ -15,6 +16,7 @@ mod structure;
 mod trichromatic;
 
 pub use basic_controls::*;
+pub use byte_bend::*;
 pub use cmyk_halftone::*;
 pub use color::*;
 pub use common::*;

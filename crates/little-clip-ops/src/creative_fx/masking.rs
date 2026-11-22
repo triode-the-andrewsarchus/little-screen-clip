@@ -149,6 +149,7 @@ fn render_creative_fx_cancellable(
         CreativeFxParams::DitherPalette(p) => apply_dither_palette_cancellable(img, p, cancel),
         CreativeFxParams::Ntsc(p) => apply_ntsc_effect_cancellable(img, p, cancel),
         CreativeFxParams::Structure(p) => apply_structure_cancellable(img, p, cancel),
+        CreativeFxParams::ByteBend(p) => apply_byte_bend_cancellable(img, p, cancel),
     }
 }
 

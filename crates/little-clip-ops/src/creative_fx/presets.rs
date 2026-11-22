@@ -12,6 +12,7 @@ pub enum CreativeFxParams {
     DitherPalette(DitherPaletteParams),
     Ntsc(NtscParams),
     Structure(StructureParams),
+    ByteBend(ByteBendParams),
 }
 
 impl CreativeFxParams {
@@ -25,6 +26,7 @@ impl CreativeFxParams {
             Self::DitherPalette(p) => &p.depth_mask,
             Self::Ntsc(p) => &p.depth_mask,
             Self::Structure(p) => &p.depth_mask,
+            Self::ByteBend(p) => &p.depth_mask,
         }
     }
 
@@ -38,6 +40,7 @@ impl CreativeFxParams {
             Self::DitherPalette(p) => &mut p.depth_mask,
             Self::Ntsc(p) => &mut p.depth_mask,
             Self::Structure(p) => &mut p.depth_mask,
+            Self::ByteBend(p) => &mut p.depth_mask,
         }
     }
 }
@@ -164,6 +167,22 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 vhs_chroma_loss: 0.05,
                 random_seed: 101,
                 depth_mask: DepthMaskConfig::default(),
+            }),
+        },
+        CreativeFxType::ByteBend => CreativeFxPreset {
+            name: "Color Break",
+            description: "Flip high bits across three sections of the byte stream",
+            params: CreativeFxParams::ByteBend(ByteBendParams {
+                edits: [18_300, 29_100, 43_600]
+                    .into_iter()
+                    .map(|address| ByteBendEdit {
+                        address,
+                        span: 1_500,
+                        mode: ByteBendMode::FlipBits,
+                        variation: 4,
+                    })
+                    .collect(),
+                ..Default::default()
             }),
         },
         CreativeFxType::Structure => CreativeFxPreset {
@@ -925,6 +944,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 }),
             },
         ],
+        CreativeFxType::ByteBend => vec![default_preset_for_fx(fx_type)],
         CreativeFxType::Structure => vec![
             CreativeFxPreset {
                 name: "Natural Texture",
