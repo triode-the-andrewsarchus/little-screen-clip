@@ -6,10 +6,11 @@ use super::{DepthMaskConfig, is_cancelled};
 use image::{ImageFormat, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{ops::Range, sync::atomic::AtomicBool};
+use std::{collections::BTreeMap, ops::Range, sync::atomic::AtomicBool};
 
 const MIN_BAND_ROWS: usize = 32;
-const ADDRESS_SPACE: u64 = 65_536;
+/// Number of normalized addresses on the map.
+pub const BYTE_BEND_ADDRESS_SPACE: u32 = 65_536;
 
 /// The data model used to bend the current image pixels.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +57,18 @@ pub enum ByteBendMode {
 }
 
 impl ByteBendMode {
+    /// Available mutations, in the order used when cycling an edit.
+    pub const ALL: [Self; 3] = [Self::FlipBits, Self::Repeat, Self::Dropout];
+
+    /// Returns the next mutation, wrapping to Bit Flip after Dropout.
+    pub fn next(self) -> Self {
+        match self {
+            Self::FlipBits => Self::Repeat,
+            Self::Repeat => Self::Dropout,
+            Self::Dropout => Self::FlipBits,
+        }
+    }
+
     /// Returns the control label for this mutation.
     pub fn label(self) -> &'static str {
         match self {
@@ -81,34 +94,146 @@ pub struct ByteBendParams {
     #[serde(default)]
     pub profile: ByteBendProfile,
     pub edits: Vec<ByteBendEdit>,
+    /// Erased normalized ranges for each staged edit address.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub erased: BTreeMap<u16, Vec<Range<u32>>>,
     pub depth_mask: DepthMaskConfig,
 }
 
 impl ByteBendParams {
-    /// Removes every edit whose byte window covers this address.
-    pub fn restore_at(&mut self, image: &RgbaImage, address: u16) -> bool {
-        if image.is_empty() {
+    /// Returns the staged edit anchored here, if the anchor itself is active.
+    pub fn active_edit(&self, address: u16) -> Option<&ByteBendEdit> {
+        if self
+            .erased
+            .get(&address)
+            .is_some_and(|holes| holes.iter().any(|hole| hole.contains(&u32::from(address))))
+        {
+            return None;
+        }
+        self.edits.iter().find(|edit| edit.address == address)
+    }
+
+    /// Stages an edit at this address. Cycling an active edit preserves its erased areas.
+    pub fn stage_edit(&mut self, edit: ByteBendEdit) {
+        if self.active_edit(edit.address).is_none() {
+            self.erased.remove(&edit.address);
+        }
+        self.edits.retain(|staged| staged.address != edit.address);
+        self.edits.push(edit);
+    }
+
+    /// Removes the last staged edit and its erased ranges.
+    pub fn undo_edit(&mut self) {
+        if let Some(edit) = self.edits.pop() {
+            self.erased.remove(&edit.address);
+        }
+    }
+
+    /// Clears the staged edits.
+    pub fn clear_edits(&mut self) {
+        self.edits.clear();
+        self.erased.clear();
+    }
+
+    /// Restores regions of the modeled byte stream, clipping any overlapping edits.
+    pub fn erase_ranges(&mut self, image: &RgbaImage, ranges: Vec<Range<u32>>) -> bool {
+        if image.is_empty() || self.edits.is_empty() {
             return false;
         }
         let len = match self.profile {
             ByteBendProfile::Jpeg => jpeg::stream_len(image),
             _ => image.as_raw().len() / 4 * 3,
         };
-        let index = address_offset(address, len);
-        let before = self.edits.len();
-        self.edits.retain(|edit| !edit.window(len).contains(&index));
-        self.edits.len() != before
+        let ranges = merge_ranges(ranges);
+        let projected: Vec<_> = ranges
+            .iter()
+            .map(|range| project_range(range, len))
+            .collect();
+        let mut changed = false;
+        self.edits.retain(|edit| {
+            let window = edit.window(len);
+            let holes = self
+                .erased
+                .get(&edit.address)
+                .map_or(&[][..], Vec::as_slice);
+            if !remaining_windows(window.clone(), holes, len)
+                .any(|active| projected.iter().any(|range| intersects(&active, range)))
+            {
+                return true;
+            }
+            changed = true;
+            let holes = self.erased.entry(edit.address).or_default();
+            holes.extend(
+                ranges
+                    .iter()
+                    .zip(&projected)
+                    .filter(|(_, range)| intersects(&window, range))
+                    .map(|(range, _)| range.clone()),
+            );
+            *holes = merge_ranges(std::mem::take(holes));
+            remaining_windows(window, holes, len).next().is_some()
+        });
+        if changed {
+            self.erased
+                .retain(|address, _| self.edits.iter().any(|edit| edit.address == *address));
+        }
+        changed
     }
 }
 
-fn address_offset(address: u16, len: usize) -> usize {
-    (u64::from(address) * len as u64 / ADDRESS_SPACE) as usize
+fn merge_ranges(mut ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
+    ranges.retain(|range| !range.is_empty() && range.end <= BYTE_BEND_ADDRESS_SPACE);
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut merged: Vec<Range<u32>> = Vec::new();
+    for range in ranges {
+        if let Some(previous) = merged.last_mut()
+            && range.start <= previous.end
+        {
+            previous.end = previous.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+fn intersects(a: &Range<usize>, b: &Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
+}
+
+fn address_offset(address: u32, len: usize) -> usize {
+    (u64::from(address) * len as u64 / u64::from(BYTE_BEND_ADDRESS_SPACE)) as usize
+}
+
+fn project_range(range: &Range<u32>, len: usize) -> Range<usize> {
+    // On a short stream, neighboring map cells can select the same byte.
+    let start = address_offset(range.start, len);
+    let end = address_offset(range.end, len).max(address_offset(range.end - 1, len) + 1);
+    start..end
+}
+
+fn remaining_windows(
+    window: Range<usize>,
+    holes: &[Range<u32>],
+    len: usize,
+) -> impl Iterator<Item = Range<usize>> + '_ {
+    let mut cursor = window.start;
+    holes
+        .iter()
+        .filter(|range| !range.is_empty() && range.end <= BYTE_BEND_ADDRESS_SPACE)
+        .map(move |range| project_range(range, len))
+        .chain(std::iter::once(window.end..window.end))
+        .filter_map(move |hole| {
+            let gap = cursor..hole.start.min(window.end);
+            cursor = cursor.max(hole.end);
+            (!gap.is_empty()).then_some(gap)
+        })
 }
 
 impl ByteBendEdit {
     fn window(self, len: usize) -> Range<usize> {
-        let center = address_offset(self.address, len);
-        let size = address_offset(self.span, len).max(1).min(len);
+        let center = address_offset(self.address.into(), len);
+        let size = address_offset(self.span.into(), len).max(1).min(len);
         let start = center.saturating_sub(size / 2).min(len - size);
         start..start + size
     }
@@ -141,7 +266,7 @@ pub fn byte_bend_sample(
     if profile == ByteBendProfile::Jpeg {
         return Some(jpeg::sample(image, address));
     }
-    let index = address_offset(address, image.as_raw().len() / 4 * 3);
+    let index = address_offset(address.into(), image.as_raw().len() / 4 * 3);
     Some((
         index,
         RowPrediction::new(image, profile).sample(image, index),
@@ -159,15 +284,20 @@ impl Edits {
                 .iter()
                 .rev()
                 .take(MAX_BYTE_BEND_EDITS + 1)
-                .map(|edit| (edit.window(len), *edit))
+                .flat_map(|edit| {
+                    let holes = params
+                        .erased
+                        .get(&edit.address)
+                        .map_or(&[][..], Vec::as_slice);
+                    remaining_windows(edit.window(len), holes, len)
+                        .map(move |window| (window, *edit))
+                })
                 .collect(),
         )
     }
 
     fn overlaps(&self, range: Range<usize>) -> bool {
-        self.0
-            .iter()
-            .any(|(edit, _)| edit.start < range.end && range.start < edit.end)
+        self.0.iter().any(|(edit, _)| intersects(edit, &range))
     }
 }
 
@@ -325,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn restoring_an_address_removes_all_covering_edits_and_keeps_other_edits() {
+    fn erasing_bytes_clips_overlapping_edits_and_preserves_both_sides() {
         let source = RgbaImage::new(64, 64);
         for profile in [
             ByteBendProfile::Png,
@@ -351,8 +481,21 @@ mod tests {
                 edits: vec![edit, neighbor, untouched],
                 ..Default::default()
             };
-            assert!(params.restore_at(&source, edit.address));
-            assert_eq!(params.edits, [untouched]);
+            let len = match profile {
+                ByteBendProfile::Jpeg => jpeg::stream_len(&source),
+                _ => source.as_raw().len() / 4 * 3,
+            };
+            let brushed = 19_700..20_400;
+            assert!(params.erase_ranges(&source, vec![brushed.clone()]));
+            assert!(!params.erase_ranges(&source, vec![brushed.clone()]));
+            let erased = project_range(&brushed, len);
+            let edits = Edits::new(&params, len);
+            assert!(!edits.overlaps(erased.clone()));
+            assert!(edits.overlaps(erased.start - 1..erased.start));
+            assert!(edits.overlaps(erased.end..erased.end + 1));
+            assert!(edits.overlaps(untouched.window(len)));
+            assert!(params.active_edit(edit.address).is_none());
+            assert_eq!(params.active_edit(untouched.address), Some(&untouched));
         }
     }
 

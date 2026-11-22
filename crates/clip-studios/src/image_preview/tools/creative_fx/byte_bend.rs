@@ -1,6 +1,8 @@
+mod eraser;
+
 use super::*;
 use egui::scroll_area::{DragScroll, ScrollSource};
-use little_clip_ops::creative_fx::byte_bend_sample;
+use little_clip_ops::creative_fx::{BYTE_BEND_ADDRESS_SPACE, byte_bend_sample};
 
 const MAP_COLUMNS: usize = 28;
 const MAP_ROWS: usize = 96;
@@ -22,6 +24,7 @@ pub(in crate::image_preview) struct ByteBendEditor {
     pub(super) audition: Option<ByteBendEdit>,
     pub(super) full_preview: bool,
     held: Option<HeldEdit>,
+    eraser: eraser::Eraser,
     suppressed_hover: Option<u16>,
     map: Option<(u64, egui::TextureHandle)>,
 }
@@ -33,6 +36,7 @@ impl Default for ByteBendEditor {
             audition: None,
             full_preview: true,
             held: None,
+            eraser: eraser::Eraser::default(),
             suppressed_hover: None,
             map: None,
         }
@@ -43,11 +47,12 @@ impl ByteBendEditor {
     pub(super) fn clear_interaction(&mut self) {
         self.audition = None;
         self.held = None;
+        self.eraser = eraser::Eraser::default();
         self.suppressed_hover = None;
     }
 
     pub(in crate::image_preview) fn clear_source(&mut self) {
-        self.params.edits.clear();
+        self.params.clear_edits();
         self.clear_interaction();
         self.map = None;
     }
@@ -55,37 +60,22 @@ impl ByteBendEditor {
     pub(super) fn preview_params(&self) -> ByteBendParams {
         let mut params = self.params.clone();
         if let Some(edit) = self.audition {
-            params.edits.retain(|staged| staged.address != edit.address);
-            params.edits.push(edit);
+            params.stage_edit(edit);
         }
         params
     }
 
-    fn stage(&mut self, edit: ByteBendEdit) {
-        self.params
-            .edits
-            .retain(|staged| staged.address != edit.address);
-        self.params.edits.push(edit);
-    }
-
     fn edit_at(&self, address: u16) -> Option<ByteBendEdit> {
-        let previous = self
-            .params
-            .edits
-            .iter()
-            .find(|edit| edit.address == address);
-        if self.params.edits.len() >= MAX_BYTE_BEND_EDITS && previous.is_none() {
+        if self.params.edits.len() >= MAX_BYTE_BEND_EDITS
+            && !self.params.edits.iter().any(|edit| edit.address == address)
+        {
             return None;
         }
-        let mut modes = [
-            ByteBendMode::FlipBits,
-            ByteBendMode::Repeat,
-            ByteBendMode::Dropout,
-        ];
-        fastrand::shuffle(&mut modes);
-        let mode = modes
-            .into_iter()
-            .find(|mode| previous.is_none_or(|edit| *mode != edit.mode))?;
+        let previous = self.params.active_edit(address);
+        let mode = previous.map_or_else(
+            || ByteBendMode::ALL[fastrand::usize(..ByteBendMode::ALL.len())],
+            |edit| edit.mode.next(),
+        );
         let variation = if let Some(edit) = previous {
             (edit.variation + fastrand::u8(1..8)) % 8
         } else {
@@ -144,7 +134,7 @@ impl ByteBendEditor {
             .auto_shrink([false, false])
             .scroll_source(ScrollSource {
                 drag: DragScroll::Never,
-                mouse_wheel: self.held.is_none(),
+                mouse_wheel: self.held.is_none() && !self.eraser.active,
                 ..Default::default()
             })
             .show(ui, |ui| {
@@ -179,15 +169,23 @@ impl ByteBendEditor {
         let visible = rect.intersect(ui.clip_rect());
         let changed = self.interact(ui, &response, visible, image, hover.map(cell_address));
         for edit in &self.params.edits {
-            outline_cell(&painter, rect, address_cell(edit.address), accent);
+            if self.params.active_edit(edit.address).is_some() {
+                outline(
+                    &painter,
+                    map_cell_rect(rect, address_cell(edit.address)),
+                    accent,
+                );
+            }
         }
-        if let Some(cell) = self
+        if let Some(cell) = self.eraser.cell {
+            outline(&painter, eraser::outline(rect, cell), Color32::WHITE);
+        } else if let Some(cell) = self
             .held
             .as_ref()
             .map(|hold| address_cell(hold.edit.address))
             .or(hover)
         {
-            outline_cell(&painter, rect, cell, Color32::WHITE);
+            outline(&painter, map_cell_rect(rect, cell), Color32::WHITE);
         }
         changed
     }
@@ -203,13 +201,11 @@ impl ByteBendEditor {
         if self.suppressed_hover != hovered {
             self.suppressed_hover = None;
         }
-        if response.secondary_clicked()
-            && let Some(address) = hovered
-        {
-            self.suppressed_hover = Some(address);
+        if let Some(ranges) = self.eraser.update(ui, response, visible) {
+            self.suppressed_hover = hovered;
             self.audition = None;
             self.held = None;
-            return self.params.restore_at(image, address);
+            return !ranges.is_empty() && self.params.erase_ranges(image, ranges);
         }
 
         if self.held.is_none() {
@@ -226,13 +222,7 @@ impl ByteBendEditor {
 
         self.audition = hovered
             .filter(|address| self.suppressed_hover != Some(*address))
-            .filter(|address| {
-                !self
-                    .params
-                    .edits
-                    .iter()
-                    .any(|edit| edit.address == *address)
-            })
+            .filter(|address| self.params.active_edit(*address).is_none())
             .filter(|_| self.params.edits.len() < MAX_BYTE_BEND_EDITS)
             .map(|address| ByteBendEdit {
                 address,
@@ -306,7 +296,7 @@ impl ByteBendEditor {
         self.audition = None;
         let stage = response.clicked_by(primary) || (released && hold.adjusting);
         if stage {
-            self.stage(hold.edit);
+            self.params.stage_edit(hold.edit);
         }
         stage
     }
@@ -320,11 +310,15 @@ fn adjust_edit(edit: &mut ByteBendEdit, rect: Rect, point: Pos2) {
 }
 
 fn cell_address(cell: usize) -> u16 {
-    ((2 * cell + 1) * 65_536 / (2 * MAP_CELLS)) as u16
+    ((cell_boundary(cell) + cell_boundary(cell + 1)) / 2) as u16
+}
+
+fn cell_boundary(cell: usize) -> u32 {
+    cell as u32 * BYTE_BEND_ADDRESS_SPACE / MAP_CELLS as u32
 }
 
 fn address_cell(address: u16) -> usize {
-    usize::from(address) * MAP_CELLS / 65_536
+    usize::from(address) * MAP_CELLS / BYTE_BEND_ADDRESS_SPACE as usize
 }
 
 fn map_cell(rect: Rect, point: Pos2) -> usize {
@@ -333,19 +327,18 @@ fn map_cell(rect: Rect, point: Pos2) -> usize {
     row.min(MAP_ROWS - 1) * MAP_COLUMNS + col.min(MAP_COLUMNS - 1)
 }
 
-fn outline_cell(painter: &egui::Painter, rect: Rect, cell: usize, color: Color32) {
+fn map_cell_rect(rect: Rect, cell: usize) -> Rect {
     let size = Vec2::new(
         rect.width() / MAP_COLUMNS as f32,
         rect.height() / MAP_ROWS as f32,
     );
     let corner =
         rect.min + size * Vec2::new((cell % MAP_COLUMNS) as f32, (cell / MAP_COLUMNS) as f32);
-    painter.rect_stroke(
-        Rect::from_min_size(corner, size),
-        0,
-        Stroke::new(1.25, color),
-        egui::StrokeKind::Inside,
-    );
+    Rect::from_min_size(corner, size)
+}
+
+fn outline(painter: &egui::Painter, rect: Rect, color: Color32) {
+    painter.rect_stroke(rect, 0, Stroke::new(1.25, color), egui::StrokeKind::Inside);
 }
 
 impl ImagePreviewState {
@@ -368,11 +361,11 @@ impl ImagePreviewState {
                     .add_enabled(staged, egui::Button::new("Undo edit"))
                     .clicked()
                 {
-                    editor.params.edits.pop();
+                    editor.params.undo_edit();
                     changed = true;
                 }
                 if ui.add_enabled(staged, egui::Button::new("Clear")).clicked() {
-                    editor.params.edits.clear();
+                    editor.params.clear_edits();
                     changed = true;
                 }
             });
@@ -385,9 +378,13 @@ impl ImagePreviewState {
             });
             ui.horizontal(|ui| {
                 let editor = &self.creative_fx_state.byte_bend;
-                if let Some(hold) = &editor.held {
-                    let edit = hold.edit;
-                    let span = f32::from(edit.span) * 100.0 / 65_536.0;
+                let displayed = editor.held.as_ref().map(|hold| &hold.edit).or_else(|| {
+                    editor
+                        .suppressed_hover
+                        .and_then(|address| editor.params.active_edit(address))
+                });
+                if let Some(edit) = displayed {
+                    let span = f32::from(edit.span) * 100.0 / BYTE_BEND_ADDRESS_SPACE as f32;
                     ui.monospace(format!(
                         "{}  {span:.2}%  {}",
                         edit.mode.label(),

@@ -52,7 +52,7 @@ pub(super) fn stream_len(image: &RgbaImage) -> usize {
 
 pub(super) fn sample(image: &RgbaImage, address: u16) -> (usize, u8) {
     let blocks = BlockImage::new(image);
-    let index = address_offset(address, blocks.len());
+    let index = address_offset(address.into(), blocks.len());
     let coefficients = blocks.coefficients(index / COEFFICIENTS);
     (index, coefficients[index % COEFFICIENTS])
 }

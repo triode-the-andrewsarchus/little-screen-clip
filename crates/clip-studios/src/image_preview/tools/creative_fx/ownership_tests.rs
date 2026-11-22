@@ -61,7 +61,7 @@ fn byte_bend_keeps_the_encoded_format_when_clearing_the_map() {
 }
 
 #[test]
-fn byte_map_scrolls_rerolls_adjusts_and_restores_in_place() {
+fn byte_map_scrolls_cycles_adjusts_and_brushes_in_place() {
     assert!(presets_for_fx(CreativeFxType::ByteBend).is_empty());
     let jobs = BackgroundJobs::new(1, 4);
     let mut state = state();
@@ -142,17 +142,58 @@ fn byte_map_scrolls_rerolls_adjusts_and_restores_in_place() {
     let primary = egui::PointerButton::Primary;
     click(&mut state, primary);
     let first = state.creative_fx_state.byte_bend.params.edits[0];
-    click(&mut state, primary);
-    let [second] = state.creative_fx_state.byte_bend.params.edits.as_slice() else {
-        panic!("clicking again should replace the edit");
-    };
-    assert_eq!(first.address, second.address);
-    assert_ne!(first.mode, second.mode);
-    assert_ne!(first.variation, second.variation);
+    let mut previous = first;
+    for _ in ByteBendMode::ALL {
+        click(&mut state, primary);
+        let [current] = state.creative_fx_state.byte_bend.params.edits.as_slice() else {
+            panic!("clicking again should replace the edit");
+        };
+        assert_eq!(current.address, first.address);
+        assert_eq!(current.mode, previous.mode.next());
+        assert_ne!(current.variation, previous.variation);
+        previous = *current;
+    }
+    assert_eq!(previous.mode, first.mode);
 
-    click(&mut state, egui::PointerButton::Secondary);
-    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
+    let secondary = egui::PointerButton::Secondary;
+    click(&mut state, secondary);
+    assert!(
+        state
+            .creative_fx_state
+            .byte_bend
+            .params
+            .active_edit(first.address)
+            .is_none()
+    );
+    assert!(
+        !state.creative_fx_state.byte_bend.params.edits.is_empty(),
+        "the rest of the span survives"
+    );
     assert!(state.creative_fx_state.byte_bend.audition.is_none());
+    state.creative_fx_state.byte_bend.params.clear_edits();
+
+    let cell_width = map.width() / 28.0;
+    let shifted = |cells| point + Vec2::new(cells * cell_width, 0.0);
+    let mut thin_edits = vec![ByteBendEdit { span: 0, ..first }];
+    for cells in [4.0, 7.0] {
+        frame(&mut state, vec![egui::Event::PointerMoved(shifted(cells))]);
+        let sampled = state.creative_fx_state.byte_bend.audition.unwrap();
+        thin_edits.push(ByteBendEdit { span: 0, ..sampled });
+    }
+    state.creative_fx_state.byte_bend.params.edits = thin_edits.clone();
+    frame(&mut state, button(point, secondary, true));
+    assert_eq!(
+        state.creative_fx_state.byte_bend.params.edits,
+        thin_edits[1..]
+    );
+    frame(&mut state, vec![egui::Event::PointerMoved(shifted(5.0))]);
+    assert_eq!(
+        state.creative_fx_state.byte_bend.params.edits,
+        thin_edits[2..]
+    );
+    frame(&mut state, button(shifted(5.0), secondary, false));
+    assert!(state.creative_fx_state.byte_bend.audition.is_none());
+    state.creative_fx_state.byte_bend.params.clear_edits();
 
     frame(&mut state, button(point, primary, true));
     let held_address = state.creative_fx_state.byte_bend.audition.unwrap().address;
