@@ -1195,15 +1195,21 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(20.0, DOCUMENT_ROW_TOP), egui::vec2(520.0, 108.0));
         clip_ui::test_support::run_frame(ctx, egui::RawInput::default(), |ctx| {
             ctx.root_ui(|ui| {
-                let position = previews.show_document(
+                let mut response = ui.interact(
+                    row,
+                    ui.scope_id().with("document_row_test"),
+                    egui::Sense::click(),
+                );
+                let result = previews.show_document(
                     ui,
                     row,
                     entry,
                     super::super::ui::ListColumns::new(row),
                     colors,
                     &palette,
+                    &mut response,
                 );
-                assert_eq!(position, expected);
+                assert_eq!(result, (expected, false));
             });
         })
     }
