@@ -37,6 +37,12 @@ impl Default for ByteBendEditor {
 }
 
 impl ByteBendEditor {
+    pub(super) fn reset(&mut self) {
+        let profile = self.params.profile;
+        *self = Self::default();
+        self.params.profile = profile;
+    }
+
     pub(in crate::image_preview) fn clear_source(&mut self) {
         self.params.edits.clear();
         self.audition = None;
@@ -73,7 +79,8 @@ impl ByteBendEditor {
         let pixels = (0..MAP_CELLS)
             .map(|cell| {
                 let address = cell_address(start, length, cell);
-                let sample = byte_bend_sample(image, address).map_or(0, |(_, value)| value);
+                let sample = byte_bend_sample(image, self.params.profile, address)
+                    .map_or(0, |(_, value)| value);
                 let signal = (sample as i8).unsigned_abs();
                 Color32::from_rgb(24 + signal / 2, 33 + signal, 47 + signal)
             })
@@ -199,9 +206,11 @@ impl ImagePreviewState {
         editor.audition = audition;
 
         ui.horizontal(|ui| {
-            if let Some((offset, byte)) =
-                candidate.and_then(|edit| byte_bend_sample(&self.current_rgba, edit.address))
-            {
+            ui.label(editor.params.profile.label())
+                .on_hover_text("The map models the source format using the current image pixels.");
+            if let Some((offset, byte)) = candidate.and_then(|edit| {
+                byte_bend_sample(&self.current_rgba, editor.params.profile, edit.address)
+            }) {
                 ui.monospace(format!("{offset:08X}  {byte:02X}"));
             } else {
                 ui.label(format!("{} staged", editor.params.edits.len()));

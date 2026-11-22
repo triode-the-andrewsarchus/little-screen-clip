@@ -48,6 +48,7 @@ impl ImagePreviewState {
             self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
         let epoch = self.creative_fx_state.thumbnail_epoch;
         let pixel_revision = self.pixel_revision;
+        let byte_bend_profile = self.creative_fx_state.byte_bend.params.profile;
         self.creative_fx_state.thumbnail_pixel_revision = Some(pixel_revision);
 
         // Downscale base image to 42x28 (sub-millisecond)
@@ -91,9 +92,12 @@ impl ImagePreviewState {
                 todo,
                 || cancelled.load(std::sync::atomic::Ordering::Acquire),
                 |fx| {
-                    let preset = default_preset_for_fx(fx);
+                    let mut params = default_preset_for_fx(fx).params;
+                    if let CreativeFxParams::ByteBend(params) = &mut params {
+                        params.profile = byte_bend_profile;
+                    }
                     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        apply_creative_fx(&thumb_base, &preset.params)
+                        apply_creative_fx(&thumb_base, &params)
                     }));
                     if let Ok(rgba) = res {
                         tx.send(CreativeFxThumbnailMsg {

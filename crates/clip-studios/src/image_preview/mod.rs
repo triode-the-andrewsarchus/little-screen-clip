@@ -32,13 +32,14 @@ use little_clip_core::palette::AppPalette;
 use little_clip_core::{AppConfig, BackgroundJobs, HandSide, IpcRequest, JobError, JobTicket};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
-    BasicControlsParams, ByteBendEdit, ByteBendMode, ByteBendParams, CmykHalftoneParams,
-    CreativeFxMaskSource, CreativeFxParams, CreativeFxType, DepthMaskConfig, DitherMethod,
-    DitherPaletteParams, LensAberrationParams, MAX_BYTE_BEND_EDITS, NtscChromaLowpass,
-    NtscDemodulation, NtscParams, NtscPhaseShift, PaperTint, PixelSortCriteria, PixelSortDirection,
-    PixelSortOrder, PixelSortParams, RetroPalette, StructureParams, TrichromaticMode,
-    TrichromaticParams, VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_masks_cancellable,
-    default_preset_for_fx, presets_for_fx, trichromatic_intersection_box,
+    BasicControlsParams, ByteBendEdit, ByteBendMode, ByteBendParams, ByteBendProfile,
+    CmykHalftoneParams, CreativeFxMaskSource, CreativeFxParams, CreativeFxType, DepthMaskConfig,
+    DitherMethod, DitherPaletteParams, LensAberrationParams, MAX_BYTE_BEND_EDITS,
+    NtscChromaLowpass, NtscDemodulation, NtscParams, NtscPhaseShift, PaperTint, PixelSortCriteria,
+    PixelSortDirection, PixelSortOrder, PixelSortParams, RetroPalette, StructureParams,
+    TrichromaticMode, TrichromaticParams, VhsTapeSpeed, apply_creative_fx,
+    apply_creative_fx_with_masks_cancellable, default_preset_for_fx, presets_for_fx,
+    trichromatic_intersection_box,
 };
 use little_clip_ops::decorrelation_stretch::{
     DecorrelationMatrixMode, DecorrelationStats, DecorrelationStretchParams,
@@ -630,6 +631,8 @@ impl ImagePreviewState {
         let mut resize_state = ResizeState::default();
         resize_state.sync_from_image(&original_rgba);
         let palette_state = PaletteState::default();
+        let mut creative_fx_state = CreativeFxState::default();
+        creative_fx_state.set_byte_bend_source(&encoded_bytes);
         Self {
             path,
             title,
@@ -741,7 +744,7 @@ impl ImagePreviewState {
             barcode_queue_status: None,
             dcs_state: DecorrelationStretchState::default(),
             film_sim_state: FilmSimState::default(),
-            creative_fx_state: CreativeFxState::default(),
+            creative_fx_state,
             metadata,
             layer_inspector: layers::Inspector::new(layer_document),
             deskew_state: DeskewState::default(),

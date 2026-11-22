@@ -289,6 +289,10 @@ impl Default for CreativeFxState {
 }
 
 impl CreativeFxState {
+    pub(in crate::image_preview) fn set_byte_bend_source(&mut self, bytes: &[u8]) {
+        self.byte_bend.params.profile = ByteBendProfile::from_bytes(bytes);
+    }
+
     pub(in crate::image_preview) fn clear_byte_bend_audition(&mut self) {
         self.byte_bend.audition = None;
     }

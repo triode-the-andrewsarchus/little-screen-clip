@@ -1,12 +1,16 @@
 use super::*;
 
 fn state() -> ImagePreviewState {
+    state_from_image(
+        image::DynamicImage::ImageRgba8(RgbaImage::new(8, 8)),
+        image::ImageFormat::Png,
+    )
+}
+
+fn state_from_image(image: image::DynamicImage, format: image::ImageFormat) -> ImagePreviewState {
     let mut bytes = Vec::new();
-    RgbaImage::new(8, 8)
-        .write_to(
-            &mut std::io::Cursor::new(&mut bytes),
-            image::ImageFormat::Png,
-        )
+    image
+        .write_to(&mut std::io::Cursor::new(&mut bytes), format)
         .unwrap();
     let mut state = ImagePreviewState::from_bytes_with_meta(
         bytes,
@@ -30,6 +34,29 @@ fn wait_render(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
             "Creative FX render timed out"
         );
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn byte_bend_uses_the_encoded_format_for_preview_even_after_reset() {
+    for (format, expected) in [
+        (image::ImageFormat::Png, ByteBendProfile::Png),
+        (image::ImageFormat::Jpeg, ByteBendProfile::Jpeg),
+        (image::ImageFormat::WebP, ByteBendProfile::WebP),
+        (image::ImageFormat::Bmp, ByteBendProfile::Rgb),
+    ] {
+        let mut state = state_from_image(
+            image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 8)),
+            format,
+        );
+        state.creative_fx_state.select_fx(CreativeFxType::ByteBend);
+        assert_eq!(state.creative_fx_state.byte_bend.params.profile, expected);
+
+        state.creative_fx_state.byte_bend.reset();
+        let CreativeFxParams::ByteBend(params) = state.creative_fx_state.current_params() else {
+            panic!("Byte Bend preview params");
+        };
+        assert_eq!(params.profile, expected);
     }
 }
 

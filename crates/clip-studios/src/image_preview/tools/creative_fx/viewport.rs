@@ -394,7 +394,12 @@ impl ImagePreviewState {
                                             self.creative_fx_state.ntsc_params = *p;
                                         }
                                         CreativeFxParams::ByteBend(p) => {
-                                            self.creative_fx_state.byte_bend.params = p.clone();
+                                            let params =
+                                                &mut self.creative_fx_state.byte_bend.params;
+                                            *params = ByteBendParams {
+                                                profile: params.profile,
+                                                ..p.clone()
+                                            };
                                         }
                                         CreativeFxParams::Structure(p) => {
                                             self.creative_fx_state.structure_params = *p;
@@ -534,8 +539,7 @@ impl ImagePreviewState {
                                         self.creative_fx_state.ntsc_params = NtscParams::default();
                                     }
                                     CreativeFxType::ByteBend => {
-                                        self.creative_fx_state.byte_bend =
-                                            byte_bend::ByteBendEditor::default();
+                                        self.creative_fx_state.byte_bend.reset();
                                     }
                                     CreativeFxType::Structure => {
                                         self.creative_fx_state.structure_params =

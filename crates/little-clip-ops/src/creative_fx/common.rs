@@ -104,7 +104,7 @@ impl CreativeFxType {
                  recording artifacts, including RF static snow, luma smear, chroma bleed, tracking bars, \
                  and head-switching jitter."
             }
-            Self::ByteBend => "Change prediction bytes to make streaks, echoes, and color breaks.",
+            Self::ByteBend => "Bend modeled image data to make streaks, blocks, and color breaks.",
             Self::Structure => {
                 "Selectively amplifies naturally occurring fine-to-medium surface textures \
                  (fabric, foliage, stone, skin detail) while protecting high-contrast object \
